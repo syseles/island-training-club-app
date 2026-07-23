@@ -1,0 +1,1071 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="artifact-branding" content="target">
+  <meta name="artifact-style" content="house">
+  <title>Island Training Club — Mobile App Directions</title>
+  <script>
+    const savedTheme = localStorage.getItem("itc-review-theme");
+    const systemDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
+    document.documentElement.dataset.theme = savedTheme || (systemDark ? "dark" : "light");
+  </script>
+  <style>
+    :root {
+      color-scheme: light;
+      --paper: oklch(94.5% 0.018 88);
+      --paper-raised: oklch(97% 0.012 88);
+      --ink: oklch(18% 0.012 82);
+      --muted: oklch(42% 0.012 82);
+      --rule: oklch(79% 0.018 82);
+      --accent: #caff31;
+      --toolbar: rgba(248, 246, 237, .92);
+      --shadow: 0 18px 50px rgba(30, 26, 16, .12);
+    }
+
+    @media (prefers-color-scheme: dark) {
+      :root {
+        color-scheme: dark;
+        --paper: oklch(17% 0.012 82);
+        --paper-raised: oklch(21% 0.012 82);
+        --ink: oklch(92% 0.012 88);
+        --muted: oklch(70% 0.012 88);
+        --rule: oklch(33% 0.012 82);
+        --toolbar: rgba(25, 24, 21, .92);
+        --shadow: 0 18px 50px rgba(0, 0, 0, .35);
+      }
+    }
+
+    :root[data-theme="light"] {
+      color-scheme: light;
+      --paper: oklch(94.5% 0.018 88);
+      --paper-raised: oklch(97% 0.012 88);
+      --ink: oklch(18% 0.012 82);
+      --muted: oklch(42% 0.012 82);
+      --rule: oklch(79% 0.018 82);
+      --toolbar: rgba(248, 246, 237, .92);
+      --shadow: 0 18px 50px rgba(30, 26, 16, .12);
+    }
+
+    :root[data-theme="dark"] {
+      color-scheme: dark;
+      --paper: oklch(17% 0.012 82);
+      --paper-raised: oklch(21% 0.012 82);
+      --ink: oklch(92% 0.012 88);
+      --muted: oklch(70% 0.012 88);
+      --rule: oklch(33% 0.012 82);
+      --toolbar: rgba(25, 24, 21, .92);
+      --shadow: 0 18px 50px rgba(0, 0, 0, .35);
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      background: var(--paper);
+      color: var(--ink);
+      font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    button { font: inherit; }
+
+    .review-bar {
+      position: sticky;
+      top: 0;
+      z-index: 30;
+      display: flex;
+      align-items: center;
+      gap: 18px;
+      min-height: 72px;
+      padding: 12px 24px;
+      border-bottom: 1px solid var(--rule);
+      background: var(--toolbar);
+      backdrop-filter: blur(18px);
+    }
+
+    .review-title {
+      min-width: 265px;
+    }
+
+    .review-title strong {
+      display: block;
+      font-size: 14px;
+      letter-spacing: -.01em;
+    }
+
+    .review-title span {
+      color: var(--muted);
+      font: 700 10px ui-monospace, SFMono-Regular, Menlo, monospace;
+      text-transform: uppercase;
+    }
+
+    .tabs {
+      display: flex;
+      gap: 6px;
+      padding: 4px;
+      border: 1px solid var(--rule);
+      border-radius: 12px;
+      background: var(--paper-raised);
+    }
+
+    .tab,
+    .theme-toggle {
+      border: 0;
+      border-radius: 8px;
+      background: transparent;
+      color: var(--muted);
+      cursor: pointer;
+      font: 700 11px ui-monospace, SFMono-Regular, Menlo, monospace;
+      text-transform: uppercase;
+      padding: 10px 14px;
+    }
+
+    .tab[aria-selected="true"] {
+      color: #10110d;
+      background: var(--accent);
+    }
+
+    .theme-toggle {
+      margin-left: auto;
+      border: 1px solid var(--rule);
+      color: var(--ink);
+    }
+
+    .direction {
+      display: none;
+      padding: 34px 24px 52px;
+    }
+
+    .direction.active { display: block; }
+
+    .direction-intro {
+      display: grid;
+      grid-template-columns: minmax(260px, 1fr) minmax(320px, 1.3fr);
+      gap: 28px;
+      max-width: 1180px;
+      margin: 0 auto 28px;
+      align-items: end;
+    }
+
+    .eyebrow {
+      color: var(--muted);
+      font: 700 10px ui-monospace, SFMono-Regular, Menlo, monospace;
+      letter-spacing: .02em;
+      text-transform: uppercase;
+    }
+
+    .direction-intro h1 {
+      margin: 8px 0 0;
+      max-width: 12ch;
+      font-size: clamp(38px, 5vw, 70px);
+      line-height: .95;
+      letter-spacing: -.055em;
+    }
+
+    .direction-intro p {
+      max-width: 62ch;
+      margin: 0;
+      color: var(--muted);
+      font-size: 15px;
+      line-height: 1.55;
+    }
+
+    .screen-rail {
+      display: flex;
+      gap: 22px;
+      overflow-x: auto;
+      overscroll-behavior-inline: contain;
+      scroll-snap-type: x proximity;
+      padding: 8px max(24px, calc((100vw - 1180px) / 2)) 36px;
+    }
+
+    .screen-wrap {
+      flex: 0 0 390px;
+      scroll-snap-align: start;
+    }
+
+    .screen-label {
+      display: flex;
+      justify-content: space-between;
+      margin-bottom: 10px;
+      color: var(--muted);
+      font: 700 10px ui-monospace, SFMono-Regular, Menlo, monospace;
+      text-transform: uppercase;
+    }
+
+    .phone {
+      position: relative;
+      width: 390px;
+      height: 844px;
+      overflow: hidden;
+      border: 1px solid rgba(128, 128, 128, .24);
+      border-radius: 24px;
+      box-shadow: var(--shadow);
+    }
+
+    .app {
+      position: relative;
+      height: 100%;
+      padding: 24px 22px 86px;
+      overflow: hidden;
+      font-family: Arial, Helvetica, sans-serif;
+    }
+
+    .app h2,
+    .app h3,
+    .app p { margin: 0; }
+
+    .app-logo {
+      display: block;
+      width: 50px;
+      height: 30px;
+      object-fit: contain;
+    }
+
+    .app-top {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      min-height: 38px;
+    }
+
+    .avatar {
+      display: grid;
+      width: 34px;
+      height: 34px;
+      place-items: center;
+      border-radius: 50%;
+      font-size: 12px;
+      font-weight: 800;
+    }
+
+    .kicker {
+      margin-top: 26px;
+      font-size: 11px;
+      font-weight: 800;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+    }
+
+    .display {
+      margin-top: 8px !important;
+      max-width: 9ch;
+      font-size: 42px;
+      font-stretch: condensed;
+      font-weight: 900;
+      letter-spacing: -.055em;
+      line-height: .92;
+      text-transform: uppercase;
+    }
+
+    .subcopy {
+      margin-top: 12px !important;
+      max-width: 32ch;
+      font-size: 14px;
+      line-height: 1.5;
+      opacity: .72;
+    }
+
+    .photo {
+      width: 100%;
+      object-fit: cover;
+      display: block;
+    }
+
+    .primary {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 52px;
+      border: 0;
+      font-size: 13px;
+      font-weight: 900;
+      letter-spacing: .04em;
+      text-transform: uppercase;
+    }
+
+    .bottom-nav {
+      position: absolute;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      display: grid;
+      grid-template-columns: repeat(5, 1fr);
+      min-height: 70px;
+      padding: 10px 8px 14px;
+      align-items: center;
+    }
+
+    .bottom-nav span {
+      text-align: center;
+      font-size: 9px;
+      font-weight: 800;
+      letter-spacing: .02em;
+    }
+
+    .week {
+      display: grid;
+      grid-template-columns: repeat(7, 1fr);
+      gap: 4px;
+      margin-top: 22px;
+    }
+
+    .day {
+      display: grid;
+      min-height: 54px;
+      place-items: center;
+      border-radius: 10px;
+      font-size: 10px;
+      line-height: 1.05;
+      text-transform: uppercase;
+    }
+
+    .day strong { font-size: 15px; }
+
+    .filters {
+      display: flex;
+      gap: 7px;
+      overflow: hidden;
+      margin-top: 18px;
+    }
+
+    .filters span {
+      white-space: nowrap;
+      border-radius: 999px;
+      padding: 8px 11px;
+      font-size: 10px;
+      font-weight: 800;
+    }
+
+    .session-list {
+      margin-top: 18px;
+      border-top: 1px solid currentColor;
+    }
+
+    .session-row {
+      display: grid;
+      grid-template-columns: 54px 1fr auto;
+      gap: 12px;
+      align-items: center;
+      padding: 16px 0;
+      border-bottom: 1px solid rgba(128, 128, 128, .28);
+    }
+
+    .session-row time {
+      font-size: 11px;
+      font-weight: 900;
+    }
+
+    .session-row h3 {
+      font-size: 14px;
+      font-weight: 900;
+      letter-spacing: -.02em;
+      text-transform: uppercase;
+    }
+
+    .session-row p {
+      margin-top: 4px;
+      font-size: 11px;
+      opacity: .62;
+    }
+
+    .session-row b {
+      font-size: 10px;
+    }
+
+    .detail-photo {
+      height: 258px;
+      margin: 20px -22px 0;
+      width: calc(100% + 44px);
+    }
+
+    .detail-meta {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      margin-top: 18px;
+      border-block: 1px solid rgba(128, 128, 128, .35);
+    }
+
+    .detail-meta div {
+      padding: 13px 8px 13px 0;
+      border-right: 1px solid rgba(128, 128, 128, .35);
+    }
+
+    .detail-meta div:last-child { border-right: 0; padding-left: 10px; }
+
+    .detail-meta small {
+      display: block;
+      font-size: 9px;
+      font-weight: 800;
+      letter-spacing: .04em;
+      text-transform: uppercase;
+      opacity: .55;
+    }
+
+    .detail-meta strong {
+      display: block;
+      margin-top: 4px;
+      font-size: 12px;
+    }
+
+    .booking-list {
+      margin-top: 22px;
+    }
+
+    .booking-card {
+      margin-bottom: 13px;
+      padding: 16px;
+    }
+
+    .booking-card header {
+      display: flex;
+      justify-content: space-between;
+      align-items: start;
+      gap: 12px;
+    }
+
+    .booking-card h3 {
+      font-size: 17px;
+      font-weight: 900;
+      text-transform: uppercase;
+    }
+
+    .booking-card p {
+      margin-top: 8px;
+      font-size: 12px;
+      line-height: 1.5;
+      opacity: .68;
+    }
+
+    .status {
+      padding: 6px 8px;
+      font-size: 9px;
+      font-weight: 900;
+      text-transform: uppercase;
+    }
+
+    .product-photo {
+      height: 390px;
+      margin: 20px -22px 0;
+      width: calc(100% + 44px);
+      object-position: 50% 34%;
+    }
+
+    .product-line {
+      display: flex;
+      justify-content: space-between;
+      align-items: start;
+      gap: 18px;
+      margin-top: 20px;
+    }
+
+    .product-line h3 {
+      font-size: 22px;
+      font-weight: 900;
+      text-transform: uppercase;
+    }
+
+    .sizes {
+      display: flex;
+      gap: 8px;
+      margin: 18px 0;
+    }
+
+    .sizes span {
+      display: grid;
+      width: 42px;
+      height: 38px;
+      place-items: center;
+      font-size: 11px;
+      font-weight: 900;
+    }
+
+    /* Direction 1: Night Circuit */
+    .night .app {
+      color: #f6f7f0;
+      background-color: #030504;
+      background-image:
+        linear-gradient(rgba(202, 255, 49, .045) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(202, 255, 49, .045) 1px, transparent 1px);
+      background-size: 72px 72px;
+    }
+
+    .night .avatar {
+      color: #050704;
+      background: #caff31;
+    }
+
+    .night .kicker,
+    .night .session-row b { color: #caff31; }
+
+    .night .hero-booking {
+      margin-top: 26px;
+      border: 1px solid #caff31;
+      border-radius: 20px;
+      overflow: hidden;
+    }
+
+    .night .hero-booking .photo { height: 220px; }
+
+    .night .hero-copy {
+      padding: 18px;
+      background: #0b101a;
+    }
+
+    .night .hero-copy h3 {
+      margin-top: 6px;
+      font-size: 24px;
+      font-weight: 900;
+      letter-spacing: -.04em;
+      text-transform: uppercase;
+    }
+
+    .night .hero-copy p {
+      margin-top: 8px;
+      font-size: 12px;
+      opacity: .7;
+    }
+
+    .night .primary {
+      margin-top: 16px;
+      color: #050704;
+      background: #caff31;
+      border-radius: 10px;
+    }
+
+    .night .bottom-nav {
+      color: #888f8f;
+      border-top: 1px solid #30373a;
+      background: #030504;
+    }
+
+    .night .bottom-nav .active { color: #caff31; }
+
+    .night .day { border: 1px solid #282d2b; }
+    .night .day.active { color: #050704; background: #caff31; border-color: #caff31; }
+    .night .filters span { border: 1px solid #3b403d; }
+    .night .filters .active { color: #050704; background: #caff31; border-color: #caff31; }
+    .night .booking-card { border: 1px solid #2a302e; border-radius: 14px; background: #0b0f0e; }
+    .night .status { color: #050704; background: #caff31; border-radius: 999px; }
+    .night .sizes span { border: 1px solid #3a403e; border-radius: 8px; }
+    .night .sizes .active { color: #050704; background: #caff31; border-color: #caff31; }
+
+    /* Direction 2: Community Journal */
+    .journal .app {
+      color: #12130f;
+      background: #f2efe4;
+      font-family: "Helvetica Neue", Arial, sans-serif;
+    }
+
+    .journal .app-logo {
+      filter: contrast(1.1);
+    }
+
+    .journal .avatar {
+      color: #f7f5ec;
+      background: #151713;
+    }
+
+    .journal .display {
+      max-width: 10ch;
+      font-family: Georgia, "Times New Roman", serif;
+      font-weight: 400;
+      letter-spacing: -.06em;
+      text-transform: none;
+    }
+
+    .journal .kicker { color: #4e5147; }
+
+    .journal .journal-photo {
+      height: 310px;
+      margin-top: 22px;
+      border-radius: 2px;
+    }
+
+    .journal .journal-next {
+      display: grid;
+      grid-template-columns: 92px 1fr;
+      gap: 15px;
+      margin-top: 16px;
+      padding-block: 15px;
+      border-block: 1px solid #1c1e18;
+    }
+
+    .journal .journal-next time {
+      font: 400 34px/1 Georgia, serif;
+    }
+
+    .journal .journal-next h3 {
+      font-size: 17px;
+      text-transform: uppercase;
+    }
+
+    .journal .journal-next p {
+      margin-top: 5px;
+      color: #5d6056;
+      font-size: 12px;
+    }
+
+    .journal .primary {
+      margin-top: 16px;
+      color: #12130f;
+      background: #caff31;
+      border: 1px solid #12130f;
+    }
+
+    .journal .bottom-nav {
+      color: #5c6055;
+      border-top: 1px solid #1d1f19;
+      background: #f2efe4;
+    }
+
+    .journal .bottom-nav .active { color: #12130f; text-decoration: underline; text-underline-offset: 5px; }
+    .journal .day { border-bottom: 1px solid #989b90; border-radius: 0; }
+    .journal .day.active { background: #caff31; border: 1px solid #12130f; border-radius: 999px; }
+    .journal .filters span { border: 1px solid #8c8f84; border-radius: 0; }
+    .journal .filters .active { color: #f6f5ec; background: #151713; border-color: #151713; }
+    .journal .session-list { border-top: 2px solid #151713; }
+    .journal .session-row { grid-template-columns: 48px 1fr auto; }
+    .journal .session-row h3 { font-family: Georgia, serif; font-weight: 400; text-transform: none; }
+    .journal .detail-photo { height: 300px; }
+    .journal .booking-card { border-bottom: 1px solid #1d1f19; padding: 17px 0; }
+    .journal .booking-card h3 { font-family: Georgia, serif; font-weight: 400; text-transform: none; }
+    .journal .status { color: #12130f; background: #caff31; border: 1px solid #12130f; }
+    .journal .sizes span { border-bottom: 1px solid #12130f; }
+    .journal .sizes .active { background: #151713; color: #f2efe4; }
+
+    /* Direction 3: Training OS */
+    .os .app {
+      color: #0a0c08;
+      background-color: #d7ff3b;
+      background-image:
+        linear-gradient(rgba(8, 10, 6, .08) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(8, 10, 6, .08) 1px, transparent 1px);
+      background-size: 44px 44px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    }
+
+    .os .app-logo {
+      padding: 5px 7px;
+      background: #080a07;
+    }
+
+    .os .avatar {
+      color: #d7ff3b;
+      background: #080a07;
+      border-radius: 2px;
+    }
+
+    .os .display {
+      max-width: 10ch;
+      font-family: Arial, Helvetica, sans-serif;
+      font-size: 45px;
+    }
+
+    .os .os-panel {
+      margin: 22px -10px 0;
+      padding: 18px;
+      color: #f3f4ed;
+      background: #090b08;
+    }
+
+    .os .os-panel .photo {
+      height: 230px;
+      filter: grayscale(1) contrast(1.12);
+    }
+
+    .os .os-panel header {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      margin-top: 15px;
+      align-items: start;
+    }
+
+    .os .os-panel h3 {
+      max-width: 10ch;
+      font-family: Arial, Helvetica, sans-serif;
+      font-size: 22px;
+      font-weight: 900;
+      line-height: .95;
+      text-transform: uppercase;
+    }
+
+    .os .os-panel small {
+      color: #d7ff3b;
+      font-size: 9px;
+      text-align: right;
+      text-transform: uppercase;
+    }
+
+    .os .primary {
+      margin-top: 14px;
+      color: #d7ff3b;
+      background: #090b08;
+      border-radius: 0;
+    }
+
+    .os .os-panel .primary {
+      color: #090b08;
+      background: #d7ff3b;
+    }
+
+    .os .bottom-nav {
+      color: #090b08;
+      border-top: 2px solid #090b08;
+      background: #d7ff3b;
+    }
+
+    .os .bottom-nav .active { background: #090b08; color: #d7ff3b; padding: 8px 1px; }
+    .os .day { border: 1px solid #090b08; border-radius: 0; }
+    .os .day.active { color: #d7ff3b; background: #090b08; }
+    .os .filters span { border: 1px solid #090b08; border-radius: 0; }
+    .os .filters .active { color: #d7ff3b; background: #090b08; }
+    .os .session-list { border-top: 3px solid #090b08; }
+    .os .session-row { border-bottom: 1px solid #090b08; }
+    .os .detail-photo { filter: grayscale(1) contrast(1.12); border-block: 3px solid #090b08; }
+    .os .detail-meta { border-color: #090b08; }
+    .os .detail-meta div { border-color: #090b08; }
+    .os .booking-card { border: 2px solid #090b08; background: rgba(255,255,255,.12); }
+    .os .status { color: #d7ff3b; background: #090b08; }
+    .os .product-photo { filter: grayscale(1) contrast(1.2); border-block: 3px solid #090b08; }
+    .os .sizes span { border: 1px solid #090b08; border-radius: 0; }
+    .os .sizes .active { color: #d7ff3b; background: #090b08; }
+
+    .source-note {
+      max-width: 1180px;
+      margin: 0 auto;
+      padding: 0 0 24px;
+      color: var(--muted);
+      font: 700 10px ui-monospace, SFMono-Regular, Menlo, monospace;
+      text-transform: uppercase;
+    }
+
+    .source-note a { color: inherit; }
+
+    @media (max-width: 800px) {
+      .review-bar { align-items: stretch; flex-wrap: wrap; padding: 12px; }
+      .review-title { min-width: 100%; }
+      .tabs { flex: 1; overflow-x: auto; }
+      .tab { flex: 1; white-space: nowrap; }
+      .theme-toggle { margin-left: 0; }
+      .direction { padding-inline: 0; }
+      .direction-intro { display: block; padding: 0 18px; }
+      .direction-intro p { margin-top: 18px; }
+      .screen-rail { padding-inline: 18px; }
+    }
+  </style>
+</head>
+<body data-branding="target" data-artifact-style="house">
+  <header class="review-bar">
+    <div class="review-title">
+      <strong>Island Training Club — Mobile App</strong>
+      <span>3 directions · 5 screens each</span>
+    </div>
+    <nav class="tabs" aria-label="Design directions">
+      <button class="tab" data-target="night" aria-selected="true">1 · Night Circuit</button>
+      <button class="tab" data-target="journal" aria-selected="false">2 · Community Journal</button>
+      <button class="tab" data-target="os" aria-selected="false">3 · Training OS</button>
+    </nav>
+    <button class="theme-toggle" type="button">Review theme</button>
+  </header>
+
+  <main>
+    <section class="direction active night" id="night">
+      <div class="direction-intro">
+        <div>
+          <div class="eyebrow">Direction 1 · Brand-forward</div>
+          <h1>Night Circuit</h1>
+        </div>
+        <p>The closest extension of the current website: black grid, electric lime, compressed athletic type, and a fast booking path. Best if the app should feel unmistakably ITC from the first tap.</p>
+      </div>
+      <div class="screen-rail">
+        <article class="screen-wrap">
+          <div class="screen-label"><span>01</span><span>Member home</span></div>
+          <div class="phone"><div class="app">
+            <div class="app-top"><img class="app-logo" src="assets/itc/logo.webp" alt="ITC"><div class="avatar">IK</div></div>
+            <div class="kicker">Thursday · 23 July</div>
+            <h2 class="display">Train together.</h2>
+            <div class="hero-booking">
+              <img class="photo" src="assets/itc/main.webp" alt="">
+              <div class="hero-copy">
+                <div class="kicker" style="margin-top:0">Next session · 9 spots</div>
+                <h3>Weds Night Training</h3>
+                <p>7:30 PM · Tamar Park · All levels</p>
+                <button class="primary" type="button">Book a class</button>
+              </div>
+            </div>
+            <nav class="bottom-nav"><span class="active">Home</span><span>Schedule</span><span>Bookings</span><span>Shop</span><span>Profile</span></nav>
+          </div></div>
+        </article>
+
+        <article class="screen-wrap">
+          <div class="screen-label"><span>02</span><span>Class schedule</span></div>
+          <div class="phone"><div class="app">
+            <div class="app-top"><img class="app-logo" src="assets/itc/logo.webp" alt="ITC"><div class="avatar">IK</div></div>
+            <div class="kicker">20—26 July 2026</div>
+            <h2 class="display">Find your session.</h2>
+            <div class="week">
+              <div class="day">Mon<strong>20</strong></div><div class="day">Tue<strong>21</strong></div><div class="day">Wed<strong>22</strong></div><div class="day active">Thu<strong>23</strong></div><div class="day">Fri<strong>24</strong></div><div class="day">Sat<strong>25</strong></div><div class="day">Sun<strong>26</strong></div>
+            </div>
+            <div class="filters"><span class="active">All</span><span>Strength</span><span>Run</span><span>HYROX</span></div>
+            <div class="session-list">
+              <div class="session-row"><time>07:00</time><div><h3>ITC Run Club</h3><p>Central Harbourfront</p></div><b>12 spots</b></div>
+              <div class="session-row"><time>19:30</time><div><h3>Weds Night Training</h3><p>Tamar Park · All levels</p></div><b>9 spots</b></div>
+              <div class="session-row"><time>10:00</time><div><h3>ITC HYROX</h3><p>Saturday · Gym entry fee</p></div><b>4 spots</b></div>
+              <div class="session-row"><time>18:30</time><div><h3>Water Sports</h3><p>Tuesday · Victoria Park</p></div><b>Open</b></div>
+            </div>
+            <nav class="bottom-nav"><span>Home</span><span class="active">Schedule</span><span>Bookings</span><span>Shop</span><span>Profile</span></nav>
+          </div></div>
+        </article>
+
+        <article class="screen-wrap">
+          <div class="screen-label"><span>03</span><span>Class detail + booking</span></div>
+          <div class="phone"><div class="app">
+            <div class="app-top"><img class="app-logo" src="assets/itc/logo.webp" alt="ITC"><span class="kicker" style="margin-top:0">Back</span></div>
+            <img class="photo detail-photo" src="assets/itc/main.webp" alt="">
+            <div class="kicker">Flagship · All levels</div>
+            <h2 class="display" style="font-size:34px;max-width:12ch">Weds Night Training</h2>
+            <div class="detail-meta"><div><small>When</small><strong>Wed · 7:30</strong></div><div><small>Where</small><strong>Tamar Park</strong></div><div><small>Spots</small><strong>9 left</strong></div></div>
+            <p class="subcopy">Structured strength and conditioning led by the community. Come ready to move; we scale every workout.</p>
+            <button class="primary" type="button">Confirm booking</button>
+            <nav class="bottom-nav"><span>Home</span><span class="active">Schedule</span><span>Bookings</span><span>Shop</span><span>Profile</span></nav>
+          </div></div>
+        </article>
+
+        <article class="screen-wrap">
+          <div class="screen-label"><span>04</span><span>My bookings</span></div>
+          <div class="phone"><div class="app">
+            <div class="app-top"><img class="app-logo" src="assets/itc/logo.webp" alt="ITC"><div class="avatar">IK</div></div>
+            <div class="kicker">2 upcoming</div>
+            <h2 class="display">My training.</h2>
+            <div class="booking-list">
+              <section class="booking-card"><header><div><div class="kicker" style="margin-top:0">Wed · 29 July</div><h3>Weds Night Training</h3></div><span class="status">Booked</span></header><p>7:30 PM · Tamar Park<br>All levels · 60 min</p></section>
+              <section class="booking-card"><header><div><div class="kicker" style="margin-top:0">Sat · 1 August</div><h3>ITC HYROX</h3></div><span class="status">Booked</span></header><p>10:00 AM · Quarry Bay<br>Gym entry fee · 75 min</p></section>
+            </div>
+            <div class="kicker" style="margin-top:28px">Past sessions</div>
+            <p class="subcopy">Your completed sessions and check-ins will appear here.</p>
+            <nav class="bottom-nav"><span>Home</span><span>Schedule</span><span class="active">Bookings</span><span>Shop</span><span>Profile</span></nav>
+          </div></div>
+        </article>
+
+        <article class="screen-wrap">
+          <div class="screen-label"><span>05</span><span>Merch shop</span></div>
+          <div class="phone"><div class="app">
+            <div class="app-top"><img class="app-logo" src="assets/itc/logo.webp" alt="ITC"><span class="kicker" style="margin-top:0">Bag · 0</span></div>
+            <div class="kicker">Community kit · Drop 01</div>
+            <h2 class="display">Wear the club.</h2>
+            <img class="photo product-photo" src="assets/itc/community.webp" alt="">
+            <div class="product-line"><div><h3>ITC Core Tee</h3><p class="subcopy" style="margin-top:5px!important">Heavyweight black training tee</p></div><strong>HK$280</strong></div>
+            <div class="sizes"><span>S</span><span class="active">M</span><span>L</span><span>XL</span></div>
+            <button class="primary" type="button">Add to bag</button>
+            <nav class="bottom-nav"><span>Home</span><span>Schedule</span><span>Bookings</span><span class="active">Shop</span><span>Profile</span></nav>
+          </div></div>
+        </article>
+      </div>
+      <div class="source-note">Visual source: <a href="https://islandtrainingclub.vercel.app/">islandtrainingclub.vercel.app</a></div>
+    </section>
+
+    <section class="direction journal" id="journal">
+      <div class="direction-intro">
+        <div>
+          <div class="eyebrow">Direction 2 · Community-first</div>
+          <h1>Community Journal</h1>
+        </div>
+        <p>A warmer, more human interpretation built around faces, shared sessions, and simple editorial layouts. Best if member belonging should lead and the athletic brand should feel welcoming rather than intense.</p>
+      </div>
+      <div class="screen-rail">
+        <article class="screen-wrap">
+          <div class="screen-label"><span>01</span><span>Member home</span></div>
+          <div class="phone"><div class="app">
+            <div class="app-top"><img class="app-logo" src="assets/itc/logo.webp" alt="ITC"><div class="avatar">IK</div></div>
+            <div class="kicker">Thursday, 23 July</div>
+            <h2 class="display">Good to see you.</h2>
+            <img class="photo journal-photo" src="assets/itc/community.webp" alt="">
+            <div class="journal-next"><time>7:30</time><div><h3>Weds Night Training</h3><p>Tamar Park · 9 places left</p></div></div>
+            <button class="primary" type="button">Book this session</button>
+            <nav class="bottom-nav"><span class="active">Home</span><span>Classes</span><span>My week</span><span>Shop</span><span>Profile</span></nav>
+          </div></div>
+        </article>
+
+        <article class="screen-wrap">
+          <div class="screen-label"><span>02</span><span>Class schedule</span></div>
+          <div class="phone"><div class="app">
+            <div class="app-top"><img class="app-logo" src="assets/itc/logo.webp" alt="ITC"><div class="avatar">IK</div></div>
+            <div class="kicker">Week of 20 July</div>
+            <h2 class="display">Make time to move.</h2>
+            <div class="week">
+              <div class="day">Mon<strong>20</strong></div><div class="day">Tue<strong>21</strong></div><div class="day">Wed<strong>22</strong></div><div class="day active">Thu<strong>23</strong></div><div class="day">Fri<strong>24</strong></div><div class="day">Sat<strong>25</strong></div><div class="day">Sun<strong>26</strong></div>
+            </div>
+            <div class="filters"><span class="active">All</span><span>Strength</span><span>Run</span><span>HYROX</span></div>
+            <div class="session-list">
+              <div class="session-row"><time>Mon</time><div><h3>ITC Run Club</h3><p>7:00 AM · Harbourfront</p></div><b>12</b></div>
+              <div class="session-row"><time>Wed</time><div><h3>Weds Night Training</h3><p>7:30 PM · Tamar Park</p></div><b>9</b></div>
+              <div class="session-row"><time>Sat</time><div><h3>ITC HYROX</h3><p>10:00 AM · Quarry Bay</p></div><b>4</b></div>
+              <div class="session-row"><time>Sun</time><div><h3>Trail Running</h3><p>8:00 AM · Route shared soon</p></div><b>Open</b></div>
+            </div>
+            <nav class="bottom-nav"><span>Home</span><span class="active">Classes</span><span>My week</span><span>Shop</span><span>Profile</span></nav>
+          </div></div>
+        </article>
+
+        <article class="screen-wrap">
+          <div class="screen-label"><span>03</span><span>Class detail + booking</span></div>
+          <div class="phone"><div class="app">
+            <div class="app-top"><img class="app-logo" src="assets/itc/logo.webp" alt="ITC"><span class="kicker" style="margin-top:0">Back to classes</span></div>
+            <img class="photo detail-photo" src="assets/itc/main.webp" alt="">
+            <div class="kicker">Wednesday · 7:30 PM</div>
+            <h2 class="display" style="font-size:35px;max-width:12ch">Weds Night Training</h2>
+            <p class="subcopy">Our flagship all-level session at Tamar Park. Come as you are; the community will help you find your pace.</p>
+            <div class="detail-meta"><div><small>Length</small><strong>60 min</strong></div><div><small>Level</small><strong>Everyone</strong></div><div><small>Places</small><strong>9 left</strong></div></div>
+            <button class="primary" type="button">Reserve my spot</button>
+            <nav class="bottom-nav"><span>Home</span><span class="active">Classes</span><span>My week</span><span>Shop</span><span>Profile</span></nav>
+          </div></div>
+        </article>
+
+        <article class="screen-wrap">
+          <div class="screen-label"><span>04</span><span>My bookings</span></div>
+          <div class="phone"><div class="app">
+            <div class="app-top"><img class="app-logo" src="assets/itc/logo.webp" alt="ITC"><div class="avatar">IK</div></div>
+            <div class="kicker">Your next seven days</div>
+            <h2 class="display">My week.</h2>
+            <div class="booking-list">
+              <section class="booking-card"><header><div><div class="kicker" style="margin-top:0">Wed · 29 July · 7:30 PM</div><h3>Weds Night Training</h3></div><span class="status">Going</span></header><p>Tamar Park · You’re joining 31 members.</p></section>
+              <section class="booking-card"><header><div><div class="kicker" style="margin-top:0">Sat · 1 August · 10:00 AM</div><h3>ITC HYROX</h3></div><span class="status">Going</span></header><p>Quarry Bay · You’re joining 14 members.</p></section>
+            </div>
+            <div class="kicker" style="margin-top:30px">A note from the team</div>
+            <p class="subcopy">Bring water, arrive ten minutes early, and look out for the lime ITC flag.</p>
+            <nav class="bottom-nav"><span>Home</span><span>Classes</span><span class="active">My week</span><span>Shop</span><span>Profile</span></nav>
+          </div></div>
+        </article>
+
+        <article class="screen-wrap">
+          <div class="screen-label"><span>05</span><span>Merch shop</span></div>
+          <div class="phone"><div class="app">
+            <div class="app-top"><img class="app-logo" src="assets/itc/logo.webp" alt="ITC"><span class="kicker" style="margin-top:0">Bag · 0</span></div>
+            <div class="kicker">Made for the community</div>
+            <h2 class="display">Community kit.</h2>
+            <img class="photo product-photo" src="assets/itc/community.webp" alt="">
+            <div class="product-line"><div><h3>Club Training Tee</h3><p class="subcopy" style="margin-top:5px!important">Black · Unisex fit</p></div><strong>HK$280</strong></div>
+            <div class="sizes"><span>S</span><span class="active">M</span><span>L</span><span>XL</span></div>
+            <button class="primary" type="button">Add to bag</button>
+            <nav class="bottom-nav"><span>Home</span><span>Classes</span><span>My week</span><span class="active">Shop</span><span>Profile</span></nav>
+          </div></div>
+        </article>
+      </div>
+      <div class="source-note">Visual source: <a href="https://islandtrainingclub.vercel.app/">islandtrainingclub.vercel.app</a></div>
+    </section>
+
+    <section class="direction os" id="os">
+      <div class="direction-intro">
+        <div>
+          <div class="eyebrow">Direction 3 · Utility-first</div>
+          <h1>Training OS</h1>
+        </div>
+        <p>A sharper operating system for committed members: dense weekly planning, clear availability, fast status reading, and direct actions. Best if bookings and repeat training habits matter more than editorial storytelling.</p>
+      </div>
+      <div class="screen-rail">
+        <article class="screen-wrap">
+          <div class="screen-label"><span>01</span><span>Member home</span></div>
+          <div class="phone"><div class="app">
+            <div class="app-top"><img class="app-logo" src="assets/itc/logo.webp" alt="ITC"><div class="avatar">IK</div></div>
+            <div class="kicker">Thu 23 Jul · Hong Kong</div>
+            <h2 class="display">Your next move.</h2>
+            <section class="os-panel">
+              <img class="photo" src="assets/itc/main.webp" alt="">
+              <header><div><div class="kicker" style="margin-top:0;color:#d7ff3b">Next / 19:30</div><h3>Weds Night Training</h3></div><small>Tamar Park<br>9 spots<br>All levels</small></header>
+              <button class="primary" type="button">Book</button>
+            </section>
+            <nav class="bottom-nav"><span class="active">Today</span><span>Plan</span><span>Bookings</span><span>Shop</span><span>Account</span></nav>
+          </div></div>
+        </article>
+
+        <article class="screen-wrap">
+          <div class="screen-label"><span>02</span><span>Class schedule</span></div>
+          <div class="phone"><div class="app">
+            <div class="app-top"><img class="app-logo" src="assets/itc/logo.webp" alt="ITC"><div class="avatar">IK</div></div>
+            <div class="kicker">Plan / Week 30</div>
+            <h2 class="display">20—26 July.</h2>
+            <div class="week">
+              <div class="day">M<strong>20</strong></div><div class="day">T<strong>21</strong></div><div class="day">W<strong>22</strong></div><div class="day active">T<strong>23</strong></div><div class="day">F<strong>24</strong></div><div class="day">S<strong>25</strong></div><div class="day">S<strong>26</strong></div>
+            </div>
+            <div class="filters"><span class="active">ALL</span><span>RUN</span><span>STRENGTH</span><span>HYROX</span></div>
+            <div class="session-list">
+              <div class="session-row"><time>MON<br>0700</time><div><h3>Run Club</h3><p>Central Harbourfront</p></div><b>12/24</b></div>
+              <div class="session-row"><time>WED<br>1930</time><div><h3>Night Training</h3><p>Tamar Park · 60 min</p></div><b>31/40</b></div>
+              <div class="session-row"><time>SAT<br>1000</time><div><h3>HYROX</h3><p>Quarry Bay · 75 min</p></div><b>14/18</b></div>
+              <div class="session-row"><time>SUN<br>0800</time><div><h3>Trail Run</h3><p>Route pending · 90 min</p></div><b>Open</b></div>
+            </div>
+            <nav class="bottom-nav"><span>Today</span><span class="active">Plan</span><span>Bookings</span><span>Shop</span><span>Account</span></nav>
+          </div></div>
+        </article>
+
+        <article class="screen-wrap">
+          <div class="screen-label"><span>03</span><span>Class detail + booking</span></div>
+          <div class="phone"><div class="app">
+            <div class="app-top"><img class="app-logo" src="assets/itc/logo.webp" alt="ITC"><span class="kicker" style="margin-top:0">Class / WNT-0729</span></div>
+            <img class="photo detail-photo" src="assets/itc/main.webp" alt="">
+            <div class="kicker">Wed 29 Jul · 19:30—20:30</div>
+            <h2 class="display" style="font-size:35px;max-width:12ch">Weds Night Training</h2>
+            <div class="detail-meta"><div><small>Load</small><strong>Moderate</strong></div><div><small>Capacity</small><strong>31 / 40</strong></div><div><small>Leader</small><strong>ITC Team</strong></div></div>
+            <p class="subcopy">Warm-up / strength circuit / conditioning / cooldown. Scaled options available for every movement.</p>
+            <button class="primary" type="button">Confirm booking</button>
+            <nav class="bottom-nav"><span>Today</span><span class="active">Plan</span><span>Bookings</span><span>Shop</span><span>Account</span></nav>
+          </div></div>
+        </article>
+
+        <article class="screen-wrap">
+          <div class="screen-label"><span>04</span><span>My bookings</span></div>
+          <div class="phone"><div class="app">
+            <div class="app-top"><img class="app-logo" src="assets/itc/logo.webp" alt="ITC"><div class="avatar">IK</div></div>
+            <div class="kicker">Training log / Upcoming</div>
+            <h2 class="display">2 booked.</h2>
+            <div class="booking-list">
+              <section class="booking-card"><header><div><div class="kicker" style="margin-top:0">WNT-0729 / Wed 19:30</div><h3>Weds Night Training</h3></div><span class="status">Booked</span></header><p>Tamar Park / Arrive 19:20 / 60 min</p></section>
+              <section class="booking-card"><header><div><div class="kicker" style="margin-top:0">HYX-0801 / Sat 10:00</div><h3>ITC HYROX</h3></div><span class="status">Booked</span></header><p>Quarry Bay / Gym fee / 75 min</p></section>
+            </div>
+            <div class="kicker" style="margin-top:28px">Check-in rule</div>
+            <p class="subcopy">Your booking becomes a completed session after leader check-in.</p>
+            <nav class="bottom-nav"><span>Today</span><span>Plan</span><span class="active">Bookings</span><span>Shop</span><span>Account</span></nav>
+          </div></div>
+        </article>
+
+        <article class="screen-wrap">
+          <div class="screen-label"><span>05</span><span>Merch shop</span></div>
+          <div class="phone"><div class="app">
+            <div class="app-top"><img class="app-logo" src="assets/itc/logo.webp" alt="ITC"><span class="kicker" style="margin-top:0">Bag / 00</span></div>
+            <div class="kicker">Equipment / Apparel / 001</div>
+            <h2 class="display">Core training tee.</h2>
+            <img class="photo product-photo" src="assets/itc/community.webp" alt="">
+            <div class="product-line"><div><h3>ITC / Core Tee</h3><p class="subcopy" style="margin-top:5px!important">240 GSM / Black / Unisex</p></div><strong>HK$280</strong></div>
+            <div class="sizes"><span>S</span><span class="active">M</span><span>L</span><span>XL</span></div>
+            <button class="primary" type="button">Add to bag / 01</button>
+            <nav class="bottom-nav"><span>Today</span><span>Plan</span><span>Bookings</span><span class="active">Shop</span><span>Account</span></nav>
+          </div></div>
+        </article>
+      </div>
+      <div class="source-note">Visual source: <a href="https://islandtrainingclub.vercel.app/">islandtrainingclub.vercel.app</a></div>
+    </section>
+  </main>
+
+  <script>
+    const tabs = [...document.querySelectorAll(".tab")];
+    const directions = [...document.querySelectorAll(".direction")];
+
+    tabs.forEach((tab) => {
+      tab.addEventListener("click", () => {
+        tabs.forEach((candidate) => candidate.setAttribute("aria-selected", "false"));
+        tab.setAttribute("aria-selected", "true");
+        directions.forEach((direction) => direction.classList.toggle("active", direction.id === tab.dataset.target));
+        window.scrollTo({ top: 0, behavior: "smooth" });
+      });
+    });
+
+    document.querySelector(".theme-toggle").addEventListener("click", () => {
+      const next = document.documentElement.dataset.theme === "dark" ? "light" : "dark";
+      document.documentElement.dataset.theme = next;
+      localStorage.setItem("itc-review-theme", next);
+    });
+  </script>
+</body>
+</html>
