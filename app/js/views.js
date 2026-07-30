@@ -177,7 +177,7 @@ export function viewHome() {
     ${encouragement}
     ${guest}
     <div class="section-head">
-      <h2>My week</h2>
+      <h2>My Week</h2>
       <a href="#/schedule">See more →</a>
     </div>
     <div class="session-list">
