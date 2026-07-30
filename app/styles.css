@@ -814,7 +814,7 @@ input, select, textarea { font: inherit; }
   display: block;
   width: 100%;
   height: 100%;
-  object-fit: contain; /* show the full garment, letterboxed on the dark backdrop */
+  object-fit: cover; /* images are pre-rendered to the tile's proportions */
 }
 
 .product-card h3 { font-size: 14.5px; }
