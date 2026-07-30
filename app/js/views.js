@@ -9,8 +9,11 @@ import * as store from "./store.js";
 import {
   LEADERS,
   CULTURE,
+  GIVING_CAMPAIGN,
+  SHOP_PRODUCTS,
   findSession,
   sessionsInRange,
+  weeklyVerse,
   mondayOf,
   addDays,
   todayLocal,
@@ -47,17 +50,17 @@ function spotsLabel(s) {
   return `<span class="spots">${spots} spot${spots === 1 ? "" : "s"} left</span>`;
 }
 
-function sessionRow(s, { past } = {}) {
+function sessionRow(s, { past, showDate = true, highlight } = {}) {
   const end =
     s.kind === "free"
       ? `<span class="badge free">Free</span><span class="spots">Just show up</span>`
       : `${store.spotsLeft(s) > 0 ? `<span class="badge paid">${fmtMoney(s.price)}</span>` : ""}${spotsLabel(s)}`;
   return `
-    <a class="session-row ${past ? "is-past" : ""}" href="#/activity/${s.id}">
-      <time>${fmtTime(s.time)}<small>${esc(s.category)}</small></time>
+    <a class="session-row${past ? " is-past" : ""}${highlight ? " next" : ""}" href="#/activity/${s.id}">
+      <time>${fmtTime(s.time)}</time>
       <div>
         <h3>${esc(s.name)}</h3>
-        <p>${esc(fmtDate(s.date))} · ${esc(s.location)}</p>
+        <p>${showDate ? `${esc(fmtDate(s.date))} · ${esc(s.location)}` : esc(s.location)}</p>
       </div>
       <div class="row-end">${end}</div>
     </a>`;
@@ -84,6 +87,8 @@ const ICONS = {
   check: '<svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="m4.5 12.5 5 5 10-11"/></svg>',
   pin: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 21s-7-5.3-7-11a7 7 0 0 1 14 0c0 5.7-7 11-7 11Z"/><circle cx="12" cy="10" r="2.6"/></svg>',
   cal: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4.5" width="18" height="17" rx="2"/><path d="M3 9.5h18M8 2.5v4M16 2.5v4"/></svg>',
+  heart: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20.5C7 16.5 3.5 13.2 3.5 9.6 3.5 7 5.5 5 8 5c1.6 0 3.1.8 4 2.1.9-1.3 2.4-2.1 4-2.1 2.5 0 4.5 2 4.5 4.6 0 3.6-3.5 6.9-8.5 10.9Z"/></svg>',
+  bag: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M5.5 8h13l-1.1 12.5H6.6Z"/><path d="M8.5 10.5V6.8a3.5 3.5 0 0 1 7 0v3.7"/></svg>',
 };
 
 // --- Bottom nav / avatar --------------------------------------------------------
@@ -92,6 +97,8 @@ const NAV_ITEMS = [
   { key: "home", label: "Home", icon: "home", href: "#/home" },
   { key: "schedule", label: "Schedule", icon: "calendar", href: "#/schedule" },
   { key: "community", label: "Community", icon: "people", href: "#/community" },
+  { key: "giving", label: "Giving", icon: "heart", href: "#/giving" },
+  { key: "shop", label: "Shop", icon: "bag", href: "#/shop" },
   { key: "account", label: "Account", icon: "user", href: "#/account" },
   { key: "admin", label: "Admin", icon: "shield", href: "#/admin", roles: ["admin", "superadmin"] },
 ];
@@ -102,7 +109,7 @@ export function navHTML(routeKey, user) {
     .map(
       (i) => `
       <a href="${i.href}" class="${i.key === routeKey ? "active" : ""}" ${i.key === routeKey ? 'aria-current="page"' : ""}>
-        ${ICONS[i.icon]}<span>${i.label}</span>
+        ${ICONS[i.icon]}<span>${i.key === "account" && user ? "Profile" : i.label}</span>
       </a>`
     )
     .join("");
@@ -118,23 +125,8 @@ export function avatarHTML(user) {
 
 export function viewHome() {
   const user = store.currentUser();
-  const next = store.nextSession();
   const upcoming = store.upcomingSessions(7).slice(0, 3);
   const name = user ? esc(user.preferredName || user.fullName.split(" ")[0]) : null;
-
-  const hero = next
-    ? `
-    <a class="card hero-card" href="#/activity/${next.id}" style="display:block;text-decoration:none">
-      <img class="photo" src="${next.photo}" alt="">
-      <div class="card-body">
-        <span class="kicker">Next up · ${esc(fmtDate(next.date))} · ${fmtTime(next.time)}</span>
-        <h3>${esc(next.name)}</h3>
-        <p class="hero-meta">${esc(next.location)} · ${next.durationMin} min</p>
-        <div class="mt8">${badgeFor(next)}${next.kind === "paid" ? ` ${spotsLabel(next)}` : ""}</div>
-        <span class="btn mt16">${next.kind === "free" ? "View details" : `View & book · ${fmtMoney(next.price)}`}</span>
-      </div>
-    </a>`
-    : `<div class="empty">No upcoming sessions — check back soon.</div>`;
 
   const guest = !user
     ? `
@@ -149,18 +141,28 @@ export function viewHome() {
     </div></div>`
     : "";
 
+  const verse = weeklyVerse();
+  const encouragement = `
+    <div class="card mt16"><div class="card-body">
+      <span class="kicker">Encouragement of the week</span>
+      <p class="verse-text">“${esc(verse.text)}”</p>
+      <p class="hero-meta">${esc(verse.ref)}</p>
+    </div></div>`;
+
   return `
     <div class="kicker">${esc(fmtDateLong(todayLocal()))} · Hong Kong</div>
     <h1 class="display">${name ? `Good to see you, ${name}.` : "Train together."}</h1>
     ${user && user.status === "pending" ? pendingBanner() : ""}
-    ${hero}
+    ${encouragement}
     ${guest}
     <div class="section-head">
-      <h2>This week</h2>
-      <a href="#/schedule">Full schedule →</a>
+      <h2>My week</h2>
+      <a href="#/schedule">See more →</a>
     </div>
     <div class="session-list">
-      ${upcoming.map((s) => sessionRow(s)).join("")}
+      ${upcoming.length
+        ? upcoming.map((s, i) => sessionRow(s, { highlight: i === 0 })).join("")
+        : `<div class="empty">No upcoming sessions — check back soon.</div>`}
     </div>
     <div class="section-head"><h2>The club</h2><a href="#/community">More →</a></div>
     <a class="card" href="#/community" style="display:block;text-decoration:none">
@@ -221,12 +223,12 @@ export function viewSchedule() {
     .filter((s) => matchesFilter(s, scheduleState.filter));
 
   const listHTML = list.length
-    ? list.map((s) => sessionRow(s, { past: s.dateISO < todayISO() })).join("")
+    ? list.map((s) => sessionRow(s, { past: s.dateISO < todayISO(), showDate: false })).join("")
     : `<div class="empty">No ${scheduleState.filter === "all" ? "" : esc(scheduleState.filter) + " "}sessions on ${esc(fmtDate(scheduleState.selected))}.</div>`;
 
   return `
     <div class="kicker">Week of ${esc(fmtDateLong(monday))}</div>
-    <h1 class="display">Find your session.</h1>
+    <h1 class="display">Find your next session</h1>
     <div class="week-strip">${cells}</div>
     <div class="week-nav">
       <button type="button" data-action="sched-week" data-dir="-1">← Prev week</button>
@@ -265,9 +267,9 @@ export function viewActivity(sessionId) {
         ${ICONS.pin}
         <div><strong>Free · No booking needed.</strong><br><span class="muted small">Everyone is welcome — just show up${s.id.startsWith("wnt") ? " and look for the lime ITC flag" : ""}.</span></div>
       </div>
-      <div class="btn-row two">
+      <div class="btn-row ${s.mapsQuery ? "two" : ""}">
         <button class="btn" type="button" data-action="ics" data-session="${s.id}">Add to calendar</button>
-        <a class="btn ghost" href="${mapsHref(s)}" target="_blank" rel="noopener">Get directions</a>
+        ${s.mapsQuery ? `<a class="btn ghost" href="${mapsHref(s)}" target="_blank" rel="noopener">Get directions</a>` : ""}
       </div>`;
   } else if (booking) {
     actionBlock = `
@@ -377,6 +379,223 @@ export function viewCommunity() {
     <p class="muted small mt16">Community copy is draft placeholder text for review with ITC leadership.</p>`;
 }
 
+// --- Giving ---------------------------------------------------------------------------------
+// Mock FPS donation flow. FPS is a push payment from the donor's banking
+// app, so the flow is: choose an amount -> transfer with the shown reference
+// -> gift recorded as "awaiting confirmation" until a leader reconciles it.
+
+export const givingState = {
+  step: 1, // 1 = amount, 2 = FPS instructions, 3 = thank you
+  amount: 200,
+  name: "",
+  note: "",
+  ref: null,
+};
+
+export function resetGivingState() {
+  givingState.step = 1;
+  givingState.amount = 200;
+  givingState.name = "";
+  givingState.note = "";
+  givingState.ref = null;
+}
+
+export function viewGiving() {
+  const user = store.currentUser();
+  const raised = store.campaignRaised();
+  const goal = GIVING_CAMPAIGN.goalHKD;
+  const pct = Math.min(100, Math.round((raised / goal) * 100));
+
+  const flow =
+    givingState.step === 2
+      ? givingFpsStep()
+      : givingState.step === 3
+        ? givingThanksStep()
+        : givingAmountStep(user);
+
+  return `
+    <div class="kicker">Giving &amp; Fundraising</div>
+    <h1 class="display">Every step can give back.</h1>
+    <div class="card mt16"><div class="card-body">
+      <span class="kicker">Current campaign</span>
+      <h3 class="mt8">${esc(GIVING_CAMPAIGN.title)}</h3>
+      <p class="hero-meta">${esc(GIVING_CAMPAIGN.subtitle)}</p>
+      <div class="progress mt16"><i style="width:${pct}%"></i></div>
+      <div class="progress-meta">
+        <strong>${fmtMoney(raised)} raised</strong>
+        <span>${pct}% of ${fmtMoney(goal)} goal</span>
+      </div>
+    </div></div>
+    ${flow}
+    <div class="section-head"><h2>Giving history</h2></div>
+    ${givingHistory(user)}`;
+}
+
+function givingAmountStep(user) {
+  return `
+    <div class="card mt16"><div class="card-body">
+      <h3>Give via FPS</h3>
+      <form id="form-giving" novalidate>
+        <div class="chip-row mt16">
+          ${[100, 200, 500, 1000]
+            .map(
+              (a) => `
+            <button type="button" class="chip${givingState.amount === a ? " active" : ""}"
+              data-action="giving-amount" data-amount="${a}">${fmtMoney(a)}</button>`
+            )
+            .join("")}
+        </div>
+        <div class="field">
+          <label for="give-amount">Amount (HKD)</label>
+          <input id="give-amount" name="amount" type="number" min="1" step="1" inputmode="numeric" value="${givingState.amount}" required>
+        </div>
+        <div class="field">
+          <label for="give-name">Your name</label>
+          <input id="give-name" name="name" autocomplete="name" value="${esc(givingState.name || user?.fullName || "")}" required>
+        </div>
+        <div class="field">
+          <label for="give-note">Message (optional)</label>
+          <input id="give-note" name="note" value="${esc(givingState.note)}" placeholder="e.g. Go ITC runners!">
+        </div>
+        <div id="giving-error"></div>
+        <button class="btn mt16" type="submit">Continue</button>
+        ${user ? "" : `<p class="muted small mt8 center">Tip: sign in first and this gift will appear in your giving history.</p>`}
+      </form>
+    </div></div>`;
+}
+
+function givingFpsStep() {
+  return `
+    <div class="card mt16"><div class="card-body">
+      <span class="kicker">Step 2 · Complete the transfer</span>
+      <h3 class="mt8">Pay ${fmtMoney(givingState.amount)} via FPS</h3>
+      <div class="fps-qr" aria-hidden="true">FPS QR<br>placeholder</div>
+      <div class="receipt-lines">
+        <div class="line"><span>FPS ID</span><strong class="mono">${esc(GIVING_CAMPAIGN.fpsId)}</strong></div>
+        <div class="line"><span>Payee</span><strong>${esc(GIVING_CAMPAIGN.fpsPayee)}</strong></div>
+        <div class="line"><span>Amount</span><strong>${fmtMoney(givingState.amount)}</strong></div>
+        <div class="line total"><span>Reference</span><strong class="mono">${esc(givingState.ref)}</strong></div>
+      </div>
+      <p class="muted small mt8">Open your banking app, choose FPS, and pay using the details above. Put the reference in the transfer remarks so a leader can match your gift.</p>
+      <div class="btn-row">
+        <button class="btn" type="button" data-action="giving-confirm">I’ve made the transfer</button>
+        <button class="btn ghost" type="button" data-action="giving-back">Back</button>
+      </div>
+      <p class="muted small mt8">Mock flow — no real payment. Gifts show as “Awaiting confirmation” until a leader reconciles the FPS transfer.</p>
+    </div></div>`;
+}
+
+function givingThanksStep() {
+  return `
+    <div class="confirm-mark">${ICONS.check}</div>
+    <h1 class="display sm center mt16">Thank you, ${esc(givingState.name.split(" ")[0] || "friend")}.</h1>
+    <p class="subcopy center mt8">Your gift of ${fmtMoney(givingState.amount)} is recorded — ref <span class="mono">${esc(givingState.ref)}</span>. It will show as confirmed once a leader reconciles the transfer.</p>
+    <div class="btn-row">
+      <button class="btn" type="button" data-action="giving-reset">Back to Giving</button>
+    </div>`;
+}
+
+function givingHistory(user) {
+  if (!user) {
+    return `<div class="locked-note">🔒 Sign in to see your giving history.</div>`;
+  }
+  const list = store.donationsForUser(user.id);
+  if (!list.length) {
+    return `<div class="empty">Your gifts will appear here.</div>`;
+  }
+  return `
+    <div class="session-list">
+      ${list
+        .map(
+          (d) => `
+        <div class="session-row">
+          <time>${new Date(d.createdAt).toLocaleDateString("en-HK", { day: "numeric", month: "short" })}<small>${esc(d.ref)}</small></time>
+          <div>
+            <h3>${fmtMoney(d.amount)}</h3>
+            <p>${esc(GIVING_CAMPAIGN.title)} · FPS${d.note ? ` · “${esc(d.note)}”` : ""}</p>
+          </div>
+          <div class="row-end">
+            ${d.status === "confirmed" ? '<span class="badge free">Confirmed</span>' : '<span class="badge warn">Awaiting confirmation</span>'}
+          </div>
+        </div>`
+        )
+        .join("")}
+    </div>`;
+}
+
+// --- Shop (preview mockup — not in the initial launch) ------------------------------------------
+
+export function viewShop() {
+  const user = store.currentUser();
+  const orders = user ? store.ordersForUser(user.id) : [];
+
+  const orderRows = orders.length
+    ? `
+      <div class="session-list">
+        ${orders
+          .map(
+            (o) => `
+          <div class="session-row">
+            <time>${new Date(o.createdAt).toLocaleDateString("en-HK", { day: "numeric", month: "short" })}<small>size ${esc(o.size)}</small></time>
+            <div>
+              <h3>${esc(o.name)}</h3>
+              <p>Qty ${o.qty} · mock order — no payment taken</p>
+            </div>
+            <div class="row-end"><strong>${fmtMoney(o.amount)}</strong><span class="badge neutral">Mock</span></div>
+          </div>`
+          )
+          .join("")}
+      </div>`
+    : `<div class="empty">No orders yet — this is a preview, so nothing here is real anyway.</div>`;
+
+  return `
+    <div class="kicker">ITC Club Shop</div>
+    <h1 class="display">Wear the movement.</h1>
+    <p class="subcopy mt8">Made for training. Designed for belonging.</p>
+    <div class="banner warn mt16">
+      <span class="kicker">Preview mockup</span>
+      <p>The shop is not part of the initial app launch — it ships later, once membership and booking are stable and more members are using the app. Orders placed here are mock only: no payment, no fulfilment.</p>
+    </div>
+    <div class="product-grid mt16">
+      ${SHOP_PRODUCTS.map(
+        (p) => `
+        <div class="card product-card">
+          <div class="product-tile"><img src="${p.image}" alt="${esc(p.name)}" loading="lazy"></div>
+          <div class="card-body">
+            <h3>${esc(p.name)}</h3>
+            <p class="hero-meta">${esc(p.blurb)}</p>
+            <p class="price-line"><strong>${fmtMoney(p.price)}</strong></p>
+            ${
+              user
+                ? `
+              <form data-form="form-shop-order" data-product="${p.id}" novalidate>
+                <div class="field-row">
+                  <div class="field">
+                    <label for="size-${p.id}">Size</label>
+                    <select id="size-${p.id}" name="size">${p.sizes.map((s) => `<option>${s}</option>`).join("")}</select>
+                  </div>
+                  <div class="field">
+                    <label for="qty-${p.id}">Qty</label>
+                    <input id="qty-${p.id}" name="qty" type="number" min="1" max="5" value="1" inputmode="numeric">
+                  </div>
+                </div>
+                <button class="btn sm mt16" type="submit">Place mock order</button>
+              </form>`
+                : `<div class="locked-note">🔒 Sign in to place a mock order.</div>`
+            }
+          </div>
+        </div>`
+      ).join("")}
+    </div>
+    ${
+      user
+        ? `
+      <div class="section-head"><h2>Your mock orders</h2></div>
+      ${orderRows}`
+        : ""
+    }`;
+}
+
 // --- Account ---------------------------------------------------------------------------------
 
 export function viewAccount() {
@@ -404,9 +623,9 @@ function accountVisitor() {
       </form>
       <p class="muted small mt16">Prototype: there is no password — sign in with a seeded email, or use a one-tap demo profile.</p>
       <div class="btn-row">
-        <button class="btn ghost sm" type="button" data-action="demo-signin" data-role="member">Demo · Continue as member (Ava)</button>
-        <button class="btn ghost sm" type="button" data-action="demo-signin" data-role="admin">Demo · Continue as admin (Dan)</button>
-        <button class="btn ghost sm" type="button" data-action="demo-signin" data-role="superadmin">Demo · Continue as super admin (Isaac)</button>
+        <button class="btn ghost sm" type="button" data-action="demo-signin" data-role="member">Demo · Continue as member (CM)</button>
+        <button class="btn ghost sm" type="button" data-action="demo-signin" data-role="admin">Demo · Continue as admin (Tina)</button>
+        <button class="btn ghost sm" type="button" data-action="demo-signin" data-role="superadmin">Demo · Continue as super admin (Arnold)</button>
       </div>
     </div></div>
     <div class="card mt16"><div class="card-body">
@@ -418,7 +637,7 @@ function accountVisitor() {
 
 function accountPending(user) {
   return `
-    <div class="kicker">Account · ${esc(user.email)}</div>
+    <div class="kicker">Profile · ${esc(user.email)}</div>
     <h1 class="display">Thanks, ${esc(user.preferredName || user.fullName.split(" ")[0])}.</h1>
     ${pendingBanner()}
     <div class="card mt16"><div class="card-body">
@@ -440,7 +659,7 @@ function accountPending(user) {
 
 function accountDeclined(user) {
   return `
-    <div class="kicker">Account · ${esc(user.email)}</div>
+    <div class="kicker">Profile · ${esc(user.email)}</div>
     <h1 class="display">Application update.</h1>
     <div class="banner warn mt16">
       <span class="kicker">Not approved</span>
@@ -457,6 +676,8 @@ function accountMember(user) {
   const upcoming = bookings.filter((b) => b.status === "confirmed" && b.snapshot.dateISO >= todayISO());
   const history = bookings.filter((b) => !(b.status === "confirmed" && b.snapshot.dateISO >= todayISO()));
   const receipts = store.receiptsForUser(user.id);
+  const gifts = store.donationsForUser(user.id);
+  const totalGiven = gifts.reduce((sum, d) => sum + d.amount, 0);
   const isAdmin = ["admin", "superadmin"].includes(user.role);
 
   const roleBadge = {
@@ -491,7 +712,7 @@ function accountMember(user) {
   };
 
   return `
-    <div class="kicker">Account</div>
+    <div class="kicker">Profile</div>
     <h1 class="display">${esc(user.preferredName || user.fullName.split(" ")[0])}’s training.</h1>
     <div class="mt16">${roleBadge} <span class="muted small">${esc(user.email)}</span></div>
 
@@ -500,7 +721,37 @@ function accountMember(user) {
     <div class="section-head"><h2>Upcoming</h2></div>
     ${upcoming.length ? upcoming.map(bookingCard).join("") : `<div class="empty">Nothing booked yet. <a href="#/schedule" style="color:var(--accent)">Find a session →</a></div>`}
 
-    <div class="section-head"><h2>Receipts & payments</h2></div>
+    <div class="section-head"><h2>Membership details</h2></div>
+    <div class="card"><div class="card-body">
+      <div class="receipt-lines">
+        <div class="line"><span>Full name</span><strong>${esc(user.fullName)}</strong></div>
+        <div class="line"><span>Preferred name</span><strong>${esc(user.preferredName)}</strong></div>
+        <div class="line"><span>Member since</span><strong>${new Date(user.appliedAt).toLocaleDateString("en-HK", { day: "numeric", month: "short", year: "numeric" })}</strong></div>
+        <div class="line"><span>Phone / WhatsApp</span><strong>${esc(user.phone)}</strong></div>
+        <div class="line"><span>Emergency contact</span><strong>${esc(user.emergencyName)} · ${esc(user.emergencyPhone)}</strong></div>
+      </div>
+      <p class="muted small mt16">Profile editing is stubbed in the prototype — fields come from the application form.</p>
+    </div></div>
+
+    <div class="section-head"><h2>Donor profile</h2></div>
+    <div class="card"><div class="card-body">
+      ${
+        gifts.length
+          ? `
+        <div class="receipt-lines">
+          <div class="line"><span>Total given</span><strong>${fmtMoney(totalGiven)}</strong></div>
+          <div class="line"><span>Gifts</span><strong>${gifts.length}</strong></div>
+          <div class="line"><span>Latest gift</span><strong>${new Date(gifts[0].createdAt).toLocaleDateString("en-HK", { day: "numeric", month: "short" })}</strong></div>
+        </div>
+        <p class="muted small mt16">FPS gifts stay pending until a leader reconciles them against the club account. Full history lives on the Giving tab.</p>
+        <a class="btn ghost sm mt16" href="#/giving">Open Giving &amp; Fundraising →</a>`
+          : `
+        <p class="hero-meta">No gifts yet — every step can give back. Support the current campaign via FPS.</p>
+        <a class="btn ghost sm mt16" href="#/giving">Give via FPS →</a>`
+      }
+    </div></div>
+
+    <div class="section-head"><h2>Payments &amp; receipts</h2></div>
     ${
       receipts.length
         ? `<div class="session-list">${receipts
@@ -518,20 +769,19 @@ function accountMember(user) {
         : `<div class="empty">No payments yet.</div>`
     }
 
-    <div class="section-head"><h2>History</h2></div>
-    ${history.length ? history.map(bookingCard).join("") : `<div class="empty">Past sessions will appear here.</div>`}
-
-    <div class="section-head"><h2>Profile</h2></div>
+    <div class="section-head"><h2>Privacy &amp; notifications</h2></div>
     <div class="card"><div class="card-body">
       <div class="receipt-lines">
-        <div class="line"><span>Full name</span><strong>${esc(user.fullName)}</strong></div>
-        <div class="line"><span>Preferred name</span><strong>${esc(user.preferredName)}</strong></div>
-        <div class="line"><span>Phone / WhatsApp</span><strong>${esc(user.phone)}</strong></div>
-        <div class="line"><span>Emergency contact</span><strong>${esc(user.emergencyName)} · ${esc(user.emergencyPhone)}</strong></div>
-        <div class="line"><span>Photo consent</span><strong>${user.mediaConsent ? "Yes" : "No"}</strong></div>
+        <div class="line"><span>Photos at sessions</span><strong>${user.mediaConsent ? "Allowed" : "Not allowed"}</strong></div>
+        <div class="line"><span>WhatsApp session reminders</span><strong>On</strong></div>
+        <div class="line"><span>Email receipts</span><strong>On</strong></div>
+        <div class="line"><span>Community news</span><strong>Off</strong></div>
       </div>
-      <p class="muted small mt16">Profile editing is stubbed in the prototype — fields come from the application form.</p>
+      <p class="muted small mt16">Privacy and notification settings are stubbed for setup — they’ll be configurable here before launch.</p>
     </div></div>
+
+    <div class="section-head"><h2>History</h2></div>
+    ${history.length ? history.map(bookingCard).join("") : `<div class="empty">Past sessions will appear here.</div>`}
 
     <div class="btn-row">
       <button class="btn ghost" type="button" data-action="signout">Sign out</button>

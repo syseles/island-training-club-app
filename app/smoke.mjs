@@ -47,6 +47,8 @@ if (!paid || !free) throw new Error("expected both paid and free sessions in win
 check("activity paid (visitor)", () => views.viewActivity(paid.id));
 check("activity free (visitor)", () => views.viewActivity(free.id));
 check("community", () => views.viewCommunity());
+check("giving (visitor)", () => views.viewGiving());
+check("shop (visitor)", () => views.viewShop());
 check("account (visitor)", () => views.viewAccount());
 check("apply", () => views.viewApply());
 check("checkout (visitor) -> redirect", () => views.viewCheckout(paid.id));
@@ -134,6 +136,32 @@ console.log("ok  cancellation refunds and frees the place");
 store.demoSignIn("member");
 check("account (seeded member)", () => views.viewAccount());
 check("home (member)", () => views.viewHome());
+check("giving (member)", () => views.viewGiving());
+check("shop (member)", () => views.viewShop());
+
+// giving flow: record a donation, it lands in history and lifts the total
+const member = store.currentUser();
+const raisedBefore = store.campaignRaised();
+const donation = store.recordDonation({
+  userId: member.id,
+  name: member.fullName,
+  amount: 300,
+  note: "smoke",
+  ref: "SCM27-SMOKE1",
+});
+if (donation.status !== "pending") throw new Error("FPS gift should start pending");
+if (store.campaignRaised() !== raisedBefore + 300) throw new Error("campaign total did not increase");
+if (!store.donationsForUser(member.id).some((d) => d.ref === "SCM27-SMOKE1")) {
+  throw new Error("donation missing from giving history");
+}
+check("giving history with new gift", () => views.viewGiving());
+
+// shop flow: mock order totals correctly and lands in the order list
+const product = data.SHOP_PRODUCTS[0];
+const order = store.placeOrder(member.id, product.id, "M", 2);
+if (order.amount !== product.price * 2) throw new Error("order total wrong");
+if (store.ordersForUser(member.id)[0]?.id !== order.id) throw new Error("order missing from list");
+check("shop after mock order", () => views.viewShop());
 
 // --- ICS generation ---
 const ics = data.buildICS(free);

@@ -9,7 +9,7 @@ const PH = "../assets/itc/";
 // --- Activity templates ----------------------------------------------------
 // kind: "free"  -> open attendance, no booking, no capacity (per product brief)
 // kind: "paid"  -> members book + pay per session at a fixed price
-// HYROX price/capacity are unresolved in the brief; seeded placeholders are
+// HYROX capacity is a seeded placeholder; price, time and capacity are all
 // editable in the Admin area.
 
 export const SEED_ACTIVITIES = [
@@ -21,12 +21,12 @@ export const SEED_ACTIVITIES = [
     weekday: 3, // Wednesday
     time: "19:30",
     durationMin: 60,
-    location: "Tamar Park, Admiralty",
-    mapsQuery: "Tamar Park, Hong Kong",
+    location: "TBC",
+    mapsQuery: "", // venue to be confirmed — no directions link until set
     photo: PH + "main.webp",
     blurb:
       "Our flagship all-level session. Structured strength and conditioning led by the community — come ready to move and we scale every workout to you.",
-    memberNote: "Meet at the lime ITC flag near the main lawn. Bring water.",
+    memberNote: "Meeting point to be confirmed — check back before Wednesday. Bring water.",
     published: true,
   },
   {
@@ -35,10 +35,10 @@ export const SEED_ACTIVITIES = [
     kind: "free",
     category: "Run",
     weekday: 1, // Monday
-    time: "07:00",
+    time: "19:30",
     durationMin: 45,
-    location: "Central Harbourfront",
-    mapsQuery: "Central Harbourfront, Hong Kong",
+    location: "TBC",
+    mapsQuery: "", // venue to be confirmed — no directions link until set
     photo: PH + "running.webp",
     blurb:
       "Easy-pace social run along the harbour. All paces welcome — nobody gets left behind.",
@@ -47,11 +47,11 @@ export const SEED_ACTIVITIES = [
   },
   {
     id: "water",
-    name: "Water Sports Evening",
+    name: "ITC Swimming",
     kind: "free",
     category: "Water",
     weekday: 2, // Tuesday
-    time: "18:30",
+    time: "19:30",
     durationMin: 90,
     location: "Victoria Park",
     mapsQuery: "Victoria Park, Hong Kong",
@@ -62,19 +62,22 @@ export const SEED_ACTIVITIES = [
     published: true,
   },
   {
-    id: "trail",
-    name: "Sunday Trail Run",
-    kind: "free",
-    category: "Run",
-    weekday: 0, // Sunday
-    time: "08:00",
-    durationMin: 90,
-    location: "Hong Kong trails",
-    mapsQuery: "",
-    photo: PH + "trail.webp",
+    id: "hyrox-midtown",
+    name: "ITC HYROX",
+    kind: "paid",
+    category: "HYROX",
+    weekday: 6, // Saturday
+    time: "11:00",
+    durationMin: 75,
+    location: "Midtown 28",
+    mapsQuery: "Midtown 28, Hong Kong",
+    photo: PH + "hyrox.webp",
     blurb:
-      "Rotating trail route each week. Route and meet point are shared with approved members a few days before.",
-    memberNote: "This week's route: Tai Tam reservoir loop, meet at Parkview gate.",
+      "Weekly hybrid race training: ski, sled, burpees and running intervals. Every session is purchased separately at one fixed price.",
+    memberNote: "Gym entry fee is included in the session price.",
+    price: 180, // HKD
+    capacity: 18, // placeholder
+    baseBooked: 9, // simulated demand from other members
     published: true,
   },
   {
@@ -83,15 +86,15 @@ export const SEED_ACTIVITIES = [
     kind: "paid",
     category: "HYROX",
     weekday: 6, // Saturday
-    time: "10:00",
+    time: "11:15",
     durationMin: 75,
-    location: "Quarry Bay Studio",
-    mapsQuery: "Quarry Bay, Hong Kong",
+    location: "BFT Causeway Bay",
+    mapsQuery: "BFT Causeway Bay, Hong Kong",
     photo: PH + "hyrox.webp",
     blurb:
       "Weekly hybrid race training: ski, sled, burpees and running intervals. Every session is purchased separately at one fixed price.",
     memberNote: "Gym entry fee is included in the session price.",
-    price: 250, // HKD — placeholder until the operations workshop fixes it
+    price: 180, // HKD
     capacity: 18, // placeholder
     baseBooked: 14, // simulated demand from other members
     published: true,
@@ -107,8 +110,8 @@ export const SEED_USERS = [
     id: "u-super",
     role: "superadmin",
     status: "approved",
-    fullName: "Isaac Kwok",
-    preferredName: "Isaac",
+    fullName: "Arnold Wong",
+    preferredName: "Arnold",
     email: "owner@itc.hk",
     phone: "+852 9000 0000",
     ageConfirmed: true,
@@ -121,8 +124,8 @@ export const SEED_USERS = [
     id: "u-admin",
     role: "admin",
     status: "approved",
-    fullName: "Daniel Lee",
-    preferredName: "Dan",
+    fullName: "Tina",
+    preferredName: "Tina",
     email: "admin@itc.hk",
     phone: "+852 9000 0002",
     ageConfirmed: true,
@@ -135,14 +138,15 @@ export const SEED_USERS = [
     id: "u-member",
     role: "member",
     status: "approved",
-    fullName: "Ava Cheung",
-    preferredName: "Ava",
+    fullName: "CM Chui",
+    preferredName: "CM",
     email: "member@itc.hk",
     phone: "+852 9000 0001",
     ageConfirmed: true,
     emergencyName: "K. Cheung",
     emergencyPhone: "+852 9000 9001",
     heard: "A friend runs with the club",
+    donorId: "IECC-10028",
     appliedAt: daysAgo(34),
   },
   {
@@ -212,24 +216,24 @@ export function seedReceipts() {
       number: "ITC-2026-0041",
       bookingId: "b-seed-past",
       userId: "u-member",
-      amount: 250,
+      amount: 180,
       currency: "HKD",
       cardLast4: "4242",
       status: "paid",
       issuedAt: daysAgo(9),
-      line: `ITC HYROX — ${fmtDate(past)} 10:00 AM`,
+      line: `ITC HYROX — ${fmtDate(past)} 11:15 AM`,
     },
     {
       id: "r-seed-next",
       number: "ITC-2026-0048",
       bookingId: "b-seed-next",
       userId: "u-member",
-      amount: 250,
+      amount: 180,
       currency: "HKD",
       cardLast4: "4242",
       status: "paid",
       issuedAt: daysAgo(3),
-      line: `ITC HYROX — ${fmtDate(next)} 10:00 AM`,
+      line: `ITC HYROX — ${fmtDate(next)} 11:15 AM`,
     },
   ];
 }
@@ -246,23 +250,94 @@ function sessionSnapshot(act, date) {
   };
 }
 
+// --- Giving campaign -------------------------------------------------------------
+// The current donation campaign. FPS details and goal are placeholders for
+// review with ITC leadership; baseRaisedHKD stands in for gifts made outside
+// the app so the progress bar reflects the real campaign.
+
+export const GIVING_CAMPAIGN = {
+  id: "scm-2027",
+  title: "Standard Chartered Marathon 2027",
+  subtitle:
+    "Support our runners as ITC raises funds for community outreach through IECC.",
+  goalHKD: 50000,
+  baseRaisedHKD: 18450,
+  fpsId: "112 233 445", // placeholder FPS identifier
+  fpsPayee: "Island Training Club",
+};
+
+export function seedDonations() {
+  return [
+    {
+      id: "d-seed-1",
+      userId: "u-member",
+      name: "CM Chui",
+      amount: 500,
+      currency: "HKD",
+      campaignId: "scm-2027",
+      method: "FPS",
+      ref: "SCM27-9K2F4A",
+      note: "Run well, team!",
+      status: "confirmed",
+      createdAt: daysAgo(6),
+    },
+    {
+      id: "d-seed-2",
+      userId: "u-member",
+      name: "CM Chui",
+      amount: 200,
+      currency: "HKD",
+      campaignId: "scm-2027",
+      method: "FPS",
+      ref: "SCM27-7QW1XZ",
+      note: "",
+      status: "pending",
+      createdAt: daysAgo(1),
+    },
+  ];
+}
+
+// --- Shop products (preview mockup — not in the initial launch) --------------------
+// Prices are placeholders. Club photos stand in for product photography.
+
+export const SHOP_PRODUCTS = [
+  {
+    id: "tee",
+    name: "ITC Performance Tee",
+    price: 280,
+    image: PH + "main.webp",
+    blurb:
+      "Lightweight sweat-wicking training tee with the lime ITC mark. Unisex cut, built for Wednesday nights.",
+    sizes: ["XS", "S", "M", "L", "XL"],
+  },
+  {
+    id: "vest",
+    name: "ITC Running Vest",
+    price: 240,
+    image: PH + "running.webp",
+    blurb:
+      "Race-day vest in black with reflective club branding. Cut for the harbour run.",
+    sizes: ["XS", "S", "M", "L", "XL"],
+  },
+];
+
 // --- Leaders & culture (draft community content) ------------------------------
 
 export const LEADERS = [
   {
-    name: "Isaac Kwok",
+    name: "Arnold Wong",
     role: "Founder · Head Coach",
     photo: PH + "community.webp",
     bio: "Started ITC so training in Hong Kong could be serious about fitness and serious about people at the same time.",
   },
   {
-    name: "Daniel Lee",
+    name: "Tina",
     role: "Community Lead",
     photo: PH + "main.webp",
     bio: "Keeps Wednesday nights running and makes sure every first-timer leaves with a name and a next session.",
   },
   {
-    name: "Ava Cheung",
+    name: "CM Chui",
     role: "Run Club Lead",
     photo: PH + "running.webp",
     bio: "Leads Monday harbour runs. Believes the best pace is the one you can talk at.",
@@ -291,6 +366,55 @@ export const CULTURE = [
     body: "Be welcoming to first-timers. Respect leaders, venues and each other. No harassment, no exclusion, no hard sell. Photos are opt-in — consent is asked, never assumed.",
   },
 ];
+
+// --- Weekly encouragement ------------------------------------------------------
+// A bible verse for the Home page; rotates every Sunday. The cycle is anchored
+// to Sunday 26 July 2026 so the first week shows Hebrews 12:1 — append more
+// verses to lengthen the rotation (it wraps around when the list runs out).
+
+export const WEEKLY_VERSES = [
+  {
+    ref: "Hebrews 12:1",
+    text: "Let us run with perseverance the race marked out for us.",
+  },
+  {
+    ref: "Isaiah 40:31",
+    text: "Those who hope in the Lord will renew their strength; they will run and not grow weary.",
+  },
+  {
+    ref: "1 Corinthians 9:24",
+    text: "Run in such a way as to get the prize.",
+  },
+  {
+    ref: "Philippians 4:13",
+    text: "I can do all this through him who gives me strength.",
+  },
+  {
+    ref: "Joshua 1:9",
+    text: "Be strong and courageous — the Lord your God will be with you wherever you go.",
+  },
+  {
+    ref: "Colossians 3:23",
+    text: "Whatever you do, work at it with all your heart, as working for the Lord.",
+  },
+  {
+    ref: "Galatians 6:9",
+    text: "Let us not become weary in doing good, for at the proper time we will reap a harvest if we do not give up.",
+  },
+  {
+    ref: "2 Timothy 4:7",
+    text: "I have fought the good fight, I have finished the race, I have kept the faith.",
+  },
+];
+
+const VERSE_EPOCH = new Date(2026, 6, 26); // Sunday — week one shows verses[0]
+
+export function weeklyVerse(date = todayLocal()) {
+  const sunday = addDays(date, -date.getDay()); // weeks run Sunday–Saturday
+  const weeks = Math.round((sunday - VERSE_EPOCH) / (7 * 24 * 60 * 60 * 1000));
+  const n = WEEKLY_VERSES.length;
+  return WEEKLY_VERSES[((weeks % n) + n) % n];
+}
 
 // ============================================================================
 // Pure helpers
@@ -374,6 +498,15 @@ export function initials(name) {
 
 export function uid(prefix) {
   return `${prefix}-${Math.random().toString(36).slice(2, 8)}${Date.now().toString(36).slice(-4)}`;
+}
+
+// Donor ID is optional. Blank or "not applicable"-style answers mean "no
+// donor ID" (null) — the member can add one later from the Profile tab.
+export function normalizeDonorId(raw) {
+  const v = String(raw ?? "").trim();
+  if (!v) return null;
+  if (/^(n\/?a|not applicable|none|no)$/i.test(v)) return null;
+  return v;
 }
 
 // --- Sessions -----------------------------------------------------------------

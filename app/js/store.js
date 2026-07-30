@@ -10,6 +10,9 @@ import {
   SEED_USERS,
   seedBookings,
   seedReceipts,
+  seedDonations,
+  GIVING_CAMPAIGN,
+  SHOP_PRODUCTS,
   sessionsInRange,
   todayLocal,
   isoDate,
@@ -19,17 +22,21 @@ import {
 } from "./data.js";
 
 const STORAGE_KEY = "itc.prototype.v1";
+const STATE_VERSION = 5;
 
 let state = null;
 
 function freshState() {
   return {
+    version: STATE_VERSION,
     sessionUserId: null,
     activities: structuredClone(SEED_ACTIVITIES),
     users: structuredClone(SEED_USERS),
     bookings: seedBookings(),
     receipts: seedReceipts(),
     receiptCounter: 49,
+    donations: seedDonations(),
+    orders: [],
   };
 }
 
@@ -40,8 +47,97 @@ export function load() {
   } catch {
     state = freshState();
   }
+  migrate();
   save();
   return state;
+}
+
+// One-time, versioned migrations for persisted state that predates a
+// seed-data revision. Each step runs once per version so admin edits made
+// afterwards are not reverted on the next load.
+function migrate() {
+  const v = state.version || 0;
+  if (v >= STATE_VERSION) return;
+  if (v < 2) {
+    // v2: Sunday Trail Run removed; HYROX moved to Sat 11:15 at Causeway Bay
+    // BFT (HK$180) and a second Saturday session added at Midtown 28 (11:00).
+    state.activities = state.activities.filter(
+      (a) => a.id !== "trail" && a.id !== "hyrox" && a.id !== "hyrox-midtown"
+    );
+    state.activities.push(
+      ...SEED_ACTIVITIES.filter((a) => a.category === "HYROX").map((a) =>
+        structuredClone(a)
+      )
+    );
+    // Seed-owned bookings/receipts are replaced outright: their snapshots
+    // describe the old session. User-created records are left untouched.
+    for (const [key, seeded] of [
+      ["bookings", seedBookings()],
+      ["receipts", seedReceipts()],
+    ]) {
+      const ids = new Set(seeded.map((r) => r.id));
+      state[key] = [...state[key].filter((r) => !ids.has(r.id)), ...seeded];
+    }
+  }
+  if (v < 3) {
+    // v3: Run Club moved to Mon 7:30 PM with venue TBC; Water Sports Evening
+    // renamed ITC Swimming at 7:30 PM; leaders renamed (Arnold Wong, Tina,
+    // CM Chui). Activities are replaced in place from the seed; seed users
+    // get the new names only, keeping any role/status changes.
+    const seedAct = new Map(SEED_ACTIVITIES.map((a) => [a.id, a]));
+    state.activities = state.activities.map((a) =>
+      a.id === "run" || a.id === "water"
+        ? structuredClone(seedAct.get(a.id))
+        : a
+    );
+    const seedUser = new Map(SEED_USERS.map((u) => [u.id, u]));
+    state.users = state.users.map((u) =>
+      seedUser.has(u.id)
+        ? {
+            ...u,
+            fullName: seedUser.get(u.id).fullName,
+            preferredName: seedUser.get(u.id).preferredName,
+          }
+        : u
+    );
+  }
+  if (v < 4) {
+    // v4: HYROX venue renamed "Causeway Bay BFT" -> "BFT Causeway Bay"
+    // (activity location + any booking snapshots carrying the old string);
+    // giving + shop state introduced, with donations seeded for the demo
+    // member. Only exact old-string matches are rewritten so admin edits
+    // made since are preserved.
+    const hyrox = state.activities.find((a) => a.id === "hyrox");
+    if (hyrox && hyrox.location === "Causeway Bay BFT") {
+      hyrox.location = "BFT Causeway Bay";
+    }
+    for (const b of state.bookings) {
+      if (b.snapshot?.location === "Causeway Bay BFT") {
+        b.snapshot.location = "BFT Causeway Bay";
+      }
+    }
+    if (!Array.isArray(state.donations)) state.donations = seedDonations();
+    if (!Array.isArray(state.orders)) state.orders = [];
+  }
+  if (v < 5) {
+    // v5: Wednesday Night Training venue changed to TBC (location, maps
+    // query, member note). Only exact old-seed matches are rewritten so
+    // admin edits made since are preserved; booking snapshots get the
+    // same treatment.
+    const wnt = state.activities.find((a) => a.id === "wnt");
+    if (wnt && wnt.location === "Tamar Park, Admiralty") {
+      wnt.location = "TBC";
+      wnt.mapsQuery = "";
+      wnt.memberNote =
+        "Meeting point to be confirmed — check back before Wednesday. Bring water.";
+    }
+    for (const b of state.bookings) {
+      if (b.snapshot?.location === "Tamar Park, Admiralty") {
+        b.snapshot.location = "TBC";
+      }
+    }
+  }
+  state.version = STATE_VERSION;
 }
 
 function save() {
@@ -195,7 +291,7 @@ export function spotsLeft(session) {
 export function attendeesFor(session) {
   // Simulated member list: seed bookings plus any local bookings.
   const pool = [
-    "Ava C.", "Daniel L.", "Marco S.", "Jenny W.", "Kelvin T.",
+    "Jason M.", "Natalie C.", "Marco S.", "Jenny W.", "Kelvin T.",
     "Chris P.", "Wing L.", "Sam H.", "Rachel N.", "Tom Y.",
     "Grace F.", "Ben K.", "Michelle O.", "Alex Z.",
   ];
@@ -304,6 +400,73 @@ export function upcomingSessions(days = 14) {
 
 export function nextSession() {
   return upcomingSessions(14)[0] ?? null;
+}
+
+// --- Giving (FPS donations) -----------------------------------------------------
+// FPS is a push payment from the member's banking app, so the prototype
+// records every gift as "pending" until a leader reconciles it against the
+// club account — there is no instant confirmation path like card checkout.
+
+export function campaignRaised() {
+  const local = state.donations
+    .filter((d) => d.campaignId === GIVING_CAMPAIGN.id)
+    .reduce((sum, d) => sum + d.amount, 0);
+  return GIVING_CAMPAIGN.baseRaisedHKD + local;
+}
+
+export function donationsForUser(userId) {
+  return state.donations
+    .filter((d) => d.userId === userId)
+    .sort((a, b) => b.createdAt - a.createdAt);
+}
+
+export function recordDonation({ userId, name, amount, note, ref }) {
+  const donation = {
+    id: uid("d"),
+    userId: userId ?? null,
+    name: String(name).trim(),
+    amount: Math.round(Number(amount)),
+    currency: "HKD",
+    campaignId: GIVING_CAMPAIGN.id,
+    method: "FPS",
+    ref,
+    note: String(note ?? "").trim(),
+    status: "pending", // reconciled manually by a leader
+    createdAt: Date.now(),
+  };
+  state.donations.push(donation);
+  save();
+  return donation;
+}
+
+// --- Shop (mock merchandise orders) ----------------------------------------------
+// Preview only: the shop is not part of the initial app launch. Orders are
+// mock — no payment, no fulfilment — and exist to validate demand.
+
+export function placeOrder(userId, productId, size, qty) {
+  const product = SHOP_PRODUCTS.find((p) => p.id === productId);
+  if (!product) throw new Error("Unknown product");
+  const n = Math.max(1, Math.min(5, Number(qty) || 1));
+  const order = {
+    id: uid("o"),
+    userId,
+    productId: product.id,
+    name: product.name,
+    size,
+    qty: n,
+    amount: product.price * n,
+    status: "mock",
+    createdAt: Date.now(),
+  };
+  state.orders.push(order);
+  save();
+  return order;
+}
+
+export function ordersForUser(userId) {
+  return state.orders
+    .filter((o) => o.userId === userId)
+    .sort((a, b) => b.createdAt - a.createdAt);
 }
 
 export { isoDate, todayLocal };
