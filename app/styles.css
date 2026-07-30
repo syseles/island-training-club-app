@@ -804,9 +804,9 @@ input, select, textarea { font: inherit; }
 }
 
 .product-tile {
-  height: 160px;
+  height: 220px;
   overflow: hidden;
-  background: var(--surface-2);
+  background: #0b0e0b; /* matches the studio backdrop of the product shots */
   border-bottom: 1px solid var(--line);
 }
 
@@ -814,8 +814,7 @@ input, select, textarea { font: inherit; }
   display: block;
   width: 100%;
   height: 100%;
-  object-fit: cover;
-  object-position: center top; /* product shots are portrait — show the collar up */
+  object-fit: contain; /* show the full garment, letterboxed on the dark backdrop */
 }
 
 .product-card h3 { font-size: 14.5px; }
