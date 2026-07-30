@@ -296,6 +296,7 @@ document.addEventListener("submit", (e) => {
         heard: fd.get("heard") || "",
         ageConfirmed: fd.get("ageConfirmed") === "on",
         mediaConsent: fd.get("mediaConsent") === "on",
+        donorId: fd.get("donorId") || "",
       });
       const errEl = form.querySelector("#apply-error");
       if (!res.ok) {
@@ -367,6 +368,21 @@ document.addEventListener("submit", (e) => {
       const fd = new FormData(form);
       const order = store.placeOrder(user.id, form.dataset.product, fd.get("size"), fd.get("qty"));
       toast(`Mock order placed — ${order.name} (${order.size})`);
+      render();
+      break;
+    }
+
+    case "form-donor-id": {
+      e.preventDefault();
+      const user = store.currentUser();
+      if (!user) return;
+      const saved = store.updateDonorId(user.id, new FormData(form).get("donorId"));
+      if (!saved) {
+        form.querySelector("#donor-error").innerHTML =
+          `<div class="form-error">Enter your Donor ID to save it.</div>`;
+        return;
+      }
+      toast("Donor ID saved");
       render();
       break;
     }

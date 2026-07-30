@@ -51,8 +51,14 @@ function spotsLabel(s) {
 }
 
 function sessionRow(s, { past, showDate = true, highlight } = {}) {
-  const end =
-    s.kind === "free"
+  // A session the signed-in member has already booked shows a "Booked"
+  // badge instead of price/spots, so Home, Schedule and the booking itself
+  // all tell the same story.
+  const user = store.currentUser();
+  const booked = user ? store.userBookingFor(user.id, s.id) : null;
+  const end = booked
+    ? `<span class="badge free">Booked</span>`
+    : s.kind === "free"
       ? `<span class="badge free">Free</span><span class="spots">Just show up</span>`
       : `${store.spotsLeft(s) > 0 ? `<span class="badge paid">${fmtMoney(s.price)}</span>` : ""}${spotsLabel(s)}`;
   return `
@@ -125,8 +131,26 @@ export function avatarHTML(user) {
 
 export function viewHome() {
   const user = store.currentUser();
-  const upcoming = store.upcomingSessions(7).slice(0, 3);
+  const upcoming = store.upcomingSessions(7);
   const name = user ? esc(user.preferredName || user.fullName.split(" ")[0]) : null;
+
+  // Signed-in members see their booked sessions first — the same bookings
+  // the Schedule tab badges "Booked" — then the rest of the week.
+  let rows = upcoming.slice(0, 3);
+  if (user && user.status === "approved") {
+    const bookedIds = new Set(
+      store
+        .bookingsForUser(user.id)
+        .filter((b) => b.status === "confirmed" && b.snapshot.dateISO >= todayISO())
+        .map((b) => b.sessionId)
+    );
+    if (bookedIds.size) {
+      rows = [
+        ...upcoming.filter((s) => bookedIds.has(s.id)),
+        ...upcoming.filter((s) => !bookedIds.has(s.id)),
+      ].slice(0, 3);
+    }
+  }
 
   const guest = !user
     ? `
@@ -160,8 +184,8 @@ export function viewHome() {
       <a href="#/schedule">See more →</a>
     </div>
     <div class="session-list">
-      ${upcoming.length
-        ? upcoming.map((s, i) => sessionRow(s, { highlight: i === 0 })).join("")
+      ${rows.length
+        ? rows.map((s, i) => sessionRow(s, { highlight: i === 0 })).join("")
         : `<div class="empty">No upcoming sessions — check back soon.</div>`}
     </div>
     <div class="section-head"><h2>The club</h2><a href="#/community">More →</a></div>
@@ -647,6 +671,7 @@ function accountPending(user) {
         <div class="line"><span>Phone</span><strong>${esc(user.phone)}</strong></div>
         <div class="line"><span>Emergency contact</span><strong>${esc(user.emergencyName)} · ${esc(user.emergencyPhone)}</strong></div>
         <div class="line"><span>Heard about ITC</span><strong>${esc(user.heard)}</strong></div>
+        ${user.donorId ? `<div class="line"><span>Donor ID</span><strong>${esc(user.donorId)}</strong></div>` : ""}
         <div class="line"><span>Photo consent</span><strong>${user.mediaConsent ? "Yes" : "No"}</strong></div>
       </div>
       <p class="muted small mt16">Want to see the approval side? Sign out, then use the admin demo profile — your application will be waiting in the queue.</p>
@@ -673,7 +698,6 @@ function accountDeclined(user) {
 
 function accountMember(user) {
   const bookings = store.bookingsForUser(user.id);
-  const upcoming = bookings.filter((b) => b.status === "confirmed" && b.snapshot.dateISO >= todayISO());
   const history = bookings.filter((b) => !(b.status === "confirmed" && b.snapshot.dateISO >= todayISO()));
   const receipts = store.receiptsForUser(user.id);
   const gifts = store.donationsForUser(user.id);
@@ -718,9 +742,6 @@ function accountMember(user) {
 
     ${isAdmin ? `<a class="btn ghost mt16" href="#/admin">Open admin tools →</a>` : ""}
 
-    <div class="section-head"><h2>Upcoming</h2></div>
-    ${upcoming.length ? upcoming.map(bookingCard).join("") : `<div class="empty">Nothing booked yet. <a href="#/schedule" style="color:var(--accent)">Find a session →</a></div>`}
-
     <div class="section-head"><h2>Membership details</h2></div>
     <div class="card"><div class="card-body">
       <div class="receipt-lines">
@@ -735,18 +756,38 @@ function accountMember(user) {
 
     <div class="section-head"><h2>Donor profile</h2></div>
     <div class="card"><div class="card-body">
+      <div class="receipt-lines">
+        <div class="line"><span>Donor ID</span><strong>${user.donorId ? esc(user.donorId) : "Not provided"}</strong></div>
+        ${
+          gifts.length
+            ? `
+          <div class="line"><span>Total given</span><strong>${fmtMoney(totalGiven)}</strong></div>
+          <div class="line"><span>Gifts</span><strong>${gifts.length}</strong></div>
+          <div class="line"><span>Latest gift</span><strong>${new Date(gifts[0].createdAt).toLocaleDateString("en-HK", { day: "numeric", month: "short" })}</strong></div>`
+            : ""
+        }
+      </div>
+      ${
+        user.donorId
+          ? ""
+          : `
+        <form id="form-donor-id" class="mt16" novalidate>
+          <div class="field">
+            <label for="donor-id">Add your Donor ID</label>
+            <input id="donor-id" name="donorId" placeholder="e.g. IECC-10028" autocomplete="off">
+            <div class="hint">Left this blank or wrote “Not applicable” at sign-up? Add it here any time — leaders use it to match your giving to your IECC donor record.</div>
+          </div>
+          <div id="donor-error"></div>
+          <button class="btn ghost sm" type="submit">Save Donor ID</button>
+        </form>`
+      }
       ${
         gifts.length
           ? `
-        <div class="receipt-lines">
-          <div class="line"><span>Total given</span><strong>${fmtMoney(totalGiven)}</strong></div>
-          <div class="line"><span>Gifts</span><strong>${gifts.length}</strong></div>
-          <div class="line"><span>Latest gift</span><strong>${new Date(gifts[0].createdAt).toLocaleDateString("en-HK", { day: "numeric", month: "short" })}</strong></div>
-        </div>
         <p class="muted small mt16">FPS gifts stay pending until a leader reconciles them against the club account. Full history lives on the Giving tab.</p>
         <a class="btn ghost sm mt16" href="#/giving">Open Giving &amp; Fundraising →</a>`
           : `
-        <p class="hero-meta">No gifts yet — every step can give back. Support the current campaign via FPS.</p>
+        <p class="hero-meta mt16">No gifts yet — every step can give back. Support the current campaign via FPS.</p>
         <a class="btn ghost sm mt16" href="#/giving">Give via FPS →</a>`
       }
     </div></div>
@@ -817,6 +858,11 @@ export function viewApply() {
           <option>Web search</option>
           <option>Other</option>
         </select>
+      </div>
+      <div class="field">
+        <label for="ap-donor">Donor ID (optional)</label>
+        <input id="ap-donor" name="donorId" placeholder="e.g. IECC-10028" autocomplete="off">
+        <div class="hint">For members who already give through IECC. Leave blank or write “Not applicable” — you can add it later from your Profile.</div>
       </div>
       <label class="check"><input type="checkbox" name="ageConfirmed" required>
         <span>I confirm I am 18 or over, or that a parent/guardian will accompany me to sessions. *</span></label>
