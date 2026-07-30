@@ -134,9 +134,10 @@ export function viewHome() {
   const upcoming = store.upcomingSessions(7);
   const name = user ? esc(user.preferredName || user.fullName.split(" ")[0]) : null;
 
-  // Signed-in members see their booked sessions first — the same bookings
-  // the Schedule tab badges "Booked" — then the rest of the week.
+  // "My week" shows a signed-in member only the sessions they've booked
+  // (free ones included); the full week stays discoverable via Schedule.
   let rows = upcoming.slice(0, 3);
+  let emptyMsg = "No upcoming sessions — check back soon.";
   if (user && user.status === "approved") {
     const bookedIds = new Set(
       store
@@ -144,12 +145,8 @@ export function viewHome() {
         .filter((b) => b.status === "confirmed" && b.snapshot.dateISO >= todayISO())
         .map((b) => b.sessionId)
     );
-    if (bookedIds.size) {
-      rows = [
-        ...upcoming.filter((s) => bookedIds.has(s.id)),
-        ...upcoming.filter((s) => !bookedIds.has(s.id)),
-      ].slice(0, 3);
-    }
+    rows = upcoming.filter((s) => bookedIds.has(s.id));
+    emptyMsg = `Nothing booked this week yet. <a href="#/schedule" style="color:var(--accent)">Find a session →</a>`;
   }
 
   const guest = !user
@@ -186,7 +183,7 @@ export function viewHome() {
     <div class="session-list">
       ${rows.length
         ? rows.map((s, i) => sessionRow(s, { highlight: i === 0 })).join("")
-        : `<div class="empty">No upcoming sessions — check back soon.</div>`}
+        : `<div class="empty">${emptyMsg}</div>`}
     </div>
     <div class="section-head"><h2>The club</h2><a href="#/community">More →</a></div>
     <a class="card" href="#/community" style="display:block;text-decoration:none">
@@ -736,8 +733,8 @@ function accountMember(user) {
   };
 
   return `
-    <div class="kicker">Member Profile</div>
-    <div class="mt16">${roleBadge} <span class="muted small">${esc(user.email)}</span></div>
+    <div class="kicker">Profile</div>
+    <div class="mt16">${roleBadge}</div>
 
     ${isAdmin ? `<a class="btn ghost mt16" href="#/admin">Open admin tools →</a>` : ""}
 
@@ -746,6 +743,7 @@ function accountMember(user) {
       <div class="receipt-lines">
         <div class="line"><span>Full name</span><strong>${esc(user.fullName)}</strong></div>
         <div class="line"><span>Preferred name</span><strong>${esc(user.preferredName)}</strong></div>
+        <div class="line"><span>Email</span><strong>${esc(user.email)}</strong></div>
         <div class="line"><span>Member since</span><strong>${new Date(user.appliedAt).toLocaleDateString("en-HK", { day: "numeric", month: "short", year: "numeric" })}</strong></div>
         <div class="line"><span>Phone / WhatsApp</span><strong>${esc(user.phone)}</strong></div>
         <div class="line"><span>Emergency contact</span><strong>${esc(user.emergencyName)} · ${esc(user.emergencyPhone)}</strong></div>
