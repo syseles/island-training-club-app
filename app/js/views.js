@@ -185,7 +185,7 @@ export function viewHome() {
         ? rows.map((s, i) => sessionRow(s, { highlight: i === 0 })).join("")
         : `<div class="empty">${emptyMsg}</div>`}
     </div>
-    <div class="section-head"><h2>The club</h2><a href="#/community">More →</a></div>
+    <div class="section-head"><h2>The Club</h2><a href="#/community">More →</a></div>
     <a class="card" href="#/community" style="display:block;text-decoration:none">
       <img class="photo" src="../assets/itc/community.webp" alt="ITC community">
       <div class="card-body">
