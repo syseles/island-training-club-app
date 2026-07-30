@@ -298,14 +298,15 @@ export function seedDonations() {
 }
 
 // --- Shop products (preview mockup — not in the initial launch) --------------------
-// Prices are placeholders. Club photos stand in for product photography.
+// Prices are placeholders. Product shots are the concept imagery from the
+// committee mockup (itcappmock.netlify.app), cropped per garment.
 
 export const SHOP_PRODUCTS = [
   {
     id: "tee",
     name: "ITC Performance Tee",
     price: 280,
-    image: PH + "main.webp",
+    image: PH + "product-tee.png",
     blurb:
       "Lightweight sweat-wicking training tee with the lime ITC mark. Unisex cut, built for Wednesday nights.",
     sizes: ["XS", "S", "M", "L", "XL"],
@@ -314,9 +315,9 @@ export const SHOP_PRODUCTS = [
     id: "vest",
     name: "ITC Running Vest",
     price: 240,
-    image: PH + "running.webp",
+    image: PH + "product-vest.png",
     blurb:
-      "Race-day vest in black with reflective club branding. Cut for the harbour run.",
+      "Race-day singlet in neon lime with black trim and the club mark. Cut for the harbour run.",
     sizes: ["XS", "S", "M", "L", "XL"],
   },
 ];

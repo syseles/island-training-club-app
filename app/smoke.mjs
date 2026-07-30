@@ -200,6 +200,11 @@ if (!memberHome.includes("BFT Causeway Bay") || memberHome.includes("Midtown 28"
 } else console.log('ok  "My week" shows only the member\'s booked session');
 check("giving (member)", () => views.viewGiving());
 check("shop (member)", () => views.viewShop());
+const shopHtml = views.viewShop();
+if (!shopHtml.includes("product-tee.png") || !shopHtml.includes("product-vest.png")) {
+  failures++;
+  console.error("FAIL shop products not using the concept product shots");
+} else console.log("ok  shop products use the concept product shots");
 
 // giving flow: record a donation, it lands in history and lifts the total
 const member = store.currentUser();
