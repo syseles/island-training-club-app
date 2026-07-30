@@ -736,8 +736,7 @@ function accountMember(user) {
   };
 
   return `
-    <div class="kicker">Profile</div>
-    <h1 class="display">${esc(user.preferredName || user.fullName.split(" ")[0])}’s training.</h1>
+    <div class="kicker">Member Profile</div>
     <div class="mt16">${roleBadge} <span class="muted small">${esc(user.email)}</span></div>
 
     ${isAdmin ? `<a class="btn ghost mt16" href="#/admin">Open admin tools →</a>` : ""}
