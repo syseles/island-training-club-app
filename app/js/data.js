@@ -308,7 +308,7 @@ export const SHOP_PRODUCTS = [
     price: 280,
     image: PH + "product-tee.png",
     blurb:
-      "Sweat-wicking training tee in black with lime piping. Built for Wednesday nights.",
+      "Sweat-wicking training tee in black with lime piping.",
     sizes: ["XS", "S", "M", "L", "XL"],
   },
   {
