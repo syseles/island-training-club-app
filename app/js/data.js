@@ -308,7 +308,7 @@ export const SHOP_PRODUCTS = [
     price: 280,
     image: PH + "product-tee.png",
     blurb:
-      "Lightweight sweat-wicking training tee with the lime ITC mark. Unisex cut, built for Wednesday nights.",
+      "Sweat-wicking training tee in black with lime piping. Built for Wednesday nights.",
     sizes: ["XS", "S", "M", "L", "XL"],
   },
   {
@@ -317,7 +317,7 @@ export const SHOP_PRODUCTS = [
     price: 240,
     image: PH + "product-vest.png",
     blurb:
-      "Race-day singlet in neon lime with black trim and the club mark. Cut for the harbour run.",
+      "Race-day vest in neon lime with black trim.",
     sizes: ["XS", "S", "M", "L", "XL"],
   },
 ];
