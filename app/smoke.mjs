@@ -406,7 +406,12 @@ if (!memberHome.includes("BFT Causeway Bay") || memberHome.includes("Midtown 28"
   failures++;
   console.error('FAIL "My week" should show only the member\'s booked 11:15 HYROX');
 } else console.log('ok  "My week" shows only the member\'s booked session');
-// community: prayer request records locally (no public reader by design)
+check("shop (member)", () => views.viewShop());
+const shopHtml = views.viewShop();
+if (!shopHtml.includes("product-tee.png") || !shopHtml.includes("product-vest.png")) {
+  failures++;
+  console.error("FAIL shop products not using the concept product shots");
+} else console.log("ok  shop products use the concept product shots");
 const member = store.currentUser();
 const prayer = store.recordPrayer({ userId: member.id, name: member.fullName, request: "Smoke test request" });
 if (!prayer.id || prayer.request !== "Smoke test request") throw new Error("prayer not recorded");

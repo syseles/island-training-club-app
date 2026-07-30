@@ -913,6 +913,7 @@ a.profile-row:hover .pr-text strong { color: var(--accent); }
 
 .stack { display: grid; gap: 12px; margin-top: 12px; }
 
+
 /* ---- Confirmation ----------------------------------------------------- */
 
 .confirm-mark {
