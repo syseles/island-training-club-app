@@ -49,22 +49,38 @@ check("activity free (visitor)", () => views.viewActivity(free.id));
 check("community", () => views.viewCommunity());
 const commHtml = views.viewCommunity();
 let commOk = true;
-for (const link of ["#/community/prayers", "#/community/fellowship", "#/community/meals", "#/community/announcements"]) {
+for (const link of [
+  "#/community/prayers",
+  "#/community/fellowship",
+  "#/community/meals",
+  "#/community/announcements",
+  "#/community/about",
+]) {
   if (!commHtml.includes(`href="${link}"`)) {
     failures++;
     commOk = false;
     console.error(`FAIL Community missing ${link} card`);
   }
 }
-if (commOk) console.log("ok  Community shows the four connect cards");
+if (commOk) console.log("ok  Community shows the five cards");
+if (!commHtml.includes("Mission, coaches and leadership")) {
+  failures++;
+  console.error("FAIL Community About card missing its subtext");
+} else console.log("ok  About card sits at the bottom of Community");
 if (commHtml.includes("Arnold Wong") || commHtml.includes("Our foundation")) {
   failures++;
-  console.error("FAIL leaders/culture should have moved off the Community tab");
-} else console.log("ok  leaders & culture moved off Community");
+  console.error("FAIL leaders/culture should live behind the About card");
+} else console.log("ok  leaders & culture live behind the About card");
 check("community > prayers", () => views.viewCommunity("prayers"));
 check("community > fellowship", () => views.viewCommunity("fellowship"));
 check("community > meals", () => views.viewCommunity("meals"));
 check("community > announcements", () => views.viewCommunity("announcements"));
+check("community > about", () => views.viewCommunity("about"));
+const commAbout = views.viewCommunity("about");
+if (!commAbout.includes("Arnold Wong") || !commAbout.includes("Our foundation")) {
+  failures++;
+  console.error("FAIL Community About page missing leaders or culture content");
+} else console.log("ok  Community About page carries leaders & culture");
 if (!views.viewCommunity("prayers").includes('id="form-prayer"')) {
   failures++;
   console.error("FAIL prayers page missing the request form");
@@ -74,6 +90,7 @@ for (const [section, title] of [
   ["fellowship", "Fellowship."],
   ["meals", "Ad-Hoc Meals."],
   ["announcements", "Announcements."],
+  ["about", "More than a workout."],
 ]) {
   if (!views.viewCommunity(section).includes(title)) {
     failures++;
@@ -194,7 +211,6 @@ for (const link of [
   "#/account/payments",
   "#/account/privacy",
   "#/account/history",
-  "#/account/about",
 ]) {
   if (!newMemberAcct.includes(`href="${link}"`)) {
     failures++;
@@ -202,13 +218,16 @@ for (const link of [
     console.error(`FAIL Profile missing ${link} card`);
   }
 }
-if (cardsOk) console.log("ok  Profile shows the six section cards");
+if (cardsOk) console.log("ok  Profile shows the five section cards");
+if (newMemberAcct.includes("#/account/about")) {
+  failures++;
+  console.error("FAIL About card should have moved to the Community tab");
+} else console.log("ok  About card moved off Profile");
 for (const sub of [
   "Donor ID and e-receipt details",
   "Bookings, donations and orders",
   "Consent and communication choices",
   "Activity history",
-  "Mission, coaches and leadership",
 ]) {
   if (!newMemberAcct.includes(sub)) {
     failures++;
@@ -221,12 +240,6 @@ check("profile > donor", () => views.viewAccount("donor"));
 check("profile > payments", () => views.viewAccount("payments"));
 check("profile > privacy", () => views.viewAccount("privacy"));
 check("profile > history", () => views.viewAccount("history"));
-check("profile > about", () => views.viewAccount("about"));
-const aboutHtml = views.viewAccount("about");
-if (!aboutHtml.includes("Arnold Wong") || !aboutHtml.includes("Our foundation")) {
-  failures++;
-  console.error("FAIL About page missing leaders or culture content");
-} else console.log("ok  About page carries leaders & culture");
 
 // sub-page headings are title-cased to match the card titles
 for (const [section, title] of [
@@ -235,7 +248,6 @@ for (const [section, title] of [
   ["payments", "Payments &amp; Receipts."],
   ["privacy", "Privacy &amp; Notifications."],
   ["history", "History."],
-  ["about", "More than a workout."],
 ]) {
   if (!views.viewAccount(section).includes(title)) {
     failures++;

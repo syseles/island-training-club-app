@@ -393,6 +393,8 @@ export function viewCommunity(section) {
       return communityMeals();
     case "announcements":
       return communityAnnouncements();
+    case "about":
+      return communityAbout();
     default:
       return viewNotFound();
   }
@@ -408,7 +410,37 @@ function communityHome() {
       ${linkCard("#/community/fellowship", "Fellowship", "Small groups and community life")}
       ${linkCard("#/community/meals", "Ad-Hoc Meals", "Share a meal with us after sessions")}
       ${linkCard("#/community/announcements", "Announcements", "News from the church and the community")}
+      ${linkCard("#/community/about", "About Island Training Club", "Mission, coaches and leadership")}
     </div>`;
+}
+
+// Leaders and culture sit at the bottom of the Community tab, behind the
+// About card — open to everyone, signed in or not.
+function communityAbout() {
+  return `
+    <a class="back-link" href="#/community">← Community</a>
+    <div class="kicker mt16">Community · About Island Training Club</div>
+    <h1 class="display sm">More than a workout.</h1>
+    <p class="subcopy mt8">Island Training Club is a Hong Kong training community with a Christian foundation — open to everyone.</p>
+    <div class="section-head"><h2>Leaders</h2></div>
+    <div class="stack">
+      ${LEADERS.map(
+        (l) => `
+        <div class="card leader-card">
+          <img src="${l.photo}" alt="${esc(l.name)}">
+          <div class="card-body">
+            <h3>${esc(l.name)}</h3>
+            <div class="role">${esc(l.role)}</div>
+            <p>${esc(l.bio)}</p>
+          </div>
+        </div>`
+      ).join("")}
+    </div>
+    <div class="section-head"><h2>Culture</h2></div>
+    <div class="card"><div class="card-body prose">
+      ${CULTURE.map((c) => `<h3>${esc(c.title)}</h3><p>${esc(c.body)}</p>`).join("")}
+    </div></div>
+    <p class="muted small mt16">Community copy is draft placeholder text for review with ITC leadership.</p>`;
 }
 
 function communityPrayers() {
@@ -725,8 +757,6 @@ export function viewAccount(section) {
       return accountPrivacy(user);
     case "history":
       return accountHistory(user);
-    case "about":
-      return accountAbout(user);
     default:
       return viewNotFound();
   }
@@ -838,7 +868,6 @@ function accountMember(user) {
       ${linkCard("#/account/payments", "Payments & Receipts", "Bookings, donations and orders")}
       ${linkCard("#/account/privacy", "Privacy & Notifications", "Consent and communication choices")}
       ${linkCard("#/account/history", "History", "Activity history")}
-      ${linkCard("#/account/about", "About Island Training Club", "Mission, coaches and leadership")}
     </div>
 
     <div class="btn-row">
@@ -1029,35 +1058,6 @@ function accountHistory(user) {
     <div class="kicker mt16">Profile · History</div>
     <h1 class="display sm">History.</h1>
     ${history.length ? history.map(bookingCard).join("") : `<div class="empty">Past sessions will appear here.</div>`}`;
-}
-
-// Leaders and culture live here (Profile > About) rather than on the public
-// Community tab, which is focused on ways to connect.
-function accountAbout() {
-  return `
-    <a class="back-link" href="#/account">← Profile</a>
-    <div class="kicker mt16">Profile · About Island Training Club</div>
-    <h1 class="display sm">More than a workout.</h1>
-    <p class="subcopy mt8">Island Training Club is a Hong Kong training community with a Christian foundation — open to everyone.</p>
-    <div class="section-head"><h2>Leaders</h2></div>
-    <div class="stack">
-      ${LEADERS.map(
-        (l) => `
-        <div class="card leader-card">
-          <img src="${l.photo}" alt="${esc(l.name)}">
-          <div class="card-body">
-            <h3>${esc(l.name)}</h3>
-            <div class="role">${esc(l.role)}</div>
-            <p>${esc(l.bio)}</p>
-          </div>
-        </div>`
-      ).join("")}
-    </div>
-    <div class="section-head"><h2>Culture</h2></div>
-    <div class="card"><div class="card-body prose">
-      ${CULTURE.map((c) => `<h3>${esc(c.title)}</h3><p>${esc(c.body)}</p>`).join("")}
-    </div></div>
-    <p class="muted small mt16">Community copy is draft placeholder text for review with ITC leadership.</p>`;
 }
 
 // --- Apply ---------------------------------------------------------------------------------
