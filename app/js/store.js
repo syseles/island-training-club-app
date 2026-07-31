@@ -20,10 +20,11 @@ import {
   fmtTime,
   uid,
   normalizeDonorId,
+  donorIdProblem,
 } from "./data.js";
 
 const STORAGE_KEY = "itc.prototype.v1";
-const STATE_VERSION = 5;
+const STATE_VERSION = 8;
 
 let state = null;
 
@@ -38,6 +39,7 @@ function freshState() {
     receiptCounter: 49,
     donations: seedDonations(),
     orders: [],
+    prayers: [],
   };
 }
 
@@ -138,6 +140,39 @@ function migrate() {
       }
     }
   }
+  if (v < 6) {
+    // v6: donor IDs follow IECC's LASTNAME-NNNN(N) format, so the seeded
+    // demo member's ID moves from the old placeholder to CHUI-08879 (only
+    // an exact old-seed match is rewritten). Indemnity acceptance is now
+    // tracked per member; approved seed members predate the requirement
+    // and are backfilled, everyone else accepts from Profile > Indemnity.
+    const member = state.users.find((u) => u.id === "u-member");
+    if (member && member.donorId === "IECC-10028") member.donorId = "CHUI-08879";
+    for (const id of ["u-super", "u-admin", "u-member"]) {
+      const u = state.users.find((x) => x.id === id);
+      if (u && u.indemnityAcceptedAt === undefined) {
+        u.indemnityAcceptedAt = u.appliedAt;
+      }
+    }
+  }
+  if (v < 7) {
+    // v7: donor IDs saved before the LASTNAME-NNNN(N) format rule existed
+    // may be missing the hyphen (CHUI08879) or use another separator, and
+    // would display that way in Profile > Donor Profile. Repair what is
+    // recognizable to the canonical form; clear the rest so the member
+    // re-enters it through the validated form.
+    for (const u of state.users) {
+      if (!u.donorId) continue;
+      const repaired = normalizeDonorId(
+        String(u.donorId).trim().replace(/^([A-Za-z]+)(\d{4,5})$/, "$1-$2")
+      );
+      u.donorId = repaired && !donorIdProblem(repaired) ? repaired : null;
+    }
+  }
+  if (v < 8) {
+    // v8: prayer requests (Community > Prayers) are stored locally.
+    if (!Array.isArray(state.prayers)) state.prayers = [];
+  }
   state.version = STATE_VERSION;
 }
 
@@ -206,6 +241,9 @@ export function applyForMembership(form) {
     heard: form.heard.trim(),
     mediaConsent: !!form.mediaConsent,
     donorId: normalizeDonorId(form.donorId),
+    // Joining requires accepting the health & liability indemnity; the
+    // timestamp is the member's acceptance record (Profile > Indemnity).
+    indemnityAcceptedAt: form.indemnity ? Date.now() : null,
     appliedAt: Date.now(),
   };
   state.users.push(user);
@@ -251,6 +289,18 @@ export function updateDonorId(userId, raw) {
   user.donorId = normalizeDonorId(raw);
   save();
   return user.donorId;
+}
+
+// Records the member's acceptance of the health & liability indemnity.
+// Idempotent — the first acceptance timestamp is the record that matters.
+export function acceptIndemnity(userId) {
+  const user = state.users.find((u) => u.id === userId);
+  if (!user) return null;
+  if (!user.indemnityAcceptedAt) {
+    user.indemnityAcceptedAt = Date.now();
+    save();
+  }
+  return user.indemnityAcceptedAt;
 }
 
 // --- Activities & sessions -------------------------------------------------------
@@ -449,6 +499,23 @@ export function recordDonation({ userId, name, amount, note, ref }) {
   state.donations.push(donation);
   save();
   return donation;
+}
+
+// --- Community: prayer requests ------------------------------------------------
+// Requests go privately to ITC leaders (no public list in the app), so the
+// store only records them — there is intentionally no reader exposed here.
+
+export function recordPrayer({ userId, name, request }) {
+  const prayer = {
+    id: uid("p"),
+    userId: userId ?? null,
+    name: String(name ?? "").trim(),
+    request: String(request ?? "").trim(),
+    createdAt: Date.now(),
+  };
+  state.prayers.push(prayer);
+  save();
+  return prayer;
 }
 
 // --- Shop (mock merchandise orders) ----------------------------------------------

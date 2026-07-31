@@ -3,7 +3,7 @@
 // ==========================================================================
 
 import * as store from "./store.js";
-import { buildICS, findSession, todayLocal, mondayOf, addDays, isoDate } from "./data.js";
+import { buildICS, findSession, todayLocal, mondayOf, addDays, isoDate, donorIdProblem } from "./data.js";
 import * as views from "./views.js";
 
 const viewEl = document.getElementById("view");
@@ -61,7 +61,7 @@ function render() {
       out = views.viewActivity(arg);
       break;
     case "community":
-      out = views.viewCommunity();
+      out = views.viewCommunity(arg);
       break;
     case "giving":
       out = views.viewGiving();
@@ -70,7 +70,7 @@ function render() {
       out = views.viewShop();
       break;
     case "account":
-      out = views.viewAccount();
+      out = views.viewAccount(arg);
       break;
     case "apply": {
       const u = store.currentUser();
@@ -253,6 +253,11 @@ document.addEventListener("click", (e) => {
       views.resetGivingState();
       render();
       break;
+
+    case "connect-interest":
+      // Stub for fellowship/meal sign-ups — the real flow will notify leaders.
+      toast(`Noted — a leader will reach out about ${el.dataset.topic}`);
+      break;
   }
 });
 
@@ -286,6 +291,11 @@ document.addEventListener("submit", (e) => {
       e.preventDefault();
       if (!form.reportValidity()) return;
       const fd = new FormData(form);
+      const errEl = form.querySelector("#apply-error");
+      if (donorIdProblem(fd.get("donorId"))) {
+        errEl.innerHTML = `<div class="form-error">That Donor ID doesn’t look right — it needs a hyphen between your last name and the 4- or 5-digit number (e.g. CHUI-08879 or CHUI-8879). Please enter it again, or leave it blank if you don’t have one.</div>`;
+        return;
+      }
       const res = store.applyForMembership({
         fullName: fd.get("fullName") || "",
         preferredName: fd.get("preferredName") || "",
@@ -297,8 +307,8 @@ document.addEventListener("submit", (e) => {
         ageConfirmed: fd.get("ageConfirmed") === "on",
         mediaConsent: fd.get("mediaConsent") === "on",
         donorId: fd.get("donorId") || "",
+        indemnity: fd.get("indemnity") === "on",
       });
-      const errEl = form.querySelector("#apply-error");
       if (!res.ok) {
         errEl.innerHTML = `<div class="form-error">An application already exists for that email — try signing in instead.</div>`;
         return;
@@ -376,13 +386,48 @@ document.addEventListener("submit", (e) => {
       e.preventDefault();
       const user = store.currentUser();
       if (!user) return;
-      const saved = store.updateDonorId(user.id, new FormData(form).get("donorId"));
+      const errEl = form.querySelector("#donor-error");
+      const raw = String(new FormData(form).get("donorId") || "").trim();
+      if (donorIdProblem(raw)) {
+        errEl.innerHTML =
+          `<div class="form-error">That Donor ID doesn’t look right — it needs a hyphen between your last name and the 4- or 5-digit number (e.g. CHUI-08879 or CHUI-8879). Please enter it again.</div>`;
+        return;
+      }
+      const saved = store.updateDonorId(user.id, raw);
       if (!saved) {
-        form.querySelector("#donor-error").innerHTML =
-          `<div class="form-error">Enter your Donor ID to save it.</div>`;
+        errEl.innerHTML = `<div class="form-error">Enter your Donor ID to save it.</div>`;
         return;
       }
       toast("Donor ID saved");
+      render();
+      break;
+    }
+
+    case "form-indemnity": {
+      e.preventDefault();
+      if (!form.reportValidity()) return;
+      const user = store.currentUser();
+      if (!user) return;
+      store.acceptIndemnity(user.id);
+      toast("Indemnity accepted & confirmed");
+      render();
+      break;
+    }
+
+    case "form-prayer": {
+      e.preventDefault();
+      if (!form.reportValidity()) return;
+      const fd = new FormData(form);
+      const request = String(fd.get("request") || "").trim();
+      if (!request) {
+        form.querySelector("#prayer-error").innerHTML =
+          `<div class="form-error">Write your prayer request first.</div>`;
+        return;
+      }
+      const user = store.currentUser();
+      store.recordPrayer({ userId: user ? user.id : null, name: fd.get("name"), request });
+      toast("Prayer request sent — leaders will pray with you");
+      location.hash = "#/community";
       render();
       break;
     }
