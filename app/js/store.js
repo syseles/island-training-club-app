@@ -14,6 +14,7 @@ import {
   GIVING_CAMPAIGN,
   SHOP_PRODUCTS,
   sessionsInRange,
+  sessionStarted,
   todayLocal,
   isoDate,
   fmtDate,
@@ -400,6 +401,7 @@ export function receiptForBooking(bookingId) {
 // Simulated in-app payment. Returns { booking, receipt }.
 export function payForSession(userId, session, cardLast4) {
   if (session.kind !== "paid") throw new Error("Session is not paid");
+  if (sessionStarted(session)) throw new Error("Session has already started");
   if (spotsLeft(session) <= 0) throw new Error("Session is full");
   if (userBookingFor(userId, session.id)) throw new Error("Already booked");
 

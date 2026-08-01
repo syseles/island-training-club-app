@@ -41,7 +41,9 @@ check("home (visitor)", () => views.viewHome());
 check("schedule", () => views.viewSchedule());
 const hyroxSid = store.nextSession().kind === "paid" ? store.nextSession().id : null;
 const allUpcoming = store.upcomingSessions(14);
-const paid = allUpcoming.find((s) => s.kind === "paid");
+// booking tests need a session that hasn't started yet — today's sessions
+// are unbookable once their start time passes
+const paid = allUpcoming.find((s) => s.kind === "paid" && !data.sessionStarted(s));
 const free = allUpcoming.find((s) => s.kind === "free");
 if (!paid || !free) throw new Error("expected both paid and free sessions in window");
 check("activity paid (visitor)", () => views.viewActivity(paid.id));
@@ -201,11 +203,12 @@ const signIn = store.signIn("test@example.com");
 if (!signIn.ok || signIn.user.status !== "approved") throw new Error("approval did not take effect");
 check("account (new member)", () => views.viewAccount());
 
-// Profile sections are tappable cards that open sub-pages; card faces carry
+// Profile sections are tappable rows that open sub-pages; row faces carry
 // a one-line description, not live details
 const newMemberAcct = views.viewAccount();
 let cardsOk = true;
 for (const link of [
+  "#/account/details",
   "#/account/indemnity",
   "#/account/donor",
   "#/account/payments",
@@ -215,15 +218,16 @@ for (const link of [
   if (!newMemberAcct.includes(`href="${link}"`)) {
     failures++;
     cardsOk = false;
-    console.error(`FAIL Profile missing ${link} card`);
+    console.error(`FAIL Profile missing ${link} row`);
   }
 }
-if (cardsOk) console.log("ok  Profile shows the five section cards");
+if (cardsOk) console.log("ok  Profile shows the six section rows");
 if (newMemberAcct.includes("#/account/about")) {
   failures++;
   console.error("FAIL About card should have moved to the Community tab");
 } else console.log("ok  About card moved off Profile");
 for (const sub of [
+  "Contact and emergency information",
   "Donor ID and e-receipt details",
   "Bookings, donations and orders",
   "Consent and communication choices",
@@ -231,18 +235,20 @@ for (const sub of [
 ]) {
   if (!newMemberAcct.includes(sub)) {
     failures++;
-    console.error(`FAIL Profile card missing subtext "${sub}"`);
+    console.error(`FAIL Profile row missing subtext "${sub}"`);
   }
 }
-console.log("ok  Profile cards show descriptive subtexts");
+console.log("ok  Profile rows show descriptive subtexts");
+check("profile > details", () => views.viewAccount("details"));
 check("profile > indemnity", () => views.viewAccount("indemnity"));
 check("profile > donor", () => views.viewAccount("donor"));
 check("profile > payments", () => views.viewAccount("payments"));
 check("profile > privacy", () => views.viewAccount("privacy"));
 check("profile > history", () => views.viewAccount("history"));
 
-// sub-page headings are title-cased to match the card titles
+// sub-page headings are title-cased to match the row titles
 for (const [section, title] of [
+  ["details", "Membership Details."],
   ["indemnity", "Health &amp; Liability Indemnity."],
   ["donor", "Donor Profile."],
   ["payments", "Payments &amp; Receipts."],
@@ -306,6 +312,10 @@ if (homeBooked.includes("BFT Causeway Bay") || homeBooked.includes("Just show up
   failures++;
   console.error('FAIL home "My week" shows sessions the member has not booked');
 } else console.log('ok  home "My week" hides unbooked sessions');
+const WEEK_MS = 7 * 24 * 3600 * 1000;
+views.scheduleState.weekOffset = Math.round(
+  (data.mondayOf(data.parseISO(paid.dateISO)) - data.mondayOf(data.todayLocal())) / WEEK_MS
+);
 views.scheduleState.selected = paid.dateISO;
 if (!views.viewSchedule().includes("Booked")) {
   failures++;
@@ -384,11 +394,14 @@ if (!memberAcct.includes('class="kicker">Profile</div>') || memberAcct.includes(
   failures++;
   console.error('FAIL Profile header should read "Profile" with no name headline');
 } else console.log('ok  Profile header reads "Profile"');
-const [profileHead, profileDetails] = memberAcct.split("Membership Details");
-if (!profileDetails?.includes("member@itc.hk") || profileHead.includes("member@itc.hk")) {
+if (memberAcct.includes("member@itc.hk")) {
   failures++;
-  console.error("FAIL email should live in the Membership Details section");
-} else console.log("ok  email lives in Membership Details");
+  console.error("FAIL email should not appear on the Profile face");
+} else console.log("ok  Profile face carries no contact details");
+if (!views.viewAccount("details").includes("member@itc.hk")) {
+  failures++;
+  console.error("FAIL email missing from Membership Details sub-page");
+} else console.log("ok  email lives on Membership Details sub-page");
 check("home (member)", () => views.viewHome());
 const memberHome = views.viewHome();
 if (!memberHome.includes("BFT Causeway Bay") || memberHome.includes("Midtown 28")) {

@@ -13,6 +13,7 @@ import {
   GIVING_CAMPAIGN,
   SHOP_PRODUCTS,
   findSession,
+  sessionStarted,
   sessionsInRange,
   weeklyVerse,
   mondayOf,
@@ -40,6 +41,9 @@ const todayISO = () => isoDate(todayLocal());
 const fmtDay = (ts) =>
   new Date(ts).toLocaleDateString("en-HK", { day: "numeric", month: "short", year: "numeric" });
 
+const fmtMonthYear = (ts) =>
+  new Date(ts).toLocaleDateString("en-HK", { month: "short", year: "numeric" });
+
 // --- Shared fragments ---------------------------------------------------------
 
 function badgeFor(s) {
@@ -61,7 +65,7 @@ function sessionRow(s, { past, showDate = true, highlight } = {}) {
   const user = store.currentUser();
   const booked = user ? store.userBookingFor(user.id, s.id) : null;
   const end = booked
-    ? `<span class="badge free">Booked</span>`
+    ? `<span class="badge free booked">Booked</span>`
     : s.kind === "free"
       ? `<span class="badge free">Free</span><span class="spots">Just show up</span>`
       : `${store.spotsLeft(s) > 0 ? `<span class="badge paid">${fmtMoney(s.price)}</span>` : ""}${spotsLabel(s)}`;
@@ -99,6 +103,9 @@ const ICONS = {
   cal: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4.5" width="18" height="17" rx="2"/><path d="M3 9.5h18M8 2.5v4M16 2.5v4"/></svg>',
   heart: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20.5C7 16.5 3.5 13.2 3.5 9.6 3.5 7 5.5 5 8 5c1.6 0 3.1.8 4 2.1.9-1.3 2.4-2.1 4-2.1 2.5 0 4.5 2 4.5 4.6 0 3.6-3.5 6.9-8.5 10.9Z"/></svg>',
   bag: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M5.5 8h13l-1.1 12.5H6.6Z"/><path d="M8.5 10.5V6.8a3.5 3.5 0 0 1 7 0v3.7"/></svg>',
+  dollar: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2.5v19"/><path d="M17 6.5H9.75a3.25 3.25 0 0 0 0 6.5h4.5a3.25 3.25 0 0 1 0 6.5H6.5"/></svg>',
+  bell: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8.5a6 6 0 0 0-12 0c0 6.5-2.5 8.5-2.5 8.5h17S18 15 18 8.5"/><path d="M13.7 20.5a2 2 0 0 1-3.4 0"/></svg>',
+  clock: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8.5"/><path d="M12 7v5.2l3.2 2"/></svg>',
   chevron: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 5 7 7-7 7"/></svg>',
 };
 
@@ -136,7 +143,9 @@ export function avatarHTML(user) {
 
 export function viewHome() {
   const user = store.currentUser();
-  const upcoming = store.upcomingSessions(7);
+  // Same 14-day window bookings are made in — a confirmed booking can never
+  // fall out of "My week" (e.g. next Saturday's booking seen on Sat evening).
+  const upcoming = store.upcomingSessions(14);
   const name = user ? esc(user.preferredName || user.fullName.split(" ")[0]) : null;
 
   // "My week" shows a signed-in member only the sessions they've booked
@@ -147,7 +156,7 @@ export function viewHome() {
     const bookedIds = new Set(
       store
         .bookingsForUser(user.id)
-        .filter((b) => b.status === "confirmed" && b.snapshot.dateISO >= todayISO())
+        .filter((b) => b.status === "confirmed" && !sessionStarted(b.snapshot))
         .map((b) => b.sessionId)
     );
     rows = upcoming.filter((s) => bookedIds.has(s.id));
@@ -208,6 +217,15 @@ export const scheduleState = {
   filter: "all",
 };
 
+// Back to the default view — this week, today, no filter. The router calls
+// this when the Schedule tab is entered fresh (back-navigation from an
+// activity/checkout page keeps the week and day you were browsing).
+export function resetScheduleState() {
+  scheduleState.weekOffset = 0;
+  scheduleState.selected = null; // viewSchedule re-picks today
+  scheduleState.filter = "all";
+}
+
 const FILTERS = [
   ["all", "All"],
   ["free", "Free"],
@@ -249,7 +267,7 @@ export function viewSchedule() {
     .filter((s) => matchesFilter(s, scheduleState.filter));
 
   const listHTML = list.length
-    ? list.map((s) => sessionRow(s, { past: s.dateISO < todayISO(), showDate: false })).join("")
+    ? list.map((s) => sessionRow(s, { past: sessionStarted(s), showDate: false })).join("")
     : `<div class="empty">No ${scheduleState.filter === "all" ? "" : esc(scheduleState.filter) + " "}sessions on ${esc(fmtDate(scheduleState.selected))}.</div>`;
 
   return `
@@ -279,7 +297,7 @@ export function viewActivity(sessionId) {
 
   const user = store.currentUser();
   const isMember = user && user.status === "approved";
-  const past = s.dateISO < todayISO();
+  const past = sessionStarted(s);
   const spots = store.spotsLeft(s);
   const booking = user ? store.userBookingFor(user.id, s.id) : null;
 
@@ -747,6 +765,8 @@ export function viewAccount(section) {
   switch (section) {
     case undefined:
       return accountMember(user);
+    case "details":
+      return accountDetails(user);
     case "indemnity":
       return accountIndemnity(user);
     case "donor":
@@ -832,42 +852,49 @@ function accountDeclined(user) {
 function accountMember(user) {
   const isAdmin = ["admin", "superadmin"].includes(user.role);
 
-  const roleBadge = {
-    member: '<span class="badge free">Member</span>',
-    admin: '<span class="badge paid">Admin</span>',
-    superadmin: '<span class="badge warn">Super admin</span>',
+  const roleLabel = {
+    member: "Active member",
+    admin: "Admin",
+    superadmin: "Super admin",
   }[user.role];
+
+  const bookings = store.bookingsForUser(user.id).filter((b) => b.status !== "cancelled");
+  const attended = bookings.filter((b) => b.status === "attended").length;
+  const gifts = store.donationsForUser(user.id).length;
 
   return `
     <div class="kicker">Profile</div>
-    <div class="mt16">${roleBadge}</div>
 
-    ${isAdmin ? `<a class="btn ghost mt16" href="#/admin">Open admin tools →</a>` : ""}
-
-    <div class="section-head"><h2>Membership Details</h2></div>
-    <div class="card"><div class="card-body">
-      <div class="receipt-lines">
-        <div class="line"><span>Full name</span><strong>${esc(user.fullName)}</strong></div>
-        <div class="line"><span>Preferred name</span><strong>${esc(user.preferredName)}</strong></div>
-        <div class="line"><span>Email</span><strong>${esc(user.email)}</strong></div>
-        <div class="line"><span>Member since</span><strong>${fmtDay(user.appliedAt)}</strong></div>
-        <div class="line"><span>Phone / WhatsApp</span><strong>${esc(user.phone)}</strong></div>
-        <div class="line"><span>Emergency contact</span><strong>${esc(user.emergencyName)} · ${esc(user.emergencyPhone)}</strong></div>
+    <div class="profile-hero">
+      <div class="ph-top">
+        <div class="ph-avatar">${esc(initials(user.fullName))}</div>
+        <div class="ph-id">
+          <div class="ph-role">${roleLabel}</div>
+          <h1>${esc(user.fullName)}</h1>
+          <p>Member since ${fmtMonthYear(user.appliedAt)}</p>
+        </div>
       </div>
-      <p class="muted small mt16">Profile editing is stubbed in the prototype — fields come from the application form.</p>
-    </div></div>
+      <div class="ph-stats">
+        <div><strong>${bookings.length}</strong><span>Bookings</span></div>
+        <div><strong>${attended}</strong><span>Attended</span></div>
+        <div><strong>${gifts}</strong><span>Donations</span></div>
+      </div>
+    </div>
 
-    <div class="link-cards">
-      ${linkCard(
+    <div class="profile-rows">
+      ${isAdmin ? profileRow("#/admin", ICONS.shield, "Admin Tools", "Approvals, activities and members") : ""}
+      ${profileRow("#/account/details", ICONS.user, "Membership Details", "Contact and emergency information")}
+      ${profileRow(
         "#/account/indemnity",
+        ICONS.check,
         "Indemnity",
         user.indemnityAcceptedAt ? `Indemnity confirmed on ${fmtDay(user.indemnityAcceptedAt)}` : "To be accepted",
         { cls: user.indemnityAcceptedAt ? "ok" : "todo" }
       )}
-      ${linkCard("#/account/donor", "Donor Profile", "Donor ID and e-receipt details")}
-      ${linkCard("#/account/payments", "Payments & Receipts", "Bookings, donations and orders")}
-      ${linkCard("#/account/privacy", "Privacy & Notifications", "Consent and communication choices")}
-      ${linkCard("#/account/history", "History", "Activity history")}
+      ${profileRow("#/account/donor", ICONS.heart, "Donor Profile", "Donor ID and e-receipt details")}
+      ${profileRow("#/account/payments", ICONS.dollar, "Payments & Receipts", "Bookings, donations and orders")}
+      ${profileRow("#/account/privacy", ICONS.bell, "Privacy & Notifications", "Consent and communication choices")}
+      ${profileRow("#/account/history", ICONS.clock, "History", "Activity history")}
     </div>
 
     <div class="btn-row">
@@ -876,9 +903,41 @@ function accountMember(user) {
     </div>`;
 }
 
+// Tappable Profile row: icon tile + title + one-line status, separated by
+// hairlines. (Community keeps the chunkier linkCard treatment.)
+function profileRow(href, icon, title, status, { cls = "" } = {}) {
+  return `
+    <a class="profile-row" href="${href}">
+      <span class="pr-icon">${icon}</span>
+      <span class="pr-text">
+        <strong>${esc(title)}</strong>
+        <span class="pr-status${cls ? ` ${cls}` : ""}">${esc(status)}</span>
+      </span>
+      ${ICONS.chevron}
+    </a>`;
+}
+
+function accountDetails(user) {
+  return `
+    <a class="back-link" href="#/account">← Profile</a>
+    <div class="kicker mt16">Profile · Membership Details</div>
+    <h1 class="display sm">Membership Details.</h1>
+    <div class="card mt16"><div class="card-body">
+      <div class="receipt-lines" style="margin-top:0;border-top:0">
+        <div class="line"><span>Full name</span><strong>${esc(user.fullName)}</strong></div>
+        <div class="line"><span>Preferred name</span><strong>${esc(user.preferredName)}</strong></div>
+        <div class="line"><span>Email</span><strong>${esc(user.email)}</strong></div>
+        <div class="line"><span>Member since</span><strong>${fmtDay(user.appliedAt)}</strong></div>
+        <div class="line"><span>Phone / WhatsApp</span><strong>${esc(user.phone)}</strong></div>
+        <div class="line"><span>Emergency contact</span><strong>${esc(user.emergencyName)} · ${esc(user.emergencyPhone)}</strong></div>
+      </div>
+      <p class="muted small mt16">Profile editing is stubbed in the prototype — fields come from the application form.</p>
+    </div></div>`;
+}
+
 // Tappable card that opens a detail page. The face shows the title plus a
 // one-line description or status (and an optional second line), so the page
-// it leads to stays uncluttered. Used on both Profile and Community.
+// it leads to stays uncluttered. Used on Community (Profile uses profileRow).
 function linkCard(href, title, status, { sub = "", cls = "" } = {}) {
   return `
     <a class="card link-card" href="${href}">
@@ -1026,7 +1085,7 @@ function accountPrivacy(user) {
 
 function bookingCard(b) {
   const s = b.snapshot;
-  const live = b.status === "confirmed" && s.dateISO >= todayISO();
+  const live = b.status === "confirmed" && !sessionStarted(s);
   const status =
     b.status === "cancelled"
       ? '<span class="badge danger">Cancelled</span>'
@@ -1052,7 +1111,7 @@ function bookingCard(b) {
 function accountHistory(user) {
   const history = store
     .bookingsForUser(user.id)
-    .filter((b) => !(b.status === "confirmed" && b.snapshot.dateISO >= todayISO()));
+    .filter((b) => !(b.status === "confirmed" && !sessionStarted(b.snapshot)));
   return `
     <a class="back-link" href="#/account">← Profile</a>
     <div class="kicker mt16">Profile · History</div>
@@ -1123,6 +1182,7 @@ export function viewCheckout(sessionId) {
     const b = store.userBookingFor(user.id, s.id);
     return { redirect: `#/booking/${b.id}` };
   }
+  if (sessionStarted(s)) return { redirect: `#/activity/${sessionId}` };
   if (store.spotsLeft(s) <= 0) return { redirect: `#/activity/${sessionId}` };
 
   return `
@@ -1164,7 +1224,7 @@ export function viewBooking(bookingId) {
   }
   const s = b.snapshot;
   const receipt = store.receiptForBooking(b.id);
-  const live = b.status === "confirmed" && s.dateISO >= todayISO();
+  const live = b.status === "confirmed" && !sessionStarted(s);
 
   const head = live
     ? `<div class="confirm-mark">${ICONS.check}</div>

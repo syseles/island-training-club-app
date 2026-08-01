@@ -590,6 +590,16 @@ export function sessionsInRange(activities, fromDate, days) {
   return out;
 }
 
+// A session counts as past once its start time has passed — a date-only
+// check would keep this morning's session "upcoming" (and bookable) all day.
+// Works for live sessions and booking snapshots (both carry dateISO + time).
+export function sessionStarted(s) {
+  const [h, m] = s.time.split(":").map(Number);
+  const start = parseISO(s.dateISO);
+  start.setHours(h, m, 0, 0);
+  return start.getTime() <= Date.now();
+}
+
 export function findSession(activities, sessionId) {
   // sessionId = `${activityId}-${YYYY-MM-DD}`; split off the date part
   const match = sessionId.match(/^(.*)-(\d{4}-\d{2}-\d{2})$/);
@@ -597,6 +607,7 @@ export function findSession(activities, sessionId) {
   const [, activityId, dateISO] = match;
   const act = activities.find((a) => a.id === activityId);
   if (!act) return null;
+
   const date = parseISO(dateISO);
   return { ...act, id: sessionId, activityId, dateISO, date };
 }

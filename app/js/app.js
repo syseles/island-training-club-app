@@ -45,9 +45,19 @@ const NAV_FOR = {
   admin: "admin",
 };
 
+let prevPage = null;
+
 function render() {
   const parts = parseHash();
   const [page, arg, arg2] = parts.length ? parts : ["home"];
+
+  // Entering the Schedule tab fresh (bottom nav, Home, Profile…) resets it
+  // to this week + today — a week offset left over from earlier browsing
+  // must not hide today's sessions. Back links from activity/checkout keep
+  // the week and day you were looking at.
+  if (page === "schedule" && !["schedule", "activity", "checkout"].includes(prevPage)) {
+    views.resetScheduleState();
+  }
 
   let out;
   switch (page) {
@@ -104,6 +114,7 @@ function render() {
   avatarEl.classList.toggle("is-empty", !user);
   avatarEl.innerHTML = views.avatarHTML(user);
   window.scrollTo({ top: 0 });
+  prevPage = page;
 }
 
 // --- ICS download -------------------------------------------------------------------
