@@ -11,3 +11,6 @@ dist/
 
 # Local screenshot work
 profile_layout.png
+
+# Pi package clones (project-local installs)
+.pi/git/
