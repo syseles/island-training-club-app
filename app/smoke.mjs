@@ -167,10 +167,15 @@ console.log("ok  cancellation refunds and frees the place");
 // --- Seeded member view ---
 store.demoSignIn("member");
 check("account (seeded member)", () => views.viewAccount());
-if (!views.viewAccount().includes("IECC-10028")) {
+const memberAcct = views.viewAccount();
+if (!memberAcct.includes("IECC-10028")) {
   failures++;
   console.error("FAIL seeded member donor ID not shown in Profile");
 } else console.log("ok  seeded member donor ID shown in Profile");
+if (!memberAcct.includes("Member Profile") || memberAcct.includes("’s training")) {
+  failures++;
+  console.error('FAIL Profile header should be "Member Profile" with no name headline');
+} else console.log('ok  Profile header is "Member Profile", name headline removed');
 check("home (member)", () => views.viewHome());
 
 // --- ICS generation ---

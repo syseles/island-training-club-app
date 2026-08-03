@@ -520,14 +520,10 @@ function accountMember(user) {
   };
 
   return `
-    <div class="kicker">Account</div>
-    <h1 class="display">${esc(user.preferredName || user.fullName.split(" ")[0])}’s training.</h1>
+    <div class="kicker">Member Profile</div>
     <div class="mt16">${roleBadge} <span class="muted small">${esc(user.email)}</span></div>
 
     ${isAdmin ? `<a class="btn ghost mt16" href="#/admin">Open admin tools →</a>` : ""}
-
-    <div class="section-head"><h2>Upcoming</h2></div>
-    ${upcoming.length ? upcoming.map(bookingCard).join("") : `<div class="empty">Nothing booked yet. <a href="#/schedule" style="color:var(--accent)">Find a session →</a></div>`}
 
     <div class="section-head"><h2>Membership details</h2></div>
     <div class="card"><div class="card-body">
