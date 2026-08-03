@@ -300,6 +300,21 @@ document.addEventListener("submit", (e) => {
       break;
     }
 
+    case "form-donor-id": {
+      e.preventDefault();
+      const user = store.currentUser();
+      if (!user) return;
+      const saved = store.updateDonorId(user.id, new FormData(form).get("donorId"));
+      if (!saved) {
+        form.querySelector("#donor-error").innerHTML =
+          `<div class="form-error">Enter your Donor ID to save it.</div>`;
+        return;
+      }
+      toast("Donor ID saved");
+      render();
+      break;
+    }
+
     case "form-activity": {
       e.preventDefault();
       if (!form.reportValidity()) return;

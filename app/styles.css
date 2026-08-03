@@ -177,7 +177,6 @@ input, select, textarea { font: inherit; }
   font-weight: 900;
   letter-spacing: -.045em;
   line-height: .94;
-  text-transform: uppercase;
 }
 
 .display.sm { font-size: 30px; }

@@ -114,6 +114,10 @@ console.log("ok  admin approved new applicant");
 const signIn = store.signIn("test@example.com");
 if (!signIn.ok || signIn.user.status !== "approved") throw new Error("approval did not take effect");
 check("account (new member)", () => views.viewAccount());
+if (!views.viewHome().includes("Nothing booked this week")) {
+  failures++;
+  console.error('FAIL "My week" should prompt when the member has no bookings');
+} else console.log('ok  "My week" empty state prompts to book');
 check("checkout (member)", () => views.viewCheckout(paid.id));
 const before = store.spotsLeft(paid);
 const { booking, receipt } = store.payForSession(signIn.user.id, paid, "4242");
@@ -124,12 +128,18 @@ check("booking confirmation", () => views.viewBooking(booking.id));
 check("receipt", () => views.viewReceipt(receipt.id));
 check("activity (member, booked)", () => views.viewActivity(paid.id));
 
-// the booked class is badged on Home "My week" and on the Schedule row,
-// and no longer repeated as a separate list in Profile
-if (!views.viewHome().includes("Booked")) {
+// the booked class is badged on Home "My week" and on the Schedule row;
+// "My week" shows booked sessions only, so unbooked ones stay out
+const homeBooked = views.viewHome();
+if (!homeBooked.includes("Booked") || !homeBooked.includes("Quarry Bay Studio")) {
   failures++;
-  console.error('FAIL home "My week" does not badge the booked session');
-} else console.log('ok  home "My week" badges booked session');
+  console.error('FAIL home "My week" does not show the booked session');
+} else console.log('ok  home "My week" shows the booked session');
+if (homeBooked.includes("Tamar Park") || homeBooked.includes("Just show up")) {
+  failures++;
+  console.error('FAIL home "My week" shows sessions the member has not booked');
+} else console.log('ok  home "My week" hides unbooked sessions');
+
 views.scheduleState.selected = paid.dateISO;
 if (!views.viewSchedule().includes("Booked")) {
   failures++;
@@ -172,11 +182,26 @@ if (!memberAcct.includes("IECC-10028")) {
   failures++;
   console.error("FAIL seeded member donor ID not shown in Profile");
 } else console.log("ok  seeded member donor ID shown in Profile");
-if (!memberAcct.includes("Member Profile") || memberAcct.includes("’s training")) {
+if (memberAcct.includes("Member Profile") || memberAcct.includes("’s training")) {
   failures++;
-  console.error('FAIL Profile header should be "Member Profile" with no name headline');
-} else console.log('ok  Profile header is "Member Profile", name headline removed');
+  console.error('FAIL Profile header should not be "Member Profile" and no name headline');
+} else console.log('ok  Profile header is "Profile", name headline removed');
 check("home (member)", () => views.viewHome());
+
+if (!memberAcct.includes('class="kicker">Profile</div>') || memberAcct.includes("Member Profile") || memberAcct.includes("’s training")) {
+  failures++;
+  console.error('FAIL Profile header should read "Profile" with no name headline');
+} else console.log('ok  Profile header reads "Profile"');
+const [profileHead, profileDetails] = memberAcct.split("Membership details");
+if (!profileDetails?.includes("member@itc.hk") || profileHead.includes("member@itc.hk")) {
+  failures++;
+  console.error("FAIL email should live in the Membership details section");
+} else console.log("ok  email lives in Membership details");
+const memberHome = views.viewHome();
+if (!memberHome.includes("Quarry Bay Studio") || memberHome.includes("Tamar Park")) {
+  failures++;
+  console.error('FAIL "My week" should show only the member\'s booked HYROX');
+} else console.log('ok  "My week" shows only the member\'s booked session');
 
 // --- ICS generation ---
 const ics = data.buildICS(free);
