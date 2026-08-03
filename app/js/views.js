@@ -10,6 +10,7 @@ import {
   LEADERS,
   CULTURE,
   ANNOUNCEMENTS,
+  SHOP_PRODUCTS,
   findSession,
   sessionStarted,
   sessionsInRange,
@@ -112,6 +113,7 @@ const NAV_ITEMS = [
   { key: "home", label: "Home", icon: "home", href: "#/home" },
   { key: "schedule", label: "Schedule", icon: "calendar", href: "#/schedule" },
   { key: "community", label: "Community", icon: "people", href: "#/community" },
+  { key: "shop", label: "Shop", icon: "bag", href: "#/shop" },
   { key: "account", label: "Account", icon: "user", href: "#/account" },
   { key: "admin", label: "Admin", icon: "shield", href: "#/admin", roles: ["admin", "superadmin"] },
 ];
@@ -522,6 +524,75 @@ function communityAnnouncements() {
       ).join("")}
     </div>
     <p class="muted small mt16">Draft announcements — real posts come from ITC leadership and IECC comms.</p>`;
+}
+
+// --- Shop (merchandise orders) ------------------------------------------
+
+export function viewShop() {
+  const user = store.currentUser();
+  const orders = user ? store.ordersForUser(user.id) : [];
+
+  const orderRows = orders.length
+    ? `
+      <div class="session-list">
+        ${orders
+          .map(
+            (o) => `
+          <div class="session-row">
+            <time>${new Date(o.createdAt).toLocaleDateString("en-HK", { day: "numeric", month: "short" })}<small>size ${esc(o.size)}</small></time>
+            <div>
+              <h3>${esc(o.name)}</h3>
+              <p>Qty ${o.qty} · order placed</p>
+            </div>
+            <div class="row-end"><strong>${fmtMoney(o.amount)}</strong><span class="badge neutral">Placed</span></div>
+          </div>`
+          )
+          .join("")}
+      </div>`
+    : `<div class="empty">No orders yet.</div>`;
+
+  return `
+    <div class="kicker">ITC Club Shop</div>
+    <h1 class="display">Wear the movement.</h1>
+    <p class="subcopy mt8">Made for training. Designed for belonging.</p>
+    <div class="product-grid mt16">
+      ${SHOP_PRODUCTS.map(
+        (p) => `
+        <div class="card product-card">
+          <div class="product-tile"><img src="${p.image}" alt="${esc(p.name)}" loading="lazy"></div>
+          <div class="card-body">
+            <h3>${esc(p.name)}</h3>
+            <p class="hero-meta">${esc(p.blurb)}</p>
+            <p class="price-line"><strong>${fmtMoney(p.price)}</strong></p>
+            ${
+              user
+                ? `
+              <form data-form="form-shop-order" data-product="${p.id}" novalidate>
+                <div class="field-row">
+                  <div class="field">
+                    <label for="size-${p.id}">Size</label>
+                    <select id="size-${p.id}" name="size">${p.sizes.map((s) => `<option>${s}</option>`).join("")}</select>
+                  </div>
+                  <div class="field">
+                    <label for="qty-${p.id}">Qty</label>
+                    <input id="qty-${p.id}" name="qty" type="number" min="1" max="5" value="1" inputmode="numeric">
+                  </div>
+                </div>
+                <button class="btn sm mt16" type="submit">PLACE ORDER</button>
+              </form>`
+                : `<div class="locked-note">🔒 Sign in to place an order.</div>`
+            }
+          </div>
+        </div>`
+      ).join("")}
+    </div>
+    ${
+      user
+        ? `
+      <div class="section-head"><h2>Your orders</h2></div>
+      ${orderRows}`
+        : ""
+    }`;
 }
 
 export function viewAccount(section) {

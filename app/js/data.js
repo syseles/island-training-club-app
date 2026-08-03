@@ -119,6 +119,7 @@ export const SEED_USERS = [
     emergencyPhone: "+852 9000 9999",
     heard: "Founder",
     appliedAt: daysAgo(120),
+    indemnityAcceptedAt: daysAgo(120),
   },
   {
     id: "u-admin",
@@ -133,6 +134,7 @@ export const SEED_USERS = [
     emergencyPhone: "+852 9000 9002",
     heard: "Founding member",
     appliedAt: daysAgo(118),
+    indemnityAcceptedAt: daysAgo(118),
   },
   {
     id: "u-member",
@@ -146,8 +148,9 @@ export const SEED_USERS = [
     emergencyName: "K. Cheung",
     emergencyPhone: "+852 9000 9001",
     heard: "A friend runs with the club",
-    donorId: "IECC-10028",
+    donorId: "CHUI-08879",
     appliedAt: daysAgo(34),
+    indemnityAcceptedAt: daysAgo(34),
   },
   {
     id: "u-pend-1",
@@ -522,17 +525,53 @@ export function initials(name) {
     .toUpperCase();
 }
 
+// Donor ID is IECC's LASTNAME-NNNN(N) format (last name, a hyphen, then a
+// 4- or 5-digit number, e.g. CHUI-08879 or CHUI-8879). The hyphen is
+// mandatory — anything else is rejected with a re-entry error. Blank or
+// "not applicable"-style answers mean "no donor ID" (null) — the member
+// can add one later from the Profile tab.
+const DONOR_ID_RE = /^[A-Za-z]+-\d{4,5}$/;
+const DONOR_ID_NA_RE = /^(n\/?a|not applicable|none|no)$/i;
+
+// Members type these on phones, where autocorrect rewrites "-" as an en/em
+// dash (or they hit the spacebar instead). Canonicalize any dash/space
+// separator to a plain hyphen so the stored ID always reads LASTNAME-NNNN(N).
+function canonicalDonorId(raw) {
+  return String(raw ?? "")
+    .trim()
+    .replace(/[‐-―_]/g, "-") // unicode dashes, underscore -> hyphen
+    .replace(/\s*-\s*/g, "-") // tidy spaces around a hyphen
+    .replace(/^([A-Za-z]+)\s+(\d{4,5})$/, "$1-$2") // space as the separator
+    .toUpperCase();
+}
+
 export function uid(prefix) {
   return `${prefix}-${Math.random().toString(36).slice(2, 8)}${Date.now().toString(36).slice(-4)}`;
 }
 
-// Donor ID is optional. Blank or "not applicable"-style answers mean "no
-// donor ID" (null) — the member can add one later from the Profile tab.
+// has the session's calendar start time already passed? A "started" session
+// is read-only — admin/leader tooling and the Schedule view use this to lock
+// edits the moment the workout begins. The minute-resolution check would keep this morning's session "upcoming" (and bookable) all day.
+// Works for live sessions and booking snapshots (both carry dateISO + time).
+export function sessionStarted(s) {
+  const [h, m] = s.time.split(":").map(Number);
+  const start = parseISO(s.dateISO);
+  start.setHours(h, m, 0, 0);
+  return start.getTime() <= Date.now();
+}
+
 export function normalizeDonorId(raw) {
-  const v = String(raw ?? "").trim();
-  if (!v) return null;
-  if (/^(n\/?a|not applicable|none|no)$/i.test(v)) return null;
+  const v = canonicalDonorId(raw);
+  if (!v || DONOR_ID_NA_RE.test(v)) return null;
   return v;
+}
+
+// Returns "format" when a non-blank, non-N/A value isn't a valid donor ID,
+// null otherwise — forms use this to reject typos before anything is saved.
+export function donorIdProblem(raw) {
+  const v = canonicalDonorId(raw);
+  if (!v || DONOR_ID_NA_RE.test(v)) return null;
+  return DONOR_ID_RE.test(v) ? null : "format";
 }
 
 // --- Sessions -----------------------------------------------------------------

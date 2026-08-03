@@ -35,6 +35,7 @@ const NAV_FOR = {
   schedule: "schedule",
   activity: "schedule",
   community: "community",
+  shop: "shop",
   account: "account",
   apply: "account",
   checkout: "account",
@@ -70,6 +71,9 @@ function render() {
       break;
     case "community":
       out = views.viewCommunity(arg);
+      break;
+    case "shop":
+      out = views.viewShop();
       break;
     case "account":
       out = views.viewAccount(arg);
@@ -233,7 +237,11 @@ document.addEventListener("submit", (e) => {
   const form = e.target;
   if (!(form instanceof HTMLFormElement)) return;
 
-  switch (form.id) {
+  // Shop order forms repeat per product card, so they key off data-form
+  // instead of a (necessarily unique) id.
+  const key = form.id || form.dataset.form || "";
+
+  switch (key) {
     case "form-signin": {
       e.preventDefault();
       const email = new FormData(form).get("email");
@@ -303,6 +311,20 @@ document.addEventListener("submit", (e) => {
           btn.textContent = "Pay";
         }
       }, 900);
+      break;
+    }
+
+    case "form-shop-order": {
+      e.preventDefault();
+      const user = store.currentUser();
+      if (!user) {
+        toast("Sign in to place an order", true);
+        return;
+      }
+      const fd = new FormData(form);
+      const order = store.placeOrder(user.id, form.dataset.product, fd.get("size"), fd.get("qty"));
+      toast(`Order placed — ${order.name} (${order.size})`);
+      render();
       break;
     }
 

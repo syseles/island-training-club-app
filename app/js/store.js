@@ -10,6 +10,7 @@ import {
   SEED_USERS,
   seedBookings,
   seedReceipts,
+  SHOP_PRODUCTS,
   sessionsInRange,
   sessionStarted,
   todayLocal,
@@ -35,6 +36,7 @@ function freshState() {
     bookings: seedBookings(),
     receipts: seedReceipts(),
     receiptCounter: 49,
+    orders: [],
     prayers: [],
   };
 }
@@ -473,6 +475,34 @@ export function recordPrayer({ userId, name, request }) {
   state.prayers.push(prayer);
   save();
   return prayer;
+}
+
+// --- Shop (merchandise orders) -------------------------------------------------
+
+export function placeOrder(userId, productId, size, qty) {
+  const product = SHOP_PRODUCTS.find((p) => p.id === productId);
+  if (!product) throw new Error("Unknown product");
+  const n = Math.max(1, Math.min(5, Number(qty) || 1));
+  const order = {
+    id: uid("o"),
+    userId,
+    productId: product.id,
+    name: product.name,
+    size,
+    qty: n,
+    amount: product.price * n,
+    status: "placed",
+    createdAt: Date.now(),
+  };
+  state.orders.push(order);
+  save();
+  return order;
+}
+
+export function ordersForUser(userId) {
+  return state.orders
+    .filter((o) => o.userId === userId)
+    .sort((a, b) => b.createdAt - a.createdAt);
 }
 
 export { isoDate, todayLocal };

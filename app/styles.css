@@ -1000,3 +1000,33 @@ a.profile-row:hover .pr-text strong { color: var(--accent); }
   from { opacity: 0; transform: translateY(8px); }
   to { opacity: 1; transform: translateY(0); }
 }
+
+/* ---- Shop (preview mockup) --------------------------------------------- */
+
+.product-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+@media (max-width: 430px) {
+  .product-grid { grid-template-columns: 1fr; }
+}
+
+.product-tile {
+  height: 220px;
+  overflow: hidden;
+  background: #0b0e0b;
+  border-bottom: 1px solid var(--line);
+}
+
+.product-tile img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.product-card h3 { font-size: 14.5px; }
+.product-card .price-line { margin: 10px 0 0; font-size: 15px; }
+.product-card .btn { width: 100%; }
