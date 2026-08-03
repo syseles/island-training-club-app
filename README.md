@@ -54,7 +54,7 @@ Version 1, “Night Circuit,” is the selected visual direction.
 
 It extends the existing Island Training Club website with a black technical grid, electric-lime accents, documentary community photography, and direct activity actions.
 
-![Selected Night Circuit direction](itc-mobile-direction-1.png)
+![Selected Night Circuit direction](references/itc-mobile-direction-1.png)
 
 ## Review The Designs
 
