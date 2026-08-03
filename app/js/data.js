@@ -376,6 +376,15 @@ export function uid(prefix) {
   return `${prefix}-${Math.random().toString(36).slice(2, 8)}${Date.now().toString(36).slice(-4)}`;
 }
 
+// Donor ID is optional. Blank or "not applicable"-style answers mean "no
+// donor ID" (null) — the member can add one later from the Profile tab.
+export function normalizeDonorId(raw) {
+  const v = String(raw ?? "").trim();
+  if (!v) return null;
+  if (/^(n\/?a|not applicable|none|no)$/i.test(v)) return null;
+  return v;
+}
+
 // --- Sessions -----------------------------------------------------------------
 // A session is a dated instance of an activity template, generated on demand
 // with a deterministic id (`${activityId}-${YYYY-MM-DD}`) so bookings survive

@@ -49,6 +49,10 @@ check("activity free (visitor)", () => views.viewActivity(free.id));
 check("community", () => views.viewCommunity());
 check("account (visitor)", () => views.viewAccount());
 check("apply", () => views.viewApply());
+if (!views.viewApply().includes('name="donorId"')) {
+  failures++;
+  console.error("FAIL apply form missing optional Donor ID field");
+} else console.log("ok  apply form collects optional Donor ID");
 check("checkout (visitor) -> redirect", () => views.viewCheckout(paid.id));
 check("admin (visitor) -> redirect", () => views.viewAdmin("approvals"));
 check("notfound", () => views.viewNotFound());
@@ -81,8 +85,13 @@ const applyRes = store.applyForMembership({
   heard: "A friend",
   ageConfirmed: true,
   mediaConsent: false,
+  donorId: "Not applicable",
 });
 if (!applyRes.ok) throw new Error("apply failed");
+if (applyRes.user.donorId !== null) {
+  failures++;
+  console.error('FAIL "Not applicable" donor ID should normalize to null');
+} else console.log("ok  N/A donor ID at signup normalizes to null");
 check("account (pending)", () => views.viewAccount());
 const pendHtml = views.viewActivity(paid.id);
 if (!pendHtml.includes("Booking locked")) {
@@ -115,6 +124,31 @@ check("booking confirmation", () => views.viewBooking(booking.id));
 check("receipt", () => views.viewReceipt(receipt.id));
 check("activity (member, booked)", () => views.viewActivity(paid.id));
 
+// the booked class is badged on Home "My week" and on the Schedule row,
+// and no longer repeated as a separate list in Profile
+if (!views.viewHome().includes("Booked")) {
+  failures++;
+  console.error('FAIL home "My week" does not badge the booked session');
+} else console.log('ok  home "My week" badges booked session');
+views.scheduleState.selected = paid.dateISO;
+if (!views.viewSchedule().includes("Booked")) {
+  failures++;
+  console.error("FAIL schedule does not badge the booked session");
+} else console.log("ok  schedule badges booked session");
+if (views.viewAccount().includes(">Upcoming<")) {
+  failures++;
+  console.error("FAIL Profile still repeats the upcoming bookings list");
+} else console.log("ok  Profile drops redundant upcoming list");
+
+// donor ID skipped at signup ("Not applicable" above) can be added later
+store.updateDonorId(signIn.user.id, "IECC-99999");
+if (store.currentUser().donorId !== "IECC-99999") throw new Error("donor ID not saved");
+const donorHtml = views.viewAccount();
+if (!donorHtml.includes("IECC-99999") || !donorHtml.includes("Donor ID")) {
+  failures++;
+  console.error("FAIL donor ID added later missing from Profile");
+} else console.log("ok  donor ID add-later shows in Profile");
+
 // double booking must be rejected
 try {
   store.payForSession(signIn.user.id, paid, "4242");
@@ -133,6 +167,10 @@ console.log("ok  cancellation refunds and frees the place");
 // --- Seeded member view ---
 store.demoSignIn("member");
 check("account (seeded member)", () => views.viewAccount());
+if (!views.viewAccount().includes("IECC-10028")) {
+  failures++;
+  console.error("FAIL seeded member donor ID not shown in Profile");
+} else console.log("ok  seeded member donor ID shown in Profile");
 check("home (member)", () => views.viewHome());
 
 // --- ICS generation ---

@@ -16,6 +16,7 @@ import {
   fmtDate,
   fmtTime,
   uid,
+  normalizeDonorId,
 } from "./data.js";
 
 const STORAGE_KEY = "itc.prototype.v1";
@@ -108,6 +109,7 @@ export function applyForMembership(form) {
     emergencyPhone: form.emergencyPhone.trim(),
     heard: form.heard.trim(),
     mediaConsent: !!form.mediaConsent,
+    donorId: normalizeDonorId(form.donorId),
     appliedAt: Date.now(),
   };
   state.users.push(user);
@@ -143,6 +145,16 @@ export function setRole(userId, role) {
   if (!user || user.status !== "approved") return;
   user.role = role;
   save();
+}
+
+// Donor ID is optional at sign-up; members who skipped it (or answered
+// "not applicable", which normalizes to null) can add it later from Profile.
+export function updateDonorId(userId, raw) {
+  const user = state.users.find((u) => u.id === userId);
+  if (!user) return null;
+  user.donorId = normalizeDonorId(raw);
+  save();
+  return user.donorId;
 }
 
 // --- Activities & sessions -------------------------------------------------------

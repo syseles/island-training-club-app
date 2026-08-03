@@ -47,9 +47,16 @@ function spotsLabel(s) {
   return `<span class="spots">${spots} spot${spots === 1 ? "" : "s"} left</span>`;
 }
 
-function sessionRow(s, { past } = {}) {
-  const end =
-    s.kind === "free"
+function sessionRow(s, { past, showDate = true, highlight } = {}) {
+  // A session the signed-in member has already booked shows a "Booked"
+  // badge instead of price/spots, so Home, Schedule and the booking itself
+  // all tell the same story.
+  const user = store.currentUser();
+  const booked = user ? store.userBookingFor(user.id, s.id) : null;
+  const end = booked
+    ? `<span class="badge free">Booked</span>`
+    : s.kind === "free"
+
       ? `<span class="badge free">Free</span><span class="spots">Just show up</span>`
       : `${store.spotsLeft(s) > 0 ? `<span class="badge paid">${fmtMoney(s.price)}</span>` : ""}${spotsLabel(s)}`;
   return `
@@ -119,8 +126,26 @@ export function avatarHTML(user) {
 export function viewHome() {
   const user = store.currentUser();
   const next = store.nextSession();
-  const upcoming = store.upcomingSessions(7).slice(0, 3);
+  const upcoming = store.upcomingSessions(7);
   const name = user ? esc(user.preferredName || user.fullName.split(" ")[0]) : null;
+
+  // Signed-in members see their booked sessions first — the same bookings
+  // the Schedule tab badges "Booked" — then the rest of the week.
+  let rows = upcoming.slice(0, 3);
+  if (user && user.status === "approved") {
+    const bookedIds = new Set(
+      store
+        .bookingsForUser(user.id)
+        .filter((b) => b.status === "confirmed" && b.snapshot.dateISO >= todayISO())
+        .map((b) => b.sessionId)
+    );
+    if (bookedIds.size) {
+      rows = [
+        ...upcoming.filter((s) => bookedIds.has(s.id)),
+        ...upcoming.filter((s) => !bookedIds.has(s.id)),
+      ].slice(0, 3);
+    }
+  }
 
   const hero = next
     ? `
@@ -160,7 +185,9 @@ export function viewHome() {
       <a href="#/schedule">Full schedule →</a>
     </div>
     <div class="session-list">
-      ${upcoming.map((s) => sessionRow(s)).join("")}
+      ${rows.length
+        ? rows.map((s, i) => sessionRow(s, { highlight: i === 0 })).join("")
+        : `<div class="empty">No upcoming sessions — check back soon.</div>`}
     </div>
     <div class="section-head"><h2>The club</h2><a href="#/community">More →</a></div>
     <a class="card" href="#/community" style="display:block;text-decoration:none">
@@ -428,6 +455,7 @@ function accountPending(user) {
         <div class="line"><span>Phone</span><strong>${esc(user.phone)}</strong></div>
         <div class="line"><span>Emergency contact</span><strong>${esc(user.emergencyName)} · ${esc(user.emergencyPhone)}</strong></div>
         <div class="line"><span>Heard about ITC</span><strong>${esc(user.heard)}</strong></div>
+        ${user.donorId ? `<div class="line"><span>Donor ID</span><strong>${esc(user.donorId)}</strong></div>` : ""}
         <div class="line"><span>Photo consent</span><strong>${user.mediaConsent ? "Yes" : "No"}</strong></div>
       </div>
       <p class="muted small mt16">Want to see the approval side? Sign out, then use the admin demo profile — your application will be waiting in the queue.</p>
@@ -454,7 +482,6 @@ function accountDeclined(user) {
 
 function accountMember(user) {
   const bookings = store.bookingsForUser(user.id);
-  const upcoming = bookings.filter((b) => b.status === "confirmed" && b.snapshot.dateISO >= todayISO());
   const history = bookings.filter((b) => !(b.status === "confirmed" && b.snapshot.dateISO >= todayISO()));
   const receipts = store.receiptsForUser(user.id);
   const isAdmin = ["admin", "superadmin"].includes(user.role);
@@ -464,6 +491,8 @@ function accountMember(user) {
     admin: '<span class="badge paid">Admin</span>',
     superadmin: '<span class="badge warn">Super admin</span>',
   }[user.role];
+
+  const upcoming = bookings.filter((b) => b.status === "confirmed" && b.snapshot.dateISO >= todayISO());
 
   const bookingCard = (b) => {
     const s = b.snapshot;
@@ -500,7 +529,41 @@ function accountMember(user) {
     <div class="section-head"><h2>Upcoming</h2></div>
     ${upcoming.length ? upcoming.map(bookingCard).join("") : `<div class="empty">Nothing booked yet. <a href="#/schedule" style="color:var(--accent)">Find a session →</a></div>`}
 
-    <div class="section-head"><h2>Receipts & payments</h2></div>
+    <div class="section-head"><h2>Membership details</h2></div>
+    <div class="card"><div class="card-body">
+      <div class="receipt-lines">
+        <div class="line"><span>Full name</span><strong>${esc(user.fullName)}</strong></div>
+        <div class="line"><span>Preferred name</span><strong>${esc(user.preferredName)}</strong></div>
+        <div class="line"><span>Member since</span><strong>${new Date(user.appliedAt).toLocaleDateString("en-HK", { day: "numeric", month: "short", year: "numeric" })}</strong></div>
+        <div class="line"><span>Phone / WhatsApp</span><strong>${esc(user.phone)}</strong></div>
+        <div class="line"><span>Emergency contact</span><strong>${esc(user.emergencyName)} · ${esc(user.emergencyPhone)}</strong></div>
+      </div>
+      <p class="muted small mt16">Profile editing is stubbed in the prototype — fields come from the application form.</p>
+    </div></div>
+
+    <div class="section-head"><h2>Donor profile</h2></div>
+    <div class="card"><div class="card-body">
+      <div class="receipt-lines">
+        <div class="line"><span>Donor ID</span><strong>${user.donorId ? esc(user.donorId) : "Not provided"}</strong></div>
+      </div>
+      ${
+        user.donorId
+          ? ""
+          : `
+        <form id="form-donor-id" class="mt16" novalidate>
+          <div class="field">
+            <label for="donor-id">Add your Donor ID</label>
+            <input id="donor-id" name="donorId" placeholder="e.g. IECC-10028" autocomplete="off">
+            <div class="hint">Left this blank or wrote “Not applicable” at sign-up? Add it here any time — leaders use it to match your giving to your IECC donor record.</div>
+          </div>
+          <div id="donor-error"></div>
+          <button class="btn ghost sm" type="submit">Save Donor ID</button>
+        </form>`
+      }
+    </div></div>
+
+    <div class="section-head"><h2>Payments &amp; receipts</h2></div>
+
     ${
       receipts.length
         ? `<div class="session-list">${receipts
@@ -567,6 +630,11 @@ export function viewApply() {
           <option>Web search</option>
           <option>Other</option>
         </select>
+      </div>
+      <div class="field">
+        <label for="ap-donor">Donor ID (optional)</label>
+        <input id="ap-donor" name="donorId" placeholder="e.g. IECC-10028" autocomplete="off">
+        <div class="hint">For members who already give through IECC. Leave blank or write “Not applicable” — you can add it later from your Profile.</div>
       </div>
       <label class="check"><input type="checkbox" name="ageConfirmed" required>
         <span>I confirm I am 18 or over, or that a parent/guardian will accompany me to sessions. *</span></label>
