@@ -10,9 +10,11 @@ import {
   LEADERS,
   CULTURE,
   ANNOUNCEMENTS,
+  GIVING_CAMPAIGN,
   findSession,
   sessionStarted,
   sessionsInRange,
+  weeklyVerse,
   mondayOf,
   addDays,
   todayLocal,
@@ -112,6 +114,7 @@ const NAV_ITEMS = [
   { key: "home", label: "Home", icon: "home", href: "#/home" },
   { key: "schedule", label: "Schedule", icon: "calendar", href: "#/schedule" },
   { key: "community", label: "Community", icon: "people", href: "#/community" },
+  { key: "giving", label: "Giving", icon: "heart", href: "#/giving" },
   { key: "account", label: "Account", icon: "user", href: "#/account" },
   { key: "admin", label: "Admin", icon: "shield", href: "#/admin", roles: ["admin", "superadmin"] },
 ];
@@ -171,10 +174,19 @@ export function viewHome() {
     </div></div>`
     : "";
 
+  const verse = weeklyVerse();
+  const encouragement = `
+    <div class="card mt16"><div class="card-body">
+      <span class="kicker">Encouragement of the week</span>
+      <p class="verse-text">“${esc(verse.text)}”</p>
+      <p class="hero-meta">${esc(verse.ref)}</p>
+    </div></div>`;
+
   return `
     <div class="kicker">${esc(fmtDateLong(todayLocal()))} · Hong Kong</div>
     <h1 class="display">${name ? `Good to see you, ${name}.` : "Train together."}</h1>
     ${user && user.status === "pending" ? pendingBanner() : ""}
+    ${encouragement}
     ${guest}
     <div class="section-head">
       <h2>My Week</h2>
@@ -379,6 +391,150 @@ export function viewActivity(sessionId) {
 function mapsHref(s) {
   const q = s.mapsQuery || s.location;
   return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(q)}`;
+}
+
+// --- Giving ---------------------------------------------------------------------------------
+// Mock FPS donation flow. FPS is a push payment from the donor's banking
+// app, so the flow is: choose an amount -> transfer with the shown reference
+// -> gift recorded as "awaiting confirmation" until a leader reconciles it.
+
+export const givingState = {
+  step: 1, // 1 = amount, 2 = FPS instructions, 3 = thank you
+  amount: 200,
+  name: "",
+  note: "",
+  ref: null,
+};
+
+export function resetGivingState() {
+  givingState.step = 1;
+  givingState.amount = 200;
+  givingState.name = "";
+  givingState.note = "";
+  givingState.ref = null;
+}
+
+export function viewGiving() {
+  const user = store.currentUser();
+  const raised = store.campaignRaised();
+  const goal = GIVING_CAMPAIGN.goalHKD;
+  const pct = Math.min(100, Math.round((raised / goal) * 100));
+
+  const flow =
+    givingState.step === 2
+      ? givingFpsStep()
+      : givingState.step === 3
+        ? givingThanksStep()
+        : givingAmountStep(user);
+
+  return `
+    <div class="kicker">Giving &amp; Fundraising</div>
+    <h1 class="display">Every step can give back.</h1>
+    <div class="card mt16"><div class="card-body">
+      <span class="kicker">Current campaign</span>
+      <h3 class="mt8">${esc(GIVING_CAMPAIGN.title)}</h3>
+      <p class="hero-meta">${esc(GIVING_CAMPAIGN.subtitle)}</p>
+      <div class="progress mt16"><i style="width:${pct}%"></i></div>
+      <div class="progress-meta">
+        <strong>${fmtMoney(raised)} raised</strong>
+        <span>${pct}% of ${fmtMoney(goal)} goal</span>
+      </div>
+    </div></div>
+    ${flow}
+    <div class="section-head"><h2>Giving history</h2></div>
+    ${givingHistory(user)}`;
+}
+
+function givingAmountStep(user) {
+  return `
+    <div class="card mt16"><div class="card-body">
+      <h3>Give via FPS</h3>
+      <form id="form-giving" novalidate>
+        <div class="chip-row mt16">
+          ${[100, 200, 500, 1000]
+            .map(
+              (a) => `
+            <button type="button" class="chip${givingState.amount === a ? " active" : ""}"
+              data-action="giving-amount" data-amount="${a}">${fmtMoney(a)}</button>`
+            )
+            .join("")}
+        </div>
+        <div class="field">
+          <label for="give-amount">Amount (HKD)</label>
+          <input id="give-amount" name="amount" type="number" min="1" step="1" inputmode="numeric" value="${givingState.amount}" required>
+        </div>
+        <div class="field">
+          <label for="give-name">Your name</label>
+          <input id="give-name" name="name" autocomplete="name" value="${esc(givingState.name || user?.fullName || "")}" required>
+        </div>
+        <div class="field">
+          <label for="give-note">Message (optional)</label>
+          <input id="give-note" name="note" value="${esc(givingState.note)}" placeholder="e.g. Go ITC runners!">
+        </div>
+        <div id="giving-error"></div>
+        <button class="btn mt16" type="submit">Continue</button>
+        ${user ? "" : `<p class="muted small mt8 center">Tip: sign in first and this gift will appear in your giving history.</p>`}
+      </form>
+    </div></div>`;
+}
+
+function givingFpsStep() {
+  return `
+    <div class="card mt16"><div class="card-body">
+      <span class="kicker">Step 2 · Complete the transfer</span>
+      <h3 class="mt8">Pay ${fmtMoney(givingState.amount)} via FPS</h3>
+      <div class="fps-qr" aria-hidden="true">FPS QR<br>placeholder</div>
+      <div class="receipt-lines">
+        <div class="line"><span>FPS ID</span><strong class="mono">${esc(GIVING_CAMPAIGN.fpsId)}</strong></div>
+        <div class="line"><span>Payee</span><strong>${esc(GIVING_CAMPAIGN.fpsPayee)}</strong></div>
+        <div class="line"><span>Amount</span><strong>${fmtMoney(givingState.amount)}</strong></div>
+        <div class="line total"><span>Reference</span><strong class="mono">${esc(givingState.ref)}</strong></div>
+      </div>
+      <p class="muted small mt8">Open your banking app, choose FPS, and pay using the details above. Put the reference in the transfer remarks so a leader can match your gift.</p>
+      <div class="btn-row">
+        <button class="btn" type="button" data-action="giving-confirm">I’ve made the transfer</button>
+        <button class="btn ghost" type="button" data-action="giving-back">Back</button>
+      </div>
+      <p class="muted small mt8">Mock flow — no real payment. Gifts show as “Awaiting confirmation” until a leader reconciles the FPS transfer.</p>
+    </div></div>`;
+}
+
+function givingThanksStep() {
+  return `
+    <div class="confirm-mark">${ICONS.check}</div>
+    <h1 class="display sm center mt16">Thank you, ${esc(givingState.name.split(" ")[0] || "friend")}.</h1>
+    <p class="subcopy center mt8">Your gift of ${fmtMoney(givingState.amount)} is recorded — ref <span class="mono">${esc(givingState.ref)}</span>. It will show as confirmed once a leader reconciles the transfer.</p>
+    <div class="btn-row">
+      <button class="btn" type="button" data-action="giving-reset">Back to Giving</button>
+    </div>`;
+}
+
+function givingHistory(user) {
+  if (!user) {
+    return `<div class="locked-note">🔒 Sign in to see your giving history.</div>`;
+  }
+  const list = store.donationsForUser(user.id);
+  if (!list.length) {
+    return `<div class="empty">Your gifts will appear here.</div>`;
+  }
+  return `
+    <div class="session-list">
+      ${list
+        .map(
+          (d) => `
+        <div class="session-row">
+          <time>${new Date(d.createdAt).toLocaleDateString("en-HK", { day: "numeric", month: "short" })}<small>${esc(d.ref)}</small></time>
+          <div>
+            <h3>${fmtMoney(d.amount)}</h3>
+            <p>${esc(GIVING_CAMPAIGN.title)} · FPS${d.note ? ` · “${esc(d.note)}”` : ""}</p>
+          </div>
+          <div class="row-end">
+            ${d.status === "confirmed" ? '<span class="badge free">Confirmed</span>' : '<span class="badge warn">Awaiting confirmation</span>'}
+          </div>
+        </div>`
+        )
+        .join("")}
+    </div>`;
 }
 
 // --- Community -----------------------------------------------------------------
@@ -627,6 +783,8 @@ function accountMember(user) {
 
   const bookings = store.bookingsForUser(user.id).filter((b) => b.status !== "cancelled");
   const attended = bookings.filter((b) => b.status === "attended").length;
+  const gifts = store.donationsForUser(user.id);
+  const totalGiven = gifts.reduce((sum, d) => sum + d.amount, 0);
 
   return `
     <div class="kicker">Profile</div>
@@ -764,6 +922,8 @@ function accountIndemnity(user) {
 }
 
 function accountDonor(user) {
+  const gifts = store.donationsForUser(user.id);
+  const totalGiven = gifts.reduce((sum, d) => sum + d.amount, 0);
   return `
     <a class="back-link" href="#/account">← Profile</a>
     <div class="kicker mt16">Profile · Donor Profile</div>
@@ -771,6 +931,14 @@ function accountDonor(user) {
     <div class="card mt16"><div class="card-body">
       <div class="receipt-lines" style="margin-top:0;border-top:0">
         <div class="line"><span>Donor ID</span><strong>${user.donorId ? esc(user.donorId) : "Not provided"}</strong></div>
+        ${
+          gifts.length
+            ? `
+          <div class="line"><span>Total given</span><strong>${fmtMoney(totalGiven)}</strong></div>
+          <div class="line"><span>Gifts</span><strong>${gifts.length}</strong></div>
+          <div class="line"><span>Latest gift</span><strong>${new Date(gifts[0].createdAt).toLocaleDateString("en-HK", { day: "numeric", month: "short" })}</strong></div>`
+            : ""
+        }
       </div>
       ${
         user.donorId
@@ -785,6 +953,15 @@ function accountDonor(user) {
           <div id="donor-error"></div>
           <button class="btn ghost sm" type="submit">Save Donor ID</button>
         </form>`
+      }
+      ${
+        gifts.length
+          ? `
+        <p class="muted small mt16">FPS gifts stay pending until a leader reconciles them against the club account. Full history lives on the Giving tab.</p>
+        <a class="btn ghost sm mt16" href="#/giving">Open Giving &amp; Fundraising →</a>`
+          : `
+        <p class="hero-meta mt16">No gifts yet — every step can give back. Support the current campaign via FPS.</p>
+        <a class="btn ghost sm mt16" href="#/giving">Give via FPS →</a>`
       }
     </div></div>`;
 }

@@ -10,6 +10,8 @@ import {
   SEED_USERS,
   seedBookings,
   seedReceipts,
+  seedDonations,
+  GIVING_CAMPAIGN,
   sessionsInRange,
   sessionStarted,
   todayLocal,
@@ -35,6 +37,7 @@ function freshState() {
     bookings: seedBookings(),
     receipts: seedReceipts(),
     receiptCounter: 49,
+    donations: seedDonations(),
     prayers: [],
   };
 }
@@ -102,9 +105,10 @@ function migrate() {
   }
   if (v < 4) {
     // v4: HYROX venue renamed "Causeway Bay BFT" -> "BFT Causeway Bay"
-    // (activity location + any booking snapshots carrying the old string).
-    // Only exact old-string matches are rewritten so admin edits made
-    // since are preserved.
+    // (activity location + any booking snapshots carrying the old string);
+    // giving + shop state introduced, with donations seeded for the demo
+    // member. Only exact old-string matches are rewritten so admin edits
+    // made since are preserved.
     const hyrox = state.activities.find((a) => a.id === "hyrox");
     if (hyrox && hyrox.location === "Causeway Bay BFT") {
       hyrox.location = "BFT Causeway Bay";
@@ -114,6 +118,7 @@ function migrate() {
         b.snapshot.location = "BFT Causeway Bay";
       }
     }
+    if (!Array.isArray(state.donations)) state.donations = seedDonations();
   }
   if (v < 5) {
     // v5: Wednesday Night Training venue changed to TBC (location, maps
@@ -473,6 +478,43 @@ export function recordPrayer({ userId, name, request }) {
   state.prayers.push(prayer);
   save();
   return prayer;
+}
+
+// --- Giving (FPS donations) -----------------------------------------------------
+// FPS is a push payment from the member's banking app, so the prototype
+// records every gift as "pending" until a leader reconciles it against the
+// club account — there is no instant confirmation path like card checkout.
+
+export function campaignRaised() {
+  const local = state.donations
+    .filter((d) => d.campaignId === GIVING_CAMPAIGN.id)
+    .reduce((sum, d) => sum + d.amount, 0);
+  return GIVING_CAMPAIGN.baseRaisedHKD + local;
+}
+
+export function donationsForUser(userId) {
+  return state.donations
+    .filter((d) => d.userId === userId)
+    .sort((a, b) => b.createdAt - a.createdAt);
+}
+
+export function recordDonation({ userId, name, amount, note, ref }) {
+  const donation = {
+    id: uid("d"),
+    userId: userId ?? null,
+    name: String(name).trim(),
+    amount: Math.round(Number(amount)),
+    currency: "HKD",
+    campaignId: GIVING_CAMPAIGN.id,
+    method: "FPS",
+    ref,
+    note: String(note ?? "").trim(),
+    status: "pending", // reconciled manually by a leader
+    createdAt: Date.now(),
+  };
+  state.donations.push(donation);
+  save();
+  return donation;
 }
 
 export { isoDate, todayLocal };

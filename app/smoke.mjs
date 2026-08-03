@@ -87,7 +87,7 @@ if (!views.viewCommunity("prayers").includes('id="form-prayer"')) {
   failures++;
   console.error("FAIL prayers page missing the request form");
 } else console.log("ok  prayers page has the request form");
-for (const [section, title] of [
+check("giving (visitor)", () => views.viewGiving());for (const [section, title] of [
   ["prayers", "Prayers."],
   ["fellowship", "Fellowship."],
   ["meals", "Ad-Hoc Meals."],
@@ -406,8 +406,26 @@ if (!memberHome.includes("BFT Causeway Bay") || memberHome.includes("Midtown 28"
   failures++;
   console.error('FAIL "My week" should show only the member\'s booked 11:15 HYROX');
 } else console.log('ok  "My week" shows only the member\'s booked session');
-// community: prayer request records locally (no public reader by design)
+check("giving (member)", () => views.viewGiving());
+
+// giving flow: record a donation, it lands in history and lifts the total
 const member = store.currentUser();
+const raisedBefore = store.campaignRaised();
+const donation = store.recordDonation({
+  userId: member.id,
+  name: member.fullName,
+  amount: 300,
+  note: "smoke",
+  ref: "SCM27-SMOKE1",
+});
+if (donation.status !== "pending") throw new Error("FPS gift should start pending");
+if (store.campaignRaised() !== raisedBefore + 300) throw new Error("campaign total did not increase");
+if (!store.donationsForUser(member.id).some((d) => d.ref === "SCM27-SMOKE1")) {
+  throw new Error("donation missing from giving history");
+}
+check("giving history with new gift", () => views.viewGiving());
+
+// community: prayer request records locally (no public reader by design)
 const prayer = store.recordPrayer({ userId: member.id, name: member.fullName, request: "Smoke test request" });
 if (!prayer.id || prayer.request !== "Smoke test request") throw new Error("prayer not recorded");
 console.log("ok  prayer request records locally");

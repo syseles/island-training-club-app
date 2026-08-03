@@ -35,6 +35,7 @@ const NAV_FOR = {
   schedule: "schedule",
   activity: "schedule",
   community: "community",
+  giving: "giving",
   account: "account",
   apply: "account",
   checkout: "account",
@@ -70,6 +71,9 @@ function render() {
       break;
     case "community":
       out = views.viewCommunity(arg);
+      break;
+    case "giving":
+      out = views.viewGiving();
       break;
     case "account":
       out = views.viewAccount(arg);
@@ -224,6 +228,43 @@ document.addEventListener("click", (e) => {
       // Stub for fellowship/meal sign-ups — the real flow will notify leaders.
       toast(`Noted — a leader will reach out about ${el.dataset.topic}`);
       break;
+
+    case "giving-amount": {
+      // No re-render — that would wipe the name/note fields. Update the
+      // amount input and chip active state in place.
+      const input = document.getElementById("give-amount");
+      if (input) input.value = el.dataset.amount;
+      el.closest(".chip-row")
+        ?.querySelectorAll(".chip")
+        .forEach((c) => c.classList.toggle("active", c === el));
+      break;
+    }
+
+    case "giving-back":
+      views.givingState.step = 1;
+      render();
+      break;
+
+    case "giving-confirm": {
+      const g = views.givingState;
+      const user = store.currentUser();
+      store.recordDonation({
+        userId: user ? user.id : null,
+        name: g.name,
+        amount: g.amount,
+        note: g.note,
+        ref: g.ref,
+      });
+      g.step = 3;
+      toast("Gift recorded — awaiting confirmation");
+      render();
+      break;
+    }
+
+    case "giving-reset":
+      views.resetGivingState();
+      render();
+      break;
   }
 });
 
@@ -303,6 +344,30 @@ document.addEventListener("submit", (e) => {
           btn.textContent = "Pay";
         }
       }, 900);
+      break;
+    }
+
+    case "form-giving": {
+      e.preventDefault();
+      const fd = new FormData(form);
+      const amount = Math.round(Number(fd.get("amount")));
+      const name = String(fd.get("name") || "").trim();
+      const errEl = form.querySelector("#giving-error");
+      if (!amount || amount < 1) {
+        errEl.innerHTML = `<div class="form-error">Enter an amount of at least HK$1.</div>`;
+        return;
+      }
+      if (!name) {
+        errEl.innerHTML = `<div class="form-error">Add your name so a leader can match your transfer.</div>`;
+        return;
+      }
+      const g = views.givingState;
+      g.step = 2;
+      g.amount = amount;
+      g.name = name;
+      g.note = String(fd.get("note") || "").trim();
+      g.ref = `SCM27-${Math.random().toString(36).slice(2, 8).toUpperCase()}`;
+      render();
       break;
     }
 
