@@ -30,7 +30,7 @@ Open:
 http://127.0.0.1:4173/app/
 ```
 
-The design review remains available at `http://127.0.0.1:4173/itc-mobile-design-directions.html`.
+The design review remains available at `http://127.0.0.1:4173/references/itc-mobile-design-directions.html`.
 
 ### Prototype conventions
 
@@ -67,7 +67,7 @@ python3 -m http.server 4173
 Open:
 
 ```text
-http://127.0.0.1:4173/itc-mobile-design-directions.html
+http://127.0.0.1:4173/references/itc-mobile-design-directions.html
 ```
 
 The review includes three historical directions with five screens each.
