@@ -9,8 +9,6 @@ dist/
 # Claude Code local settings
 .claude/
 
-# Local screenshot work
-profile_layout.png
 
 # Pi package clones (project-local installs)
 .pi/git/
