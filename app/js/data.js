@@ -9,7 +9,7 @@ const PH = "../assets/itc/";
 // --- Activity templates ----------------------------------------------------
 // kind: "free"  -> open attendance, no booking, no capacity (per product brief)
 // kind: "paid"  -> members book + pay per session at a fixed price
-// HYROX price/capacity are unresolved in the brief; seeded placeholders are
+// HYROX capacity is a seeded placeholder; price, time and capacity are all
 // editable in the Admin area.
 
 export const SEED_ACTIVITIES = [
@@ -21,12 +21,12 @@ export const SEED_ACTIVITIES = [
     weekday: 3, // Wednesday
     time: "19:30",
     durationMin: 60,
-    location: "Tamar Park, Admiralty",
-    mapsQuery: "Tamar Park, Hong Kong",
+    location: "TBC",
+    mapsQuery: "", // venue to be confirmed — no directions link until set
     photo: PH + "main.webp",
     blurb:
       "Our flagship all-level session. Structured strength and conditioning led by the community — come ready to move and we scale every workout to you.",
-    memberNote: "Meet at the lime ITC flag near the main lawn. Bring water.",
+    memberNote: "Meeting point to be confirmed — check back before Wednesday. Bring water.",
     published: true,
   },
   {
@@ -35,10 +35,10 @@ export const SEED_ACTIVITIES = [
     kind: "free",
     category: "Run",
     weekday: 1, // Monday
-    time: "07:00",
+    time: "19:30",
     durationMin: 45,
-    location: "Central Harbourfront",
-    mapsQuery: "Central Harbourfront, Hong Kong",
+    location: "TBC",
+    mapsQuery: "", // venue to be confirmed — no directions link until set
     photo: PH + "running.webp",
     blurb:
       "Easy-pace social run along the harbour. All paces welcome — nobody gets left behind.",
@@ -47,11 +47,11 @@ export const SEED_ACTIVITIES = [
   },
   {
     id: "water",
-    name: "Water Sports Evening",
+    name: "ITC Swimming",
     kind: "free",
     category: "Water",
     weekday: 2, // Tuesday
-    time: "18:30",
+    time: "19:30",
     durationMin: 90,
     location: "Victoria Park",
     mapsQuery: "Victoria Park, Hong Kong",
@@ -62,19 +62,22 @@ export const SEED_ACTIVITIES = [
     published: true,
   },
   {
-    id: "trail",
-    name: "Sunday Trail Run",
-    kind: "free",
-    category: "Run",
-    weekday: 0, // Sunday
-    time: "08:00",
-    durationMin: 90,
-    location: "Hong Kong trails",
-    mapsQuery: "",
-    photo: PH + "trail.webp",
+    id: "hyrox-midtown",
+    name: "ITC HYROX",
+    kind: "paid",
+    category: "HYROX",
+    weekday: 6, // Saturday
+    time: "11:00",
+    durationMin: 75,
+    location: "Midtown 28",
+    mapsQuery: "Midtown 28, Hong Kong",
+    photo: PH + "hyrox.webp",
     blurb:
-      "Rotating trail route each week. Route and meet point are shared with approved members a few days before.",
-    memberNote: "This week's route: Tai Tam reservoir loop, meet at Parkview gate.",
+      "Weekly hybrid race training: ski, sled, burpees and running intervals. Every session is purchased separately at one fixed price.",
+    memberNote: "Gym entry fee is included in the session price.",
+    price: 180, // HKD
+    capacity: 18, // placeholder
+    baseBooked: 9, // simulated demand from other members
     published: true,
   },
   {
@@ -83,15 +86,15 @@ export const SEED_ACTIVITIES = [
     kind: "paid",
     category: "HYROX",
     weekday: 6, // Saturday
-    time: "10:00",
+    time: "11:15",
     durationMin: 75,
-    location: "Quarry Bay Studio",
-    mapsQuery: "Quarry Bay, Hong Kong",
+    location: "BFT Causeway Bay",
+    mapsQuery: "BFT Causeway Bay, Hong Kong",
     photo: PH + "hyrox.webp",
     blurb:
       "Weekly hybrid race training: ski, sled, burpees and running intervals. Every session is purchased separately at one fixed price.",
     memberNote: "Gym entry fee is included in the session price.",
-    price: 250, // HKD — placeholder until the operations workshop fixes it
+    price: 180, // HKD
     capacity: 18, // placeholder
     baseBooked: 14, // simulated demand from other members
     published: true,
@@ -107,8 +110,8 @@ export const SEED_USERS = [
     id: "u-super",
     role: "superadmin",
     status: "approved",
-    fullName: "Isaac Kwok",
-    preferredName: "Isaac",
+    fullName: "Arnold Wong",
+    preferredName: "Arnold",
     email: "owner@itc.hk",
     phone: "+852 9000 0000",
     ageConfirmed: true,
@@ -116,13 +119,14 @@ export const SEED_USERS = [
     emergencyPhone: "+852 9000 9999",
     heard: "Founder",
     appliedAt: daysAgo(120),
+    indemnityAcceptedAt: daysAgo(120),
   },
   {
     id: "u-admin",
     role: "admin",
     status: "approved",
-    fullName: "Daniel Lee",
-    preferredName: "Dan",
+    fullName: "Tina",
+    preferredName: "Tina",
     email: "admin@itc.hk",
     phone: "+852 9000 0002",
     ageConfirmed: true,
@@ -130,20 +134,23 @@ export const SEED_USERS = [
     emergencyPhone: "+852 9000 9002",
     heard: "Founding member",
     appliedAt: daysAgo(118),
+    indemnityAcceptedAt: daysAgo(118),
   },
   {
     id: "u-member",
     role: "member",
     status: "approved",
-    fullName: "Ava Cheung",
-    preferredName: "Ava",
+    fullName: "CM Chui",
+    preferredName: "CM",
     email: "member@itc.hk",
     phone: "+852 9000 0001",
     ageConfirmed: true,
     emergencyName: "K. Cheung",
     emergencyPhone: "+852 9000 9001",
     heard: "A friend runs with the club",
+    donorId: "CHUI-08879",
     appliedAt: daysAgo(34),
+    indemnityAcceptedAt: daysAgo(34),
   },
   {
     id: "u-pend-1",
@@ -158,6 +165,7 @@ export const SEED_USERS = [
     emergencyPhone: "+852 6333 4444",
     heard: "Instagram",
     appliedAt: daysAgo(2),
+    indemnityAcceptedAt: null,
   },
   {
     id: "u-pend-2",
@@ -172,6 +180,7 @@ export const SEED_USERS = [
     emergencyPhone: "+852 6777 8888",
     heard: "Saw the club at Tamar Park",
     appliedAt: daysAgo(1),
+    indemnityAcceptedAt: null,
   },
 ];
 
@@ -212,24 +221,24 @@ export function seedReceipts() {
       number: "ITC-2026-0041",
       bookingId: "b-seed-past",
       userId: "u-member",
-      amount: 250,
+      amount: 180,
       currency: "HKD",
       cardLast4: "4242",
       status: "paid",
       issuedAt: daysAgo(9),
-      line: `ITC HYROX — ${fmtDate(past)} 10:00 AM`,
+      line: `ITC HYROX — ${fmtDate(past)} 11:15 AM`,
     },
     {
       id: "r-seed-next",
       number: "ITC-2026-0048",
       bookingId: "b-seed-next",
       userId: "u-member",
-      amount: 250,
+      amount: 180,
       currency: "HKD",
       cardLast4: "4242",
       status: "paid",
       issuedAt: daysAgo(3),
-      line: `ITC HYROX — ${fmtDate(next)} 10:00 AM`,
+      line: `ITC HYROX — ${fmtDate(next)} 11:15 AM`,
     },
   ];
 }
@@ -246,23 +255,44 @@ function sessionSnapshot(act, date) {
   };
 }
 
+export const ANNOUNCEMENTS = [
+  {
+    id: "ann-1",
+    title: "Sunday service at IECC",
+    body: "Several of us worship at Island Evangelical Community Church on Sundays — 10:30 AM. Come as you are, and look for the ITC crowd after the service.",
+    postedAt: daysAgo(3),
+  },
+  {
+    id: "ann-2",
+    title: "New Wednesday venue being scouted",
+    body: "Leaders are trialling alternate spots for Wednesday Night Training. Watch the session page — venue updates land there first.",
+    postedAt: daysAgo(6),
+  },
+  {
+    id: "ann-3",
+    title: "Marathon fundraiser passes first milestone",
+    body: "Thank you! The Standard Chartered Marathon 2027 milestone was reached for community outreach.",
+    postedAt: daysAgo(9),
+  },
+];
+
 // --- Leaders & culture (draft community content) ------------------------------
 
 export const LEADERS = [
   {
-    name: "Isaac Kwok",
+    name: "Arnold Wong",
     role: "Founder · Head Coach",
     photo: PH + "community.webp",
     bio: "Started ITC so training in Hong Kong could be serious about fitness and serious about people at the same time.",
   },
   {
-    name: "Daniel Lee",
+    name: "Tina",
     role: "Community Lead",
     photo: PH + "main.webp",
     bio: "Keeps Wednesday nights running and makes sure every first-timer leaves with a name and a next session.",
   },
   {
-    name: "Ava Cheung",
+    name: "CM Chui",
     role: "Run Club Lead",
     photo: PH + "running.webp",
     bio: "Leads Monday harbour runs. Believes the best pace is the one you can talk at.",
@@ -376,13 +406,38 @@ export function uid(prefix) {
   return `${prefix}-${Math.random().toString(36).slice(2, 8)}${Date.now().toString(36).slice(-4)}`;
 }
 
-// Donor ID is optional. Blank or "not applicable"-style answers mean "no
-// donor ID" (null) — the member can add one later from the Profile tab.
+// Donor IDs come from IECC as LASTNAME-NNNN(N): the member's surname, a
+// hyphen, then a 4- or 5-digit number (e.g. CHUI-08879 or CHUI-8879). The
+// hyphen is mandatory — anything else is rejected with a re-entry error.
+// Blank or "not applicable"-style answers mean "no donor ID" (null) — the
+// member can add one later from the Profile tab.
+const DONOR_ID_RE = /^[A-Za-z]+-\d{4,5}$/;
+const DONOR_ID_NA_RE = /^(n\/?a|not applicable|none|no)$/i;
+
+// Members type these on phones, where autocorrect rewrites "-" as an en/em
+// dash (or they hit the spacebar instead). Canonicalize any dash/space
+// separator to a plain hyphen so the stored ID always reads LASTNAME-NNNN(N).
+function canonicalDonorId(raw) {
+  return String(raw ?? "")
+    .trim()
+    .replace(/[‐-―_]/g, "-") // unicode dashes, underscore -> hyphen
+    .replace(/\s*-\s*/g, "-") // tidy spaces around a hyphen
+    .replace(/^([A-Za-z]+)\s+(\d{4,5})$/, "$1-$2") // space as the separator
+    .toUpperCase();
+}
+
 export function normalizeDonorId(raw) {
-  const v = String(raw ?? "").trim();
-  if (!v) return null;
-  if (/^(n\/?a|not applicable|none|no)$/i.test(v)) return null;
+  const v = canonicalDonorId(raw);
+  if (!v || DONOR_ID_NA_RE.test(v)) return null;
   return v;
+}
+
+// Returns "format" when a non-blank, non-N/A value isn't a valid donor ID,
+// null otherwise — forms use this to reject typos before anything is saved.
+export function donorIdProblem(raw) {
+  const v = canonicalDonorId(raw);
+  if (!v || DONOR_ID_NA_RE.test(v)) return null;
+  return DONOR_ID_RE.test(v) ? null : "format";
 }
 
 // --- Sessions -----------------------------------------------------------------
@@ -410,6 +465,16 @@ export function sessionsInRange(activities, fromDate, days) {
   return out;
 }
 
+// A session counts as past once its start time has passed — a date-only
+// check would keep this morning's session "upcoming" (and bookable) all day.
+// Works for live sessions and booking snapshots (both carry dateISO + time).
+export function sessionStarted(s) {
+  const [h, m] = s.time.split(":").map(Number);
+  const start = parseISO(s.dateISO);
+  start.setHours(h, m, 0, 0);
+  return start.getTime() <= Date.now();
+}
+
 export function findSession(activities, sessionId) {
   // sessionId = `${activityId}-${YYYY-MM-DD}`; split off the date part
   const match = sessionId.match(/^(.*)-(\d{4}-\d{2}-\d{2})$/);
@@ -417,6 +482,7 @@ export function findSession(activities, sessionId) {
   const [, activityId, dateISO] = match;
   const act = activities.find((a) => a.id === activityId);
   if (!act) return null;
+
   const date = parseISO(dateISO);
   return { ...act, id: sessionId, activityId, dateISO, date };
 }

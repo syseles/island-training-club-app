@@ -11,26 +11,31 @@ import {
   seedBookings,
   seedReceipts,
   sessionsInRange,
+  sessionStarted,
   todayLocal,
   isoDate,
   fmtDate,
   fmtTime,
   uid,
   normalizeDonorId,
+  donorIdProblem,
 } from "./data.js";
 
 const STORAGE_KEY = "itc.prototype.v1";
+const STATE_VERSION = 8;
 
 let state = null;
 
 function freshState() {
   return {
+    version: STATE_VERSION,
     sessionUserId: null,
     activities: structuredClone(SEED_ACTIVITIES),
     users: structuredClone(SEED_USERS),
     bookings: seedBookings(),
     receipts: seedReceipts(),
     receiptCounter: 49,
+    prayers: [],
   };
 }
 
@@ -41,8 +46,127 @@ export function load() {
   } catch {
     state = freshState();
   }
+  migrate();
   save();
   return state;
+}
+
+// One-time, versioned migrations for persisted state that predates a
+// seed-data revision. Each step runs once per version so admin edits made
+// afterwards are not reverted on the next load.
+function migrate() {
+  const v = state.version || 0;
+  if (v >= STATE_VERSION) return;
+  if (v < 2) {
+    // v2: Sunday Trail Run removed; HYROX moved to Sat 11:15 at Causeway Bay
+    // BFT (HK$180) and a second Saturday session added at Midtown 28 (11:00).
+    state.activities = state.activities.filter(
+      (a) => a.id !== "trail" && a.id !== "hyrox" && a.id !== "hyrox-midtown"
+    );
+    state.activities.push(
+      ...SEED_ACTIVITIES.filter((a) => a.category === "HYROX").map((a) =>
+        structuredClone(a)
+      )
+    );
+    // Seed-owned bookings/receipts are replaced outright: their snapshots
+    // describe the old session. User-created records are left untouched.
+    for (const [key, seeded] of [
+      ["bookings", seedBookings()],
+      ["receipts", seedReceipts()],
+    ]) {
+      const ids = new Set(seeded.map((r) => r.id));
+      state[key] = [...state[key].filter((r) => !ids.has(r.id)), ...seeded];
+    }
+  }
+  if (v < 3) {
+    // v3: Run Club moved to Mon 7:30 PM with venue TBC; Water Sports Evening
+    // renamed ITC Swimming at 7:30 PM; leaders renamed (Arnold Wong, Tina,
+    // CM Chui). Activities are replaced in place from the seed; seed users
+    // get the new names only, keeping any role/status changes.
+    const seedAct = new Map(SEED_ACTIVITIES.map((a) => [a.id, a]));
+    state.activities = state.activities.map((a) =>
+      a.id === "run" || a.id === "water"
+        ? structuredClone(seedAct.get(a.id))
+        : a
+    );
+    const seedUser = new Map(SEED_USERS.map((u) => [u.id, u]));
+    state.users = state.users.map((u) =>
+      seedUser.has(u.id)
+        ? {
+            ...u,
+            fullName: seedUser.get(u.id).fullName,
+            preferredName: seedUser.get(u.id).preferredName,
+          }
+        : u
+    );
+  }
+  if (v < 4) {
+    // v4: HYROX venue renamed "Causeway Bay BFT" -> "BFT Causeway Bay"
+    // (activity location + any booking snapshots carrying the old string).
+    // Only exact old-string matches are rewritten so admin edits made
+    // since are preserved.
+    const hyrox = state.activities.find((a) => a.id === "hyrox");
+    if (hyrox && hyrox.location === "Causeway Bay BFT") {
+      hyrox.location = "BFT Causeway Bay";
+    }
+    for (const b of state.bookings) {
+      if (b.snapshot?.location === "Causeway Bay BFT") {
+        b.snapshot.location = "BFT Causeway Bay";
+      }
+    }
+  }
+  if (v < 5) {
+    // v5: Wednesday Night Training venue changed to TBC (location, maps
+    // query, member note). Only exact old-seed matches are rewritten so
+    // admin edits made since are preserved; booking snapshots get the
+    // same treatment.
+    const wnt = state.activities.find((a) => a.id === "wnt");
+    if (wnt && wnt.location === "Tamar Park, Admiralty") {
+      wnt.location = "TBC";
+      wnt.mapsQuery = "";
+      wnt.memberNote =
+        "Meeting point to be confirmed — check back before Wednesday. Bring water.";
+    }
+    for (const b of state.bookings) {
+      if (b.snapshot?.location === "Tamar Park, Admiralty") {
+        b.snapshot.location = "TBC";
+      }
+    }
+  }
+  if (v < 6) {
+    // v6: donor IDs follow IECC's LASTNAME-NNNN(N) format, so the seeded
+    // demo member's ID moves from the old placeholder to CHUI-08879 (only
+    // an exact old-seed match is rewritten). Indemnity acceptance is now
+    // tracked per member; approved seed members predate the requirement
+    // and are backfilled, everyone else accepts from Profile > Indemnity.
+    const member = state.users.find((u) => u.id === "u-member");
+    if (member && member.donorId === "IECC-10028") member.donorId = "CHUI-08879";
+    for (const id of ["u-super", "u-admin", "u-member"]) {
+      const u = state.users.find((x) => x.id === id);
+      if (u && u.indemnityAcceptedAt === undefined) {
+        u.indemnityAcceptedAt = u.appliedAt;
+      }
+    }
+  }
+  if (v < 7) {
+    // v7: donor IDs saved before the LASTNAME-NNNN(N) format rule existed
+    // may be missing the hyphen (CHUI08879) or use another separator, and
+    // would display that way in Profile > Donor Profile. Repair what is
+    // recognizable to the canonical form; clear the rest so the member
+    // re-enters it through the validated form.
+    for (const u of state.users) {
+      if (!u.donorId) continue;
+      const repaired = normalizeDonorId(
+        String(u.donorId).trim().replace(/^([A-Za-z]+)(\d{4,5})$/, "$1-$2")
+      );
+      u.donorId = repaired && !donorIdProblem(repaired) ? repaired : null;
+    }
+  }
+  if (v < 8) {
+    // v8: prayer requests (Community > Prayers) are stored locally.
+    if (!Array.isArray(state.prayers)) state.prayers = [];
+  }
+  state.version = STATE_VERSION;
 }
 
 function save() {
@@ -110,6 +234,9 @@ export function applyForMembership(form) {
     heard: form.heard.trim(),
     mediaConsent: !!form.mediaConsent,
     donorId: normalizeDonorId(form.donorId),
+    // Joining requires accepting the health & liability indemnity; the
+    // timestamp is the member's acceptance record (Profile > Indemnity).
+    indemnityAcceptedAt: form.indemnity ? Date.now() : null,
     appliedAt: Date.now(),
   };
   state.users.push(user);
@@ -155,6 +282,18 @@ export function updateDonorId(userId, raw) {
   user.donorId = normalizeDonorId(raw);
   save();
   return user.donorId;
+}
+
+// Records the member's acceptance of the health & liability indemnity.
+// Idempotent — the first acceptance timestamp is the record that matters.
+export function acceptIndemnity(userId) {
+  const user = state.users.find((u) => u.id === userId);
+  if (!user) return null;
+  if (!user.indemnityAcceptedAt) {
+    user.indemnityAcceptedAt = Date.now();
+    save();
+  }
+  return user.indemnityAcceptedAt;
 }
 
 // --- Activities & sessions -------------------------------------------------------
@@ -207,7 +346,7 @@ export function spotsLeft(session) {
 export function attendeesFor(session) {
   // Simulated member list: seed bookings plus any local bookings.
   const pool = [
-    "Ava C.", "Daniel L.", "Marco S.", "Jenny W.", "Kelvin T.",
+    "Jason M.", "Natalie C.", "Marco S.", "Jenny W.", "Kelvin T.",
     "Chris P.", "Wing L.", "Sam H.", "Rachel N.", "Tom Y.",
     "Grace F.", "Ben K.", "Michelle O.", "Alex Z.",
   ];
@@ -254,6 +393,7 @@ export function receiptForBooking(bookingId) {
 // Simulated in-app payment. Returns { booking, receipt }.
 export function payForSession(userId, session, cardLast4) {
   if (session.kind !== "paid") throw new Error("Session is not paid");
+  if (sessionStarted(session)) throw new Error("Session has already started");
   if (spotsLeft(session) <= 0) throw new Error("Session is full");
   if (userBookingFor(userId, session.id)) throw new Error("Already booked");
 
@@ -316,6 +456,23 @@ export function upcomingSessions(days = 14) {
 
 export function nextSession() {
   return upcomingSessions(14)[0] ?? null;
+}
+
+// --- Community: prayer requests ------------------------------------------------
+// Requests go privately to ITC leaders (no public list in the app), so the
+// store only records them — there is intentionally no reader exposed here.
+
+export function recordPrayer({ userId, name, request }) {
+  const prayer = {
+    id: uid("p"),
+    userId: userId ?? null,
+    name: String(name ?? "").trim(),
+    request: String(request ?? "").trim(),
+    createdAt: Date.now(),
+  };
+  state.prayers.push(prayer);
+  save();
+  return prayer;
 }
 
 export { isoDate, todayLocal };

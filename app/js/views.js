@@ -9,7 +9,9 @@ import * as store from "./store.js";
 import {
   LEADERS,
   CULTURE,
+  ANNOUNCEMENTS,
   findSession,
+  sessionStarted,
   sessionsInRange,
   mondayOf,
   addDays,
@@ -33,6 +35,12 @@ const esc = (s) =>
 
 const todayISO = () => isoDate(todayLocal());
 
+const fmtDay = (ts) =>
+  new Date(ts).toLocaleDateString("en-HK", { day: "numeric", month: "short", year: "numeric" });
+
+const fmtMonthYear = (ts) =>
+  new Date(ts).toLocaleDateString("en-HK", { month: "short", year: "numeric" });
+
 // --- Shared fragments ---------------------------------------------------------
 
 function badgeFor(s) {
@@ -54,16 +62,16 @@ function sessionRow(s, { past, showDate = true, highlight } = {}) {
   const user = store.currentUser();
   const booked = user ? store.userBookingFor(user.id, s.id) : null;
   const end = booked
-    ? `<span class="badge free">Booked</span>`
+    ? `<span class="badge free booked">Booked</span>`
     : s.kind === "free"
       ? `<span class="badge free">Free</span><span class="spots">Just show up</span>`
       : `${store.spotsLeft(s) > 0 ? `<span class="badge paid">${fmtMoney(s.price)}</span>` : ""}${spotsLabel(s)}`;
   return `
-    <a class="session-row ${past ? "is-past" : ""}" href="#/activity/${s.id}">
-      <time>${fmtTime(s.time)}<small>${esc(s.category)}</small></time>
+    <a class="session-row${past ? " is-past" : ""}${highlight ? " next" : ""}" href="#/activity/${s.id}">
+      <time>${fmtTime(s.time)}</time>
       <div>
         <h3>${esc(s.name)}</h3>
-        <p>${esc(fmtDate(s.date))} · ${esc(s.location)}</p>
+        <p>${showDate ? `${esc(fmtDate(s.date))} · ${esc(s.location)}` : esc(s.location)}</p>
       </div>
       <div class="row-end">${end}</div>
     </a>`;
@@ -90,6 +98,12 @@ const ICONS = {
   check: '<svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="m4.5 12.5 5 5 10-11"/></svg>',
   pin: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 21s-7-5.3-7-11a7 7 0 0 1 14 0c0 5.7-7 11-7 11Z"/><circle cx="12" cy="10" r="2.6"/></svg>',
   cal: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4.5" width="18" height="17" rx="2"/><path d="M3 9.5h18M8 2.5v4M16 2.5v4"/></svg>',
+  heart: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20.5C7 16.5 3.5 13.2 3.5 9.6 3.5 7 5.5 5 8 5c1.6 0 3.1.8 4 2.1.9-1.3 2.4-2.1 4-2.1 2.5 0 4.5 2 4.5 4.6 0 3.6-3.5 6.9-8.5 10.9Z"/></svg>',
+  bag: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M5.5 8h13l-1.1 12.5H6.6Z"/><path d="M8.5 10.5V6.8a3.5 3.5 0 0 1 7 0v3.7"/></svg>',
+  dollar: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2.5v19"/><path d="M17 6.5H9.75a3.25 3.25 0 0 0 0 6.5h4.5a3.25 3.25 0 0 1 0 6.5H6.5"/></svg>',
+  bell: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8.5a6 6 0 0 0-12 0c0 6.5-2.5 8.5-2.5 8.5h17S18 15 18 8.5"/><path d="M13.7 20.5a2 2 0 0 1-3.4 0"/></svg>',
+  clock: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8.5"/><path d="M12 7v5.2l3.2 2"/></svg>',
+  chevron: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 5 7 7-7 7"/></svg>',
 };
 
 // --- Bottom nav / avatar --------------------------------------------------------
@@ -108,7 +122,7 @@ export function navHTML(routeKey, user) {
     .map(
       (i) => `
       <a href="${i.href}" class="${i.key === routeKey ? "active" : ""}" ${i.key === routeKey ? 'aria-current="page"' : ""}>
-        ${ICONS[i.icon]}<span>${i.label}</span>
+        ${ICONS[i.icon]}<span>${i.key === "account" && user ? "Profile" : i.label}</span>
       </a>`
     )
     .join("");
@@ -124,8 +138,9 @@ export function avatarHTML(user) {
 
 export function viewHome() {
   const user = store.currentUser();
-  const next = store.nextSession();
-  const upcoming = store.upcomingSessions(7);
+  // Same 14-day window bookings are made in — a confirmed booking can never
+  // fall out of "My week" (e.g. next Saturday's booking seen on Sat evening).
+  const upcoming = store.upcomingSessions(14);
   const name = user ? esc(user.preferredName || user.fullName.split(" ")[0]) : null;
 
   // "My week" shows a signed-in member only the sessions they've booked
@@ -136,26 +151,12 @@ export function viewHome() {
     const bookedIds = new Set(
       store
         .bookingsForUser(user.id)
-        .filter((b) => b.status === "confirmed" && b.snapshot.dateISO >= todayISO())
+        .filter((b) => b.status === "confirmed" && !sessionStarted(b.snapshot))
         .map((b) => b.sessionId)
     );
     rows = upcoming.filter((s) => bookedIds.has(s.id));
     emptyMsg = `Nothing booked this week yet. <a href="#/schedule" style="color:var(--accent)">Find a session →</a>`;
   }
-
-  const hero = next
-    ? `
-    <a class="card hero-card" href="#/activity/${next.id}" style="display:block;text-decoration:none">
-      <img class="photo" src="${next.photo}" alt="">
-      <div class="card-body">
-        <span class="kicker">Next up · ${esc(fmtDate(next.date))} · ${fmtTime(next.time)}</span>
-        <h3>${esc(next.name)}</h3>
-        <p class="hero-meta">${esc(next.location)} · ${next.durationMin} min</p>
-        <div class="mt8">${badgeFor(next)}${next.kind === "paid" ? ` ${spotsLabel(next)}` : ""}</div>
-        <span class="btn mt16">${next.kind === "free" ? "View details" : `View & book · ${fmtMoney(next.price)}`}</span>
-      </div>
-    </a>`
-    : `<div class="empty">No upcoming sessions — check back soon.</div>`;
 
   const guest = !user
     ? `
@@ -174,24 +175,22 @@ export function viewHome() {
     <div class="kicker">${esc(fmtDateLong(todayLocal()))} · Hong Kong</div>
     <h1 class="display">${name ? `Good to see you, ${name}.` : "Train together."}</h1>
     ${user && user.status === "pending" ? pendingBanner() : ""}
-    ${hero}
     ${guest}
     <div class="section-head">
-      <h2>This week</h2>
-      <a href="#/schedule">Full schedule →</a>
+      <h2>My Week</h2>
+      <a href="#/schedule">See more →</a>
     </div>
     <div class="session-list">
       ${rows.length
         ? rows.map((s, i) => sessionRow(s, { highlight: i === 0 })).join("")
         : `<div class="empty">${emptyMsg}</div>`}
-
     </div>
     <div class="section-head"><h2>The Club</h2><a href="#/community">More →</a></div>
     <a class="card" href="#/community" style="display:block;text-decoration:none">
       <img class="photo" src="../assets/itc/community.webp" alt="ITC community">
       <div class="card-body">
-        <h3>More than a workout</h3>
-        <p class="hero-meta">Meet the leaders and read what the club stands for.</p>
+        <h3>Connect and grow with us</h3>
+        <p class="hero-meta">Prayers, fellowship, ad-hoc meals and announcements from the church and the community.</p>
       </div>
     </a>`;
 }
@@ -203,6 +202,15 @@ export const scheduleState = {
   selected: null, // ISO date
   filter: "all",
 };
+
+// Back to the default view — this week, today, no filter. The router calls
+// this when the Schedule tab is entered fresh (back-navigation from an
+// activity/checkout page keeps the week and day you were browsing).
+export function resetScheduleState() {
+  scheduleState.weekOffset = 0;
+  scheduleState.selected = null; // viewSchedule re-picks today
+  scheduleState.filter = "all";
+}
 
 const FILTERS = [
   ["all", "All"],
@@ -245,12 +253,12 @@ export function viewSchedule() {
     .filter((s) => matchesFilter(s, scheduleState.filter));
 
   const listHTML = list.length
-    ? list.map((s) => sessionRow(s, { past: s.dateISO < todayISO() })).join("")
+    ? list.map((s) => sessionRow(s, { past: sessionStarted(s), showDate: false })).join("")
     : `<div class="empty">No ${scheduleState.filter === "all" ? "" : esc(scheduleState.filter) + " "}sessions on ${esc(fmtDate(scheduleState.selected))}.</div>`;
 
   return `
     <div class="kicker">Week of ${esc(fmtDateLong(monday))}</div>
-    <h1 class="display">Find your session.</h1>
+    <h1 class="display">Find your next session</h1>
     <div class="week-strip">${cells}</div>
     <div class="week-nav">
       <button type="button" data-action="sched-week" data-dir="-1">← Prev week</button>
@@ -275,7 +283,7 @@ export function viewActivity(sessionId) {
 
   const user = store.currentUser();
   const isMember = user && user.status === "approved";
-  const past = s.dateISO < todayISO();
+  const past = sessionStarted(s);
   const spots = store.spotsLeft(s);
   const booking = user ? store.userBookingFor(user.id, s.id) : null;
 
@@ -289,9 +297,9 @@ export function viewActivity(sessionId) {
         ${ICONS.pin}
         <div><strong>Free · No booking needed.</strong><br><span class="muted small">Everyone is welcome — just show up${s.id.startsWith("wnt") ? " and look for the lime ITC flag" : ""}.</span></div>
       </div>
-      <div class="btn-row two">
+      <div class="btn-row ${s.mapsQuery ? "two" : ""}">
         <button class="btn" type="button" data-action="ics" data-session="${s.id}">Add to calendar</button>
-        <a class="btn ghost" href="${mapsHref(s)}" target="_blank" rel="noopener">Get directions</a>
+        ${s.mapsQuery ? `<a class="btn ghost" href="${mapsHref(s)}" target="_blank" rel="noopener">Get directions</a>` : ""}
       </div>`;
   } else if (booking) {
     actionBlock = `
@@ -373,12 +381,50 @@ function mapsHref(s) {
   return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(q)}`;
 }
 
-// --- Community --------------------------------------------------------------------------
+// --- Community -----------------------------------------------------------------
+// The Community tab is about connecting: prayer, fellowship, meals and news.
+// Leaders and culture copy lives under Profile > About Island Training Club.
 
-export function viewCommunity() {
+export function viewCommunity(section) {
+  switch (section) {
+    case undefined:
+      return communityHome();
+    case "prayers":
+      return communityPrayers();
+    case "fellowship":
+      return communityFellowship();
+    case "meals":
+      return communityMeals();
+    case "announcements":
+      return communityAnnouncements();
+    case "about":
+      return communityAbout();
+    default:
+      return viewNotFound();
+  }
+}
+
+function communityHome() {
   return `
     <div class="kicker">Community</div>
-    <h1 class="display">More than a workout.</h1>
+    <h1 class="display">Connect and grow with us.</h1>
+    <p class="subcopy mt8">Island Training Club is a Hong Kong training community with a Christian foundation — open to everyone. Training is the doorway; here are the ways to go deeper.</p>
+    <div class="link-cards">
+      ${linkCard("#/community/prayers", "Prayers", "Ask for prayer, or pray with us")}
+      ${linkCard("#/community/fellowship", "Fellowship", "Small groups and community life")}
+      ${linkCard("#/community/meals", "Ad-Hoc Meals", "Share a meal with us after sessions")}
+      ${linkCard("#/community/announcements", "Announcements", "News from the church and the community")}
+      ${linkCard("#/community/about", "About Island Training Club", "Mission, coaches and leadership")}
+    </div>`;
+}
+
+// Leaders and culture sit at the bottom of the Community tab, behind the
+// About card — open to everyone, signed in or not.
+function communityAbout() {
+  return `
+    <a class="back-link" href="#/community">← Community</a>
+    <div class="kicker mt16">Community · About Island Training Club</div>
+    <h1 class="display sm">More than a workout.</h1>
     <p class="subcopy mt8">Island Training Club is a Hong Kong training community with a Christian foundation — open to everyone.</p>
     <div class="section-head"><h2>Leaders</h2></div>
     <div class="stack">
@@ -401,14 +447,106 @@ export function viewCommunity() {
     <p class="muted small mt16">Community copy is draft placeholder text for review with ITC leadership.</p>`;
 }
 
-// --- Account ---------------------------------------------------------------------------------
+function communityPrayers() {
+  const user = store.currentUser();
+  return `
+    <a class="back-link" href="#/community">← Community</a>
+    <div class="kicker mt16">Community · Prayers</div>
+    <h1 class="display sm">Prayers.</h1>
+    <p class="subcopy mt8">We pray for each other — injuries, exams, work, family, anything. Send a request and the leaders will pray with you this week; you’re also welcome to pray along.</p>
+    <div class="card mt16"><div class="card-body">
+      <h3>Ask for prayer</h3>
+      <form id="form-prayer" novalidate>
+        <div class="field">
+          <label for="pr-name">Your name (optional)</label>
+          <input id="pr-name" name="name" autocomplete="name" value="${esc(user?.fullName || "")}">
+        </div>
+        <div class="field">
+          <label for="pr-text">Prayer request *</label>
+          <textarea id="pr-text" name="request" rows="4" required placeholder="What can we pray about?"></textarea>
+        </div>
+        <div id="prayer-error"></div>
+        <button class="btn mt16" type="submit">Send prayer request</button>
+        <p class="muted small mt8">Requests go privately to ITC leaders — nothing is posted publicly. Prototype: stored on this device only.</p>
+      </form>
+    </div></div>`;
+}
 
-export function viewAccount() {
+function communityFellowship() {
+  return `
+    <a class="back-link" href="#/community">← Community</a>
+    <div class="kicker mt16">Community · Fellowship</div>
+    <h1 class="display sm">Fellowship.</h1>
+    <p class="subcopy mt8">Sessions are where we train; fellowship is where we become friends. Whatever you believe, you’re welcome at every one of these.</p>
+    <div class="card mt16"><div class="card-body prose">
+      <h3>Small groups</h3>
+      <p>Midweek groups meet around the city — a short reflection, honest conversation and prayer for anyone who wants it. No Bible knowledge required.</p>
+      <h3>Sundays at IECC</h3>
+      <p>Many of us worship at Island Evangelical Community Church on Sunday mornings. Come along and sit with the ITC crowd — service starts 10:30 AM.</p>
+      <h3>First-timers</h3>
+      <p>New to church entirely? Say so at any session and a leader will happily walk you through what to expect — zero pressure, zero jargon.</p>
+    </div></div>
+    <button class="btn mt16" type="button" data-action="connect-interest" data-topic="fellowship groups">I’m interested — tell me more</button>
+    <p class="muted small mt16 center">Draft content — fellowship details to be confirmed with ITC leadership.</p>`;
+}
+
+function communityMeals() {
+  return `
+    <a class="back-link" href="#/community">← Community</a>
+    <div class="kicker mt16">Community · Ad-Hoc Meals</div>
+    <h1 class="display sm">Ad-Hoc Meals.</h1>
+    <p class="subcopy mt8">The best conversations happen over food. After some sessions we head straight to a nearby cha chaan teng — no programme, no agenda, just dinner. First-timers especially welcome.</p>
+    <div class="card mt16"><div class="card-body">
+      <span class="kicker">Next meal</span>
+      <h3 class="mt8">Post-training dinner — details TBC</h3>
+      <p class="hero-meta">Date and venue are announced in the session WhatsApp group a few days ahead. Pay for your own meal; the company is free.</p>
+    </div></div>
+    <button class="btn mt16" type="button" data-action="connect-interest" data-topic="the next ad-hoc meal">Count me in</button>
+    <p class="muted small mt16 center">Prototype placeholder — meal scheduling will plug in here.</p>`;
+}
+
+function communityAnnouncements() {
+  return `
+    <a class="back-link" href="#/community">← Community</a>
+    <div class="kicker mt16">Community · Announcements</div>
+    <h1 class="display sm">Announcements.</h1>
+    <p class="subcopy mt8">News from the church and the community.</p>
+    <div class="stack mt16">
+      ${ANNOUNCEMENTS.map(
+        (a) => `
+        <div class="card"><div class="card-body">
+          <span class="kicker dim">${fmtDay(a.postedAt)}</span>
+          <h3 class="mt8">${esc(a.title)}</h3>
+          <p class="hero-meta">${esc(a.body)}</p>
+        </div></div>`
+      ).join("")}
+    </div>
+    <p class="muted small mt16">Draft announcements — real posts come from ITC leadership and IECC comms.</p>`;
+}
+
+export function viewAccount(section) {
   const user = store.currentUser();
   if (!user) return accountVisitor();
   if (user.status === "pending") return accountPending(user);
   if (user.status === "declined") return accountDeclined(user);
-  return accountMember(user);
+  switch (section) {
+    case undefined:
+      return accountMember(user);
+    case "details":
+      return accountDetails(user);
+    case "indemnity":
+      return accountIndemnity(user);
+    case "donor":
+      return accountDonor(user);
+    case "payments":
+      return accountPayments(user);
+    case "privacy":
+      return accountPrivacy(user);
+    case "history":
+      return accountHistory(user);
+    default:
+      return viewNotFound();
+  }
 }
 
 function accountVisitor() {
@@ -428,9 +566,9 @@ function accountVisitor() {
       </form>
       <p class="muted small mt16">Prototype: there is no password — sign in with a seeded email, or use a one-tap demo profile.</p>
       <div class="btn-row">
-        <button class="btn ghost sm" type="button" data-action="demo-signin" data-role="member">Demo · Continue as member (Ava)</button>
-        <button class="btn ghost sm" type="button" data-action="demo-signin" data-role="admin">Demo · Continue as admin (Dan)</button>
-        <button class="btn ghost sm" type="button" data-action="demo-signin" data-role="superadmin">Demo · Continue as super admin (Isaac)</button>
+        <button class="btn ghost sm" type="button" data-action="demo-signin" data-role="member">Demo · Continue as member (CM)</button>
+        <button class="btn ghost sm" type="button" data-action="demo-signin" data-role="admin">Demo · Continue as admin (Tina)</button>
+        <button class="btn ghost sm" type="button" data-action="demo-signin" data-role="superadmin">Demo · Continue as super admin (Arnold)</button>
       </div>
     </div></div>
     <div class="card mt16"><div class="card-body">
@@ -442,7 +580,7 @@ function accountVisitor() {
 
 function accountPending(user) {
   return `
-    <div class="kicker">Account · ${esc(user.email)}</div>
+    <div class="kicker">Profile · ${esc(user.email)}</div>
     <h1 class="display">Thanks, ${esc(user.preferredName || user.fullName.split(" ")[0])}.</h1>
     ${pendingBanner()}
     <div class="card mt16"><div class="card-body">
@@ -453,6 +591,7 @@ function accountPending(user) {
         <div class="line"><span>Emergency contact</span><strong>${esc(user.emergencyName)} · ${esc(user.emergencyPhone)}</strong></div>
         <div class="line"><span>Heard about ITC</span><strong>${esc(user.heard)}</strong></div>
         ${user.donorId ? `<div class="line"><span>Donor ID</span><strong>${esc(user.donorId)}</strong></div>` : ""}
+        <div class="line"><span>Indemnity</span><strong>${user.indemnityAcceptedAt ? "Accepted" : "—"}</strong></div>
         <div class="line"><span>Photo consent</span><strong>${user.mediaConsent ? "Yes" : "No"}</strong></div>
       </div>
       <p class="muted small mt16">Want to see the approval side? Sign out, then use the admin demo profile — your application will be waiting in the queue.</p>
@@ -465,7 +604,7 @@ function accountPending(user) {
 
 function accountDeclined(user) {
   return `
-    <div class="kicker">Account · ${esc(user.email)}</div>
+    <div class="kicker">Profile · ${esc(user.email)}</div>
     <h1 class="display">Application update.</h1>
     <div class="banner warn mt16">
       <span class="kicker">Not approved</span>
@@ -478,66 +617,159 @@ function accountDeclined(user) {
 }
 
 function accountMember(user) {
-  const bookings = store.bookingsForUser(user.id);
-  const history = bookings.filter((b) => !(b.status === "confirmed" && b.snapshot.dateISO >= todayISO()));
-  const receipts = store.receiptsForUser(user.id);
   const isAdmin = ["admin", "superadmin"].includes(user.role);
 
-  const roleBadge = {
-    member: '<span class="badge free">Member</span>',
-    admin: '<span class="badge paid">Admin</span>',
-    superadmin: '<span class="badge warn">Super admin</span>',
+  const roleLabel = {
+    member: "Active member",
+    admin: "Admin",
+    superadmin: "Super admin",
   }[user.role];
 
-  const upcoming = bookings.filter((b) => b.status === "confirmed" && b.snapshot.dateISO >= todayISO());
-
-  const bookingCard = (b) => {
-    const s = b.snapshot;
-    const live = b.status === "confirmed" && s.dateISO >= todayISO();
-    const status =
-      b.status === "cancelled"
-        ? '<span class="badge danger">Cancelled</span>'
-        : b.status === "attended"
-          ? '<span class="badge neutral">Attended</span>'
-          : '<span class="badge free">Booked</span>';
-    return `
-      <div class="card booking-card"><div class="card-body">
-        <header>
-          <div>
-            <div class="kicker dim" style="margin-top:0">${esc(fmtDate(s.dateISO))} · ${fmtTime(s.time)}</div>
-            <h3 class="mt8">${esc(s.name)}</h3>
-          </div>
-          ${status}
-        </header>
-        <p>${esc(s.location)} · ${s.durationMin} min · paid ${fmtMoney(s.price)}</p>
-        <div class="actions">
-          <a class="btn ghost sm" href="#/booking/${b.id}">${live ? "Manage" : "Details"}</a>
-        </div>
-      </div></div>`;
-  };
+  const bookings = store.bookingsForUser(user.id).filter((b) => b.status !== "cancelled");
+  const attended = bookings.filter((b) => b.status === "attended").length;
 
   return `
     <div class="kicker">Profile</div>
-    <div class="mt16">${roleBadge}</div>
 
-    ${isAdmin ? `<a class="btn ghost mt16" href="#/admin">Open admin tools →</a>` : ""}
+    <div class="profile-hero">
+      <div class="ph-top">
+        <div class="ph-avatar">${esc(initials(user.fullName))}</div>
+        <div class="ph-id">
+          <div class="ph-role">${roleLabel}</div>
+          <h1>${esc(user.fullName)}</h1>
+          <p>Member since ${fmtMonthYear(user.appliedAt)}</p>
+        </div>
+      </div>
+      <div class="ph-stats">
+        <div><strong>${bookings.length}</strong><span>Bookings</span></div>
+        <div><strong>${attended}</strong><span>Attended</span></div>
+      </div>
+    </div>
 
-    <div class="section-head"><h2>Membership Details</h2></div>
-    <div class="card"><div class="card-body">
-      <div class="receipt-lines">
+    <div class="profile-rows">
+      ${isAdmin ? profileRow("#/admin", ICONS.shield, "Admin Tools", "Approvals, activities and members") : ""}
+      ${profileRow("#/account/details", ICONS.user, "Membership Details", "Contact and emergency information")}
+      ${profileRow(
+        "#/account/indemnity",
+        ICONS.check,
+        "Indemnity",
+        user.indemnityAcceptedAt ? `Indemnity confirmed on ${fmtDay(user.indemnityAcceptedAt)}` : "To be accepted",
+        { cls: user.indemnityAcceptedAt ? "ok" : "todo" }
+      )}
+      ${profileRow("#/account/donor", ICONS.heart, "Donor Profile", "Donor ID and e-receipt details")}
+      ${profileRow("#/account/payments", ICONS.dollar, "Payments & Receipts", "Bookings, donations and orders")}
+      ${profileRow("#/account/privacy", ICONS.bell, "Privacy & Notifications", "Consent and communication choices")}
+      ${profileRow("#/account/history", ICONS.clock, "History", "Activity history")}
+    </div>
+
+    <div class="btn-row">
+      <button class="btn ghost" type="button" data-action="signout">Sign out</button>
+      <button class="btn danger sm" type="button" data-action="reset-demo">Reset demo data</button>
+    </div>`;
+}
+
+// Tappable Profile row: icon tile + title + one-line status, separated by
+// hairlines. (Community keeps the chunkier linkCard treatment.)
+function profileRow(href, icon, title, status, { cls = "" } = {}) {
+  return `
+    <a class="profile-row" href="${href}">
+      <span class="pr-icon">${icon}</span>
+      <span class="pr-text">
+        <strong>${esc(title)}</strong>
+        <span class="pr-status${cls ? ` ${cls}` : ""}">${esc(status)}</span>
+      </span>
+      ${ICONS.chevron}
+    </a>`;
+}
+
+function accountDetails(user) {
+  return `
+    <a class="back-link" href="#/account">← Profile</a>
+    <div class="kicker mt16">Profile · Membership Details</div>
+    <h1 class="display sm">Membership Details.</h1>
+    <div class="card mt16"><div class="card-body">
+      <div class="receipt-lines" style="margin-top:0;border-top:0">
         <div class="line"><span>Full name</span><strong>${esc(user.fullName)}</strong></div>
         <div class="line"><span>Preferred name</span><strong>${esc(user.preferredName)}</strong></div>
         <div class="line"><span>Email</span><strong>${esc(user.email)}</strong></div>
-        <div class="line"><span>Member since</span><strong>${new Date(user.appliedAt).toLocaleDateString("en-HK", { day: "numeric", month: "short", year: "numeric" })}</strong></div>
+        <div class="line"><span>Member since</span><strong>${fmtDay(user.appliedAt)}</strong></div>
         <div class="line"><span>Phone / WhatsApp</span><strong>${esc(user.phone)}</strong></div>
         <div class="line"><span>Emergency contact</span><strong>${esc(user.emergencyName)} · ${esc(user.emergencyPhone)}</strong></div>
       </div>
       <p class="muted small mt16">Profile editing is stubbed in the prototype — fields come from the application form.</p>
-    </div></div>
+    </div></div>`;
+}
 
-    <div class="section-head"><h2>Donor Profile</h2></div>
-    <div class="card"><div class="card-body">
-      <div class="receipt-lines">
+// Tappable card that opens a detail page. The face shows the title plus a
+// one-line description or status (and an optional second line), so the page
+// it leads to stays uncluttered. Used on Community (Profile uses profileRow).
+function linkCard(href, title, status, { sub = "", cls = "" } = {}) {
+  return `
+    <a class="card link-card" href="${href}">
+      <div class="card-body">
+        <div class="lc-text">
+          <h3>${esc(title)}</h3>
+          <p class="lc-status${cls ? ` ${cls}` : ""}">${esc(status)}</p>
+          ${sub ? `<p class="lc-sub">${esc(sub)}</p>` : ""}
+        </div>
+        ${ICONS.chevron}
+      </div>
+    </a>`;
+}
+
+// Draft indemnity wording — final text to be confirmed with ITC leadership
+// before launch. The apply form captures acceptance at join time; this page
+// catches members who joined before that requirement existed.
+function accountIndemnity(user) {
+  const at = user.indemnityAcceptedAt;
+  return `
+    <a class="back-link" href="#/account">← Profile</a>
+    <div class="kicker mt16">Profile · Indemnity</div>
+    <h1 class="display sm">Health &amp; Liability Indemnity.</h1>
+    ${
+      at
+        ? `
+      <div class="banner mt16">
+        <span class="kicker">Indemnity confirmed on ${fmtDay(at)}</span>
+        <p>You’re confirmed to join ITC activities.</p>
+      </div>`
+        : `
+      <div class="banner warn mt16">
+        <span class="kicker">To be accepted</span>
+        <p>Please read the indemnity below, then accept and confirm — it’s required for joining ITC activities.</p>
+      </div>`
+    }
+    <div class="card mt16"><div class="card-body prose">
+      <h3>Health declaration</h3>
+      <p>I confirm that I am physically fit and in good health, and I know of no medical reason I should not take part in Island Training Club (ITC) activities. If my health changes, I will seek professional medical advice before taking part again.</p>
+      <h3>Participation at my own risk</h3>
+      <p>I understand that ITC activities are recreational, may be volunteer-led, and involve inherent physical risk. I take part at my own risk, will work within my own limits, and will follow the instructions of ITC leaders at all times.</p>
+      <h3>Release &amp; indemnity</h3>
+      <p>To the fullest extent permitted by law, I release and indemnify ITC, its leaders, members and volunteers against any claim, loss, injury or damage arising from my participation in ITC activities.</p>
+      <h3>Emergency contact</h3>
+      <p>I confirm the emergency contact details in my membership application are accurate, and I will keep them up to date.</p>
+    </div></div>
+    ${
+      at
+        ? ""
+        : `
+      <form id="form-indemnity" class="mt16" novalidate>
+        <label class="check"><input type="checkbox" name="indemnityAccept" required>
+          <span>I have read and accept the health &amp; liability indemnity above. *</span></label>
+        <div id="indemnity-error"></div>
+        <button class="btn mt16" type="submit">Accept &amp; Confirm</button>
+      </form>`
+    }
+    <p class="muted small mt16">Draft wording — the final indemnity will be confirmed with ITC leadership before launch.</p>`;
+}
+
+function accountDonor(user) {
+  return `
+    <a class="back-link" href="#/account">← Profile</a>
+    <div class="kicker mt16">Profile · Donor Profile</div>
+    <h1 class="display sm">Donor Profile.</h1>
+    <div class="card mt16"><div class="card-body">
+      <div class="receipt-lines" style="margin-top:0;border-top:0">
         <div class="line"><span>Donor ID</span><strong>${user.donorId ? esc(user.donorId) : "Not provided"}</strong></div>
       </div>
       ${
@@ -547,17 +779,22 @@ function accountMember(user) {
         <form id="form-donor-id" class="mt16" novalidate>
           <div class="field">
             <label for="donor-id">Add your Donor ID</label>
-            <input id="donor-id" name="donorId" placeholder="e.g. IECC-10028" autocomplete="off">
-            <div class="hint">Left this blank or wrote “Not applicable” at sign-up? Add it here any time — leaders use it to match your giving to your IECC donor record.</div>
+            <input id="donor-id" name="donorId" placeholder="e.g. CHUI-08879" autocomplete="off">
+            <div class="hint">Format: your last name, a hyphen, then the 4- or 5-digit number from your IECC donor record (e.g. CHUI-08879 or CHUI-8879). Left this blank at sign-up? Add it here any time — leaders use it to match your giving to your donor record.</div>
           </div>
           <div id="donor-error"></div>
           <button class="btn ghost sm" type="submit">Save Donor ID</button>
         </form>`
       }
-    </div></div>
+    </div></div>`;
+}
 
-    <div class="section-head"><h2>Payments &amp; receipts</h2></div>
-
+function accountPayments(user) {
+  const receipts = store.receiptsForUser(user.id);
+  return `
+    <a class="back-link" href="#/account">← Profile</a>
+    <div class="kicker mt16">Profile · Payments &amp; Receipts</div>
+    <h1 class="display sm">Payments &amp; Receipts.</h1>
     ${
       receipts.length
         ? `<div class="session-list">${receipts
@@ -573,27 +810,59 @@ function accountMember(user) {
             )
             .join("")}</div>`
         : `<div class="empty">No payments yet.</div>`
-    }
+    }`;
+}
 
-    <div class="section-head"><h2>History</h2></div>
-    ${history.length ? history.map(bookingCard).join("") : `<div class="empty">Past sessions will appear here.</div>`}
-
-    <div class="section-head"><h2>Profile</h2></div>
-    <div class="card"><div class="card-body">
-      <div class="receipt-lines">
-        <div class="line"><span>Full name</span><strong>${esc(user.fullName)}</strong></div>
-        <div class="line"><span>Preferred name</span><strong>${esc(user.preferredName)}</strong></div>
-        <div class="line"><span>Phone / WhatsApp</span><strong>${esc(user.phone)}</strong></div>
-        <div class="line"><span>Emergency contact</span><strong>${esc(user.emergencyName)} · ${esc(user.emergencyPhone)}</strong></div>
-        <div class="line"><span>Photo consent</span><strong>${user.mediaConsent ? "Yes" : "No"}</strong></div>
+function accountPrivacy(user) {
+  return `
+    <a class="back-link" href="#/account">← Profile</a>
+    <div class="kicker mt16">Profile · Privacy &amp; Notifications</div>
+    <h1 class="display sm">Privacy &amp; Notifications.</h1>
+    <div class="card mt16"><div class="card-body">
+      <div class="receipt-lines" style="margin-top:0;border-top:0">
+        <div class="line"><span>Photos at sessions</span><strong>${user.mediaConsent ? "Allowed" : "Not allowed"}</strong></div>
+        <div class="line"><span>WhatsApp session reminders</span><strong>On</strong></div>
+        <div class="line"><span>Email receipts</span><strong>On</strong></div>
+        <div class="line"><span>Community news</span><strong>Off</strong></div>
       </div>
-      <p class="muted small mt16">Profile editing is stubbed in the prototype — fields come from the application form.</p>
-    </div></div>
+      <p class="muted small mt16">Privacy and notification settings are stubbed for setup — they’ll be configurable here before launch.</p>
+    </div></div>`;
+}
 
-    <div class="btn-row">
-      <button class="btn ghost" type="button" data-action="signout">Sign out</button>
-      <button class="btn danger sm" type="button" data-action="reset-demo">Reset demo data</button>
-    </div>`;
+function bookingCard(b) {
+  const s = b.snapshot;
+  const live = b.status === "confirmed" && !sessionStarted(s);
+  const status =
+    b.status === "cancelled"
+      ? '<span class="badge danger">Cancelled</span>'
+      : b.status === "attended"
+        ? '<span class="badge neutral">Attended</span>'
+        : '<span class="badge free">Booked</span>';
+  return `
+    <div class="card booking-card"><div class="card-body">
+      <header>
+        <div>
+          <div class="kicker dim" style="margin-top:0">${esc(fmtDate(s.dateISO))} · ${fmtTime(s.time)}</div>
+          <h3 class="mt8">${esc(s.name)}</h3>
+        </div>
+        ${status}
+      </header>
+      <p>${esc(s.location)} · ${s.durationMin} min · paid ${fmtMoney(s.price)}</p>
+      <div class="actions">
+        <a class="btn ghost sm" href="#/booking/${b.id}">${live ? "Manage" : "Details"}</a>
+      </div>
+    </div></div>`;
+}
+
+function accountHistory(user) {
+  const history = store
+    .bookingsForUser(user.id)
+    .filter((b) => !(b.status === "confirmed" && !sessionStarted(b.snapshot)));
+  return `
+    <a class="back-link" href="#/account">← Profile</a>
+    <div class="kicker mt16">Profile · History</div>
+    <h1 class="display sm">History.</h1>
+    ${history.length ? history.map(bookingCard).join("") : `<div class="empty">Past sessions will appear here.</div>`}`;
 }
 
 // --- Apply ---------------------------------------------------------------------------------
@@ -627,13 +896,13 @@ export function viewApply() {
       </div>
       <div class="field">
         <label for="ap-donor">Donor ID (optional)</label>
-        <input id="ap-donor" name="donorId" placeholder="e.g. IECC-10028" autocomplete="off">
-        <div class="hint">For members who already give through IECC. Leave blank or write “Not applicable” — you can add it later from your Profile.</div>
+        <input id="ap-donor" name="donorId" placeholder="e.g. CHUI-08879" autocomplete="off">
+        <div class="hint">For members who already give through IECC — your last name, a hyphen, then a 4- or 5-digit number (e.g. CHUI-8879). Leave blank or write “Not applicable” — you can add it later from your Profile.</div>
       </div>
       <label class="check"><input type="checkbox" name="ageConfirmed" required>
         <span>I confirm I am 18 or over, or that a parent/guardian will accompany me to sessions. *</span></label>
-      <label class="check"><input type="checkbox" name="waiver" required>
-        <span>I accept the participation waiver — activities are recreational, may be volunteer-led, and involve inherent physical risk. *</span></label>
+      <label class="check"><input type="checkbox" name="indemnity" required>
+        <span>I accept the health &amp; liability indemnity — I confirm I am fit to take part, I join ITC activities at my own risk, and I release ITC and its leaders from liability. *</span></label>
       <label class="check"><input type="checkbox" name="guidelines" required>
         <span>I accept the ITC community guidelines. *</span></label>
       <label class="check"><input type="checkbox" name="privacy" required>
@@ -659,6 +928,7 @@ export function viewCheckout(sessionId) {
     const b = store.userBookingFor(user.id, s.id);
     return { redirect: `#/booking/${b.id}` };
   }
+  if (sessionStarted(s)) return { redirect: `#/activity/${sessionId}` };
   if (store.spotsLeft(s) <= 0) return { redirect: `#/activity/${sessionId}` };
 
   return `
@@ -700,7 +970,7 @@ export function viewBooking(bookingId) {
   }
   const s = b.snapshot;
   const receipt = store.receiptForBooking(b.id);
-  const live = b.status === "confirmed" && s.dateISO >= todayISO();
+  const live = b.status === "confirmed" && !sessionStarted(s);
 
   const head = live
     ? `<div class="confirm-mark">${ICONS.check}</div>
@@ -796,6 +1066,7 @@ function adminApprovals() {
           <dt>Emergency</dt><dd>${esc(u.emergencyName)} · ${esc(u.emergencyPhone)}</dd>
           <dt>Heard via</dt><dd>${esc(u.heard)}</dd>
           <dt>Age 18+ / guardian</dt><dd>${u.ageConfirmed ? "Confirmed" : "—"}</dd>
+          <dt>Indemnity</dt><dd>${u.indemnityAcceptedAt ? "Accepted" : "—"}</dd>
           <dt>Photo consent</dt><dd>${u.mediaConsent ? "Yes" : "No"}</dd>
         </dl>
         <div class="actions">
