@@ -522,7 +522,7 @@ function accountMember(user) {
 
     ${isAdmin ? `<a class="btn ghost mt16" href="#/admin">Open admin tools →</a>` : ""}
 
-    <div class="section-head"><h2>Membership details</h2></div>
+    <div class="section-head"><h2>Membership Details</h2></div>
     <div class="card"><div class="card-body">
       <div class="receipt-lines">
         <div class="line"><span>Full name</span><strong>${esc(user.fullName)}</strong></div>
@@ -535,7 +535,7 @@ function accountMember(user) {
       <p class="muted small mt16">Profile editing is stubbed in the prototype — fields come from the application form.</p>
     </div></div>
 
-    <div class="section-head"><h2>Donor profile</h2></div>
+    <div class="section-head"><h2>Donor Profile</h2></div>
     <div class="card"><div class="card-body">
       <div class="receipt-lines">
         <div class="line"><span>Donor ID</span><strong>${user.donorId ? esc(user.donorId) : "Not provided"}</strong></div>

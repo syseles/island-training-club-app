@@ -192,7 +192,7 @@ if (!memberAcct.includes('class="kicker">Profile</div>') || memberAcct.includes(
   failures++;
   console.error('FAIL Profile header should read "Profile" with no name headline');
 } else console.log('ok  Profile header reads "Profile"');
-const [profileHead, profileDetails] = memberAcct.split("Membership details");
+const [profileHead, profileDetails] = memberAcct.split("Membership Details");
 if (!profileDetails?.includes("member@itc.hk") || profileHead.includes("member@itc.hk")) {
   failures++;
   console.error("FAIL email should live in the Membership details section");
