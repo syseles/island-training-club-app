@@ -28,7 +28,7 @@ with:
 ```sql
 update public.profiles
    set role = 'super_admin'
- where email = '<owner email>';
+ where email = 'syselesli@gmail.com';
 ```
 
 ## Promote a second admin
