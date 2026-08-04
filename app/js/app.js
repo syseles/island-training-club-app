@@ -45,6 +45,25 @@ const NAV_FOR = {
 
 let prevPage = null;
 
+// Live-mode auth listener: when Supabase completes sign-in, route the
+// pending user to /apply (if they have not yet submitted an application).
+import { supabase, isLive } from "./config.js";
+if (isLive() && supabase) {
+  supabase.auth.onAuthStateChange((event) => {
+    if (event === "SIGNED_IN") maybeRedirectToApply();
+  });
+}
+
+export async function maybeRedirectToApply() {
+  if (!isLive()) return;
+  const cu = await store.getCurrentUser();
+  if (!cu || cu.role !== "pending") return;
+  const app = await store.getMyApplication();
+  if (!app && window.location.hash !== "#/apply") {
+    window.location.hash = "#/apply";
+  }
+}
+
 async function render() {
   const parts = parseHash();
   const [page, arg, arg2] = parts.length ? parts : ["home"];
@@ -498,3 +517,4 @@ store.load();
 if (!location.hash) location.hash = "#/home";
 window.addEventListener("hashchange", render);
 render();
+maybeRedirectToApply();
