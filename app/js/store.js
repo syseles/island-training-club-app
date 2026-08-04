@@ -20,9 +20,17 @@ import {
   normalizeDonorId,
   donorIdProblem,
 } from "./data.js";
+import { supabase, isLive } from "./config.js";
 
 const STORAGE_KEY = "itc.prototype.v1";
 const STATE_VERSION = 8;
+
+// Live-mode (Supabase) session cache. Avoids hammering the DB on every
+// page load. The TTL is short so role flips and welcome notifications
+// surface promptly after the admin takes an action.
+let liveProfile = null;
+let liveProfileFetchedAt = 0;
+const LIVE_PROFILE_TTL_MS = 30_000;
 
 let state = null;
 
@@ -209,8 +217,60 @@ export function demoSignIn(role) {
 }
 
 export function signOut() {
+  liveProfile = null;
+  liveProfileFetchedAt = 0;
   state.sessionUserId = null;
   save();
+}
+
+// --- Live (Supabase) auth helpers --------------------------------------------
+
+export async function getCurrentUser() {
+  if (!isLive || !supabase) return currentUser();
+  const { data: sessData, error: sessErr } = await supabase.auth.getSession();
+  if (sessErr || !sessData.session) return null;
+  const authUser = sessData.session.user;
+  if (!liveProfile || Date.now() - liveProfileFetchedAt > LIVE_PROFILE_TTL_MS) {
+    const { data: prof, error: profErr } = await supabase
+      .from("profiles")
+      .select("*")
+      .eq("id", authUser.id)
+      .maybeSingle();
+    if (profErr) return null;
+    liveProfile = prof || {
+      id: authUser.id,
+      email: authUser.email,
+      full_name: authUser.user_metadata?.full_name || null,
+      avatar_url: authUser.user_metadata?.avatar_url || null,
+      role: "pending",
+    };
+    liveProfileFetchedAt = Date.now();
+  }
+  return {
+    id: liveProfile.id,
+    email: liveProfile.email,
+    role: liveProfile.role,
+    profile: liveProfile,
+  };
+}
+
+export async function signInWithGoogle() {
+  if (!isLive || !supabase) {
+    throw new Error("signInWithGoogle requires SUPABASE_URL and SUPABASE_ANON_KEY");
+  }
+  const { error } = await supabase.auth.signInWithOAuth({
+    provider: "google",
+    options: { redirectTo: `${window.location.origin}/app/` },
+  });
+  if (error) throw error;
+}
+
+export async function signOutLive() {
+  if (!isLive || !supabase) return signOut();
+  liveProfile = null;
+  liveProfileFetchedAt = 0;
+  const { error } = await supabase.auth.signOut();
+  if (error) throw error;
 }
 
 // --- Signup / approval ---------------------------------------------------------

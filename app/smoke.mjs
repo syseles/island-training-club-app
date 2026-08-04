@@ -438,6 +438,31 @@ store.resetDemo();
   } else console.log("ok  v7 migration clears unrecognizable donor ID");
 }
 
+// --- store.getCurrentUser fallback (local mode) ---
+store.signOut();
+const localUser = await store.getCurrentUser();
+const localCu = store.currentUser();
+const localMatch = (localUser === null && localCu === null) ||
+                   (localUser !== null && localCu !== null && localUser.id === localCu.id);
+if (!localMatch) {
+  failures++;
+  console.error(`FAIL getCurrentUser: should mirror currentUser() in local mode (got ${JSON.stringify(localUser)} vs ${JSON.stringify(localCu)})`);
+} else {
+  console.log("ok  getCurrentUser: mirrors currentUser() in local mode");
+}
+// Sign in as a seeded user so the local-mode mirror check has a real user.
+store.signIn("member@itc.hk");
+const signedUser = await store.getCurrentUser();
+const signedCu = store.currentUser();
+const signedMatch = signedUser && signedCu && signedUser.id === signedCu.id;
+if (!signedMatch) {
+  failures++;
+  console.error(`FAIL getCurrentUser: signed-in user should match (got ${JSON.stringify(signedUser)} vs ${JSON.stringify(signedCu)})`);
+} else {
+  console.log("ok  getCurrentUser: signed-in user mirrors currentUser() in local mode");
+}
+store.signOut();
+
 // --- Supabase config (no env vars set) ---
 const cfg = await import("./js/config.js");
 if (cfg.supabase !== null) {
