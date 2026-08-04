@@ -547,6 +547,33 @@ for (const fn of ["listProfiles", "listRoleChanges", "updateProfileRole"]) {
     console.log(`ok  store.js: exports ${fn}`);
   }
 }
+for (const fn of ["getMyApplication", "saveMyApplication"]) {
+  if (!storeSrc.includes(`export async function ${fn}`)) {
+    failures++;
+    console.error(`FAIL store.js: should export ${fn}`);
+  } else {
+    console.log(`ok  store.js: exports ${fn}`);
+  }
+}
+
+if (!viewsSrc.includes("export async function viewApplyLive")) {
+  failures++;
+  console.error("FAIL views.js: should export viewApplyLive");
+} else {
+  console.log("ok  views.js: exports viewApplyLive");
+}
+if (!viewsSrc.includes("data-form=\"apply\"")) {
+  failures++;
+  console.error("FAIL views.js: apply form should use data-form='apply'");
+} else {
+  console.log("ok  views.js: apply form uses data-form='apply'");
+}
+if (!viewsSrc.includes("data-minor-only")) {
+  failures++;
+  console.error("FAIL views.js: apply form should have data-minor-only block");
+} else {
+  console.log("ok  views.js: apply form has data-minor-only block");
+}
 
 // --- Reset ---
 store.resetDemo();

@@ -884,7 +884,79 @@ function accountHistory(user) {
 
 // --- Apply ---------------------------------------------------------------------------------
 
+export async function viewApplyLive() {
+  const cu = await store.getCurrentUser();
+  if (!cu) return `<section class="card"><p class="muted">Please sign in first.</p></section>`;
+  if (cu.role !== "pending") {
+    return `<section class="card"><p class="muted">Your application has already been processed.</p></section>`;
+  }
+  const existing = await store.getMyApplication();
+  if (existing) {
+    return `
+      <section class="card">
+        <p class="kicker">Application</p>
+        <h2 class="display">Awaiting review</h2>
+        <p class="muted">Your application was submitted on ${fmtDate(existing.submitted_at)}. An admin will review it shortly.</p>
+      </section>
+    `;
+  }
+  return applyFormHtml();
+}
+
+function applyFormHtml() {
+  return `
+    <section class="card">
+      <p class="kicker">Application</p>
+      <h2 class="display">Tell us about you</h2>
+      <p class="muted">We collect this so the team can approve your application and reach you in an emergency.</p>
+      <form data-form="apply" class="form-grid">
+        ${applyField("text", "mobile", "Mobile / WhatsApp number", true)}
+        ${applyField("date", "date_of_birth", "Date of birth", true)}
+        <div data-minor-only hidden>
+          ${applyField("text", "guardian_name", "Guardian name", true)}
+          ${applyField("text", "guardian_phone", "Guardian phone", true)}
+        </div>
+        ${applyField("text", "emergency_name", "Emergency contact name", true)}
+        ${applyField("text", "emergency_phone", "Emergency contact phone", true)}
+        ${applySelect("heard_source", "How did you hear about ITC?", ["friend","family","search","social","event","other"], true)}
+        ${applyField("text", "heard_detail", "Detail (optional)", false)}
+        ${applyField("text", "preferred_name", "Preferred name (optional)", false)}
+        <label class="check"><input type="checkbox" name="photo_consent"> I consent to photos/videos of me being used on ITC channels. (Optional)</label>
+        <label class="check"><input type="checkbox" name="waiver" required> I accept the participation waiver. (⏳ text pending ITC review)</label>
+        <label class="check"><input type="checkbox" name="privacy" required> I accept the privacy policy. (⏳ text pending ITC review)</label>
+        <label class="check"><input type="checkbox" name="guidelines" required> I accept the community guidelines. (⏳ text pending ITC review)</label>
+        <button class="btn btn-primary" type="submit">Submit application</button>
+      </form>
+    </section>
+  `;
+}
+
+function applyField(type, name, label, required) {
+  return `
+    <label class="field">
+      <span class="field-label">${esc(label)}${required ? " *" : ""}</span>
+      <input type="${type}" name="${name}" ${required ? "required" : ""}>
+    </label>
+  `;
+}
+
+function applySelect(name, label, options, required) {
+  return `
+    <label class="field">
+      <span class="field-label">${esc(label)}${required ? " *" : ""}</span>
+      <select name="${name}" ${required ? "required" : ""}>
+        ${options.map((o) => `<option value="${o}">${esc(o)}</option>`).join("")}
+      </select>
+    </label>
+  `;
+}
+
 export function viewApply() {
+  if (isLive()) return viewApplyLive();
+  return viewApplyLocal();
+}
+
+function viewApplyLocal() {
   return `
     <a class="back-link" href="#/account">← Account</a>
     <div class="kicker mt16">Membership application</div>

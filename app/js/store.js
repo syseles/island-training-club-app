@@ -311,6 +311,58 @@ export async function updateProfileRole(profileId, newRole, reason) {
   if (reason) console.info("role update reason:", reason);
 }
 
+// --- Applicant: application form (B; Supabase) ------------------------------
+
+export async function getMyApplication() {
+  if (!isLive() || !supabase) return null;
+  const cu = await getCurrentUser();
+  if (!cu) return null;
+  const { data, error } = await supabase
+    .from("applications")
+    .select("*")
+    .eq("profile_id", cu.id)
+    .maybeSingle();
+  if (error) throw error;
+  return data;
+}
+
+export async function saveMyApplication(form) {
+  if (!isLive() || !supabase) {
+    throw new Error("saveMyApplication requires live mode");
+  }
+  const cu = await getCurrentUser();
+  if (!cu) throw new Error("Not signed in");
+  const isMinor = computeIsMinor(form.date_of_birth);
+  const row = {
+    profile_id: cu.id,
+    mobile: form.mobile,
+    date_of_birth: form.date_of_birth,
+    is_minor: isMinor,
+    guardian_name: isMinor ? form.guardian_name : null,
+    guardian_phone: isMinor ? form.guardian_phone : null,
+    emergency_name: form.emergency_name,
+    emergency_phone: form.emergency_phone,
+    heard_source: form.heard_source,
+    heard_detail: form.heard_detail || null,
+    preferred_name: form.preferred_name || null,
+    photo_consent: !!form.photo_consent,
+    waiver_accepted_at: new Date().toISOString(),
+    privacy_accepted_at: new Date().toISOString(),
+    guidelines_accepted_at: new Date().toISOString(),
+  };
+  const { error } = await supabase.from("applications").upsert(row);
+  if (error) throw error;
+}
+
+function computeIsMinor(dob) {
+  const d = new Date(dob);
+  const now = new Date();
+  let age = now.getFullYear() - d.getFullYear();
+  const m = now.getMonth() - d.getMonth();
+  if (m < 0 || (m === 0 && now.getDate() < d.getDate())) age--;
+  return age < 18;
+}
+
 // --- Signup / approval ---------------------------------------------------------
 
 export function applyForMembership(form) {

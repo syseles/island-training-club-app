@@ -45,7 +45,7 @@ const NAV_FOR = {
 
 let prevPage = null;
 
-function render() {
+async function render() {
   const parts = parseHash();
   const [page, arg, arg2] = parts.length ? parts : ["home"];
 
@@ -76,7 +76,7 @@ function render() {
       break;
     case "apply": {
       const u = store.currentUser();
-      out = u && u.status === "approved" ? { redirect: "#/account" } : views.viewApply();
+      out = u && u.status === "approved" ? { redirect: "#/account" } : await views.viewApply();
       break;
     }
     case "checkout":
@@ -110,6 +110,30 @@ function render() {
   avatarEl.innerHTML = views.avatarHTML(user);
   window.scrollTo({ top: 0 });
   prevPage = page;
+}
+
+// --- Live apply form: toggle minor-only fields when DOB changes ---------
+
+document.addEventListener("change", (e) => {
+  const t = e.target;
+  if (!(t instanceof HTMLInputElement) || t.name !== "date_of_birth") return;
+  const form = t.closest('form[data-form="apply"]');
+  if (!form) return;
+  const block = form.querySelector("[data-minor-only]");
+  if (!block) return;
+  const age = computeAge(t.value);
+  const isMinor = age < 18 && age >= 0;
+  block.hidden = !isMinor;
+  block.querySelectorAll("input").forEach((el) => { el.required = isMinor; });
+});
+
+function computeAge(dob) {
+  const d = new Date(dob);
+  const now = new Date();
+  let age = now.getFullYear() - d.getFullYear();
+  const m = now.getMonth() - d.getMonth();
+  if (m < 0 || (m === 0 && now.getDate() < d.getDate())) age--;
+  return age;
 }
 
 // --- ICS download -------------------------------------------------------------------
@@ -267,9 +291,27 @@ document.addEventListener("click", (e) => {
 
 // --- Form delegation ---------------------------------------------------------------------
 
-document.addEventListener("submit", (e) => {
+document.addEventListener("submit", async (e) => {
   const form = e.target;
   if (!(form instanceof HTMLFormElement)) return;
+
+  // Live-mode application form (data-form="apply"). The local-mode form
+  // is handled below by id "form-apply".
+  if (form.dataset.form === "apply") {
+    e.preventDefault();
+    const fd = new FormData(form);
+    const payload = Object.fromEntries(fd.entries());
+    payload.photo_consent = !!fd.get("photo_consent");
+    try {
+      await store.saveMyApplication(payload);
+      toast("Application submitted.");
+      location.hash = "#/home";
+      await render();
+    } catch (err) {
+      toast(err.message || "Submit failed");
+    }
+    return;
+  }
 
   switch (form.id) {
     case "form-signin": {
