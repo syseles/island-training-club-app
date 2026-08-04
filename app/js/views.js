@@ -113,13 +113,19 @@ const NAV_ITEMS = [
   { key: "home", label: "Home", icon: "home", href: "#/home" },
   { key: "schedule", label: "Schedule", icon: "calendar", href: "#/schedule" },
   { key: "community", label: "Community", icon: "people", href: "#/community" },
+  { key: "notifications", label: "Notifications", icon: "bell", href: "#/notifications", roles: ["signed-in"] },
   { key: "account", label: "Account", icon: "user", href: "#/account" },
   { key: "admin", label: "Admin", icon: "shield", href: "#/admin/users", roles: ["admin", "superadmin", "super_admin"] },
 ];
 
 export function navHTML(routeKey, user) {
   const isAdmin = user && ["admin", "superadmin", "super_admin"].includes(user.role);
-  return NAV_ITEMS.filter((i) => !i.roles || isAdmin)
+  const isSignedIn = !!user;
+  return NAV_ITEMS.filter((i) => {
+    if (!i.roles) return true;
+    if (i.roles.includes("signed-in")) return isSignedIn;
+    return i.roles.some((r) => isAdmin);
+  })
     .map(
       (i) => `
       <a href="${i.href}" class="${i.key === routeKey ? "active" : ""}" ${i.key === routeKey ? 'aria-current="page"' : ""}>
@@ -1309,6 +1315,35 @@ export function viewNotFound(msg = "Page not found.") {
       <p>${esc(msg)}</p>
       <a class="btn ghost mt16" href="#/home" style="display:inline-flex;width:auto;padding:12px 22px">Back home</a>
     </div>`;
+}
+
+// --- Notifications (live / Supabase) -----------------------------------------------------------
+
+export async function viewNotifications() {
+  const rows = await store.listMyNotifications();
+  if (!rows.length) {
+    return `<section class="card"><p class="muted">No notifications.</p></section>`;
+  }
+  return `
+    <section class="card">
+      <p class="kicker">Notifications</p>
+      ${rows.map((n) => `
+        <div class="row ${n.read_at ? "" : "row-unread"}" data-notification-id="${n.id}" data-action="notification-open">
+          <div class="row-body">
+            <strong>${esc(n.title)}</strong>
+            <span class="muted">${esc(n.body)}</span>
+            <span class="muted">${fmtDate(n.created_at)}</span>
+          </div>
+        </div>
+      `).join("")}
+    </section>
+  `;
+}
+
+export async function unreadBadge() {
+  const rows = await store.listMyNotifications();
+  const n = rows.filter((r) => !r.read_at).length;
+  return n > 0 ? `<span class="badge">${n}</span>` : "";
 }
 
 // --- Admin: users (live / Supabase) ------------------------------------------------------------

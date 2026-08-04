@@ -555,6 +555,14 @@ for (const fn of ["getMyApplication", "saveMyApplication"]) {
     console.log(`ok  store.js: exports ${fn}`);
   }
 }
+for (const fn of ["listMyNotifications", "markNotificationRead"]) {
+  if (!storeSrc.includes(`export async function ${fn}`)) {
+    failures++;
+    console.error(`FAIL store.js: should export ${fn}`);
+  } else {
+    console.log(`ok  store.js: exports ${fn}`);
+  }
+}
 
 if (!viewsSrc.includes("export async function viewApplyLive")) {
   failures++;
@@ -573,6 +581,24 @@ if (!viewsSrc.includes("data-minor-only")) {
   console.error("FAIL views.js: apply form should have data-minor-only block");
 } else {
   console.log("ok  views.js: apply form has data-minor-only block");
+}
+if (!viewsSrc.includes("export async function viewNotifications")) {
+  failures++;
+  console.error("FAIL views.js: should export viewNotifications");
+} else {
+  console.log("ok  views.js: exports viewNotifications");
+}
+if (!viewsSrc.includes("export async function unreadBadge")) {
+  failures++;
+  console.error("FAIL views.js: should export unreadBadge");
+} else {
+  console.log("ok  views.js: exports unreadBadge");
+}
+if (!viewsSrc.includes('#/notifications')) {
+  failures++;
+  console.error("FAIL views.js: should reference #/notifications");
+} else {
+  console.log("ok  views.js: references #/notifications");
 }
 
 // --- Reset ---

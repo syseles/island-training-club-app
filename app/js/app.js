@@ -113,6 +113,9 @@ async function render() {
     case "admin/users":
       out = await views.viewAdminUsers();
       break;
+    case "notifications":
+      out = await views.viewNotifications();
+      break;
     default:
       out = views.viewNotFound();
   }
@@ -127,6 +130,13 @@ async function render() {
   navEl.innerHTML = views.navHTML(NAV_FOR[page] ?? "home", user);
   avatarEl.classList.toggle("is-empty", !user);
   avatarEl.innerHTML = views.avatarHTML(user);
+  // Best-effort: append unread-count badge to the Notifications nav item.
+  if (isLive() && user) {
+    views.unreadBadge().then((badge) => {
+      const notifLink = navEl.querySelector('a[href="#/notifications"]');
+      if (notifLink && badge) notifLink.insertAdjacentHTML("afterbegin", badge);
+    }).catch(() => {});
+  }
   window.scrollTo({ top: 0 });
   prevPage = page;
 }
@@ -267,6 +277,17 @@ document.addEventListener("click", (e) => {
         render();
       } catch (err) {
         toast(err.message || "Revoke failed");
+      }
+      break;
+    }
+
+    case "notification-open": {
+      const id = el.closest("[data-notification-id]").dataset.notificationId;
+      try {
+        await store.markNotificationRead(id);
+        render();
+      } catch (err) {
+        toast(err.message || "Failed to mark read");
       }
       break;
     }
