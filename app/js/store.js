@@ -266,11 +266,49 @@ export async function signInWithGoogle() {
 }
 
 export async function signOutLive() {
-  if (!isLive || !supabase) return signOut();
+  if (!isLive() || !supabase) return signOut();
   liveProfile = null;
   liveProfileFetchedAt = 0;
   const { error } = await supabase.auth.signOut();
   if (error) throw error;
+}
+
+// --- Admin: user/role management (Supabase) --------------------------------
+
+export async function listProfiles() {
+  if (!isLive() || !supabase) return allUsers();
+  const { data, error } = await supabase
+    .from("profiles")
+    .select("*")
+    .order("created_at", { ascending: true });
+  if (error) throw error;
+  return data || [];
+}
+
+export async function listRoleChanges() {
+  if (!isLive() || !supabase) return [];
+  const { data, error } = await supabase
+    .from("role_changes")
+    .select("*, changed_by_profile:changed_by(email, full_name)")
+    .order("created_at", { ascending: false });
+  if (error) throw error;
+  return data || [];
+}
+
+export async function updateProfileRole(profileId, newRole, reason) {
+  if (!isLive() || !supabase) {
+    setRole(profileId, newRole);
+    return;
+  }
+  const { error } = await supabase
+    .from("profiles")
+    .update({ role: newRole })
+    .eq("id", profileId);
+  if (error) throw error;
+  // The DB trigger writes role_changes + welcome notification automatically.
+  // Persisting `reason` to role_changes.reason requires a small Postgres
+  // RPC that sets a session-local config; deferred. ⏳
+  if (reason) console.info("role update reason:", reason);
 }
 
 // --- Signup / approval ---------------------------------------------------------

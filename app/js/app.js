@@ -91,6 +91,9 @@ function render() {
     case "admin":
       out = arg === "activity" ? views.viewAdminActivity(arg2) : views.viewAdmin(arg || "approvals");
       break;
+    case "admin/users":
+      out = await views.viewAdminUsers();
+      break;
     default:
       out = views.viewNotFound();
   }
@@ -193,6 +196,37 @@ document.addEventListener("click", (e) => {
     case "sign-in-google":
       store.signInWithGoogle().catch((err) => toast(err.message || "Sign-in failed"));
       break;
+
+    case "approve":
+    case "promote":
+    case "demote": {
+      const roleMap = { approve: "member", promote: "admin", demote: "member" };
+      const msgMap  = { approve: "Approved.", promote: "Promoted to admin.", demote: "Demoted to member." };
+      const id = el.dataset.id;
+      try {
+        await store.updateProfileRole(id, roleMap[action]);
+        toast(msgMap[action]);
+        render();
+      } catch (err) {
+        toast(err.message || "Action failed");
+      }
+      break;
+    }
+
+    case "revoke": {
+      const id = el.dataset.id;
+      const profile = await store.listProfiles().then((all) => all.find((p) => p.id === id));
+      const typed = window.prompt(`Type the user's email to confirm revocation: ${profile?.email || ""}`);
+      if (typed !== profile?.email) break;
+      try {
+        await store.updateProfileRole(id, "pending");
+        toast("Revoked.");
+        render();
+      } catch (err) {
+        toast(err.message || "Revoke failed");
+      }
+      break;
+    }
 
     case "reset-demo":
       if (confirm("Reset all demo data? Bookings, applications and edits will be cleared.")) {

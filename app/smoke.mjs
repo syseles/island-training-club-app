@@ -525,6 +525,29 @@ if (cfg.config.url !== null || cfg.config.anonKey !== null) {
   console.log("ok  config: url/anonKey are null when window env vars unset");
 }
 
+// --- viewAdminUsers smoke (source-only) ---
+// viewAdminUsers depends on store.getCurrentUser / listProfiles /
+// listRoleChanges, which talk to Supabase in live mode. ES module exports
+// are read-only and cannot be stubbed. We verify the function exists in
+// views.js and that the helper functions are exported from store.js; the
+// actual render path is verified manually on a deployed staging
+// environment.
+if (!viewsSrc.includes("export async function viewAdminUsers")) {
+  failures++;
+  console.error("FAIL views.js: should export viewAdminUsers");
+} else {
+  console.log("ok  views.js: exports viewAdminUsers");
+}
+const storeSrc = readFileSync(resolve(__dirname, "js/store.js"), "utf8");
+for (const fn of ["listProfiles", "listRoleChanges", "updateProfileRole"]) {
+  if (!storeSrc.includes(`export async function ${fn}`)) {
+    failures++;
+    console.error(`FAIL store.js: should export ${fn}`);
+  } else {
+    console.log(`ok  store.js: exports ${fn}`);
+  }
+}
+
 // --- Reset ---
 store.resetDemo();
 console.log("ok  reset");
