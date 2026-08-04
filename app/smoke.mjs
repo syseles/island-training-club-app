@@ -438,6 +438,27 @@ store.resetDemo();
   } else console.log("ok  v7 migration clears unrecognizable donor ID");
 }
 
+// --- Supabase config (no env vars set) ---
+const cfg = await import("./js/config.js");
+if (cfg.supabase !== null) {
+  failures++;
+  console.error("FAIL config: supabase should be null when env vars unset");
+} else {
+  console.log("ok  config: supabase is null when env vars unset");
+}
+if (cfg.isLive !== false) {
+  failures++;
+  console.error("FAIL config: isLive should be false when env vars unset");
+} else {
+  console.log("ok  config: isLive is false when env vars unset");
+}
+if (cfg.config.url !== null || cfg.config.anonKey !== null) {
+  failures++;
+  console.error("FAIL config: url/anonKey should be null when window env vars unset");
+} else {
+  console.log("ok  config: url/anonKey are null when window env vars unset");
+}
+
 // --- Reset ---
 store.resetDemo();
 console.log("ok  reset");

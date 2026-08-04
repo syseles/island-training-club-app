@@ -8,6 +8,14 @@
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="icon" href="../assets/itc/logo.webp">
   <link rel="stylesheet" href="styles.css">
+  <script>
+    // Replace these placeholder values with real ones for live deployment.
+    // Vercel injects these via its env-var UI in production; locally you can
+    // edit this block or wrap it with a build-time substitution.
+    window.SUPABASE_URL = "";
+    window.SUPABASE_ANON_KEY = "";
+  </script>
+  <script type="module" src="https://esm.sh/@supabase/supabase-js@2"></script>
 </head>
 <body>
   <div class="app-shell">
@@ -29,6 +37,7 @@
 
   <div class="toast-stack" id="toast-stack" aria-live="polite"></div>
 
+  <script type="module" src="js/config.js"></script>
   <script type="module" src="js/app.js"></script>
 </body>
 </html>
