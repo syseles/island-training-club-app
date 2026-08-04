@@ -2,7 +2,7 @@
 
 **Date:** 2026-08-04
 **Branch:** `feature/auth-identity` (non-Shop work; lands on `main`)
-**Sub-projects:** A (Stack + Identity) + D (User & role management admin panel)
+**Sub-projects:** A (Stack + Identity) + B (Approval workflow — see sibling spec `2026-08-04-approval-workflow-design.md`) + D (User & role management admin panel)
 **Status:** Agreed in brainstorm. Sections marked ⏳ have details to be confirmed later.
 
 ## Problem
@@ -11,7 +11,7 @@ The Island Training Club prototype has frictionless email-only sign-in backed by
 
 Phase one calls for public visitors, pending applicants, approved members, admins, and a super admin — with an ITC leader required to approve every applicant before full member access. None of that is possible without a real backend holding users and roles, **and** without an admin UI to review pending applicants and adjust roles.
 
-This branch covers **A (Stack + Identity)** and **D (User & role management)** together. They are tightly coupled: A defines the role model and RLS, D provides the UI that mutates role within those rules. The "approve pending → member" transition that D implements is the data-model side of the approval workflow; B (approval workflow policy — application form, welcome copy, audit, email) and C (persistence migration) remain separate sub-projects and are out of scope here.
+This branch covers **A (Stack + Identity)**, **B (Approval workflow)**, and **D (User & role management)** together. A defines the role model and RLS; D provides the admin UI that mutates role within those rules; B adds the application form, audit log, welcome notification, and approval criteria that wrap the approve-transition mechanic. B has its own spec on this branch — `2026-08-04-approval-workflow-design.md`. C (persistence migration) and E (policy & notifications) remain separate sub-projects and are out of scope here.
 
 ## Goals
 
@@ -287,7 +287,7 @@ The runbook lives in `docs/runbooks/live-auth.md` (new file in this branch's imp
 
 ## Explicit out-of-scope (deferred)
 
-- **B — Approval workflow.** The data-model side of the transition (pending → member on admin approval) is implemented by D on this branch. B is the surrounding scaffolding: application form fields beyond Google data, welcome copy, audit log of role changes, approval criteria, and any associated emails. Branch for B is a future decision.
+- **B — Approval workflow.** Covered by the sibling spec `2026-08-04-approval-workflow-design.md` on this branch. Adds the application form, audit log, welcome notification, and approval criteria that wrap the approve-transition mechanic in D. Approval criteria text and welcome copy are ⏳ awaiting ITC leadership review (flagged in B's spec).
 - **C — Persistence migration.** Activities, bookings, donations, and receipts stay on localStorage. When C runs, `store.js` stops reading from localStorage for those tables and starts reading from Postgres tables defined there.
 - **D — Activity / booking / payment admin.** Activity creation/editing, capacity changes, payment confirmations, refund flows, attendee lists, etc. already live partially on `feature/payment-system` (per the commits there) and continue to evolve there. This spec covers user & role admin only.
 - **E — Policy & notifications.** Waiver text, privacy text, approval criteria, retention, and any email / WhatsApp / push channels are not in this spec. They are owned by the policy workshop flagged in the handoff document.
