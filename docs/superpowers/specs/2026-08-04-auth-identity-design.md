@@ -47,7 +47,7 @@ This branch covers **A (Stack + Identity)**, **B (Approval workflow)**, and **D 
 ## Stack & deployment surface
 
 - **Backend:** Supabase free tier (project already exists in the owner's dashboard).
-- **Auth:** Supabase Auth, Google OAuth provider enabled.
+- **Auth:** Supabase Auth, Google OAuth provider enabled. Phone (SMS OTP via Twilio) is a planned secondary provider — not shipped in A, deferred to a follow-up task. Both providers would link to the same `auth.users` row, so the data model needs no change.
 - **Database:** Postgres (managed by Supabase).
 - **Hosting:** Vercel (already in use; `git log main` shows previous Vercel-driven commits).
 - **Client lib:** `@supabase/supabase-js` — the only npm dependency added to this repo. Loaded via `<script type="module">` import, no bundler, no build step (matches the prototype's "no build" constraint).
