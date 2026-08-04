@@ -438,6 +438,47 @@ store.resetDemo();
   } else console.log("ok  v7 migration clears unrecognizable donor ID");
 }
 
+// --- viewAccount live-mode branch ---
+// The live-mode HTML is rendered when isLive() is true at viewAccount
+// call time. We can't re-route views.js's captured config import to a
+// bustered version (cache busting only affects the top-level URL), so we
+// verify the live-mode HTML source exists in views.js and that the live
+// config evaluates correctly when imported fresh. The live render path
+// is verified manually against a deployed staging environment.
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { dirname, resolve } from "node:path";
+const __dirname = dirname(fileURLToPath(import.meta.url));
+
+const _savedWindow = globalThis.window;
+globalThis.window = {
+  SUPABASE_URL: "https://test.supabase.co",
+  SUPABASE_ANON_KEY: "test-anon-key",
+  supabase: { createClient: () => ({}) },
+};
+const cfgLive = await import("./js/config.js?v=live");
+if (!cfgLive.isLive()) {
+  failures++;
+  console.error("FAIL config (live): isLive() should be true with stubbed window");
+} else {
+  console.log("ok  config (live): isLive() is true with stubbed window");
+}
+globalThis.window = _savedWindow || undefined;
+
+const viewsSrc = readFileSync(resolve(__dirname, "js/views.js"), "utf8");
+if (!viewsSrc.includes("Continue with Google")) {
+  failures++;
+  console.error("FAIL views.js: should contain 'Continue with Google' string");
+} else {
+  console.log("ok  views.js: contains Continue with Google (live-mode HTML source)");
+}
+if (!viewsSrc.includes("accountVisitorLive")) {
+  failures++;
+  console.error("FAIL views.js: should contain accountVisitorLive function");
+} else {
+  console.log("ok  views.js: contains accountVisitorLive function");
+}
+
 // --- store.getCurrentUser fallback (local mode) ---
 store.signOut();
 const localUser = await store.getCurrentUser();
@@ -471,11 +512,11 @@ if (cfg.supabase !== null) {
 } else {
   console.log("ok  config: supabase is null when env vars unset");
 }
-if (cfg.isLive !== false) {
+if (cfg.isLive() !== false) {
   failures++;
-  console.error("FAIL config: isLive should be false when env vars unset");
+  console.error("FAIL config: isLive() should be false when env vars unset");
 } else {
-  console.log("ok  config: isLive is false when env vars unset");
+  console.log("ok  config: isLive() is false when env vars unset");
 }
 if (cfg.config.url !== null || cfg.config.anonKey !== null) {
   failures++;

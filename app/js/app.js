@@ -190,6 +190,10 @@ document.addEventListener("click", (e) => {
       render();
       break;
 
+    case "sign-in-google":
+      store.signInWithGoogle().catch((err) => toast(err.message || "Sign-in failed"));
+      break;
+
     case "reset-demo":
       if (confirm("Reset all demo data? Bookings, applications and edits will be cleared.")) {
         store.resetDemo();

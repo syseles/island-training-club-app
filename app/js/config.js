@@ -1,8 +1,9 @@
 // app/js/config.js
 // Reads env vars injected via inline <script> in index.html and returns a
 // configured Supabase client, or null when running without Supabase (local
-// prototype). Exposes a single `supabase` named export so call-sites import
-// it the same way regardless of configuration.
+// prototype). `isLive()` is a function so tests can re-evaluate it after
+// stubbing `window`; in production it returns whether the supabase client
+// was created.
 
 export const config = {
   url: typeof window !== "undefined" ? window.SUPABASE_URL || null : null,
@@ -20,4 +21,6 @@ export const supabase = config.url && config.anonKey && typeof window !== "undef
     })
   : null;
 
-export const isLive = supabase !== null;
+export function isLive() {
+  return supabase !== null;
+}

@@ -6,6 +6,7 @@
 // ==========================================================================
 
 import * as store from "./store.js";
+import { isLive } from "./config.js";
 import {
   LEADERS,
   CULTURE,
@@ -550,6 +551,22 @@ export function viewAccount(section) {
 }
 
 function accountVisitor() {
+  if (isLive()) return accountVisitorLive();
+  return accountVisitorLocal();
+}
+
+function accountVisitorLive() {
+  return `
+    <div class="kicker">Account</div>
+    <h1 class="display">Sign in</h1>
+    <p class="subcopy mt8">Use your Google account to sign in to Island Training Club. New here? You'll be guided through a short application after sign-in.</p>
+    <div class="card mt24"><div class="card-body">
+      <button class="btn mt16" type="button" data-action="sign-in-google">Continue with Google</button>
+      <p class="muted small mt16">By continuing, you agree to be added to the ITC community roster. An ITC leader will review your application before you can book sessions.</p>
+    </div></div>`;
+}
+
+function accountVisitorLocal() {
   return `
     <div class="kicker">Account</div>
     <h1 class="display">Join the club.</h1>
