@@ -5,6 +5,7 @@
 import * as store from "./store.js";
 import { buildICS, findSession, todayLocal, mondayOf, addDays, isoDate, donorIdProblem } from "./data.js";
 import * as views from "./views.js";
+import { supabase, isLive } from "./config.js";
 
 const viewEl = document.getElementById("view");
 const navEl = document.getElementById("bottom-nav");
@@ -47,7 +48,6 @@ let prevPage = null;
 
 // Live-mode auth listener: when Supabase completes sign-in, route the
 // pending user to /apply (if they have not yet submitted an application).
-import { supabase, isLive } from "./config.js";
 if (isLive() && supabase) {
   supabase.auth.onAuthStateChange((event) => {
     if (event === "SIGNED_IN") maybeRedirectToApply();
@@ -180,7 +180,7 @@ function downloadICS(session) {
 
 // --- Click delegation -----------------------------------------------------------------
 
-document.addEventListener("click", (e) => {
+document.addEventListener("click", async (e) => {
   const el = e.target.closest("[data-action]");
   if (!el) return;
   const { action } = el.dataset;
