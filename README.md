@@ -6,6 +6,12 @@ The current status is pre-production.
 
 No production application has been built yet. The `app/` directory contains a clickable working prototype for refining flows, copy, and visuals — it is not the production implementation, and the production architecture decision remains open.
 
+## Live deployment
+
+This prototype has a live Supabase-backed auth + admin panel + approval
+workflow on the `feature/auth-identity` branch. To deploy, see
+[`docs/runbooks/live-auth.md`](docs/runbooks/live-auth.md).
+
 ## Working Prototype
 
 The prototype implements the selected "Night Circuit" direction and the confirmed product rules from the phase-one brief:

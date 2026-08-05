@@ -8,8 +8,6 @@
 import {
   SEED_ACTIVITIES,
   SEED_USERS,
-  seedBookings,
-  seedReceipts,
   seedDonations,
   GIVING_CAMPAIGN,
   sessionsInRange,
@@ -22,20 +20,38 @@ import {
   normalizeDonorId,
   donorIdProblem,
 } from "./data.js";
+import { supabase, isLive } from "./config.js";
 
 const STORAGE_KEY = "itc.prototype.v1";
-const STATE_VERSION = 8;
+const STATE_VERSION = 10;
+
+// Live-mode (Supabase) session cache. Avoids hammering the DB on every
+// page load. The TTL is short so role flips and welcome notifications
+// surface promptly after the admin takes an action.
+let liveProfile = null;
+let liveUser = null;
+let liveProfileFetchedAt = 0;
+const LIVE_PROFILE_TTL_MS = 30_000;
 
 let state = null;
+
+function backfillProfilePreferences(user) {
+  if (user.isMinor === undefined) user.isMinor = false;
+  if (user.privacyAcceptedAt === undefined) user.privacyAcceptedAt = user.appliedAt || null;
+  if (user.whatsappReminders === undefined) user.whatsappReminders = false;
+  if (user.emailReceipts === undefined) user.emailReceipts = false;
+  if (user.communityNews === undefined) user.communityNews = false;
+  return user;
+}
 
 function freshState() {
   return {
     version: STATE_VERSION,
     sessionUserId: null,
     activities: structuredClone(SEED_ACTIVITIES),
-    users: structuredClone(SEED_USERS),
-    bookings: seedBookings(),
-    receipts: seedReceipts(),
+    users: structuredClone(SEED_USERS).map(backfillProfilePreferences),
+    bookings: [],
+    receipts: [],
     receiptCounter: 49,
     donations: seedDonations(),
     prayers: [],
@@ -71,15 +87,6 @@ function migrate() {
         structuredClone(a)
       )
     );
-    // Seed-owned bookings/receipts are replaced outright: their snapshots
-    // describe the old session. User-created records are left untouched.
-    for (const [key, seeded] of [
-      ["bookings", seedBookings()],
-      ["receipts", seedReceipts()],
-    ]) {
-      const ids = new Set(seeded.map((r) => r.id));
-      state[key] = [...state[key].filter((r) => !ids.has(r.id)), ...seeded];
-    }
   }
   if (v < 3) {
     // v3: Run Club moved to Mon 7:30 PM with venue TBC; Water Sports Evening
@@ -171,6 +178,20 @@ function migrate() {
     // v8: prayer requests (Community > Prayers) are stored locally.
     if (!Array.isArray(state.prayers)) state.prayers = [];
   }
+  if (v < 9) state.users.forEach(backfillProfilePreferences);
+  if (v < 10) {
+    // v10: HYROX demo attendance cleanup — the club no longer simulates
+    // demand. Strip the seeded baseBooked counters and remove the old
+    // seed-owned bookings/receipts so "Who's coming" and spots left reflect
+    // real sign-ups only. User-created records are untouched.
+    for (const a of state.activities) {
+      if (a.id === "hyrox" || a.id === "hyrox-midtown") delete a.baseBooked;
+    }
+    const seedBookingIds = new Set(["b-seed-past", "b-seed-next"]);
+    const seedReceiptIds = new Set(["r-seed-past", "r-seed-next"]);
+    state.bookings = state.bookings.filter((b) => !seedBookingIds.has(b.id));
+    state.receipts = state.receipts.filter((r) => !seedReceiptIds.has(r.id));
+  }
   state.version = STATE_VERSION;
 }
 
@@ -186,6 +207,7 @@ export function resetDemo() {
 // --- Session / auth ----------------------------------------------------------
 
 export function currentUser() {
+  if (isLive()) return liveUser;
   if (!state.sessionUserId) return null;
   return state.users.find((u) => u.id === state.sessionUserId) ?? null;
 }
@@ -214,8 +236,333 @@ export function demoSignIn(role) {
 }
 
 export function signOut() {
+  liveProfile = null;
+  liveUser = null;
+  liveProfileFetchedAt = 0;
   state.sessionUserId = null;
   save();
+}
+
+// --- Live (Supabase) auth helpers --------------------------------------------
+
+export async function getCurrentUser() {
+  if (!isLive() || !supabase) return currentUser();
+  const { data: sessData, error: sessErr } = await supabase.auth.getSession();
+  if (sessErr || !sessData.session) {
+    liveUser = null;
+    return null;
+  }
+  const authUser = sessData.session.user;
+  if (!liveProfile || Date.now() - liveProfileFetchedAt > LIVE_PROFILE_TTL_MS) {
+    const { data: prof, error: profErr } = await supabase
+      .from("profiles")
+      .select("*")
+      .eq("id", authUser.id)
+      .maybeSingle();
+    if (profErr) {
+      // Never fail silently — a broken profile read renders a signed-in
+      // user as a visitor with no clue why (cf. the 42P17 RLS recursion).
+      console.error("profiles fetch failed", profErr);
+      return null;
+    }
+    liveProfile = prof || {
+      id: authUser.id,
+      email: authUser.email,
+      full_name: authUser.user_metadata?.full_name || null,
+      avatar_url: authUser.user_metadata?.avatar_url || null,
+      role: "pending",
+    };
+    liveProfileFetchedAt = Date.now();
+  }
+  const fullName = liveProfile.full_name || liveProfile.email || "ITC Member";
+  liveUser = {
+    id: liveProfile.id,
+    email: liveProfile.email,
+    fullName,
+    preferredName: fullName.split(" ")[0],
+    avatarUrl: liveProfile.avatar_url,
+    appliedAt: liveProfile.created_at,
+    role: liveProfile.role,
+    status: liveProfile.role === "pending" ? "pending" : "approved",
+    profile: liveProfile,
+  };
+  return liveUser;
+}
+
+export async function signInWithGoogle() {
+  if (!isLive || !supabase) {
+    throw new Error("signInWithGoogle requires SUPABASE_URL and SUPABASE_ANON_KEY");
+  }
+  const { error } = await supabase.auth.signInWithOAuth({
+    provider: "google",
+    options: { redirectTo: `${window.location.origin}/app/` },
+  });
+  if (error) throw error;
+}
+
+export async function signOutLive() {
+  if (!isLive() || !supabase) return signOut();
+  liveProfile = null;
+  liveUser = null;
+  liveProfileFetchedAt = 0;
+  const { error } = await supabase.auth.signOut();
+  if (error) throw error;
+}
+
+// --- Admin: user/role management (Supabase) --------------------------------
+
+export async function listProfiles() {
+  if (!isLive() || !supabase) return allUsers();
+  const { data, error } = await supabase
+    .from("profiles")
+    .select("*")
+    .order("created_at", { ascending: true });
+  if (error) throw error;
+  return data || [];
+}
+
+export async function listRoleChanges() {
+  if (!isLive() || !supabase) return [];
+  const { data, error } = await supabase
+    .from("role_changes")
+    .select("*, changed_by_profile:changed_by(email, full_name)")
+    .order("created_at", { ascending: false });
+  if (error) throw error;
+  return data || [];
+}
+
+export async function updateProfileRole(profileId, newRole, reason) {
+  if (!isLive() || !supabase) {
+    setRole(profileId, newRole);
+    return;
+  }
+  const { error } = await supabase
+    .from("profiles")
+    .update({ role: newRole })
+    .eq("id", profileId);
+  if (error) throw error;
+  // The DB trigger writes role_changes + welcome notification automatically.
+  // Persisting `reason` to role_changes.reason requires a small Postgres
+  // RPC that sets a session-local config; deferred. ⏳
+  if (reason) console.info("role update reason:", reason);
+}
+
+// --- Applicant: application form (B; Supabase) ------------------------------
+
+function localApplication(user) {
+  return {
+    profile_id: user.id,
+    mobile: user.phone || "",
+    is_minor: !!user.isMinor,
+    guardian_name: user.guardianName || null,
+    guardian_phone: user.guardianPhone || null,
+    emergency_name: user.emergencyName || "",
+    emergency_phone: user.emergencyPhone || "",
+    heard_source: user.heard || "other",
+    heard_detail: user.heardDetail || null,
+    preferred_name: user.preferredName || null,
+    photo_consent: !!user.mediaConsent,
+    waiver_accepted_at: user.indemnityAcceptedAt || null,
+    privacy_accepted_at: user.privacyAcceptedAt || null,
+    guidelines_accepted_at: user.guidelinesAcceptedAt || user.appliedAt || null,
+    submitted_at: user.appliedAt || null,
+    whatsapp_reminders: !!user.whatsappReminders,
+    email_receipts: !!user.emailReceipts,
+    community_news: !!user.communityNews,
+  };
+}
+
+function membershipPatch(form) {
+  const isMinor = parseAgeOver18(form.age_over_18);
+  const guardian = guardianFields(isMinor, form.guardian_name, form.guardian_phone);
+  const patch = {
+    mobile: String(form.mobile || "").trim(),
+    is_minor: isMinor,
+    date_of_birth: null,
+    guardian_name: guardian.name,
+    guardian_phone: guardian.phone,
+    emergency_name: String(form.emergency_name || "").trim(),
+    emergency_phone: String(form.emergency_phone || "").trim(),
+    heard_source: String(form.heard_source || "").trim(),
+    heard_detail: String(form.heard_detail || "").trim() || null,
+    preferred_name: String(form.preferred_name || "").trim() || null,
+  };
+  if (!patch.mobile) throw new Error("Enter mobile number");
+  if (!patch.emergency_name || !patch.emergency_phone) {
+    throw new Error("Enter emergency contact name and phone");
+  }
+  if (!patch.heard_source) throw new Error("Choose how you heard about ITC");
+  return patch;
+}
+
+function privacyPatch(form) {
+  return {
+    photo_consent: !!form.photo_consent,
+    whatsapp_reminders: !!form.whatsapp_reminders,
+    email_receipts: !!form.email_receipts,
+    community_news: !!form.community_news,
+  };
+}
+
+export async function getMyApplication() {
+  if (!isLive() || !supabase) {
+    const user = currentUser();
+    return user ? localApplication(user) : null;
+  }
+  const cu = await getCurrentUser();
+  if (!cu) return null;
+  const { data, error } = await supabase
+    .from("applications")
+    .select("*")
+    .eq("profile_id", cu.id)
+    .maybeSingle();
+  if (error) throw error;
+  return data;
+}
+
+export async function saveMyApplication(form) {
+  if (!isLive() || !supabase) {
+    throw new Error("saveMyApplication requires live mode");
+  }
+  const cu = await getCurrentUser();
+  if (!cu) throw new Error("Not signed in");
+  const isMinor = parseAgeOver18(form.age_over_18);
+  const guardian = guardianFields(isMinor, form.guardian_name, form.guardian_phone);
+  const row = {
+    profile_id: cu.id,
+    mobile: form.mobile,
+    date_of_birth: null,
+    is_minor: isMinor,
+    guardian_name: guardian.name,
+    guardian_phone: guardian.phone,
+    emergency_name: form.emergency_name,
+    emergency_phone: form.emergency_phone,
+    heard_source: form.heard_source,
+    heard_detail: form.heard_detail || null,
+    preferred_name: form.preferred_name || null,
+    photo_consent: !!form.photo_consent,
+    waiver_accepted_at: new Date().toISOString(),
+    privacy_accepted_at: new Date().toISOString(),
+    guidelines_accepted_at: new Date().toISOString(),
+  };
+  const { error } = await supabase.from("applications").upsert(row);
+  if (error) throw error;
+}
+
+export async function updateMyMembershipDetails(form) {
+  const patch = membershipPatch(form);
+  if (!isLive() || !supabase) {
+    const user = currentUser();
+    if (!user) throw new Error("Not signed in");
+    user.phone = patch.mobile;
+    user.isMinor = patch.is_minor;
+    user.guardianName = patch.guardian_name;
+    user.guardianPhone = patch.guardian_phone;
+    user.emergencyName = patch.emergency_name;
+    user.emergencyPhone = patch.emergency_phone;
+    user.heard = patch.heard_source;
+    user.heardDetail = patch.heard_detail;
+    user.preferredName = patch.preferred_name;
+    save();
+    return localApplication(user);
+  }
+  const cu = await getCurrentUser();
+  if (!cu) throw new Error("Not signed in");
+  const { data, error } = await supabase
+    .from("applications")
+    .update(patch)
+    .eq("profile_id", cu.id)
+    .select()
+    .single();
+  if (error) throw error;
+  return data;
+}
+
+export async function updateMyPrivacyPreferences(form) {
+  const patch = privacyPatch(form);
+  if (!isLive() || !supabase) {
+    const user = currentUser();
+    if (!user) throw new Error("Not signed in");
+    user.mediaConsent = patch.photo_consent;
+    user.whatsappReminders = patch.whatsapp_reminders;
+    user.emailReceipts = patch.email_receipts;
+    user.communityNews = patch.community_news;
+    save();
+    return localApplication(user);
+  }
+  const cu = await getCurrentUser();
+  if (!cu) throw new Error("Not signed in");
+  const { data, error } = await supabase
+    .from("applications")
+    .update(patch)
+    .eq("profile_id", cu.id)
+    .select()
+    .single();
+  if (error) throw error;
+  return data;
+}
+
+export async function acceptMyIndemnity() {
+  if (!isLive() || !supabase) {
+    const user = currentUser();
+    if (!user) throw new Error("Not signed in");
+    if (!user.indemnityAcceptedAt) {
+      user.indemnityAcceptedAt = Date.now();
+      save();
+    }
+    return user.indemnityAcceptedAt;
+  }
+  const cu = await getCurrentUser();
+  if (!cu) throw new Error("Not signed in");
+  const app = await getMyApplication();
+  if (!app) throw new Error("Application not found");
+  if (app.waiver_accepted_at) return app.waiver_accepted_at;
+  const waiver_accepted_at = new Date().toISOString();
+  const { data, error } = await supabase
+    .from("applications")
+    .update({ waiver_accepted_at })
+    .eq("profile_id", cu.id)
+    .select()
+    .single();
+  if (error) throw error;
+  return data.waiver_accepted_at;
+}
+
+function parseAgeOver18(value) {
+  if (value === "yes") return false;
+  if (value === "no") return true;
+  throw new Error("Choose whether you are 18 or over");
+}
+
+function guardianFields(isMinor, name, phone) {
+  if (!isMinor) return { name: null, phone: null };
+  const guardianName = String(name || "").trim();
+  const guardianPhone = String(phone || "").trim();
+  if (!guardianName || !guardianPhone) {
+    throw new Error("Enter guardian name and phone");
+  }
+  return { name: guardianName, phone: guardianPhone };
+}
+
+// --- Notifications (B; Supabase) -----------------------------------------------
+
+export async function listMyNotifications() {
+  if (!isLive() || !supabase) return [];
+  const { data, error } = await supabase
+    .from("notifications")
+    .select("*")
+    .order("created_at", { ascending: false });
+  if (error) throw error;
+  return data || [];
+}
+
+export async function markNotificationRead(id) {
+  if (!isLive() || !supabase) return;
+  const { error } = await supabase
+    .from("notifications")
+    .update({ read_at: new Date().toISOString() })
+    .eq("id", id);
+  if (error) throw error;
 }
 
 // --- Signup / approval ---------------------------------------------------------
@@ -225,6 +572,8 @@ export function applyForMembership(form) {
   if (state.users.some((u) => u.email.toLowerCase() === email)) {
     return { ok: false, reason: "duplicate" };
   }
+  const isMinor = parseAgeOver18(form.ageOver18);
+  const guardian = guardianFields(isMinor, form.guardianName, form.guardianPhone);
   const user = {
     id: uid("u"),
     role: "pending",
@@ -233,7 +582,6 @@ export function applyForMembership(form) {
     preferredName: form.preferredName.trim(),
     email,
     phone: form.phone.trim(),
-    ageConfirmed: !!form.ageConfirmed,
     emergencyName: form.emergencyName.trim(),
     emergencyPhone: form.emergencyPhone.trim(),
     heard: form.heard.trim(),
@@ -242,12 +590,43 @@ export function applyForMembership(form) {
     // Joining requires accepting the health & liability indemnity; the
     // timestamp is the member's acceptance record (Profile > Indemnity).
     indemnityAcceptedAt: form.indemnity ? Date.now() : null,
+    isMinor,
+    guardianName: guardian.name,
+    guardianPhone: guardian.phone,
+    privacyAcceptedAt: Date.now(),
+    whatsappReminders: false,
+    emailReceipts: false,
+    communityNews: false,
     appliedAt: Date.now(),
   };
   state.users.push(user);
   state.sessionUserId = user.id; // applicant keeps public-level access while pending
   save();
   return { ok: true, user };
+}
+
+// Live: pending applications joined with their profiles, mapped to the
+// shape the admin approvals cards render. Local: the seed applicants.
+export async function listPendingApplications() {
+  if (!isLive() || !supabase) return pendingApplicants();
+  const { data, error } = await supabase
+    .from("applications")
+    .select("*, profiles!inner(id, email, full_name, role)")
+    .eq("profiles.role", "pending");
+  if (error) throw error;
+  return (data || []).map((a) => ({
+    id: a.profiles.id,
+    fullName: a.profiles.full_name || a.profiles.email,
+    email: a.profiles.email,
+    phone: a.mobile,
+    emergencyName: a.emergency_name,
+    emergencyPhone: a.emergency_phone,
+    heard: a.heard_source,
+    appliedAt: a.submitted_at,
+    isMinor: !!a.is_minor,
+    indemnityAcceptedAt: a.waiver_accepted_at,
+    mediaConsent: a.photo_consent,
+  }));
 }
 
 export function pendingApplicants() {
@@ -349,13 +728,9 @@ export function spotsLeft(session) {
 }
 
 export function attendeesFor(session) {
-  // Simulated member list: seed bookings plus any local bookings.
-  const pool = [
-    "Jason M.", "Natalie C.", "Marco S.", "Jenny W.", "Kelvin T.",
-    "Chris P.", "Wing L.", "Sam H.", "Rachel N.", "Tom Y.",
-    "Grace F.", "Ben K.", "Michelle O.", "Alex Z.",
-  ];
-  const names = pool.slice(0, Math.min(session.baseBooked || 0, pool.length));
+  // Real bookings only — no simulated strangers. The list must reflect who
+  // actually signed up.
+  const names = [];
   for (const b of activeBookingsForSession(session.id)) {
     const u = state.users.find((x) => x.id === b.userId);
     if (u) names.unshift(`${u.preferredName || u.fullName} ${u.fullName.split(" ").pop()[0]}.`);

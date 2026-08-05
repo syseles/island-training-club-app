@@ -2,9 +2,14 @@
 *.log
 .env
 .env.*
+!.env.example
 node_modules/
 dist/
 .vercel/
 
 # Claude Code local settings
 .claude/
+
+
+# Pi package clones (project-local installs)
+.pi/git/
