@@ -264,6 +264,7 @@ export async function getCurrentUser() {
     fullName,
     preferredName: fullName.split(" ")[0],
     avatarUrl: liveProfile.avatar_url,
+    appliedAt: liveProfile.created_at,
     role: liveProfile.role,
     status: liveProfile.role === "pending" ? "pending" : "approved",
     profile: liveProfile,

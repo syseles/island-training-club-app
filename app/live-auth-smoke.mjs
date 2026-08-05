@@ -21,7 +21,7 @@ const profile = {
   email: authUser.email,
   full_name: "Riley Runner",
   avatar_url: authUser.user_metadata.avatar_url,
-  role: "member",
+  role: "super_admin",
   created_at: "2026-08-05T00:00:00.000Z",
   updated_at: "2026-08-05T00:00:00.000Z",
 };
@@ -85,4 +85,16 @@ if (home.includes("Continue with Google")) {
   throw new Error("Home still asked the signed-in Google user to sign in");
 }
 
+const account = views.viewAccount();
+if (!account.includes("Super admin")) {
+  throw new Error("Account did not display the live super-admin role");
+}
+if (!account.includes("Member since Aug 2026")) {
+  throw new Error("Account did not map the live profile creation date");
+}
+if (account.includes("undefined") || account.includes("Invalid Date")) {
+  throw new Error("Account displayed an undefined role or invalid membership date");
+}
+
 console.log("ok  live OAuth session renders the signed-in home page");
+console.log("ok  live profile renders valid account metadata");

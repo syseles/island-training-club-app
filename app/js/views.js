@@ -671,6 +671,7 @@ function accountMember(user) {
     member: "Active member",
     admin: "Admin",
     superadmin: "Super admin",
+    super_admin: "Super admin",
   }[user.role];
 
   const bookings = store.bookingsForUser(user.id).filter((b) => b.status !== "cancelled");
