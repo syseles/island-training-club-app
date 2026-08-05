@@ -227,7 +227,7 @@ export function viewHome() {
     <div class="kicker">${esc(fmtDateLong(todayLocal()))} · Hong Kong</div>
     <h1 class="display">${name ? `Good to see you, ${name}.` : "Train together."}</h1>
     ${user && user.status === "pending" ? pendingBanner() : ""}
-    ${encouragement}
+    ${user ? encouragement : ""}
     ${guest}
     ${weekSection}
     <div class="section-head"><h2>The Club</h2><a href="#/community">More →</a></div>
@@ -566,20 +566,25 @@ function communityAnnouncements() {
     <p class="muted small mt16">Draft announcements — real posts come from ITC leadership and IECC comms.</p>`;
 }
 
-export function viewAccount(section) {
+export async function viewAccount(section, editMode) {
   const user = store.currentUser();
   if (!user) return accountVisitor();
   if (user.status === "pending") return accountPending(user);
   if (user.status === "declined") return accountDeclined(user);
+
+  const needsApplication = section === undefined || section === "details" || section === "indemnity";
+  const application = needsApplication ? await store.getMyApplication() : null;
+  if (isLive() && needsApplication && !application) return { redirect: "#/apply" };
+
   switch (section) {
     case undefined:
-      return accountMember(user);
+      return accountMember(user, application);
     case "details":
       // Live members edit their application details here (async view);
       // local demo accounts keep the read-only page.
-      return isLive() ? viewAccountDetailsLive() : accountDetails(user);
+      return isLive() ? viewAccountDetailsLive(application, editMode) : accountDetails(user);
     case "indemnity":
-      return accountIndemnity(user);
+      return accountIndemnity(user, application);
     case "donor":
       return accountDonor(user);
     case "payments":
@@ -676,8 +681,9 @@ function accountDeclined(user) {
     </div>`;
 }
 
-function accountMember(user) {
+function accountMember(user, application) {
   const isAdmin = isAdminRole(user.role);
+  const indemnityAt = application?.waiver_accepted_at || user.indemnityAcceptedAt;
 
   const roleLabel = {
     member: "Active member",
@@ -714,8 +720,8 @@ function accountMember(user) {
         "#/account/indemnity",
         ICONS.check,
         "Indemnity",
-        user.indemnityAcceptedAt ? `Indemnity confirmed on ${fmtDay(user.indemnityAcceptedAt)}` : "To be accepted",
-        { cls: user.indemnityAcceptedAt ? "ok" : "todo" }
+        indemnityAt ? `Indemnity confirmed on ${fmtDay(indemnityAt)}` : "To be accepted",
+        { cls: indemnityAt ? "ok" : "todo" }
       )}
       ${profileRow("#/account/donor", ICONS.heart, "Donor Profile", "Donor ID and e-receipt details")}
       ${profileRow("#/account/payments", ICONS.dollar, "Payments & Receipts", "Bookings, donations and orders")}
@@ -781,8 +787,8 @@ function linkCard(href, title, status, { sub = "", cls = "" } = {}) {
 // Draft indemnity wording — final text to be confirmed with ITC leadership
 // before launch. The apply form captures acceptance at join time; this page
 // catches members who joined before that requirement existed.
-function accountIndemnity(user) {
-  const at = user.indemnityAcceptedAt;
+function accountIndemnity(user, application) {
+  const at = application?.waiver_accepted_at || user.indemnityAcceptedAt;
   return `
     <a class="back-link" href="#/account">← Profile</a>
     <div class="kicker mt16">Profile · Indemnity</div>
@@ -1007,10 +1013,7 @@ function applySelect(name, label, options, required, value = "") {
 
 // Live "Membership Details": the application form, prefilled from the
 // member's submitted application, reusing data-form="apply" (upsert).
-async function viewAccountDetailsLive() {
-  const cu = await store.getCurrentUser();
-  if (!cu) return { redirect: "#/account" };
-  const app = await store.getMyApplication();
+function viewAccountDetailsLive(app) {
   return `
     <a class="back-link" href="#/account">← Profile</a>
     <div class="kicker mt16">Profile · Membership Details</div>

@@ -481,9 +481,13 @@ document.addEventListener("submit", async (e) => {
       if (!form.reportValidity()) return;
       const user = store.currentUser();
       if (!user) return;
-      store.acceptIndemnity(user.id);
-      toast("Indemnity accepted & confirmed");
-      render();
+      try {
+        await store.acceptMyIndemnity();
+        toast("Indemnity accepted and confirmed");
+        await render();
+      } catch (err) {
+        toast(err.message || "Unable to confirm indemnity", true);
+      }
       break;
     }
 

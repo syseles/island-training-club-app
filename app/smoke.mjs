@@ -125,9 +125,9 @@ const views = await import("./js/views.js");
 const data = await import("./js/data.js");
 
 let failures = 0;
-function check(label, fn) {
+async function check(label, fn) {
   try {
-    const out = fn();
+    const out = await fn();
     if (out && typeof out === "object" && out.redirect) {
       console.log(`ok(redirect) ${label} -> ${out.redirect}`);
       return out;
@@ -148,7 +148,7 @@ store.load();
 
 // --- Visitor state ---
 store.signOut();
-check("home (visitor)", () => views.viewHome());
+await check("home (visitor)", () => views.viewHome());
 const homeVisitor = views.viewHome();
 if (homeVisitor.includes("My Week")) {
   failures++;
@@ -166,11 +166,15 @@ if (!homeVisitor.includes('href="#/account"')) {
   failures++;
   console.error("FAIL visitor home missing its #/account CTA");
 } else console.log("ok  visitor home CTA points to #/account");
+if (homeVisitor.includes("Encouragement of the week")) {
+  failures++;
+  console.error('FAIL visitor home must not show "Encouragement of the week"');
+} else console.log('ok  visitor home hides "Encouragement of the week"');
 if (homeVisitor.includes("Book & pay")) {
   failures++;
   console.error("FAIL visitor home preview must not contain paid booking language");
 } else console.log("ok  visitor home preview has no paid booking language");
-check("schedule", () => views.viewSchedule());
+await check("schedule", () => views.viewSchedule());
 const hyroxSid = store.nextSession().kind === "paid" ? store.nextSession().id : null;
 const allUpcoming = store.upcomingSessions(14);
 // booking tests need a session that hasn't started yet — today's sessions
@@ -178,9 +182,9 @@ const allUpcoming = store.upcomingSessions(14);
 const paid = allUpcoming.find((s) => s.kind === "paid" && !data.sessionStarted(s));
 const free = allUpcoming.find((s) => s.kind === "free");
 if (!paid || !free) throw new Error("expected both paid and free sessions in window");
-check("activity paid (visitor)", () => views.viewActivity(paid.id));
-check("activity free (visitor)", () => views.viewActivity(free.id));
-check("community", () => views.viewCommunity());
+await check("activity paid (visitor)", () => views.viewActivity(paid.id));
+await check("activity free (visitor)", () => views.viewActivity(free.id));
+await check("community", () => views.viewCommunity());
 const commHtml = views.viewCommunity();
 let commOk = true;
 for (const link of [
@@ -205,11 +209,11 @@ if (commHtml.includes("Arnold Wong") || commHtml.includes("Our foundation")) {
   failures++;
   console.error("FAIL leaders/culture should live behind the About card");
 } else console.log("ok  leaders & culture live behind the About card");
-check("community > prayers", () => views.viewCommunity("prayers"));
-check("community > fellowship", () => views.viewCommunity("fellowship"));
-check("community > meals", () => views.viewCommunity("meals"));
-check("community > announcements", () => views.viewCommunity("announcements"));
-check("community > about", () => views.viewCommunity("about"));
+await check("community > prayers", () => views.viewCommunity("prayers"));
+await check("community > fellowship", () => views.viewCommunity("fellowship"));
+await check("community > meals", () => views.viewCommunity("meals"));
+await check("community > announcements", () => views.viewCommunity("announcements"));
+await check("community > about", () => views.viewCommunity("about"));
 const commAbout = views.viewCommunity("about");
 if (!commAbout.includes("Arnold Wong") || !commAbout.includes("Our foundation")) {
   failures++;
@@ -236,8 +240,8 @@ if (!views.viewCommunity("nope").includes("Page not found")) {
   failures++;
   console.error("FAIL unknown Community section should 404");
 } else console.log("ok  unknown Community section 404s");
-check("account (visitor)", () => views.viewAccount());
-check("apply", () => views.viewApply());
+await check("account (visitor)", () => views.viewAccount());
+await check("apply", () => views.viewApply());
 const localApplyHtml = views.viewApply();
 if (!localApplyHtml.includes('name="donorId"')) {
   failures++;
@@ -255,10 +259,10 @@ if (!localApplyHtml.includes("data-minor-only")) {
   failures++;
   console.error("FAIL application guardian fields should be marked minor-only");
 } else console.log("ok  application guardian fields are marked minor-only");
-check("checkout (visitor) -> redirect", () => views.viewCheckout(paid.id));
+await check("checkout (visitor) -> redirect", () => views.viewCheckout(paid.id));
 const adminVisitorOut = await views.viewAdmin("approvals");
-check("admin (visitor) -> redirect", () => adminVisitorOut);
-check("notfound", () => views.viewNotFound());
+await check("admin (visitor) -> redirect", () => adminVisitorOut);
+await check("notfound", () => views.viewNotFound());
 
 // free activity must never show booking/capacity language
 const freeHtml = views.viewActivity(free.id);
@@ -350,6 +354,10 @@ if (!pendingHome.includes(free.name)) {
   failures++;
   console.error("FAIL pending home should list free sessions");
 } else console.log("ok  pending home lists free sessions");
+if (!pendingHome.includes("Encouragement of the week")) {
+  failures++;
+  console.error('FAIL pending home should show "Encouragement of the week"');
+} else console.log('ok  pending home shows "Encouragement of the week"');
 
 // donor ID format: last name, hyphen, then 4 or 5 digits (CHUI-08879 / CHUI-8879);
 // dash variants and spaces as the separator normalize to a plain hyphen
@@ -374,7 +382,7 @@ for (const [input, expect] of [
   }
 }
 console.log("ok  donor ID format validation");
-check("account (pending)", () => views.viewAccount());
+await check("account (pending)", () => views.viewAccount());
 const pendHtml = views.viewActivity(paid.id);
 if (!pendHtml.includes("Booking locked")) {
   failures++;
@@ -384,13 +392,13 @@ if (!pendHtml.includes("Booking locked")) {
 // --- Admin approval flow ---
 store.demoSignIn("admin");
 const adminApprovalsOut = await views.viewAdmin("approvals");
-check("admin approvals", () => adminApprovalsOut);
+await check("admin approvals", () => adminApprovalsOut);
 const adminActivitiesOut = await views.viewAdmin("activities");
-check("admin activities", () => adminActivitiesOut);
+await check("admin activities", () => adminActivitiesOut);
 const adminMembersOut = await views.viewAdmin("members");
-check("admin members", () => adminMembersOut);
-check("admin activity edit", () => views.viewAdminActivity("hyrox"));
-check("admin activity new", () => views.viewAdminActivity("new"));
+await check("admin members", () => adminMembersOut);
+await check("admin activity edit", () => views.viewAdminActivity("hyrox"));
+await check("admin activity new", () => views.viewAdminActivity("new"));
 const newApplicant = store.pendingApplicants().find((u) => u.email === "test@example.com");
 store.approveApplicant(newApplicant.id);
 console.log("ok  admin approved new applicant");
@@ -398,11 +406,11 @@ console.log("ok  admin approved new applicant");
 // --- Member booking + payment flow ---
 const signIn = store.signIn("test@example.com");
 if (!signIn.ok || signIn.user.status !== "approved") throw new Error("approval did not take effect");
-check("account (new member)", () => views.viewAccount());
+await check("account (new member)", () => views.viewAccount());
 
 // Profile sections are tappable rows that open sub-pages; row faces carry
 // a one-line description, not live details
-const newMemberAcct = views.viewAccount();
+const newMemberAcct = await views.viewAccount();
 let cardsOk = true;
 for (const link of [
   "#/account/details",
@@ -436,12 +444,12 @@ for (const sub of [
   }
 }
 console.log("ok  Profile rows show descriptive subtexts");
-check("profile > details", () => views.viewAccount("details"));
-check("profile > indemnity", () => views.viewAccount("indemnity"));
-check("profile > donor", () => views.viewAccount("donor"));
-check("profile > payments", () => views.viewAccount("payments"));
-check("profile > privacy", () => views.viewAccount("privacy"));
-check("profile > history", () => views.viewAccount("history"));
+await check("profile > details", () => views.viewAccount("details"));
+await check("profile > indemnity", () => views.viewAccount("indemnity"));
+await check("profile > donor", () => views.viewAccount("donor"));
+await check("profile > payments", () => views.viewAccount("payments"));
+await check("profile > privacy", () => views.viewAccount("privacy"));
+await check("profile > history", () => views.viewAccount("history"));
 
 // sub-page headings are title-cased to match the row titles
 for (const [section, title] of [
@@ -452,13 +460,13 @@ for (const [section, title] of [
   ["privacy", "Privacy &amp; Notifications."],
   ["history", "History."],
 ]) {
-  if (!views.viewAccount(section).includes(title)) {
+  if (!(await views.viewAccount(section)).includes(title)) {
     failures++;
     console.error(`FAIL profile > ${section} heading should read "${title}"`);
   }
 }
 console.log("ok  sub-page headings title-cased");
-if (!views.viewAccount("nope").includes("Page not found")) {
+if (!(await views.viewAccount("nope")).includes("Page not found")) {
   failures++;
   console.error("FAIL unknown Profile section should 404");
 } else console.log("ok  unknown Profile section 404s");
@@ -471,16 +479,16 @@ if (!newMemberAcct.includes("Indemnity confirmed on") || newMemberAcct.includes(
   console.error("FAIL Profile should show a single indemnity-confirmed-on-date line");
 } else console.log("ok  Profile shows single-line indemnity confirmation");
 store.currentUser().indemnityAcceptedAt = null;
-if (!views.viewAccount().includes("To be accepted")) {
+if (!(await views.viewAccount()).includes("To be accepted")) {
   failures++;
   console.error('FAIL unaccepted indemnity should read "To be accepted"');
 } else console.log('ok  unaccepted indemnity reads "To be accepted"');
-if (!views.viewAccount("indemnity").includes("Accept &amp; Confirm")) {
+if (!(await views.viewAccount("indemnity")).includes("Accept &amp; Confirm")) {
   failures++;
   console.error("FAIL indemnity page missing Accept & Confirm");
 } else console.log("ok  indemnity page offers Accept & Confirm");
 store.acceptIndemnity(store.currentUser().id);
-if (!views.viewAccount().includes("Indemnity confirmed on")) {
+if (!(await views.viewAccount()).includes("Indemnity confirmed on")) {
   failures++;
   console.error("FAIL acceptIndemnity did not confirm on Profile");
 } else console.log("ok  acceptIndemnity confirms on Profile");
@@ -488,15 +496,15 @@ if (!views.viewHome().includes("Nothing booked this week")) {
   failures++;
   console.error('FAIL "My week" should prompt when the member has no bookings');
 } else console.log('ok  "My week" empty state prompts to book');
-check("checkout (member)", () => views.viewCheckout(paid.id));
+await check("checkout (member)", () => views.viewCheckout(paid.id));
 const before = store.spotsLeft(paid);
 const { booking, receipt } = store.payForSession(signIn.user.id, paid, "4242");
 const after = store.spotsLeft(paid);
 if (after !== before - 1) throw new Error(`spots did not decrement (${before} -> ${after})`);
 console.log(`ok  payment decremented spots ${before} -> ${after}`);
-check("booking confirmation", () => views.viewBooking(booking.id));
-check("receipt", () => views.viewReceipt(receipt.id));
-check("activity (member, booked)", () => views.viewActivity(paid.id));
+await check("booking confirmation", () => views.viewBooking(booking.id));
+await check("receipt", () => views.viewReceipt(receipt.id));
+await check("activity (member, booked)", () => views.viewActivity(paid.id));
 
 // the booked class is badged on Home "My week" and on the Schedule row;
 // "My week" shows booked sessions only, so unbooked ones stay out
@@ -518,7 +526,7 @@ if (!views.viewSchedule().includes("Booked")) {
   failures++;
   console.error("FAIL schedule does not badge the booked session");
 } else console.log("ok  schedule badges booked session");
-if (views.viewAccount().includes(">Upcoming<")) {
+if ((await views.viewAccount()).includes(">Upcoming<")) {
   failures++;
   console.error("FAIL Profile still repeats the upcoming bookings list");
 } else console.log("ok  Profile drops redundant upcoming list");
@@ -527,11 +535,11 @@ if (views.viewAccount().includes(">Upcoming<")) {
 // it lives inside the Donor Profile sub-page, not on the card face
 store.updateDonorId(signIn.user.id, "IECC-99999");
 if (store.currentUser().donorId !== "IECC-99999") throw new Error("donor ID not saved");
-if (views.viewAccount().includes("IECC-99999")) {
+if ((await views.viewAccount()).includes("IECC-99999")) {
   failures++;
   console.error("FAIL donor ID should not appear on the Profile card face");
 } else console.log("ok  Profile card face carries no donor details");
-if (!views.viewAccount("donor").includes("IECC-99999")) {
+if (!(await views.viewAccount("donor")).includes("IECC-99999")) {
   failures++;
   console.error("FAIL donor ID missing from Donor Profile sub-page");
 } else console.log("ok  donor ID shows on Donor Profile sub-page");
@@ -557,11 +565,11 @@ if (store.receiptForBooking(booking.id).status !== "refunded") throw new Error("
 console.log("ok  cancellation refunds and frees the place");
 
 // past bookings live behind the History card, not inline on the Profile
-if (views.viewAccount().includes("booking-card")) {
+if ((await views.viewAccount()).includes("booking-card")) {
   failures++;
   console.error("FAIL Profile should not list history inline");
 } else console.log("ok  Profile keeps history behind the card");
-const histHtml = views.viewAccount("history");
+const histHtml = await views.viewAccount("history");
 if (!histHtml.includes("booking-card") || !histHtml.includes("Cancelled")) {
   failures++;
   console.error("FAIL History sub-page missing past bookings");
@@ -569,9 +577,9 @@ if (!histHtml.includes("booking-card") || !histHtml.includes("Cancelled")) {
 
 // --- Seeded member view ---
 store.demoSignIn("member");
-check("account (seeded member)", () => views.viewAccount());
-const memberAcct = views.viewAccount();
-if (!views.viewAccount("donor").includes("CHUI-08879")) {
+await check("account (seeded member)", () => views.viewAccount());
+const memberAcct = await views.viewAccount();
+if (!(await views.viewAccount("donor")).includes("CHUI-08879")) {
   failures++;
   console.error("FAIL seeded member donor ID not shown in Donor Profile");
 } else console.log("ok  seeded member donor ID shown in Donor Profile");
@@ -579,7 +587,7 @@ if (memberAcct.includes("CHUI-08879")) {
   failures++;
   console.error("FAIL donor ID should not appear on the Profile card face");
 } else console.log("ok  seeded member card faces carry no donor details");
-if (!views.viewAccount("payments").includes("ITC-2026-0048")) {
+if (!(await views.viewAccount("payments")).includes("ITC-2026-0048")) {
   failures++;
   console.error("FAIL seeded receipts missing from Payments sub-page");
 } else console.log("ok  seeded receipts show on Payments sub-page");
@@ -595,16 +603,20 @@ if (memberAcct.includes("member@itc.hk")) {
   failures++;
   console.error("FAIL email should not appear on the Profile face");
 } else console.log("ok  Profile face carries no contact details");
-if (!views.viewAccount("details").includes("member@itc.hk")) {
+if (!(await views.viewAccount("details")).includes("member@itc.hk")) {
   failures++;
   console.error("FAIL email missing from Membership Details sub-page");
 } else console.log("ok  email lives on Membership Details sub-page");
-check("home (member)", () => views.viewHome());
+await check("home (member)", () => views.viewHome());
 const memberHome = views.viewHome();
 if (!memberHome.includes("BFT Causeway Bay") || memberHome.includes("Midtown 28")) {
   failures++;
   console.error('FAIL "My week" should show only the member\'s booked 11:15 HYROX');
 } else console.log('ok  "My week" shows only the member\'s booked session');
+if (!memberHome.includes("Encouragement of the week")) {
+  failures++;
+  console.error('FAIL approved home should show "Encouragement of the week"');
+} else console.log('ok  approved home shows "Encouragement of the week"');
 
 const member = store.currentUser();
 const memberApplication = await store.getMyApplication();
@@ -986,12 +998,11 @@ if (!selfEditMigration.includes('drop policy "self update application"')) {
 } else {
   console.log("ok  migrations: self update application allowed post-approval");
 }
-const homeNow = views.viewHome();
-if (!homeNow.includes("Encouragement of the week")) {
+if (!viewsSrc.includes('${user ? encouragement : ""}')) {
   failures++;
-  console.error("FAIL home should show the weekly encouragement below the greeting");
+  console.error('FAIL views.js: home encouragement should be gated by a signed-in user');
 } else {
-  console.log("ok  home shows the weekly encouragement");
+  console.log('ok  views.js: home encouragement is gated by a signed-in user');
 }
 
 // --- every role must apply (incl. the bootstrap super admin) ---

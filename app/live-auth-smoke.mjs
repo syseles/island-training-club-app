@@ -166,6 +166,24 @@ const liveApplication = await store.getMyApplication();
 if (!liveApplication || liveApplication.waiver_accepted_at !== "2026-08-05T01:00:00.000Z") {
   throw new Error("waiver missing");
 }
+const confirmedDay = "5 Aug 2026";
+const account = await views.viewAccount();
+if (!account.includes("Super admin")) {
+  throw new Error("Account did not display the live super-admin role");
+}
+if (!account.includes("Member since Aug 2026")) {
+  throw new Error("Account did not map the live profile creation date");
+}
+if (!account.includes(`Indemnity confirmed on ${confirmedDay}`) || account.includes("To be accepted")) {
+  throw new Error("Account should reflect the live application waiver acceptance date");
+}
+if (account.includes("undefined") || account.includes("Invalid Date")) {
+  throw new Error("Account displayed an undefined role or invalid membership date");
+}
+const indemnity = await views.viewAccount("indemnity");
+if (!indemnity.includes(`Indemnity confirmed on ${confirmedDay}`) || indemnity.includes("To be accepted")) {
+  throw new Error("Indemnity page should reflect the live application waiver acceptance date");
+}
 await store.updateMyMembershipDetails({
   mobile: "+852 9000 0000",
   age_over_18: "yes",
@@ -251,6 +269,10 @@ applicationRows.set(authUser.id, {
   ...applicationRows.get(authUser.id),
   waiver_accepted_at: null,
 });
+const waiverMissing = await views.viewAccount("indemnity");
+if (!waiverMissing.includes("To be accepted")) {
+  throw new Error("Indemnity page should prompt when the live waiver is missing");
+}
 const createdWaiver = await store.acceptMyIndemnity();
 if (createdWaiver !== fixedIso) {
   throw new Error(`acceptMyIndemnity should write ${fixedIso}, got ${createdWaiver}`);
@@ -268,16 +290,21 @@ if (home.includes("Continue with Google")) {
   throw new Error("Home still asked the signed-in Google user to sign in");
 }
 
-const account = views.viewAccount();
-if (!account.includes("Super admin")) {
-  throw new Error("Account did not display the live super-admin role");
+const refreshedAccount = await views.viewAccount();
+if (!refreshedAccount.includes(`Indemnity confirmed on ${confirmedDay}`) || refreshedAccount.includes("To be accepted")) {
+  throw new Error("Account should rerender from the accepted live waiver timestamp");
 }
-if (!account.includes("Member since Aug 2026")) {
-  throw new Error("Account did not map the live profile creation date");
+const refreshedIndemnity = await views.viewAccount("indemnity");
+if (!refreshedIndemnity.includes(`Indemnity confirmed on ${confirmedDay}`) || refreshedIndemnity.includes("To be accepted")) {
+  throw new Error("Indemnity page should rerender from the accepted live waiver timestamp");
 }
-if (account.includes("undefined") || account.includes("Invalid Date")) {
-  throw new Error("Account displayed an undefined role or invalid membership date");
+applicationRows.delete(authUser.id);
+const redirectToApply = await views.viewAccount("details");
+if (!redirectToApply || redirectToApply.redirect !== "#/apply") {
+  throw new Error("Live account details should redirect to #/apply when no application exists");
 }
 
 console.log("ok  live OAuth session renders the signed-in home page");
 console.log("ok  live profile renders valid account metadata");
+console.log("ok  live indemnity renders from the application waiver state");
+console.log("ok  live account details redirect to #/apply without an application");
