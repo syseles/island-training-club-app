@@ -501,6 +501,54 @@ store.resetDemo();
   } else console.log("ok  v7 migration clears unrecognizable donor ID");
 }
 
+// --- v9 migration: age status + notification preferences ---
+store.resetDemo();
+{
+  const raw = JSON.parse(mem.get("itc.prototype.v1"));
+  raw.version = 8;
+  const legacyUser = raw.users.find((u) => u.id === "u-member");
+  delete legacyUser.isMinor;
+  delete legacyUser.privacyAcceptedAt;
+  delete legacyUser.whatsappReminders;
+  delete legacyUser.emailReceipts;
+  delete legacyUser.communityNews;
+  mem.set("itc.prototype.v1", JSON.stringify(raw));
+  store.load();
+  const migrated = store.allUsers().find((u) => u.id === "u-member");
+  if (
+    migrated.isMinor !== false ||
+    migrated.whatsappReminders !== false ||
+    migrated.emailReceipts !== false ||
+    migrated.communityNews !== false ||
+    migrated.privacyAcceptedAt !== migrated.appliedAt
+  ) {
+    failures++;
+    console.error("FAIL v9 migration should backfill age, privacy and notification defaults");
+  } else {
+    console.log("ok  v9 migration backfills age, privacy and notification defaults");
+  }
+
+  const migrationPath = fileURLToPath(
+    new URL("../supabase/migrations/20260805000005_profile_preferences_age_status.sql", import.meta.url)
+  );
+  const migrationSql = existsSync(migrationPath) ? readFileSync(migrationPath, "utf8") : "";
+  if (
+    !migrationSql.includes("add column whatsapp_reminders boolean not null default false") ||
+    !migrationSql.includes("add column email_receipts boolean not null default false") ||
+    !migrationSql.includes("add column community_news boolean not null default false") ||
+    !migrationSql.includes("set is_minor = case") ||
+    !migrationSql.includes("when date_of_birth is null then is_minor") ||
+    !migrationSql.includes("else date_of_birth > (current_date - interval '18 years')::date") ||
+    !migrationSql.includes("update public.applications\nset date_of_birth = null;") ||
+    !migrationSql.includes("alter column date_of_birth drop not null")
+  ) {
+    failures++;
+    console.error("FAIL v9 migration SQL should add defaults, backfill age and clear DOB");
+  } else {
+    console.log("ok  v9 migration SQL adds defaults, backfills age and clears DOB");
+  }
+}
+
 // --- viewAccount live-mode branch ---
 // The live-mode HTML is rendered when isLive() is true at viewAccount
 // call time. We can't re-route views.js's captured config import to a

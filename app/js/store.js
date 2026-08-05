@@ -23,7 +23,7 @@ import {
 import { supabase, isLive } from "./config.js";
 
 const STORAGE_KEY = "itc.prototype.v1";
-const STATE_VERSION = 8;
+const STATE_VERSION = 9;
 
 // Live-mode (Supabase) session cache. Avoids hammering the DB on every
 // page load. The TTL is short so role flips and welcome notifications
@@ -35,12 +35,21 @@ const LIVE_PROFILE_TTL_MS = 30_000;
 
 let state = null;
 
+function backfillProfilePreferences(user) {
+  if (user.isMinor === undefined) user.isMinor = false;
+  if (user.privacyAcceptedAt === undefined) user.privacyAcceptedAt = user.appliedAt || null;
+  if (user.whatsappReminders === undefined) user.whatsappReminders = false;
+  if (user.emailReceipts === undefined) user.emailReceipts = false;
+  if (user.communityNews === undefined) user.communityNews = false;
+  return user;
+}
+
 function freshState() {
   return {
     version: STATE_VERSION,
     sessionUserId: null,
     activities: structuredClone(SEED_ACTIVITIES),
-    users: structuredClone(SEED_USERS),
+    users: structuredClone(SEED_USERS).map(backfillProfilePreferences),
     bookings: seedBookings(),
     receipts: seedReceipts(),
     receiptCounter: 49,
@@ -175,6 +184,7 @@ function migrate() {
     // v8: prayer requests (Community > Prayers) are stored locally.
     if (!Array.isArray(state.prayers)) state.prayers = [];
   }
+  if (v < 9) state.users.forEach(backfillProfilePreferences);
   state.version = STATE_VERSION;
 }
 
@@ -427,6 +437,11 @@ export function applyForMembership(form) {
     // Joining requires accepting the health & liability indemnity; the
     // timestamp is the member's acceptance record (Profile > Indemnity).
     indemnityAcceptedAt: form.indemnity ? Date.now() : null,
+    isMinor: false,
+    privacyAcceptedAt: Date.now(),
+    whatsappReminders: false,
+    emailReceipts: false,
+    communityNews: false,
     appliedAt: Date.now(),
   };
   state.users.push(user);
