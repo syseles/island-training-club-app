@@ -352,12 +352,9 @@ export function viewActivity(sessionId) {
     actionBlock = `
       <div class="banner mt16">
         <span class="kicker">Members only</span>
-        <p>This is a paid member session. Apply for free membership — a leader approves every application — then book and pay here.</p>
+        <p>This is a paid member session. Sign in to book — new here? You'll be guided through a short free application after sign-in.</p>
       </div>
-      <div class="btn-row two">
-        <a class="btn" href="#/apply">Apply to join</a>
-        <a class="btn ghost" href="#/account">Sign in</a>
-      </div>`;
+      <a class="btn mt16" href="#/account">Sign in to book</a>`;
   }
 
   const metaPaid =

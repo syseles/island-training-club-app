@@ -152,6 +152,16 @@ if (!paidHtml.includes("HK$") || !paidHtml.includes("badge paid")) {
   console.error("FAIL paid activity missing price or paid badge");
 } else console.log("ok  paid activity shows price + badge");
 
+const paidVisitor = views.viewActivity(paid.id);
+if (!paidVisitor.includes("Sign in to book") || !paidVisitor.includes('href="#/account"')) {
+  failures++;
+  console.error("FAIL paid activity (visitor) should offer a single sign-in CTA");
+} else console.log("ok  paid activity (visitor) routes to sign-in");
+if (paidVisitor.includes('href="#/apply"')) {
+  failures++;
+  console.error("FAIL paid activity (visitor) must not link to #/apply");
+} else console.log("ok  paid activity (visitor) has no #/apply link");
+
 // --- Application flow ---
 const applyRes = store.applyForMembership({
   fullName: "Test Person",
