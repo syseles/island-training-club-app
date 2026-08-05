@@ -694,6 +694,94 @@ if (memberDetailsEdit.includes('name="photo_consent"')) {
   failures++;
   console.error("FAIL Membership Details edit route should exclude photo consent controls");
 } else console.log("ok  Membership Details edit route excludes photo consent controls");
+member.mediaConsent = true;
+member.whatsappReminders = false;
+member.emailReceipts = true;
+member.communityNews = false;
+member.privacyAcceptedAt = "2026-08-05T01:05:00.000Z";
+const memberPrivacySummary = await views.viewAccount("privacy");
+for (const label of [
+  "Photo/video consent",
+  "Privacy policy accepted",
+  "WhatsApp session reminders",
+  "Email receipts",
+  "Community news",
+]) {
+  if (!memberPrivacySummary.includes(label)) {
+    failures++;
+    console.error(`FAIL Privacy summary missing ${label}`);
+  }
+}
+if (!memberPrivacySummary.includes("Allowed")) {
+  failures++;
+  console.error("FAIL Privacy summary should show Allowed when photo consent is true");
+}
+if (!memberPrivacySummary.includes("5 Aug 2026")) {
+  failures++;
+  console.error("FAIL Privacy summary should show the accepted privacy date");
+}
+if (!memberPrivacySummary.includes('>Off<') || !memberPrivacySummary.includes('>On<')) {
+  failures++;
+  console.error("FAIL Privacy summary should show mixed On/Off preferences");
+}
+if (!memberPrivacySummary.includes('href="#/account/privacy/edit"')) {
+  failures++;
+  console.error("FAIL Privacy summary should link to the edit route");
+}
+if (memberPrivacySummary.includes('data-form="privacy-preferences"')) {
+  failures++;
+  console.error("FAIL Privacy summary should be a card, not the edit form");
+} else console.log("ok  Privacy summary is distinct from the edit form");
+const memberPrivacyEdit = await views.viewAccount("privacy", "edit");
+if (!memberPrivacyEdit.includes('data-form="privacy-preferences"')) {
+  failures++;
+  console.error("FAIL Privacy edit route should render the privacy-preferences form");
+} else console.log("ok  Privacy edit route renders the privacy-preferences form");
+if (!memberPrivacyEdit.includes('href="#/account/privacy"')) {
+  failures++;
+  console.error("FAIL Privacy edit route should link back to #/account/privacy");
+}
+if (!memberPrivacyEdit.includes("Privacy policy accepted") || !memberPrivacyEdit.includes("5 Aug 2026")) {
+  failures++;
+  console.error("FAIL Privacy edit route should show privacy acceptance read-only");
+}
+for (const name of ["photo_consent", "whatsapp_reminders", "email_receipts", "community_news"]) {
+  if (!memberPrivacyEdit.includes(`name="${name}"`)) {
+    failures++;
+    console.error(`FAIL Privacy edit route missing ${name}`);
+  }
+}
+if (!/name="photo_consent"[^>]*checked/.test(memberPrivacyEdit)) {
+  failures++;
+  console.error("FAIL Privacy edit route should prefill checked photo consent");
+}
+if (/name="whatsapp_reminders"[^>]*checked/.test(memberPrivacyEdit)) {
+  failures++;
+  console.error("FAIL Privacy edit route should leave unchecked WhatsApp reminders off");
+}
+if (!/name="email_receipts"[^>]*checked/.test(memberPrivacyEdit)) {
+  failures++;
+  console.error("FAIL Privacy edit route should prefill checked email receipts");
+}
+if (/name="community_news"[^>]*checked/.test(memberPrivacyEdit)) {
+  failures++;
+  console.error("FAIL Privacy edit route should leave unchecked community news off");
+}
+if (!memberPrivacyEdit.includes("Save changes")) {
+  failures++;
+  console.error("FAIL Privacy edit route missing Save changes");
+}
+member.mediaConsent = false;
+member.whatsappReminders = undefined;
+member.emailReceipts = undefined;
+member.communityNews = undefined;
+const memberPrivacyFallback = await views.viewAccount("privacy");
+if ((memberPrivacyFallback.match(/>Off</g) || []).length < 3) {
+  failures++;
+  console.error("FAIL Privacy summary should default omitted preference properties to Off");
+} else {
+  console.log("ok  Privacy summary defaults omitted preference properties to Off");
+}
 await check("home (member)", () => views.viewHome());
 const memberHome = views.viewHome();
 if (!memberHome.includes("Nothing booked this week")) {
@@ -1073,6 +1161,12 @@ if (!viewsSrc.includes('data-form="membership-details"') || !viewsSrc.includes("
 } else {
   console.log("ok  views.js: Membership Details summary/edit workflow present");
 }
+if (!viewsSrc.includes('data-form="privacy-preferences"') || !viewsSrc.includes("accountPrivacyEdit")) {
+  failures++;
+  console.error("FAIL views.js: Privacy summary/edit workflow missing");
+} else {
+  console.log("ok  views.js: Privacy summary/edit workflow present");
+}
 if (!appSrc.includes("await views.viewAccount(arg, arg2)")) {
   failures++;
   console.error("FAIL app.js: account route should pass arg2 so #/account/details/edit can render edit mode");
@@ -1085,6 +1179,13 @@ if (!membershipSubmitBlock || !membershipSubmitBlock[0].includes('location.hash 
   console.error("FAIL app.js: successful membership saves should return to #/account/details");
 } else {
   console.log("ok  app.js: successful membership saves return to #/account/details");
+}
+const privacySubmitBlock = appSrc.match(/if \(form\.dataset\.form === "privacy-preferences"\) \{[\s\S]*?\n  \}\n\n  switch \(form\.id\)/);
+if (!privacySubmitBlock || !privacySubmitBlock[0].includes('location.hash = "#/account/privacy"')) {
+  failures++;
+  console.error("FAIL app.js: successful privacy saves should return to #/account/privacy");
+} else {
+  console.log("ok  app.js: successful privacy saves return to #/account/privacy");
 }
 const selfEditMigration = existsSync(
   resolve(__dirname, "../supabase/migrations/20260805000003_self_update_application.sql")

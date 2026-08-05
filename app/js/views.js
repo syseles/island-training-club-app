@@ -595,7 +595,7 @@ export async function viewAccount(section, editMode) {
     case "payments":
       return accountPayments(user);
     case "privacy":
-      return accountPrivacy(user, application);
+      return editMode === "edit" ? accountPrivacyEdit(application) : accountPrivacy(user, application);
     case "history":
       return accountHistory(user);
     default:
@@ -941,6 +941,10 @@ function accountPayments(user) {
     }`;
 }
 
+function privacyAcceptedValue(application) {
+  return application?.privacy_accepted_at ? fmtDay(application.privacy_accepted_at) : "Not recorded";
+}
+
 function accountPrivacy(user, application) {
   if (isLive() && !application) {
     return `
@@ -949,23 +953,48 @@ function accountPrivacy(user, application) {
     <h1 class="display sm">Privacy &amp; Notifications.</h1>
     ${applicationUnavailableCard()}`;
   }
-  const mediaConsent = application ? !!application.photo_consent : !!user.mediaConsent;
-  const whatsappReminders = application ? !!application.whatsapp_reminders : !!user.whatsappReminders;
-  const emailReceipts = application ? !!application.email_receipts : !!user.emailReceipts;
-  const communityNews = application ? !!application.community_news : !!user.communityNews;
+  const onOff = (value) => value ? "On" : "Off";
   return `
     <a class="back-link" href="#/account">← Profile</a>
     <div class="kicker mt16">Profile · Privacy &amp; Notifications</div>
     <h1 class="display sm">Privacy &amp; Notifications.</h1>
     <div class="card mt16"><div class="card-body">
       <div class="receipt-lines" style="margin-top:0;border-top:0">
-        <div class="line"><span>Photos at sessions</span><strong>${mediaConsent ? "Allowed" : "Not allowed"}</strong></div>
-        <div class="line"><span>WhatsApp session reminders</span><strong>${whatsappReminders ? "On" : "Off"}</strong></div>
-        <div class="line"><span>Email receipts</span><strong>${emailReceipts ? "On" : "Off"}</strong></div>
-        <div class="line"><span>Community news</span><strong>${communityNews ? "On" : "Off"}</strong></div>
+        ${accountLine("Photo/video consent", application?.photo_consent ? "Allowed" : "Not allowed")}
+        ${accountLine("Privacy policy accepted", privacyAcceptedValue(application))}
+        ${accountLine("WhatsApp session reminders", onOff(application?.whatsapp_reminders))}
+        ${accountLine("Email receipts", onOff(application?.email_receipts))}
+        ${accountLine("Community news", onOff(application?.community_news))}
       </div>
-      <p class="muted small mt16">Privacy and notification settings are stubbed for setup — they’ll be configurable here before launch.</p>
+      <a class="btn ghost mt16" href="#/account/privacy/edit">Update details</a>
     </div></div>`;
+}
+
+function accountPrivacyEdit(application) {
+  if (isLive() && !application) {
+    return `
+    <a class="back-link" href="#/account">← Profile</a>
+    <div class="kicker mt16">Profile · Privacy &amp; Notifications</div>
+    <h1 class="display sm">Privacy &amp; Notifications.</h1>
+    ${applicationUnavailableCard()}`;
+  }
+  return `
+    <a class="back-link" href="#/account/privacy">← Privacy &amp; Notifications</a>
+    <div class="kicker mt16">Profile · Privacy &amp; Notifications</div>
+    <h1 class="display sm">Privacy &amp; Notifications.</h1>
+    <p class="subcopy mt8">Update your consent and communication preferences.</p>
+    <div class="card mt16"><div class="card-body">
+      <div class="receipt-lines" style="margin-top:0;border-top:0">
+        ${accountLine("Privacy policy accepted", privacyAcceptedValue(application))}
+      </div>
+    </div></div>
+    <form data-form="privacy-preferences" class="form-grid mt16">
+      <label class="check"><input type="checkbox" name="photo_consent" ${application?.photo_consent ? "checked" : ""}> <span>Photo/video consent</span></label>
+      <label class="check"><input type="checkbox" name="whatsapp_reminders" ${application?.whatsapp_reminders ? "checked" : ""}> <span>WhatsApp session reminders</span></label>
+      <label class="check"><input type="checkbox" name="email_receipts" ${application?.email_receipts ? "checked" : ""}> <span>Email receipts</span></label>
+      <label class="check"><input type="checkbox" name="community_news" ${application?.community_news ? "checked" : ""}> <span>Community news</span></label>
+      <button class="btn btn-primary" type="submit">Save changes</button>
+    </form>`;
 }
 
 function bookingCard(b) {

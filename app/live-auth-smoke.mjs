@@ -232,6 +232,77 @@ if (!detailsEdit.includes('value="Taylor Coach"') || !detailsEdit.includes('valu
 if (detailsEdit.includes('name="photo_consent"')) {
   throw new Error("Live details edit route should exclude photo consent controls");
 }
+const privacySummary = await views.viewAccount("privacy");
+for (const label of [
+  "Photo/video consent",
+  "Privacy policy accepted",
+  "WhatsApp session reminders",
+  "Email receipts",
+  "Community news",
+]) {
+  if (!privacySummary.includes(label)) throw new Error(`Live privacy summary missing ${label}`);
+}
+if (!privacySummary.includes("Allowed")) {
+  throw new Error("Live privacy summary should show Allowed when photo consent is true");
+}
+if (!privacySummary.includes(confirmedDay)) {
+  throw new Error("Live privacy summary should show the accepted privacy date");
+}
+if (!privacySummary.includes('>Off<') || (privacySummary.match(/>On</g) || []).length < 2) {
+  throw new Error("Live privacy summary should show the expected On/Off values");
+}
+if (!privacySummary.includes('href="#/account/privacy/edit"')) {
+  throw new Error("Live privacy summary should link to the edit route");
+}
+if (privacySummary.includes('data-form="privacy-preferences"')) {
+  throw new Error("Live privacy summary should be a card, not the edit form");
+}
+const privacyEdit = await views.viewAccount("privacy", "edit");
+if (!privacyEdit.includes('data-form="privacy-preferences"')) {
+  throw new Error("Live privacy edit route should render the privacy-preferences form");
+}
+if (!privacyEdit.includes('href="#/account/privacy"')) {
+  throw new Error("Live privacy edit route should link back to #/account/privacy");
+}
+if (!privacyEdit.includes("Privacy policy accepted") || !privacyEdit.includes(confirmedDay)) {
+  throw new Error("Live privacy edit route should show privacy acceptance read-only");
+}
+for (const name of ["photo_consent", "whatsapp_reminders", "email_receipts", "community_news"]) {
+  if (!privacyEdit.includes(`name="${name}"`)) {
+    throw new Error(`Live privacy edit route missing ${name}`);
+  }
+}
+if (!/name="photo_consent"[^>]*checked/.test(privacyEdit)) {
+  throw new Error("Live privacy edit route should prefill checked photo consent");
+}
+if (/name="whatsapp_reminders"[^>]*checked/.test(privacyEdit)) {
+  throw new Error("Live privacy edit route should leave unchecked WhatsApp reminders off");
+}
+if (!/name="email_receipts"[^>]*checked/.test(privacyEdit)) {
+  throw new Error("Live privacy edit route should prefill checked email receipts");
+}
+if (!/name="community_news"[^>]*checked/.test(privacyEdit)) {
+  throw new Error("Live privacy edit route should prefill checked community news");
+}
+if (!privacyEdit.includes("Save changes")) {
+  throw new Error("Live privacy edit route should render the save action");
+}
+applicationRows.set(authUser.id, {
+  ...applicationRows.get(authUser.id),
+  whatsapp_reminders: undefined,
+  email_receipts: undefined,
+  community_news: undefined,
+});
+const missingPreferenceSummary = await views.viewAccount("privacy");
+if ((missingPreferenceSummary.match(/>Off</g) || []).length < 3) {
+  throw new Error("Live privacy summary should default omitted preference properties to Off");
+}
+applicationRows.set(authUser.id, {
+  ...applicationRows.get(authUser.id),
+  whatsapp_reminders: false,
+  email_receipts: true,
+  community_news: true,
+});
 await store.updateMyMembershipDetails({
   mobile: "+852 9000 0000",
   age_over_18: "yes",

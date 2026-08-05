@@ -385,6 +385,25 @@ document.addEventListener("submit", async (e) => {
     return;
   }
 
+  if (form.dataset.form === "privacy-preferences") {
+    e.preventDefault();
+    const fd = new FormData(form);
+    try {
+      await store.updateMyPrivacyPreferences({
+        photo_consent: fd.has("photo_consent"),
+        whatsapp_reminders: fd.has("whatsapp_reminders"),
+        email_receipts: fd.has("email_receipts"),
+        community_news: fd.has("community_news"),
+      });
+      toast("Privacy preferences saved");
+      location.hash = "#/account/privacy";
+    } catch (err) {
+      console.error(err);
+      toast("Unable to save privacy preferences", true);
+    }
+    return;
+  }
+
   switch (form.id) {
     case "form-signin": {
       e.preventDefault();
