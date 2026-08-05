@@ -38,6 +38,27 @@ store.load();
 // --- Visitor state ---
 store.signOut();
 check("home (visitor)", () => views.viewHome());
+const homeVisitor = views.viewHome();
+if (homeVisitor.includes("My Week")) {
+  failures++;
+  console.error('FAIL visitor home must not show "My Week"');
+} else console.log('ok  "My Week" is signed-in-only');
+if (!homeVisitor.includes("This week — open to all")) {
+  failures++;
+  console.error("FAIL visitor home missing free open-to-all preview");
+} else console.log("ok  visitor home shows the free open-to-all preview");
+if (homeVisitor.includes('href="#/apply"')) {
+  failures++;
+  console.error("FAIL visitor home must not link to #/apply");
+} else console.log("ok  visitor home has no #/apply link");
+if (!homeVisitor.includes('href="#/account"')) {
+  failures++;
+  console.error("FAIL visitor home missing its #/account CTA");
+} else console.log("ok  visitor home CTA points to #/account");
+if (homeVisitor.includes("Book & pay")) {
+  failures++;
+  console.error("FAIL visitor home preview must not contain paid booking language");
+} else console.log("ok  visitor home preview has no paid booking language");
 check("schedule", () => views.viewSchedule());
 const hyroxSid = store.nextSession().kind === "paid" ? store.nextSession().id : null;
 const allUpcoming = store.upcomingSessions(14);

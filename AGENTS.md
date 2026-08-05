@@ -96,7 +96,7 @@ When in doubt: is this a real product feature, or a prototype affordance? If the
 - **Don't add Shop code to `main`.** The branch split is the source of truth — feature work belongs on the right branch.
 - **Don't break localStorage migrations.** Bump `STATE_VERSION` and add a migration step. Snapshots in `state.bookings` reference seed activity fields by name; renaming them silently breaks old persisted data.
 - **Title-cased headings on Profile sub-pages.** "Membership Details", "Donor Profile", "Payments & Receipts", "Privacy & Notifications" — "History" stays single-word.
-- **"My Week" on Home is signed-in-only and shows booked sessions.** Visitors see the upcoming preview, not "My Week".
+- **"My Week" on Home is signed-in-only and shows booked sessions.** Visitors see a free-only "This week — open to all" preview, not "My Week".
 - **The Wednesday Night Training session is free.** No booking, no checkout, no capacity. Actions are Add to Calendar and Get Directions.
 - **The smoke test is the contract.** When you change product behaviour, update the test in the same commit. Don't leave the test failing.
 

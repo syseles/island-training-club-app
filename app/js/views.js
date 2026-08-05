@@ -150,39 +150,35 @@ export function viewHome() {
   const upcoming = store.upcomingSessions(14);
   const name = user ? esc(user.preferredName || user.fullName.split(" ")[0]) : null;
 
-  // "My week" shows a signed-in member only the sessions they've booked
-  // (free ones included); the full week stays discoverable via Schedule.
-  let rows = upcoming.slice(0, 3);
-  let emptyMsg = "No upcoming sessions — check back soon.";
-  if (user && user.status === "approved") {
-    const bookedIds = new Set(
-      store
-        .bookingsForUser(user.id)
-        .filter((b) => b.status === "confirmed" && !sessionStarted(b.snapshot))
-        .map((b) => b.sessionId)
-    );
-    rows = upcoming.filter((s) => bookedIds.has(s.id));
-    emptyMsg = `Nothing booked this week yet. <a href="#/schedule" style="color:var(--accent)">Find a session →</a>`;
-  }
-
   const guest = !user
     ? `
     <div class="card mt24"><div class="card-body">
       <span class="kicker">New to ITC?</span>
       <h3 class="mt8">Everyone is welcome</h3>
-      <p class="hero-meta">Free activities are open to all — just show up. Membership is free too; an ITC leader approves every application before paid booking unlocks.</p>
-      <div class="btn-row two">
-        <a class="btn" href="#/apply">Apply to join</a>
-        <a class="btn ghost" href="#/account">Sign in</a>
-      </div>
+      <p class="hero-meta">Free activities are open to all — just show up. Membership is free too; sign in and an ITC leader approves every application before paid booking unlocks.</p>
+      <a class="btn mt16" href="#/account">${isLive() ? "Continue with Google" : "Sign in or join"}</a>
+      <p class="muted small mt8">New here? You'll be guided through a short application after sign-in.</p>
     </div></div>`
     : "";
 
-  return `
-    <div class="kicker">${esc(fmtDateLong(todayLocal()))} · Hong Kong</div>
-    <h1 class="display">${name ? `Good to see you, ${name}.` : "Train together."}</h1>
-    ${user && user.status === "pending" ? pendingBanner() : ""}
-    ${guest}
+  // "My week" is signed-in-only: approved members see the sessions they've
+  // booked (free ones included); other signed-in users see the upcoming
+  // preview. Visitors get the free open-to-all preview instead.
+  let weekSection;
+  if (user) {
+    let rows = upcoming.slice(0, 3);
+    let emptyMsg = "No upcoming sessions — check back soon.";
+    if (user.status === "approved") {
+      const bookedIds = new Set(
+        store
+          .bookingsForUser(user.id)
+          .filter((b) => b.status === "confirmed" && !sessionStarted(b.snapshot))
+          .map((b) => b.sessionId)
+      );
+      rows = upcoming.filter((s) => bookedIds.has(s.id));
+      emptyMsg = `Nothing booked this week yet. <a href="#/schedule" style="color:var(--accent)">Find a session →</a>`;
+    }
+    weekSection = `
     <div class="section-head">
       <h2>My Week</h2>
       <a href="#/schedule">See more →</a>
@@ -191,7 +187,27 @@ export function viewHome() {
       ${rows.length
         ? rows.map((s, i) => sessionRow(s, { highlight: i === 0 })).join("")
         : `<div class="empty">${emptyMsg}</div>`}
+    </div>`;
+  } else {
+    const freeRows = upcoming.filter((s) => s.kind === "free");
+    weekSection = `
+    <div class="section-head">
+      <h2>This week — open to all</h2>
+      <a href="#/schedule">See more →</a>
     </div>
+    <div class="session-list">
+      ${freeRows.length
+        ? freeRows.map((s, i) => sessionRow(s, { highlight: i === 0 })).join("")
+        : `<div class="empty">No open sessions this week — check back soon.</div>`}
+    </div>`;
+  }
+
+  return `
+    <div class="kicker">${esc(fmtDateLong(todayLocal()))} · Hong Kong</div>
+    <h1 class="display">${name ? `Good to see you, ${name}.` : "Train together."}</h1>
+    ${user && user.status === "pending" ? pendingBanner() : ""}
+    ${guest}
+    ${weekSection}
     <div class="section-head"><h2>The Club</h2><a href="#/community">More →</a></div>
     <a class="card" href="#/community" style="display:block;text-decoration:none">
       <img class="photo" src="../assets/itc/community.webp" alt="ITC community">
