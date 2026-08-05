@@ -278,7 +278,12 @@ export async function getCurrentUser() {
     avatarUrl: liveProfile.avatar_url,
     appliedAt: liveProfile.created_at,
     role: liveProfile.role,
-    status: liveProfile.role === "pending" ? "pending" : "approved",
+    status:
+      liveProfile.role === "pending"
+        ? "pending"
+        : liveProfile.role === "declined"
+          ? "declined"
+          : "approved",
     profile: liveProfile,
   };
   return liveUser;
@@ -606,22 +611,69 @@ export async function listPendingApplications() {
   if (!isLive() || !supabase) return pendingApplicants();
   const { data, error } = await supabase
     .from("applications")
-    .select("*, profiles!inner(id, email, full_name, role)")
-    .eq("profiles.role", "pending");
+    .select("*, profiles(id, email, full_name, role)");
   if (error) throw error;
-  return (data || []).map((a) => ({
-    id: a.profiles.id,
-    fullName: a.profiles.full_name || a.profiles.email,
-    email: a.profiles.email,
-    phone: a.mobile,
-    emergencyName: a.emergency_name,
-    emergencyPhone: a.emergency_phone,
-    heard: a.heard_source,
-    appliedAt: a.submitted_at,
-    isMinor: !!a.is_minor,
-    indemnityAcceptedAt: a.waiver_accepted_at,
-    mediaConsent: a.photo_consent,
-  }));
+  return (data || [])
+    .filter((a) => a.profiles?.role === "pending")
+    .map((a) => ({
+      id: a.profiles.id,
+      fullName: a.profiles.full_name || a.profiles.email,
+      email: a.profiles.email,
+      phone: a.mobile,
+      emergencyName: a.emergency_name,
+      emergencyPhone: a.emergency_phone,
+      heard: a.heard_source,
+      appliedAt: a.submitted_at,
+      isMinor: !!a.is_minor,
+      indemnityAcceptedAt: a.waiver_accepted_at,
+      mediaConsent: a.photo_consent,
+    }));
+}
+
+export async function listApprovalCandidates() {
+  if (!isLive() || !supabase) {
+    return pendingApplicants().map((user) => ({
+      ...user,
+      applicationSubmitted: true,
+    }));
+  }
+  const [profiles, applications] = await Promise.all([
+    listProfiles(),
+    listPendingApplications(),
+  ]);
+  const applicationByProfile = new Map(applications.map((item) => [item.id, item]));
+  return profiles
+    .filter((profile) => profile.role === "pending")
+    .map((profile) => {
+      const application = applicationByProfile.get(profile.id);
+      return application
+        ? { ...application, applicationSubmitted: true }
+        : {
+            id: profile.id,
+            fullName: profile.full_name || profile.email,
+            email: profile.email,
+            appliedAt: profile.created_at,
+            applicationSubmitted: false,
+          };
+    })
+    .sort((a, b) => new Date(a.appliedAt) - new Date(b.appliedAt));
+}
+
+export async function decideApplication(profileId, decision) {
+  if (!new Set(["member", "declined"]).has(decision)) {
+    throw new Error("Invalid application decision.");
+  }
+  if (!isLive() || !supabase) {
+    const candidate = pendingApplicants().find((user) => user.id === profileId);
+    if (!candidate) throw new Error("Pending application not found.");
+    if (decision === "member") approveApplicant(profileId);
+    else declineApplicant(profileId);
+    return;
+  }
+  const candidate = (await listApprovalCandidates()).find((item) => item.id === profileId);
+  if (!candidate) throw new Error("Pending application not found.");
+  if (!candidate.applicationSubmitted) throw new Error("Application not submitted.");
+  await updateProfileRole(profileId, decision);
 }
 
 export function pendingApplicants() {

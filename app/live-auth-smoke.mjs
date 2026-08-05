@@ -1,6 +1,8 @@
 // Focused regression for the Supabase OAuth -> synchronous view handoff.
 // Run directly with: node app/live-auth-smoke.mjs
 
+import assert from "node:assert/strict";
+
 const mem = new Map();
 globalThis.localStorage = {
   getItem: (key) => (mem.has(key) ? mem.get(key) : null),
@@ -51,7 +53,29 @@ const applicationRows = new Map([
     },
   ],
 ]);
+const pendingProfiles = [
+  {
+    id: "pending-submitted",
+    email: "submitted@example.com",
+    full_name: "Submitted Runner",
+    role: "pending",
+    created_at: "2026-08-05T03:00:00.000Z",
+  },
+  {
+    id: "pending-incomplete",
+    email: "incomplete@example.com",
+    full_name: "Incomplete Runner",
+    role: "pending",
+    created_at: "2026-08-05T04:00:00.000Z",
+  },
+];
+applicationRows.set("pending-submitted", {
+  ...structuredClone(applicationRows.get(authUser.id)),
+  profile_id: "pending-submitted",
+  profiles: pendingProfiles[0],
+});
 const applicationUpdates = [];
+const profileUpdates = [];
 let applicationReadError = null;
 let authStateChangeHandler = null;
 let authCallbackLocked = false;
@@ -111,6 +135,29 @@ const fakeSupabase = {
                 maybeSingle: async () => ({ data: profile, error: null }),
               };
             },
+            order(column, options) {
+              if (column !== "created_at" || options?.ascending !== true) {
+                throw new Error("Profile list query should order by created_at ascending");
+              }
+              return Promise.resolve({
+                data: [structuredClone(profile), ...structuredClone(pendingProfiles)],
+                error: null,
+              });
+            },
+          };
+        },
+        update(patch) {
+          return {
+            eq(column, value) {
+              if (column !== "id") {
+                throw new Error("Profile update did not target a profile id");
+              }
+              profileUpdates.push({ id: value, ...structuredClone(patch) });
+              if (value === profile.id) Object.assign(profile, patch);
+              const pendingProfile = pendingProfiles.find((item) => item.id === value);
+              if (pendingProfile) Object.assign(pendingProfile, patch);
+              return Promise.resolve({ error: null });
+            },
           };
         },
       };
@@ -129,6 +176,12 @@ const fakeSupabase = {
                   error: applicationReadError,
                 }),
               };
+            },
+            then(resolve, reject) {
+              return Promise.resolve({
+                data: Array.from(applicationRows.values()).map((row) => structuredClone(row)),
+                error: null,
+              }).then(resolve, reject);
             },
           };
         },
@@ -170,6 +223,30 @@ const store = await import("./js/store.js");
 const views = await import("./js/views.js");
 store.load();
 
+await store.getCurrentUser();
+const queue = await store.listApprovalCandidates();
+const submitted = queue.find((item) => item.id === "pending-submitted");
+const incomplete = queue.find((item) => item.id === "pending-incomplete");
+if (!submitted?.applicationSubmitted || incomplete?.applicationSubmitted !== false) {
+  throw new Error("Approval queue must include both pending groups");
+}
+if (queue.some((item) => item.id === authUser.id)) {
+  throw new Error("Approved/admin profiles must not enter the approval queue");
+}
+await store.decideApplication(submitted.id, "declined");
+if (!profileUpdates.some((update) => update.id === submitted.id && update.role === "declined")) {
+  throw new Error("Decline must persist the declined profile role");
+}
+await assert.rejects(
+  () => store.decideApplication(incomplete.id, "member"),
+  /Application not submitted/
+);
+profile.role = "declined";
+await store.getCurrentUser();
+if (store.currentUser().status !== "declined") {
+  throw new Error("Live declined profiles must hydrate with declined status");
+}
+profile.role = "super_admin";
 await store.getCurrentUser();
 const renderedUser = store.currentUser();
 if (!renderedUser || renderedUser.id !== authUser.id) {
