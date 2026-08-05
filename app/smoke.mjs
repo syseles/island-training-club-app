@@ -185,13 +185,15 @@ if (!paid || !free) throw new Error("expected both paid and free sessions in win
 // --- HYROX demo attendance cleanup: no simulated strangers ---
 // The club has one real member and no sign-ups yet, so HYROX sessions must
 // show full capacity and an empty attendee list in fresh state.
+let hyroxSeedsClear = true;
 for (const a of data.SEED_ACTIVITIES.filter((x) => x.category === "HYROX")) {
   if ("baseBooked" in a) {
     failures++;
+    hyroxSeedsClear = false;
     console.error(`FAIL seed activity ${a.id} still simulates demand (baseBooked)`);
   }
 }
-console.log("ok  HYROX seeds carry no simulated bookings");
+if (hyroxSeedsClear) console.log("ok  HYROX seeds carry no simulated bookings");
 const hyroxUpcoming = allUpcoming.find((s) => s.category === "HYROX" && !data.sessionStarted(s));
 if (!hyroxUpcoming) throw new Error("expected an upcoming HYROX session");
 if (store.attendeesFor(hyroxUpcoming).length !== 0) {
@@ -965,6 +967,7 @@ store.resetDemo();
   // seed-owned and user-created bookings side by side
   raw.activities.find((a) => a.id === "hyrox").baseBooked = 14;
   raw.activities.find((a) => a.id === "hyrox-midtown").baseBooked = 9;
+  raw.activities.find((a) => a.id === "run").baseBooked = 4;
   const snap = (dateISO) => ({ name: "ITC HYROX", kind: "paid", dateISO, time: "11:15", durationMin: 75, location: "BFT Causeway Bay", price: 180 });
   raw.bookings.push(
     { id: "b-seed-past", userId: "u-member", sessionId: "hyrox-2026-07-25", status: "attended", createdAt: 1, snapshot: snap("2026-07-25") },
@@ -973,24 +976,34 @@ store.resetDemo();
   );
   raw.receipts.push(
     { id: "r-seed-past", bookingId: "b-seed-past", userId: "u-member", amount: 180, currency: "HKD", status: "paid", issuedAt: 1, line: "x" },
-    { id: "r-seed-next", bookingId: "b-seed-next", userId: "u-member", amount: 180, currency: "HKD", status: "paid", issuedAt: 2, line: "x" }
+    { id: "r-seed-next", bookingId: "b-seed-next", userId: "u-member", amount: 180, currency: "HKD", status: "paid", issuedAt: 2, line: "x" },
+    { id: "r-user-1", bookingId: "b-user-1", userId: "u-member", amount: 180, currency: "HKD", status: "paid", issuedAt: 3, number: "ITC-2026-0099", cardLast4: "4242", line: "ITC HYROX — 8 Aug 2026 11:15 AM" }
   );
   mem.set("itc.prototype.v1", JSON.stringify(raw));
   store.load();
-  if (store.activities().some((a) => "baseBooked" in a)) {
+  const migratedActivities = store.activities();
+  for (const id of ["hyrox", "hyrox-midtown"]) {
+    if (migratedActivities.find((a) => a.id === id)?.baseBooked !== undefined) {
+      failures++;
+      console.error(`FAIL v10 migration should strip baseBooked from ${id}`);
+    }
+  }
+  const migratedRun = migratedActivities.find((a) => a.id === "run");
+  if (migratedRun?.baseBooked !== 4) {
     failures++;
-    console.error("FAIL v10 migration should strip baseBooked from activities");
-  } else console.log("ok  v10 migration strips baseBooked");
+    console.error(`FAIL v10 migration should preserve run baseBooked 4, got ${migratedRun?.baseBooked}`);
+  } else console.log("ok  v10 migration preserves unrelated activity baseBooked");
   const migratedIds = store.bookingsForUser("u-member").map((b) => b.id);
   if (migratedIds.length !== 1 || migratedIds[0] !== "b-user-1") {
     failures++;
     console.error(`FAIL v10 migration should remove seed bookings only, got ${JSON.stringify(migratedIds)}`);
   } else console.log("ok  v10 migration removes seed bookings, keeps user bookings");
   const persisted = JSON.parse(mem.get("itc.prototype.v1"));
-  if ((persisted.receipts || []).length !== 0) {
+  const persistedReceiptIds = (persisted.receipts || []).map((r) => r.id);
+  if (persistedReceiptIds.length !== 1 || persistedReceiptIds[0] !== "r-user-1") {
     failures++;
-    console.error("FAIL v10 migration should remove seed receipts");
-  } else console.log("ok  v10 migration removes seed receipts");
+    console.error(`FAIL v10 migration should keep only the user receipt, got ${JSON.stringify(persistedReceiptIds)}`);
+  } else console.log("ok  v10 migration keeps the user receipt only");
   if (persisted.version !== 10) {
     failures++;
     console.error(`FAIL state version should be 10 after migration, got ${persisted.version}`);

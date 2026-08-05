@@ -386,13 +386,14 @@ export function viewActivity(sessionId) {
       <div><small>Places</small><strong>${spots <= 0 ? "Full" : `${spots} of ${s.capacity} left`}</strong></div>`
       : "";
 
+  const attendeeNames = store.attendeesFor(s);
   const attendees =
     s.kind === "paid"
       ? isMember
         ? `
       <div class="section-head"><h2>Who’s coming</h2></div>
-      ${store.attendeesFor(s).length
-        ? `<div class="attendees">${store.attendeesFor(s).map((n) => `<span>${esc(n)}</span>`).join("")}</div>`
+      ${attendeeNames.length
+        ? `<div class="attendees">${attendeeNames.map((n) => `<span>${esc(n)}</span>`).join("")}</div>`
         : `<p class="muted small">No sign-ups yet — be the first.</p>`}`
         : `<div class="section-head"><h2>Who’s coming</h2></div>${memberOnlyNote("Member-only: the attendee list is visible after approval.")}`
       : "";
