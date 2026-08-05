@@ -43,6 +43,7 @@
 - Full name / preferred name / email inputs are removed from the form in live mode (sourced from the Google profile; preferred name can default to first name and stay editable in Profile later).
 - Submit → user becomes `pending`; the existing leader-approval flow (admin approves → member) is untouched.
 - The existing guard (signed-in pending user with no application → pushed to `#/apply`) already closes the loop and stays.
+- **Bootstrap exception:** the first Google sign-in on the live deployment, `syselesli@gmail.com`, becomes `super_admin` (per `docs/runbooks/live-auth.md`). Super admins are never `pending`, so the apply guard never fires for them — they skip Stage 1 entirely and land on the app directly.
 - The localStorage (non-live) prototype path keeps its current behavior as the demo seam; changes target the live/auth path and shared visitor views.
 
 ## Section 3 — Stage 2: PayMe reconciliation at first checkout (`feature/payment-system`)
