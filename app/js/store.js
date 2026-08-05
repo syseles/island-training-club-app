@@ -342,8 +342,66 @@ export async function updateProfileRole(profileId, newRole, reason) {
 
 // --- Applicant: application form (B; Supabase) ------------------------------
 
+function localApplication(user) {
+  return {
+    profile_id: user.id,
+    mobile: user.phone || "",
+    is_minor: !!user.isMinor,
+    guardian_name: user.guardianName || null,
+    guardian_phone: user.guardianPhone || null,
+    emergency_name: user.emergencyName || "",
+    emergency_phone: user.emergencyPhone || "",
+    heard_source: user.heard || "other",
+    heard_detail: user.heardDetail || null,
+    preferred_name: user.preferredName || null,
+    photo_consent: !!user.mediaConsent,
+    waiver_accepted_at: user.indemnityAcceptedAt || null,
+    privacy_accepted_at: user.privacyAcceptedAt || null,
+    guidelines_accepted_at: user.guidelinesAcceptedAt || user.appliedAt || null,
+    submitted_at: user.appliedAt || null,
+    whatsapp_reminders: !!user.whatsappReminders,
+    email_receipts: !!user.emailReceipts,
+    community_news: !!user.communityNews,
+  };
+}
+
+function membershipPatch(form) {
+  const isMinor = parseAgeOver18(form.age_over_18);
+  const guardian = guardianFields(isMinor, form.guardian_name, form.guardian_phone);
+  const patch = {
+    mobile: String(form.mobile || "").trim(),
+    is_minor: isMinor,
+    date_of_birth: null,
+    guardian_name: guardian.name,
+    guardian_phone: guardian.phone,
+    emergency_name: String(form.emergency_name || "").trim(),
+    emergency_phone: String(form.emergency_phone || "").trim(),
+    heard_source: String(form.heard_source || "").trim(),
+    heard_detail: String(form.heard_detail || "").trim() || null,
+    preferred_name: String(form.preferred_name || "").trim() || null,
+  };
+  if (!patch.mobile) throw new Error("Enter mobile number");
+  if (!patch.emergency_name || !patch.emergency_phone) {
+    throw new Error("Enter emergency contact name and phone");
+  }
+  if (!patch.heard_source) throw new Error("Choose how you heard about ITC");
+  return patch;
+}
+
+function privacyPatch(form) {
+  return {
+    photo_consent: !!form.photo_consent,
+    whatsapp_reminders: !!form.whatsapp_reminders,
+    email_receipts: !!form.email_receipts,
+    community_news: !!form.community_news,
+  };
+}
+
 export async function getMyApplication() {
-  if (!isLive() || !supabase) return null;
+  if (!isLive() || !supabase) {
+    const user = currentUser();
+    return user ? localApplication(user) : null;
+  }
   const cu = await getCurrentUser();
   if (!cu) return null;
   const { data, error } = await supabase
@@ -382,6 +440,85 @@ export async function saveMyApplication(form) {
   };
   const { error } = await supabase.from("applications").upsert(row);
   if (error) throw error;
+}
+
+export async function updateMyMembershipDetails(form) {
+  const patch = membershipPatch(form);
+  if (!isLive() || !supabase) {
+    const user = currentUser();
+    if (!user) throw new Error("Not signed in");
+    user.phone = patch.mobile;
+    user.isMinor = patch.is_minor;
+    user.guardianName = patch.guardian_name;
+    user.guardianPhone = patch.guardian_phone;
+    user.emergencyName = patch.emergency_name;
+    user.emergencyPhone = patch.emergency_phone;
+    user.heard = patch.heard_source;
+    user.heardDetail = patch.heard_detail;
+    user.preferredName = patch.preferred_name;
+    save();
+    return localApplication(user);
+  }
+  const cu = await getCurrentUser();
+  if (!cu) throw new Error("Not signed in");
+  const { data, error } = await supabase
+    .from("applications")
+    .update(patch)
+    .eq("profile_id", cu.id)
+    .select()
+    .single();
+  if (error) throw error;
+  return data;
+}
+
+export async function updateMyPrivacyPreferences(form) {
+  const patch = privacyPatch(form);
+  if (!isLive() || !supabase) {
+    const user = currentUser();
+    if (!user) throw new Error("Not signed in");
+    user.mediaConsent = patch.photo_consent;
+    user.whatsappReminders = patch.whatsapp_reminders;
+    user.emailReceipts = patch.email_receipts;
+    user.communityNews = patch.community_news;
+    save();
+    return localApplication(user);
+  }
+  const cu = await getCurrentUser();
+  if (!cu) throw new Error("Not signed in");
+  const { data, error } = await supabase
+    .from("applications")
+    .update(patch)
+    .eq("profile_id", cu.id)
+    .select()
+    .single();
+  if (error) throw error;
+  return data;
+}
+
+export async function acceptMyIndemnity() {
+  if (!isLive() || !supabase) {
+    const user = currentUser();
+    if (!user) throw new Error("Not signed in");
+    if (!user.indemnityAcceptedAt) {
+      user.indemnityAcceptedAt = Date.now();
+      save();
+    }
+    return user.indemnityAcceptedAt;
+  }
+  const cu = await getCurrentUser();
+  if (!cu) throw new Error("Not signed in");
+  const app = await getMyApplication();
+  if (!app) throw new Error("Application not found");
+  if (app.waiver_accepted_at) return app.waiver_accepted_at;
+  const waiver_accepted_at = new Date().toISOString();
+  const { data, error } = await supabase
+    .from("applications")
+    .update({ waiver_accepted_at })
+    .eq("profile_id", cu.id)
+    .select()
+    .single();
+  if (error) throw error;
+  return data.waiver_accepted_at;
 }
 
 function parseAgeOver18(value) {

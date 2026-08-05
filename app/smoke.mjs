@@ -605,8 +605,93 @@ if (!memberHome.includes("BFT Causeway Bay") || memberHome.includes("Midtown 28"
   failures++;
   console.error('FAIL "My week" should show only the member\'s booked 11:15 HYROX');
 } else console.log('ok  "My week" shows only the member\'s booked session');
-// community: prayer request records locally (no public reader by design)
+
 const member = store.currentUser();
+const memberApplication = await store.getMyApplication();
+if (
+  !memberApplication ||
+  memberApplication.profile_id !== member.id ||
+  memberApplication.mobile !== member.phone ||
+  memberApplication.is_minor !== !!member.isMinor ||
+  memberApplication.waiver_accepted_at !== member.indemnityAcceptedAt ||
+  memberApplication.privacy_accepted_at !== member.privacyAcceptedAt ||
+  memberApplication.submitted_at !== member.appliedAt
+) {
+  failures++;
+  console.error("FAIL getMyApplication should map the local member into the live application shape");
+} else {
+  console.log("ok  getMyApplication maps the local member into application shape");
+}
+const membershipBefore = await store.getMyApplication();
+const updatedMembership = await store.updateMyMembershipDetails({
+  mobile: "+852 9000 0000",
+  age_over_18: "yes",
+  emergency_name: "Alex Runner",
+  emergency_phone: "+852 9111 1111",
+  heard_source: "friend",
+  heard_detail: "Run club",
+  preferred_name: "Riley",
+});
+if (
+  updatedMembership.mobile !== "+852 9000 0000" ||
+  updatedMembership.is_minor !== false ||
+  updatedMembership.guardian_name !== null ||
+  updatedMembership.guardian_phone !== null ||
+  updatedMembership.emergency_name !== "Alex Runner" ||
+  updatedMembership.emergency_phone !== "+852 9111 1111" ||
+  updatedMembership.heard_source !== "friend" ||
+  updatedMembership.heard_detail !== "Run club" ||
+  updatedMembership.preferred_name !== "Riley" ||
+  updatedMembership.photo_consent !== membershipBefore.photo_consent ||
+  store.currentUser().phone !== "+852 9000 0000"
+) {
+  failures++;
+  console.error("FAIL updateMyMembershipDetails should update only membership fields locally");
+} else {
+  console.log("ok  updateMyMembershipDetails updates only membership fields locally");
+}
+const updatedPrivacy = await store.updateMyPrivacyPreferences({
+  photo_consent: false,
+  whatsapp_reminders: true,
+  email_receipts: false,
+  community_news: true,
+});
+if (
+  updatedPrivacy.photo_consent !== false ||
+  updatedPrivacy.whatsapp_reminders !== true ||
+  updatedPrivacy.email_receipts !== false ||
+  updatedPrivacy.community_news !== true ||
+  updatedPrivacy.mobile !== "+852 9000 0000" ||
+  store.currentUser().mediaConsent !== false ||
+  store.currentUser().whatsappReminders !== true ||
+  store.currentUser().emailReceipts !== false ||
+  store.currentUser().communityNews !== true
+) {
+  failures++;
+  console.error("FAIL updateMyPrivacyPreferences should update only privacy fields locally");
+} else {
+  console.log("ok  updateMyPrivacyPreferences updates only privacy fields locally");
+}
+const existingIndemnity = member.indemnityAcceptedAt;
+const preservedIndemnity = await store.acceptMyIndemnity();
+if (preservedIndemnity !== existingIndemnity) {
+  failures++;
+  console.error("FAIL acceptMyIndemnity should preserve an existing local timestamp");
+} else {
+  console.log("ok  acceptMyIndemnity preserves an existing local timestamp");
+}
+const realNow = Date.now;
+Date.now = () => 1780000000000;
+store.currentUser().indemnityAcceptedAt = null;
+const writtenIndemnity = await store.acceptMyIndemnity();
+Date.now = realNow;
+if (writtenIndemnity !== 1780000000000 || store.currentUser().indemnityAcceptedAt !== 1780000000000) {
+  failures++;
+  console.error("FAIL acceptMyIndemnity should write one local timestamp when absent");
+} else {
+  console.log("ok  acceptMyIndemnity writes one local timestamp when absent");
+}
+// community: prayer request records locally (no public reader by design)
 const prayer = store.recordPrayer({ userId: member.id, name: member.fullName, request: "Smoke test request" });
 if (!prayer.id || prayer.request !== "Smoke test request") throw new Error("prayer not recorded");
 console.log("ok  prayer request records locally");
@@ -1007,7 +1092,13 @@ for (const fn of ["listProfiles", "listRoleChanges", "updateProfileRole"]) {
     console.log(`ok  store.js: exports ${fn}`);
   }
 }
-for (const fn of ["getMyApplication", "saveMyApplication"]) {
+for (const fn of [
+  "getMyApplication",
+  "saveMyApplication",
+  "updateMyMembershipDetails",
+  "updateMyPrivacyPreferences",
+  "acceptMyIndemnity",
+]) {
   if (!storeSrc.includes(`export async function ${fn}`)) {
     failures++;
     console.error(`FAIL store.js: should export ${fn}`);
