@@ -5,7 +5,7 @@
 -- read/update their existing application, but may not create a new one.
 -- Keep both ownership and current profile role in the insert check.
 
-drop policy "self insert application" on public.applications;
+drop policy if exists "self insert application" on public.applications;
 create policy "self insert application"
   on public.applications for insert
   with check (

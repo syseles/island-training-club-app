@@ -949,15 +949,18 @@ store.resetDemo();
     new URL("../supabase/migrations/20260805000005_profile_preferences_age_status.sql", import.meta.url)
   );
   const migrationSql = existsSync(migrationPath) ? readFileSync(migrationPath, "utf8") : "";
+  const dropDobNotNullAt = migrationSql.indexOf("alter column date_of_birth drop not null");
+  const clearDobAt = migrationSql.indexOf("update public.applications\nset date_of_birth = null;");
   if (
-    !migrationSql.includes("add column whatsapp_reminders boolean not null default false") ||
-    !migrationSql.includes("add column email_receipts boolean not null default false") ||
-    !migrationSql.includes("add column community_news boolean not null default false") ||
+    !migrationSql.includes("add column if not exists whatsapp_reminders boolean not null default false") ||
+    !migrationSql.includes("add column if not exists email_receipts boolean not null default false") ||
+    !migrationSql.includes("add column if not exists community_news boolean not null default false") ||
     !migrationSql.includes("set is_minor = case") ||
     !migrationSql.includes("when date_of_birth is null then is_minor") ||
     !migrationSql.includes("else date_of_birth > (current_date - interval '18 years')::date") ||
-    !migrationSql.includes("update public.applications\nset date_of_birth = null;") ||
-    !migrationSql.includes("alter column date_of_birth drop not null")
+    clearDobAt < 0 ||
+    dropDobNotNullAt < 0 ||
+    dropDobNotNullAt > clearDobAt
   ) {
     failures++;
     console.error("FAIL v9 migration SQL should add defaults, backfill age and clear DOB");
@@ -1309,7 +1312,7 @@ const restorePendingInsert = existsSync(resolve(__dirname, "../supabase/migratio
   ? readFileSync(resolve(__dirname, "../supabase/migrations/20260805000006_restore_pending_self_insert_application.sql"), "utf8")
   : "";
 if (
-  !restorePendingInsert.includes('drop policy "self insert application"') ||
+  !restorePendingInsert.includes('drop policy if exists "self insert application"') ||
   !restorePendingInsert.includes("auth.uid() = profile_id") ||
   !restorePendingInsert.includes("(select role from public.profiles where id = auth.uid()) = 'pending'")
 ) {
