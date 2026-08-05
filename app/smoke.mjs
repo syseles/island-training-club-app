@@ -198,6 +198,22 @@ if (!applyRes.user.indemnityAcceptedAt) {
   console.error("FAIL indemnity acceptance not recorded at application");
 } else console.log("ok  indemnity acceptance recorded at application");
 
+// pending users see "My Week" but with free sessions only — paid booking
+// is locked until approval, so paid rows would be dead ends
+const pendingHome = views.viewHome();
+if (!pendingHome.includes("My Week")) {
+  failures++;
+  console.error('FAIL pending home should show "My Week"');
+} else console.log('ok  pending home shows "My Week"');
+if (pendingHome.includes("badge paid")) {
+  failures++;
+  console.error("FAIL pending home must not list paid sessions");
+} else console.log("ok  pending home lists no paid sessions");
+if (!pendingHome.includes(free.name)) {
+  failures++;
+  console.error("FAIL pending home should list free sessions");
+} else console.log("ok  pending home lists free sessions");
+
 // donor ID format: last name, hyphen, then 4 or 5 digits (CHUI-08879 / CHUI-8879);
 // dash variants and spaces as the separator normalize to a plain hyphen
 for (const [input, expect] of [

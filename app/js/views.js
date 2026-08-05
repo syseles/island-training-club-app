@@ -168,8 +168,8 @@ export function viewHome() {
   // preview. Visitors get the free open-to-all preview instead.
   let weekSection;
   if (user) {
-    let rows = upcoming.slice(0, 3);
-    let emptyMsg = "No upcoming sessions — check back soon.";
+    let rows;
+    let emptyMsg;
     if (user.status === "approved") {
       const bookedIds = new Set(
         store
@@ -179,6 +179,11 @@ export function viewHome() {
       );
       rows = upcoming.filter((s) => bookedIds.has(s.id));
       emptyMsg = `Nothing booked this week yet. <a href="#/schedule" style="color:var(--accent)">Find a session →</a>`;
+    } else {
+      // Signed in but not yet approved: paid booking is locked, so only
+      // the free open sessions are actionable.
+      rows = upcoming.filter((s) => s.kind === "free");
+      emptyMsg = "No open sessions this week — check back soon.";
     }
     weekSection = `
     <div class="section-head">

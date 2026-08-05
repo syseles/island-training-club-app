@@ -37,7 +37,7 @@ Stage 1 was shortened per product decision: the application collects only **mobi
 
 ## Amendment 2 (2026-08-05)
 
-Short-form decision **reverted**: the full application form stands — mobile, DOB, emergency name/phone and heard_source required; waiver, privacy and guidelines checkboxes required; heard detail, preferred name and photo consent optional. Migration `20260805000001_short_application.sql` is kept (a more permissive DB is harmless; the form enforces the required fields).
+Short-form decision **reverted**: the full application form stands — mobile, DOB, emergency name/phone and heard_source required; waiver, privacy and guidelines checkboxes required; heard detail, preferred name and photo consent optional. Migration `20260805000001_short_application.sql` is kept (a more permissive DB is harmless; the form enforces the required fields). Also: pending users keep the "My Week" section but its content is **free sessions only** — paid rows are dead ends while booking is locked pre-approval.
 
 ## Section 2 — Stage 1: application after Google sign-in (`feature/auth-identity`)
 
