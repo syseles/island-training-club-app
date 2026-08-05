@@ -55,7 +55,6 @@ const applicationUpdates = [];
 let applicationReadError = null;
 let authStateChangeHandler = null;
 let authCallbackLocked = false;
-let sessionReadDuringAuthCallback = false;
 const deferredAuthTasks = [];
 const fixedIso = "2026-08-05T02:00:00.000Z";
 const RealDate = Date;
@@ -76,9 +75,11 @@ globalThis.Date = class extends RealDate {
 
 const fakeSupabase = {
   auth: {
-    getSession: async () => {
-      if (authCallbackLocked) sessionReadDuringAuthCallback = true;
-      return {
+    getSession: () => {
+      if (authCallbackLocked) {
+        throw new Error("getSession must not run while the auth callback lock is held");
+      }
+      return Promise.resolve({
         data: {
           session: {
             access_token: "test-access-token",
@@ -90,7 +91,7 @@ const fakeSupabase = {
           },
         },
         error: null,
-      };
+      });
     },
     onAuthStateChange(callback) {
       authStateChangeHandler = callback;
@@ -527,9 +528,14 @@ globalThis.setTimeout = (callback, delay) => {
 
 async function dispatchAuthStateChange(event) {
   authCallbackLocked = true;
-  const callbackResult = authStateChangeHandler(event);
-  authCallbackLocked = false;
-  await callbackResult;
+  try {
+    const callbackResult = authStateChangeHandler(event);
+    if (callbackResult !== undefined) {
+      throw new Error("onAuthStateChange callback must return undefined synchronously");
+    }
+  } finally {
+    authCallbackLocked = false;
+  }
   while (deferredAuthTasks.length) {
     await deferredAuthTasks.shift()();
   }
@@ -566,9 +572,6 @@ profile.role = "pending";
 applicationReadError = null;
 location.hash = "#/account";
 await dispatchAuthStateChange("SIGNED_IN");
-if (sessionReadDuringAuthCallback) {
-  throw new Error("SIGNED_IN hydration must begin only after the auth callback lock is released");
-}
 if (location.hash !== "#/apply" || !elements.get("view").innerHTML.includes("Good to see you, Riley.")) {
   throw new Error("Deferred SIGNED_IN handling should render Home before redirecting a pending applicant to Apply");
 }
@@ -584,7 +587,7 @@ process.off("unhandledRejection", captureRejection);
 applicationReadError = null;
 profile.role = "super_admin";
 
-console.log("ok  live SIGNED_IN hydration starts after the auth callback lock is released");
+console.log("ok  live SIGNED_IN callback returns synchronously and defers hydration until after the auth lock");
 console.log("ok  live application read failures are caught and shown once across async render flows");
 console.log("ok  live OAuth session renders the signed-in home page");
 console.log("ok  live profile renders valid account metadata");
