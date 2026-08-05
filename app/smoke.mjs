@@ -1321,6 +1321,19 @@ if (
 } else {
   console.log("ok  migrations: self insert application is restored to pending-only ownership checks");
 }
+const adminDecisionSql = readFileSync(
+  new URL("../supabase/migrations/20260805000007_admin_application_decisions.sql", import.meta.url),
+  "utf8"
+);
+if (!adminDecisionSql.includes("'declined'") || !adminDecisionSql.includes("profiles_role_check")) {
+  failures++;
+  console.error("FAIL migrations: admin decision migration must permit the declined profile role");
+} else if (!adminDecisionSql.includes("role in ('member', 'declined')")) {
+  failures++;
+  console.error("FAIL migrations: admin decision migration must allow submitted applications to be approved or declined");
+} else {
+  console.log("ok  migration supports approve and decline decisions");
+}
 
 // --- store.getCurrentUser fallback (local mode) ---
 store.signOut();
