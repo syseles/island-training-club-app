@@ -77,7 +77,6 @@ export const SEED_ACTIVITIES = [
     memberNote: "Gym entry fee is included in the session price.",
     price: 180, // HKD
     capacity: 18, // placeholder
-    baseBooked: 9, // simulated demand from other members
     published: true,
   },
   {
@@ -96,7 +95,6 @@ export const SEED_ACTIVITIES = [
     memberNote: "Gym entry fee is included in the session price.",
     price: 180, // HKD
     capacity: 18, // placeholder
-    baseBooked: 14, // simulated demand from other members
     published: true,
   },
 ];
@@ -183,77 +181,6 @@ export const SEED_USERS = [
     indemnityAcceptedAt: null,
   },
 ];
-
-// --- Seed bookings -----------------------------------------------------------
-// Snapshot fields keep the member area renderable even after the schedule
-// window rolls forward.
-
-export function seedBookings() {
-  const past = saturdayOnOrBefore(todayLocal());
-  const next = addDays(past, 7);
-  const act = SEED_ACTIVITIES.find((a) => a.id === "hyrox");
-  return [
-    {
-      id: "b-seed-past",
-      userId: "u-member",
-      sessionId: `hyrox-${isoDate(past)}`,
-      status: "attended",
-      createdAt: daysAgo(9),
-      snapshot: sessionSnapshot(act, past),
-    },
-    {
-      id: "b-seed-next",
-      userId: "u-member",
-      sessionId: `hyrox-${isoDate(next)}`,
-      status: "confirmed",
-      createdAt: daysAgo(3),
-      snapshot: sessionSnapshot(act, next),
-    },
-  ];
-}
-
-export function seedReceipts() {
-  const past = saturdayOnOrBefore(todayLocal());
-  const next = addDays(past, 7);
-  return [
-    {
-      id: "r-seed-past",
-      number: "ITC-2026-0041",
-      bookingId: "b-seed-past",
-      userId: "u-member",
-      amount: 180,
-      currency: "HKD",
-      cardLast4: "4242",
-      status: "paid",
-      issuedAt: daysAgo(9),
-      line: `ITC HYROX — ${fmtDate(past)} 11:15 AM`,
-    },
-    {
-      id: "r-seed-next",
-      number: "ITC-2026-0048",
-      bookingId: "b-seed-next",
-      userId: "u-member",
-      amount: 180,
-      currency: "HKD",
-      cardLast4: "4242",
-      status: "paid",
-      issuedAt: daysAgo(3),
-      line: `ITC HYROX — ${fmtDate(next)} 11:15 AM`,
-    },
-  ];
-}
-
-function sessionSnapshot(act, date) {
-  return {
-    name: act.name,
-    kind: act.kind,
-    dateISO: isoDate(date),
-    time: act.time,
-    durationMin: act.durationMin,
-    location: act.location,
-    price: act.price ?? null,
-  };
-}
 
 export const ANNOUNCEMENTS = [
   {
@@ -354,12 +281,6 @@ export function addDays(date, n) {
 export function mondayOf(date) {
   const d = new Date(date.getTime());
   const offset = (d.getDay() + 6) % 7; // Monday = 0
-  return addDays(d, -offset);
-}
-
-function saturdayOnOrBefore(date) {
-  const d = new Date(date.getTime());
-  const offset = (d.getDay() + 1) % 7; // days since Saturday
   return addDays(d, -offset);
 }
 
@@ -513,4 +434,54 @@ export function buildICS(session) {
 export function mapsUrl(session) {
   const q = session.mapsQuery || session.location;
   return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(q)}`;
+}
+
+// ============================================================================
+// Weekly encouragement — rotating verse, Sunday–Saturday weeks
+// ============================================================================
+// To rotate: append verses to lengthen the cycle (it wraps when the list
+// runs out). Prototype copy — final verse list to be confirmed with ITC.
+
+export const WEEKLY_VERSES = [
+  {
+    ref: "Hebrews 12:1",
+    text: "Let us run with perseverance the race marked out for us.",
+  },
+  {
+    ref: "Isaiah 40:31",
+    text: "Those who hope in the Lord will renew their strength; they will run and not grow weary.",
+  },
+  {
+    ref: "1 Corinthians 9:24",
+    text: "Run in such a way as to get the prize.",
+  },
+  {
+    ref: "Philippians 4:13",
+    text: "I can do all this through him who gives me strength.",
+  },
+  {
+    ref: "Joshua 1:9",
+    text: "Be strong and courageous — the Lord your God will be with you wherever you go.",
+  },
+  {
+    ref: "Colossians 3:23",
+    text: "Whatever you do, work at it with all your heart, as working for the Lord.",
+  },
+  {
+    ref: "Galatians 6:9",
+    text: "Let us not become weary in doing good, for at the proper time we will reap a harvest if we do not give up.",
+  },
+  {
+    ref: "2 Timothy 4:7",
+    text: "I have fought the good fight, I have finished the race, I have kept the faith.",
+  },
+];
+
+const VERSE_EPOCH = new Date(2026, 6, 26); // Sunday — week one shows verses[0]
+
+export function weeklyVerse(date = todayLocal()) {
+  const sunday = addDays(date, -date.getDay()); // weeks run Sunday–Saturday
+  const weeks = Math.round((sunday - VERSE_EPOCH) / (7 * 24 * 60 * 60 * 1000));
+  const n = WEEKLY_VERSES.length;
+  return WEEKLY_VERSES[((weeks % n) + n) % n];
 }

@@ -5,6 +5,7 @@
 import * as store from "./store.js";
 import { buildICS, findSession, todayLocal, mondayOf, addDays, isoDate, donorIdProblem } from "./data.js";
 import * as views from "./views.js";
+import { supabase, isLive } from "./config.js";
 
 const viewEl = document.getElementById("view");
 const navEl = document.getElementById("bottom-nav");
@@ -24,7 +25,12 @@ export function toast(msg, isErr = false) {
 // --- Router ----------------------------------------------------------------------
 
 function parseHash() {
-  return location.hash
+  const raw = location.hash;
+  // Supabase OAuth redirects land on /app/#access_token=… — auth params,
+  // not a route. supabase-js strips the hash via history.replaceState,
+  // which never fires hashchange, so guard here as well as on SIGNED_IN.
+  if (raw.startsWith("#access_token")) return [];
+  return raw
     .replace(/^#\/?/, "")
     .split("/")
     .filter(Boolean);
@@ -41,11 +47,42 @@ const NAV_FOR = {
   booking: "account",
   receipt: "account",
   admin: "admin",
+  notifications: "notifications",
 };
 
 let prevPage = null;
 
-function render() {
+// Live-mode auth listener: when Supabase completes sign-in, route the
+// pending user to /apply (if they have not yet submitted an application).
+if (isLive() && supabase) {
+  supabase.auth.onAuthStateChange((event) => {
+    if (event !== "SIGNED_IN") return;
+    setTimeout(async () => {
+      try {
+        // Hydrate the synchronous view model before rendering Home. Without
+        // this handoff, OAuth succeeds but Home still renders as a visitor.
+        await store.getCurrentUser();
+        location.hash = "#/home";
+        await render();
+        await maybeRedirectToApply();
+      } catch (err) {
+        toast(err.message || "Sign-in failed", true);
+      }
+    }, 0);
+  });
+}
+
+export async function maybeRedirectToApply() {
+  if (!isLive()) return;
+  const cu = await store.getCurrentUser();
+  if (!cu || cu.role !== "pending") return;
+  const app = await store.getMyApplication();
+  if (!app && window.location.hash !== "#/apply") {
+    window.location.hash = "#/apply";
+  }
+}
+
+async function render() {
   const parts = parseHash();
   const [page, arg, arg2] = parts.length ? parts : ["home"];
 
@@ -72,11 +109,13 @@ function render() {
       out = views.viewCommunity(arg);
       break;
     case "account":
-      out = views.viewAccount(arg);
+      // Awaited: account sections can fetch live application data and use
+      // an optional edit-mode segment such as #/account/details/edit.
+      out = await views.viewAccount(arg, arg2);
       break;
     case "apply": {
       const u = store.currentUser();
-      out = u && u.status === "approved" ? { redirect: "#/account" } : views.viewApply();
+      out = u && u.status === "approved" ? { redirect: "#/account" } : await views.viewApply();
       break;
     }
     case "checkout":
@@ -89,7 +128,18 @@ function render() {
       out = views.viewReceipt(arg);
       break;
     case "admin":
-      out = arg === "activity" ? views.viewAdminActivity(arg2) : views.viewAdmin(arg || "approvals");
+      // The tabbed admin page (approvals / activities / members) is the
+      // canonical admin surface — Admin Tools and the Admin tab both land
+      // here. #/admin/users stays as the role-audit subpage.
+      out =
+        arg === "activity"
+          ? views.viewAdminActivity(arg2)
+          : arg === "users"
+            ? await views.viewAdminUsers()
+            : await views.viewAdmin(arg || "approvals");
+      break;
+    case "notifications":
+      out = await views.viewNotifications();
       break;
     default:
       out = views.viewNotFound();
@@ -105,9 +155,33 @@ function render() {
   navEl.innerHTML = views.navHTML(NAV_FOR[page] ?? "home", user);
   avatarEl.classList.toggle("is-empty", !user);
   avatarEl.innerHTML = views.avatarHTML(user);
+  // Best-effort: append unread-count badge to the Notifications nav item.
+  if (isLive() && user) {
+    views.unreadBadge().then((badge) => {
+      const notifLink = navEl.querySelector('a[href="#/notifications"]');
+      if (notifLink && badge) notifLink.insertAdjacentHTML("afterbegin", badge);
+    }).catch(() => {});
+  }
   window.scrollTo({ top: 0 });
   prevPage = page;
 }
+
+// --- Apply/details forms: toggle minor-only fields when age status changes --------
+
+document.addEventListener("change", (e) => {
+  const t = e.target;
+  if (!(t instanceof HTMLInputElement) || t.name !== "age_over_18") return;
+  const form = t.closest("form");
+  if (!form || (!["apply", "membership-details"].includes(form.dataset.form) && form.id !== "form-apply")) return;
+  const block = form.querySelector("[data-minor-only]");
+  if (!block) return;
+  const isMinor = t.value === "no";
+  block.hidden = !isMinor;
+  block.querySelectorAll("input").forEach((input) => {
+    input.required = isMinor;
+    if (!isMinor) input.value = "";
+  });
+});
 
 // --- ICS download -------------------------------------------------------------------
 
@@ -124,7 +198,7 @@ function downloadICS(session) {
 
 // --- Click delegation -----------------------------------------------------------------
 
-document.addEventListener("click", (e) => {
+document.addEventListener("click", async (e) => {
   const el = e.target.closest("[data-action]");
   if (!el) return;
   const { action } = el.dataset;
@@ -183,12 +257,62 @@ document.addEventListener("click", (e) => {
       break;
     }
 
-    case "signout":
-      store.signOut();
+    case "signout": {
+      // signOutLive clears the Supabase session in live mode and falls back
+      // to local signOut otherwise — without it the live session survives.
+      await store.signOutLive();
       toast("Signed out");
-      location.hash = "#/home";
+      // Back to the sign-in page — the account page IS the visitor front door.
+      location.hash = "#/account";
       render();
       break;
+    }
+
+    case "sign-in-google":
+      store.signInWithGoogle().catch((err) => toast(err.message || "Sign-in failed"));
+      break;
+
+    case "approve":
+    case "promote":
+    case "demote": {
+      const roleMap = { approve: "member", promote: "admin", demote: "member" };
+      const msgMap  = { approve: "Approved.", promote: "Promoted to admin.", demote: "Demoted to member." };
+      const id = el.dataset.id;
+      try {
+        await store.updateProfileRole(id, roleMap[action]);
+        toast(msgMap[action]);
+        render();
+      } catch (err) {
+        toast(err.message || "Action failed");
+      }
+      break;
+    }
+
+    case "revoke": {
+      const id = el.dataset.id;
+      const profile = await store.listProfiles().then((all) => all.find((p) => p.id === id));
+      const typed = window.prompt(`Type the user's email to confirm revocation: ${profile?.email || ""}`);
+      if (typed !== profile?.email) break;
+      try {
+        await store.updateProfileRole(id, "pending");
+        toast("Revoked.");
+        render();
+      } catch (err) {
+        toast(err.message || "Revoke failed");
+      }
+      break;
+    }
+
+    case "notification-open": {
+      const id = el.closest("[data-notification-id]").dataset.notificationId;
+      try {
+        await store.markNotificationRead(id);
+        render();
+      } catch (err) {
+        toast(err.message || "Failed to mark read");
+      }
+      break;
+    }
 
     case "reset-demo":
       if (confirm("Reset all demo data? Bookings, applications and edits will be cleared.")) {
@@ -229,9 +353,60 @@ document.addEventListener("click", (e) => {
 
 // --- Form delegation ---------------------------------------------------------------------
 
-document.addEventListener("submit", (e) => {
+document.addEventListener("submit", async (e) => {
   const form = e.target;
   if (!(form instanceof HTMLFormElement)) return;
+
+  // Live-mode application form (data-form="apply"). The local-mode form
+  // is handled below by id "form-apply".
+  if (form.dataset.form === "apply") {
+    e.preventDefault();
+    const fd = new FormData(form);
+    const payload = Object.fromEntries(fd.entries());
+    payload.photo_consent = !!fd.get("photo_consent");
+    try {
+      await store.saveMyApplication(payload);
+      toast(form.dataset.toast || "Application submitted.");
+      location.hash = "#/home";
+      await render();
+    } catch (err) {
+      toast(err.message || "Submit failed");
+    }
+    return;
+  }
+
+  if (form.dataset.form === "membership-details") {
+    e.preventDefault();
+    if (!form.reportValidity()) return;
+    const fd = new FormData(form);
+    try {
+      await store.updateMyMembershipDetails(Object.fromEntries(fd.entries()));
+      toast("Membership details saved");
+      location.hash = "#/account/details";
+    } catch (err) {
+      toast(err.message || "Unable to save membership details", true);
+    }
+    return;
+  }
+
+  if (form.dataset.form === "privacy-preferences") {
+    e.preventDefault();
+    const fd = new FormData(form);
+    try {
+      await store.updateMyPrivacyPreferences({
+        photo_consent: fd.has("photo_consent"),
+        whatsapp_reminders: fd.has("whatsapp_reminders"),
+        email_receipts: fd.has("email_receipts"),
+        community_news: fd.has("community_news"),
+      });
+      toast("Privacy preferences saved");
+      location.hash = "#/account/privacy";
+    } catch (err) {
+      console.error(err);
+      toast("Unable to save privacy preferences", true);
+    }
+    return;
+  }
 
   switch (form.id) {
     case "form-signin": {
@@ -258,21 +433,28 @@ document.addEventListener("submit", (e) => {
         errEl.innerHTML = `<div class="form-error">That Donor ID doesn’t look right — it needs a hyphen between your last name and the 4- or 5-digit number (e.g. CHUI-08879 or CHUI-8879). Please enter it again, or leave it blank if you don’t have one.</div>`;
         return;
       }
-      const res = store.applyForMembership({
-        fullName: fd.get("fullName") || "",
-        preferredName: fd.get("preferredName") || "",
-        email: fd.get("email") || "",
-        phone: fd.get("phone") || "",
-        emergencyName: fd.get("emergencyName") || "",
-        emergencyPhone: fd.get("emergencyPhone") || "",
-        heard: fd.get("heard") || "",
-        ageConfirmed: fd.get("ageConfirmed") === "on",
-        mediaConsent: fd.get("mediaConsent") === "on",
-        donorId: fd.get("donorId") || "",
-        indemnity: fd.get("indemnity") === "on",
-      });
-      if (!res.ok) {
-        errEl.innerHTML = `<div class="form-error">An application already exists for that email — try signing in instead.</div>`;
+      try {
+        const res = store.applyForMembership({
+          fullName: fd.get("fullName") || "",
+          preferredName: fd.get("preferredName") || "",
+          email: fd.get("email") || "",
+          phone: fd.get("phone") || "",
+          emergencyName: fd.get("emergencyName") || "",
+          emergencyPhone: fd.get("emergencyPhone") || "",
+          heard: fd.get("heard") || "",
+          ageOver18: fd.get("age_over_18"),
+          guardianName: fd.get("guardianName") || "",
+          guardianPhone: fd.get("guardianPhone") || "",
+          mediaConsent: fd.get("mediaConsent") === "on",
+          donorId: fd.get("donorId") || "",
+          indemnity: fd.get("indemnity") === "on",
+        });
+        if (!res.ok) {
+          errEl.innerHTML = `<div class="form-error">An application already exists for that email — try signing in instead.</div>`;
+          return;
+        }
+      } catch (err) {
+        errEl.innerHTML = `<div class="form-error">${err.message || "Application failed."}</div>`;
         return;
       }
       toast("Application submitted — a leader will review it");
@@ -332,9 +514,13 @@ document.addEventListener("submit", (e) => {
       if (!form.reportValidity()) return;
       const user = store.currentUser();
       if (!user) return;
-      store.acceptIndemnity(user.id);
-      toast("Indemnity accepted & confirmed");
-      render();
+      try {
+        await store.acceptMyIndemnity();
+        toast("Indemnity accepted and confirmed");
+        await render();
+      } catch (err) {
+        toast(err.message || "Unable to confirm indemnity", true);
+      }
       break;
     }
 
@@ -414,7 +600,21 @@ function form_kind_toggle(select) {
 
 // --- Boot ---------------------------------------------------------------------------------------
 
-store.load();
-if (!location.hash) location.hash = "#/home";
-window.addEventListener("hashchange", render);
-render();
+async function boot() {
+  store.load();
+  if (isLive()) await store.getCurrentUser();
+  if (!location.hash) location.hash = "#/home";
+  window.addEventListener("hashchange", async () => {
+    try {
+      await render();
+    } catch (err) {
+      toast(err.message || "Unable to load your account", true);
+    }
+  });
+  await render();
+  await maybeRedirectToApply();
+}
+
+export const bootPromise = boot().catch((err) => {
+  toast(err.message || "Unable to load your account", true);
+});

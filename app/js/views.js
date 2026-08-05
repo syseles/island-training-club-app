@@ -6,6 +6,7 @@
 // ==========================================================================
 
 import * as store from "./store.js";
+import { isLive } from "./config.js";
 import {
   LEADERS,
   CULTURE,
@@ -13,6 +14,7 @@ import {
   findSession,
   sessionStarted,
   sessionsInRange,
+  weeklyVerse,
   mondayOf,
   addDays,
   todayLocal,
@@ -108,17 +110,28 @@ const ICONS = {
 
 // --- Bottom nav / avatar --------------------------------------------------------
 
+// Live roles use super_admin; local seed roles use superadmin.
+const ADMIN_ROLES = ["admin", "superadmin", "super_admin"];
+const isAdminRole = (role) => ADMIN_ROLES.includes(role);
+const isSuperRole = (role) => ["superadmin", "super_admin"].includes(role);
+
 const NAV_ITEMS = [
   { key: "home", label: "Home", icon: "home", href: "#/home" },
   { key: "schedule", label: "Schedule", icon: "calendar", href: "#/schedule" },
   { key: "community", label: "Community", icon: "people", href: "#/community" },
+  { key: "notifications", label: "Notifications", icon: "bell", href: "#/notifications", roles: ["signed-in"] },
   { key: "account", label: "Account", icon: "user", href: "#/account" },
-  { key: "admin", label: "Admin", icon: "shield", href: "#/admin", roles: ["admin", "superadmin"] },
+  { key: "admin", label: "Admin", icon: "shield", href: "#/admin", roles: ["admin", "superadmin", "super_admin"] },
 ];
 
 export function navHTML(routeKey, user) {
-  const isAdmin = user && ["admin", "superadmin"].includes(user.role);
-  return NAV_ITEMS.filter((i) => !i.roles || isAdmin)
+  const isAdmin = user && isAdminRole(user.role);
+  const isSignedIn = !!user;
+  return NAV_ITEMS.filter((i) => {
+    if (!i.roles) return true;
+    if (i.roles.includes("signed-in")) return isSignedIn;
+    return i.roles.some((r) => isAdmin);
+  })
     .map(
       (i) => `
       <a href="${i.href}" class="${i.key === routeKey ? "active" : ""}" ${i.key === routeKey ? 'aria-current="page"' : ""}>
@@ -143,39 +156,42 @@ export function viewHome() {
   const upcoming = store.upcomingSessions(14);
   const name = user ? esc(user.preferredName || user.fullName.split(" ")[0]) : null;
 
-  // "My week" shows a signed-in member only the sessions they've booked
-  // (free ones included); the full week stays discoverable via Schedule.
-  let rows = upcoming.slice(0, 3);
-  let emptyMsg = "No upcoming sessions — check back soon.";
-  if (user && user.status === "approved") {
-    const bookedIds = new Set(
-      store
-        .bookingsForUser(user.id)
-        .filter((b) => b.status === "confirmed" && !sessionStarted(b.snapshot))
-        .map((b) => b.sessionId)
-    );
-    rows = upcoming.filter((s) => bookedIds.has(s.id));
-    emptyMsg = `Nothing booked this week yet. <a href="#/schedule" style="color:var(--accent)">Find a session →</a>`;
-  }
-
   const guest = !user
     ? `
     <div class="card mt24"><div class="card-body">
       <span class="kicker">New to ITC?</span>
       <h3 class="mt8">Everyone is welcome</h3>
-      <p class="hero-meta">Free activities are open to all — just show up. Membership is free too; an ITC leader approves every application before paid booking unlocks.</p>
-      <div class="btn-row two">
-        <a class="btn" href="#/apply">Apply to join</a>
-        <a class="btn ghost" href="#/account">Sign in</a>
-      </div>
+      <p class="hero-meta">Free activities are open to all — just show up. Membership is free too; sign in and an ITC leader approves every application before paid booking unlocks.</p>
+      ${isLive()
+        ? `<button class="btn mt16" type="button" data-action="sign-in-google">Continue with Google</button>`
+        : `<a class="btn mt16" href="#/account">Sign in or join</a>`}
+      <p class="muted small mt8">New here? You'll be guided through a short application after sign-in.</p>
     </div></div>`
     : "";
 
-  return `
-    <div class="kicker">${esc(fmtDateLong(todayLocal()))} · Hong Kong</div>
-    <h1 class="display">${name ? `Good to see you, ${name}.` : "Train together."}</h1>
-    ${user && user.status === "pending" ? pendingBanner() : ""}
-    ${guest}
+  // "My week" is signed-in-only: approved members see the sessions they've
+  // booked (free ones included); other signed-in users see the upcoming
+  // preview. Visitors get the free open-to-all preview instead.
+  let weekSection;
+  if (user) {
+    let rows;
+    let emptyMsg;
+    if (user.status === "approved") {
+      const bookedIds = new Set(
+        store
+          .bookingsForUser(user.id)
+          .filter((b) => b.status === "confirmed" && !sessionStarted(b.snapshot))
+          .map((b) => b.sessionId)
+      );
+      rows = upcoming.filter((s) => bookedIds.has(s.id));
+      emptyMsg = `Nothing booked this week yet. <a href="#/schedule" style="color:var(--accent)">Find a session →</a>`;
+    } else {
+      // Signed in but not yet approved: paid booking is locked, so only
+      // the free open sessions are actionable.
+      rows = upcoming.filter((s) => s.kind === "free");
+      emptyMsg = "No open sessions this week — check back soon.";
+    }
+    weekSection = `
     <div class="section-head">
       <h2>My Week</h2>
       <a href="#/schedule">See more →</a>
@@ -184,7 +200,36 @@ export function viewHome() {
       ${rows.length
         ? rows.map((s, i) => sessionRow(s, { highlight: i === 0 })).join("")
         : `<div class="empty">${emptyMsg}</div>`}
+    </div>`;
+  } else {
+    const freeRows = upcoming.filter((s) => s.kind === "free");
+    weekSection = `
+    <div class="section-head">
+      <h2>This week — open to all</h2>
+      <a href="#/schedule">See more →</a>
     </div>
+    <div class="session-list">
+      ${freeRows.length
+        ? freeRows.map((s, i) => sessionRow(s, { highlight: i === 0 })).join("")
+        : `<div class="empty">No open sessions this week — check back soon.</div>`}
+    </div>`;
+  }
+
+  const verse = weeklyVerse();
+  const encouragement = `
+    <div class="card mt16"><div class="card-body">
+      <span class="kicker">Encouragement of the week</span>
+      <p class="verse-text">“${esc(verse.text)}”</p>
+      <p class="hero-meta">${esc(verse.ref)}</p>
+    </div></div>`;
+
+  return `
+    <div class="kicker">${esc(fmtDateLong(todayLocal()))} · Hong Kong</div>
+    <h1 class="display">${name ? `Good to see you, ${name}.` : "Train together."}</h1>
+    ${user && user.status === "pending" ? pendingBanner() : ""}
+    ${user ? encouragement : ""}
+    ${guest}
+    ${weekSection}
     <div class="section-head"><h2>The Club</h2><a href="#/community">More →</a></div>
     <a class="card" href="#/community" style="display:block;text-decoration:none">
       <img class="photo" src="../assets/itc/community.webp" alt="ITC community">
@@ -329,12 +374,9 @@ export function viewActivity(sessionId) {
     actionBlock = `
       <div class="banner mt16">
         <span class="kicker">Members only</span>
-        <p>This is a paid member session. Apply for free membership — a leader approves every application — then book and pay here.</p>
+        <p>This is a paid member session. Sign in to book — new here? You'll be guided through a short free application after sign-in.</p>
       </div>
-      <div class="btn-row two">
-        <a class="btn" href="#/apply">Apply to join</a>
-        <a class="btn ghost" href="#/account">Sign in</a>
-      </div>`;
+      <a class="btn mt16" href="#/account">Sign in to book</a>`;
   }
 
   const metaPaid =
@@ -344,12 +386,15 @@ export function viewActivity(sessionId) {
       <div><small>Places</small><strong>${spots <= 0 ? "Full" : `${spots} of ${s.capacity} left`}</strong></div>`
       : "";
 
+  const attendeeNames = store.attendeesFor(s);
   const attendees =
     s.kind === "paid"
       ? isMember
         ? `
       <div class="section-head"><h2>Who’s coming</h2></div>
-      <div class="attendees">${store.attendeesFor(s).map((n) => `<span>${esc(n)}</span>`).join("")}</div>`
+      ${attendeeNames.length
+        ? `<div class="attendees">${attendeeNames.map((n) => `<span>${esc(n)}</span>`).join("")}</div>`
+        : `<p class="muted small">No sign-ups yet — be the first.</p>`}`
         : `<div class="section-head"><h2>Who’s coming</h2></div>${memberOnlyNote("Member-only: the attendee list is visible after approval.")}`
       : "";
 
@@ -524,24 +569,32 @@ function communityAnnouncements() {
     <p class="muted small mt16">Draft announcements — real posts come from ITC leadership and IECC comms.</p>`;
 }
 
-export function viewAccount(section) {
+export async function viewAccount(section, editMode) {
   const user = store.currentUser();
   if (!user) return accountVisitor();
-  if (user.status === "pending") return accountPending(user);
+  if (user.status === "pending") {
+    const application = await store.getMyApplication();
+    if (isLive() && !application) return { redirect: "#/apply" };
+    return accountPending(user, application);
+  }
   if (user.status === "declined") return accountDeclined(user);
+
+  const needsApplication = section === undefined || section === "details" || section === "indemnity" || section === "privacy";
+  const application = needsApplication ? await store.getMyApplication() : null;
+
   switch (section) {
     case undefined:
-      return accountMember(user);
+      return accountMember(user, application);
     case "details":
-      return accountDetails(user);
+      return editMode === "edit" ? accountDetailsEdit(user, application) : accountDetails(user, application);
     case "indemnity":
-      return accountIndemnity(user);
+      return accountIndemnity(user, application);
     case "donor":
       return accountDonor(user);
     case "payments":
       return accountPayments(user);
     case "privacy":
-      return accountPrivacy(user);
+      return editMode === "edit" ? accountPrivacyEdit(application) : accountPrivacy(user, application);
     case "history":
       return accountHistory(user);
     default:
@@ -550,6 +603,22 @@ export function viewAccount(section) {
 }
 
 function accountVisitor() {
+  if (isLive()) return accountVisitorLive();
+  return accountVisitorLocal();
+}
+
+function accountVisitorLive() {
+  return `
+    <div class="kicker">Account</div>
+    <h1 class="display">Sign in</h1>
+    <p class="subcopy mt8">Use your Google account to sign in to Island Training Club. New here? You'll be guided through a short application after sign-in.</p>
+    <div class="card mt24"><div class="card-body">
+      <button class="btn mt16" type="button" data-action="sign-in-google">Continue with Google</button>
+      <p class="muted small mt16">By continuing, you agree to be added to the ITC community roster. An ITC leader will review your application before you can book sessions.</p>
+    </div></div>`;
+}
+
+function accountVisitorLocal() {
   return `
     <div class="kicker">Account</div>
     <h1 class="display">Join the club.</h1>
@@ -578,7 +647,13 @@ function accountVisitor() {
     </div></div>`;
 }
 
-function accountPending(user) {
+function accountPending(user, application) {
+  const phone = application ? application.mobile : user.phone;
+  const emergencyName = application ? application.emergency_name : user.emergencyName;
+  const emergencyPhone = application ? application.emergency_phone : user.emergencyPhone;
+  const heard = application ? application.heard_source : user.heard;
+  const indemnityAt = application ? application.waiver_accepted_at : user.indemnityAcceptedAt;
+  const photoConsent = application ? application.photo_consent : user.mediaConsent;
   return `
     <div class="kicker">Profile · ${esc(user.email)}</div>
     <h1 class="display">Thanks, ${esc(user.preferredName || user.fullName.split(" ")[0])}.</h1>
@@ -587,14 +662,14 @@ function accountPending(user) {
       <h3>Your application</h3>
       <div class="receipt-lines">
         <div class="line"><span>Name</span><strong>${esc(user.fullName)}</strong></div>
-        <div class="line"><span>Phone</span><strong>${esc(user.phone)}</strong></div>
-        <div class="line"><span>Emergency contact</span><strong>${esc(user.emergencyName)} · ${esc(user.emergencyPhone)}</strong></div>
-        <div class="line"><span>Heard about ITC</span><strong>${esc(user.heard)}</strong></div>
+        <div class="line"><span>Phone</span><strong>${esc(presentValue(phone))}</strong></div>
+        <div class="line"><span>Emergency contact</span><strong>${esc(presentValue(emergencyName))} · ${esc(presentValue(emergencyPhone))}</strong></div>
+        <div class="line"><span>Heard about ITC</span><strong>${esc(heardSourceLabel(heard))}</strong></div>
         ${user.donorId ? `<div class="line"><span>Donor ID</span><strong>${esc(user.donorId)}</strong></div>` : ""}
-        <div class="line"><span>Indemnity</span><strong>${user.indemnityAcceptedAt ? "Accepted" : "—"}</strong></div>
-        <div class="line"><span>Photo consent</span><strong>${user.mediaConsent ? "Yes" : "No"}</strong></div>
+        <div class="line"><span>Indemnity</span><strong>${indemnityAt ? "Accepted" : "—"}</strong></div>
+        <div class="line"><span>Photo consent</span><strong>${photoConsent ? "Yes" : "No"}</strong></div>
       </div>
-      <p class="muted small mt16">Want to see the approval side? Sign out, then use the admin demo profile — your application will be waiting in the queue.</p>
+      ${!isLive() ? `<p class="muted small mt16">Want to see the approval side? Sign out, then use the admin demo profile — your application will be waiting in the queue.</p>` : ""}
     </div></div>
     <div class="btn-row">
       <a class="btn ghost" href="#/schedule">Browse the schedule</a>
@@ -616,13 +691,16 @@ function accountDeclined(user) {
     </div>`;
 }
 
-function accountMember(user) {
-  const isAdmin = ["admin", "superadmin"].includes(user.role);
+function accountMember(user, application) {
+  const isAdmin = isAdminRole(user.role);
+  const applicationMissing = isLive() && !application;
+  const indemnityAt = application?.waiver_accepted_at || (!applicationMissing ? user.indemnityAcceptedAt : null);
 
   const roleLabel = {
     member: "Active member",
     admin: "Admin",
     superadmin: "Super admin",
+    super_admin: "Super admin",
   }[user.role];
 
   const bookings = store.bookingsForUser(user.id).filter((b) => b.status !== "cancelled");
@@ -648,23 +726,27 @@ function accountMember(user) {
 
     <div class="profile-rows">
       ${isAdmin ? profileRow("#/admin", ICONS.shield, "Admin Tools", "Approvals, activities and members") : ""}
-      ${profileRow("#/account/details", ICONS.user, "Membership Details", "Contact and emergency information")}
+      ${profileRow("#/account/details", ICONS.user, "Membership Details", applicationMissing ? "Application details unavailable" : "Contact and emergency information")}
       ${profileRow(
         "#/account/indemnity",
         ICONS.check,
         "Indemnity",
-        user.indemnityAcceptedAt ? `Indemnity confirmed on ${fmtDay(user.indemnityAcceptedAt)}` : "To be accepted",
-        { cls: user.indemnityAcceptedAt ? "ok" : "todo" }
+        applicationMissing
+          ? "Application details unavailable"
+          : indemnityAt
+            ? `Indemnity confirmed on ${fmtDay(indemnityAt)}`
+            : "To be accepted",
+        { cls: indemnityAt ? "ok" : applicationMissing ? "" : "todo" }
       )}
       ${profileRow("#/account/donor", ICONS.heart, "Donor Profile", "Donor ID and e-receipt details")}
       ${profileRow("#/account/payments", ICONS.dollar, "Payments & Receipts", "Bookings, donations and orders")}
-      ${profileRow("#/account/privacy", ICONS.bell, "Privacy & Notifications", "Consent and communication choices")}
+      ${profileRow("#/account/privacy", ICONS.bell, "Privacy & Notifications", applicationMissing ? "Application details unavailable" : "Consent and communication choices")}
       ${profileRow("#/account/history", ICONS.clock, "History", "Activity history")}
     </div>
 
     <div class="btn-row">
       <button class="btn ghost" type="button" data-action="signout">Sign out</button>
-      <button class="btn danger sm" type="button" data-action="reset-demo">Reset demo data</button>
+      ${!isLive() ? `<button class="btn danger sm" type="button" data-action="reset-demo">Reset demo data</button>` : ""}
     </div>`;
 }
 
@@ -682,21 +764,64 @@ function profileRow(href, icon, title, status, { cls = "" } = {}) {
     </a>`;
 }
 
-function accountDetails(user) {
+function applicationUnavailableCard() {
+  return `
+    <div class="card mt16"><div class="card-body">
+      <span class="kicker">Application</span>
+      <h3 class="mt8">Application details unavailable</h3>
+      <p class="hero-meta">We couldn’t find the membership application details for this approved account. Please contact an ITC leader so they can review the account record.</p>
+    </div></div>`;
+}
+
+function accountLine(label, value) {
+  return `<div class="line"><span>${esc(label)}</span><strong>${esc(value)}</strong></div>`;
+}
+
+function presentValue(value, fallback = "Not provided") {
+  const text = String(value ?? "").trim();
+  return text || fallback;
+}
+
+function heardSourceLabel(value) {
+  return {
+    friend: "Friend",
+    family: "Family",
+    search: "Search",
+    social: "Social media",
+    event: "Event",
+    other: "Other",
+  }[value] || presentValue(value);
+}
+
+function accountDetails(user, application) {
+  if (isLive() && !application) {
+    return `
+    <a class="back-link" href="#/account">← Profile</a>
+    <div class="kicker mt16">Profile · Membership Details</div>
+    <h1 class="display sm">Membership Details.</h1>
+    ${applicationUnavailableCard()}`;
+  }
+  const memberSince = application?.submitted_at || user.appliedAt;
   return `
     <a class="back-link" href="#/account">← Profile</a>
     <div class="kicker mt16">Profile · Membership Details</div>
     <h1 class="display sm">Membership Details.</h1>
     <div class="card mt16"><div class="card-body">
       <div class="receipt-lines" style="margin-top:0;border-top:0">
-        <div class="line"><span>Full name</span><strong>${esc(user.fullName)}</strong></div>
-        <div class="line"><span>Preferred name</span><strong>${esc(user.preferredName)}</strong></div>
-        <div class="line"><span>Email</span><strong>${esc(user.email)}</strong></div>
-        <div class="line"><span>Member since</span><strong>${fmtDay(user.appliedAt)}</strong></div>
-        <div class="line"><span>Phone / WhatsApp</span><strong>${esc(user.phone)}</strong></div>
-        <div class="line"><span>Emergency contact</span><strong>${esc(user.emergencyName)} · ${esc(user.emergencyPhone)}</strong></div>
+        ${accountLine("Full name", user.fullName)}
+        ${accountLine("Preferred name", presentValue(application ? application.preferred_name : user.preferredName))}
+        ${accountLine("Email", user.email)}
+        ${accountLine("Member since", fmtDay(memberSince))}
+        ${accountLine("Mobile / WhatsApp number", presentValue(application?.mobile || user.phone))}
+        ${accountLine("Age status", application?.is_minor ? "Under 18" : "18 or over")}
+        ${application?.is_minor ? accountLine("Guardian name", presentValue(application?.guardian_name)) : ""}
+        ${application?.is_minor ? accountLine("Guardian phone", presentValue(application?.guardian_phone)) : ""}
+        ${accountLine("Emergency contact name", presentValue(application?.emergency_name || user.emergencyName))}
+        ${accountLine("Emergency contact phone", presentValue(application?.emergency_phone || user.emergencyPhone))}
+        ${accountLine("How you heard about ITC", heardSourceLabel(application?.heard_source || user.heard))}
+        ${application?.heard_detail ? accountLine("Detail", application.heard_detail) : ""}
       </div>
-      <p class="muted small mt16">Profile editing is stubbed in the prototype — fields come from the application form.</p>
+      <a class="btn ghost mt16" href="#/account/details/edit">Update details</a>
     </div></div>`;
 }
 
@@ -720,8 +845,16 @@ function linkCard(href, title, status, { sub = "", cls = "" } = {}) {
 // Draft indemnity wording — final text to be confirmed with ITC leadership
 // before launch. The apply form captures acceptance at join time; this page
 // catches members who joined before that requirement existed.
-function accountIndemnity(user) {
-  const at = user.indemnityAcceptedAt;
+function accountIndemnity(user, application) {
+  if (isLive() && !application) {
+    return `
+    <a class="back-link" href="#/account">← Profile</a>
+    <div class="kicker mt16">Profile · Indemnity</div>
+    <h1 class="display sm">Health &amp; Liability Indemnity.</h1>
+    ${applicationUnavailableCard()}
+    <p class="muted small mt16">Draft wording — the final indemnity will be confirmed with ITC leadership before launch.</p>`;
+  }
+  const at = application?.waiver_accepted_at || user.indemnityAcceptedAt;
   return `
     <a class="back-link" href="#/account">← Profile</a>
     <div class="kicker mt16">Profile · Indemnity</div>
@@ -813,20 +946,60 @@ function accountPayments(user) {
     }`;
 }
 
-function accountPrivacy(user) {
+function privacyAcceptedValue(application) {
+  return application?.privacy_accepted_at ? fmtDay(application.privacy_accepted_at) : "Not recorded";
+}
+
+function accountPrivacy(user, application) {
+  if (isLive() && !application) {
+    return `
+    <a class="back-link" href="#/account">← Profile</a>
+    <div class="kicker mt16">Profile · Privacy &amp; Notifications</div>
+    <h1 class="display sm">Privacy &amp; Notifications.</h1>
+    ${applicationUnavailableCard()}`;
+  }
+  const onOff = (value) => value ? "On" : "Off";
   return `
     <a class="back-link" href="#/account">← Profile</a>
     <div class="kicker mt16">Profile · Privacy &amp; Notifications</div>
     <h1 class="display sm">Privacy &amp; Notifications.</h1>
     <div class="card mt16"><div class="card-body">
       <div class="receipt-lines" style="margin-top:0;border-top:0">
-        <div class="line"><span>Photos at sessions</span><strong>${user.mediaConsent ? "Allowed" : "Not allowed"}</strong></div>
-        <div class="line"><span>WhatsApp session reminders</span><strong>On</strong></div>
-        <div class="line"><span>Email receipts</span><strong>On</strong></div>
-        <div class="line"><span>Community news</span><strong>Off</strong></div>
+        ${accountLine("Photo/video consent", application?.photo_consent ? "Allowed" : "Not allowed")}
+        ${accountLine("Privacy policy accepted", privacyAcceptedValue(application))}
+        ${accountLine("WhatsApp session reminders", onOff(application?.whatsapp_reminders))}
+        ${accountLine("Email receipts", onOff(application?.email_receipts))}
+        ${accountLine("Community news", onOff(application?.community_news))}
       </div>
-      <p class="muted small mt16">Privacy and notification settings are stubbed for setup — they’ll be configurable here before launch.</p>
+      <a class="btn ghost mt16" href="#/account/privacy/edit">Update details</a>
     </div></div>`;
+}
+
+function accountPrivacyEdit(application) {
+  if (isLive() && !application) {
+    return `
+    <a class="back-link" href="#/account">← Profile</a>
+    <div class="kicker mt16">Profile · Privacy &amp; Notifications</div>
+    <h1 class="display sm">Privacy &amp; Notifications.</h1>
+    ${applicationUnavailableCard()}`;
+  }
+  return `
+    <a class="back-link" href="#/account/privacy">← Privacy &amp; Notifications</a>
+    <div class="kicker mt16">Profile · Privacy &amp; Notifications</div>
+    <h1 class="display sm">Privacy &amp; Notifications.</h1>
+    <p class="subcopy mt8">Update your consent and communication preferences.</p>
+    <div class="card mt16"><div class="card-body">
+      <div class="receipt-lines" style="margin-top:0;border-top:0">
+        ${accountLine("Privacy policy accepted", privacyAcceptedValue(application))}
+      </div>
+    </div></div>
+    <form data-form="privacy-preferences" class="form-grid mt16">
+      <label class="check"><input type="checkbox" name="photo_consent" ${application?.photo_consent ? "checked" : ""}> <span>Photo/video consent</span></label>
+      <label class="check"><input type="checkbox" name="whatsapp_reminders" ${application?.whatsapp_reminders ? "checked" : ""}> <span>WhatsApp session reminders</span></label>
+      <label class="check"><input type="checkbox" name="email_receipts" ${application?.email_receipts ? "checked" : ""}> <span>Email receipts</span></label>
+      <label class="check"><input type="checkbox" name="community_news" ${application?.community_news ? "checked" : ""}> <span>Community news</span></label>
+      <button class="btn btn-primary" type="submit">Save changes</button>
+    </form>`;
 }
 
 function bookingCard(b) {
@@ -867,7 +1040,126 @@ function accountHistory(user) {
 
 // --- Apply ---------------------------------------------------------------------------------
 
+export async function viewApplyLive() {
+  const cu = await store.getCurrentUser();
+  if (!cu) return { redirect: "#/account" };
+  if (cu.role !== "pending") {
+    return `<section class="card"><p class="muted">Your application has already been processed.</p></section>`;
+  }
+  const existing = await store.getMyApplication();
+  if (existing) {
+    return `
+      <section class="card">
+        <p class="kicker">Application</p>
+        <h2 class="display">Awaiting review</h2>
+        <p class="muted">Your application was submitted on ${fmtDate(existing.submitted_at)}. An admin will review it shortly.</p>
+      </section>
+    `;
+  }
+  return applyFormHtml(cu);
+}
+
+function applyFormHtml(cu) {
+  const displayName = cu?.profile?.full_name || cu?.email || "";
+  return `
+    <section class="card">
+      <p class="kicker">Application</p>
+      <h2 class="display">Tell us about you</h2>
+      <p class="muted">Signed in as <strong>${esc(displayName)}</strong>${cu?.email ? ` · ${esc(cu.email)}` : ""}. We collect this so the team can approve your application and reach you in an emergency.</p>
+      <form data-form="apply" class="form-grid">
+        ${applyField("text", "mobile", "Mobile / WhatsApp number", true)}
+        ${ageStatusField()}
+        <div data-minor-only hidden>
+          ${applyField("text", "guardian_name", "Guardian name", false)}
+          ${applyField("text", "guardian_phone", "Guardian phone", false)}
+        </div>
+        ${applyField("text", "emergency_name", "Emergency contact name", true)}
+        ${applyField("text", "emergency_phone", "Emergency contact phone", true)}
+        ${applySelect("heard_source", "How did you hear about ITC?", ["friend","family","search","social","event","other"], true)}
+        ${applyField("text", "heard_detail", "Detail (optional)", false)}
+        ${applyField("text", "preferred_name", "Preferred name (optional)", false)}
+        <label class="check"><input type="checkbox" name="photo_consent"> I consent to photos/videos of me being used on ITC channels. (Optional)</label>
+        <label class="check"><input type="checkbox" name="waiver" required> I accept the participation waiver. (⏳ text pending ITC review)</label>
+        <label class="check"><input type="checkbox" name="privacy" required> I accept the privacy policy. (⏳ text pending ITC review)</label>
+        <label class="check"><input type="checkbox" name="guidelines" required> I accept the community guidelines. (⏳ text pending ITC review)</label>
+        <button class="btn btn-primary" type="submit">Submit application</button>
+      </form>
+    </section>
+  `;
+}
+
+function ageStatusField(isMinor) {
+  return `
+    <fieldset class="field age-status">
+      <legend>Are you 18 or over? *</legend>
+      <label><input type="radio" name="age_over_18" value="yes" ${isMinor === false ? "checked" : ""} required> Yes</label>
+      <label><input type="radio" name="age_over_18" value="no" ${isMinor === true ? "checked" : ""} required> No</label>
+    </fieldset>`;
+}
+
+function applyField(type, name, label, required, value = "") {
+  return `
+    <label class="field">
+      <span class="field-label">${esc(label)}${required ? " *" : ""}</span>
+      <input type="${type}" name="${name}" value="${esc(value || "")}" ${required ? "required" : ""}>
+    </label>
+  `;
+}
+
+function applySelect(name, label, options, required, value = "") {
+  const selectOptions = value && !options.includes(value) ? [value, ...options] : options;
+  return `
+    <label class="field">
+      <span class="field-label">${esc(label)}${required ? " *" : ""}</span>
+      <select name="${name}" ${required ? "required" : ""}>
+        ${required ? "" : `<option value="">—</option>`}
+        ${selectOptions.map((o) => `<option value="${o}" ${o === value ? "selected" : ""}>${esc(heardSourceLabel(o))}</option>`).join("")}
+      </select>
+    </label>
+  `;
+}
+
+function accountDetailsEdit(user, application) {
+  if (isLive() && !application) {
+    return `
+    <a class="back-link" href="#/account">← Profile</a>
+    <div class="kicker mt16">Profile · Membership Details</div>
+    <h1 class="display sm">Membership Details.</h1>
+    ${applicationUnavailableCard()}`;
+  }
+  return `
+    <a class="back-link" href="#/account/details">← Membership Details</a>
+    <div class="kicker mt16">Profile · Membership Details</div>
+    <h1 class="display sm">Membership Details.</h1>
+    <p class="subcopy mt8">Update the details from your membership application.</p>
+    <div class="card mt16"><div class="card-body">
+      <div class="receipt-lines" style="margin-top:0;border-top:0">
+        ${accountLine("Full name", user.fullName)}
+        ${accountLine("Email", user.email)}
+      </div>
+    </div></div>
+    <form data-form="membership-details" class="form-grid mt16">
+      ${applyField("text", "mobile", "Mobile / WhatsApp number", true, application?.mobile || user.phone)}
+      ${ageStatusField(application?.is_minor)}
+      <div data-minor-only ${application?.is_minor ? "" : "hidden"}>
+        ${applyField("text", "guardian_name", "Guardian name", !!application?.is_minor, application?.guardian_name)}
+        ${applyField("text", "guardian_phone", "Guardian phone", !!application?.is_minor, application?.guardian_phone)}
+      </div>
+      ${applyField("text", "emergency_name", "Emergency contact name", true, application?.emergency_name || user.emergencyName)}
+      ${applyField("text", "emergency_phone", "Emergency contact phone", true, application?.emergency_phone || user.emergencyPhone)}
+      ${applySelect("heard_source", "How did you hear about ITC?", ["friend","family","search","social","event","other"], true, application?.heard_source || user.heard)}
+      ${applyField("text", "heard_detail", "Detail (optional)", false, application?.heard_detail)}
+      ${applyField("text", "preferred_name", "Preferred name (optional)", false, application ? application.preferred_name : user.preferredName)}
+      <button class="btn btn-primary" type="submit">Save changes</button>
+    </form>`;
+}
+
 export function viewApply() {
+  if (isLive()) return viewApplyLive();
+  return viewApplyLocal();
+}
+
+function viewApplyLocal() {
   return `
     <a class="back-link" href="#/account">← Account</a>
     <div class="kicker mt16">Membership application</div>
@@ -899,8 +1191,13 @@ export function viewApply() {
         <input id="ap-donor" name="donorId" placeholder="e.g. CHUI-08879" autocomplete="off">
         <div class="hint">For members who already give through IECC — your last name, a hyphen, then a 4- or 5-digit number (e.g. CHUI-8879). Leave blank or write “Not applicable” — you can add it later from your Profile.</div>
       </div>
-      <label class="check"><input type="checkbox" name="ageConfirmed" required>
-        <span>I confirm I am 18 or over, or that a parent/guardian will accompany me to sessions. *</span></label>
+      ${ageStatusField()}
+      <div data-minor-only hidden>
+        <div class="field-row">
+          <div class="field"><label for="ap-guardian-name">Guardian name *</label><input id="ap-guardian-name" name="guardianName"></div>
+          <div class="field"><label for="ap-guardian-phone">Guardian phone *</label><input id="ap-guardian-phone" name="guardianPhone" type="tel"></div>
+        </div>
+      </div>
       <label class="check"><input type="checkbox" name="indemnity" required>
         <span>I accept the health &amp; liability indemnity — I confirm I am fit to take part, I join ITC activities at my own risk, and I release ITC and its leaders from liability. *</span></label>
       <label class="check"><input type="checkbox" name="guidelines" required>
@@ -965,7 +1262,7 @@ export function viewCheckout(sessionId) {
 export function viewBooking(bookingId) {
   const b = store.getBooking(bookingId);
   const user = store.currentUser();
-  if (!b || !user || (b.userId !== user.id && !["admin", "superadmin"].includes(user.role))) {
+  if (!b || !user || (b.userId !== user.id && !isAdminRole(user.role))) {
     return viewNotFound("Booking not found.");
   }
   const s = b.snapshot;
@@ -1002,7 +1299,7 @@ export function viewBooking(bookingId) {
 export function viewReceipt(receiptId) {
   const r = store.getReceipt(receiptId);
   const user = store.currentUser();
-  if (!r || !user || (r.userId !== user.id && !["admin", "superadmin"].includes(user.role))) {
+  if (!r || !user || (r.userId !== user.id && !isAdminRole(user.role))) {
     return viewNotFound("Receipt not found.");
   }
   return `
@@ -1022,9 +1319,9 @@ export function viewReceipt(receiptId) {
 
 // --- Admin --------------------------------------------------------------------------------------
 
-export function viewAdmin(tab = "approvals") {
+export async function viewAdmin(tab = "approvals") {
   const user = store.currentUser();
-  if (!user || !["admin", "superadmin"].includes(user.role)) {
+  if (!user || !isAdminRole(user.role)) {
     return { redirect: "#/account" };
   }
   const tabs = `
@@ -1034,8 +1331,28 @@ export function viewAdmin(tab = "approvals") {
         .join("")}
     </nav>`;
 
+  // Live mode reads real data (Supabase applications + profiles); local
+  // mode keeps the seed-backed demo lists.
+  let memberUsers = null;
+  if (tab === "members") {
+    memberUsers = isLive()
+      ? (await store.listProfiles())
+          .map((p) => ({
+            id: p.id,
+            fullName: p.full_name || p.email,
+            email: p.email,
+            role: p.role === "super_admin" ? "superadmin" : p.role,
+            status: p.role === "pending" ? "pending" : "approved",
+          }))
+          .sort((a, b) => a.fullName.localeCompare(b.fullName))
+      : [...store.allUsers()].sort((a, b) => a.fullName.localeCompare(b.fullName));
+  }
   const body =
-    tab === "activities" ? adminActivities() : tab === "members" ? adminMembers(user) : adminApprovals();
+    tab === "activities"
+      ? adminActivities()
+      : tab === "members"
+        ? adminMembers(user, memberUsers)
+        : adminApprovals(await store.listPendingApplications(), { live: isLive() });
 
   return `
     <div class="kicker">Admin</div>
@@ -1044,8 +1361,7 @@ export function viewAdmin(tab = "approvals") {
     ${body}`;
 }
 
-function adminApprovals() {
-  const pending = store.pendingApplicants();
+function adminApprovals(pending, { live = false } = {}) {
   if (!pending.length) {
     return `<div class="empty">No pending applications. New signups will land here.</div>`;
   }
@@ -1065,13 +1381,13 @@ function adminApprovals() {
           <dt>Phone</dt><dd>${esc(u.phone)}</dd>
           <dt>Emergency</dt><dd>${esc(u.emergencyName)} · ${esc(u.emergencyPhone)}</dd>
           <dt>Heard via</dt><dd>${esc(u.heard)}</dd>
-          <dt>Age 18+ / guardian</dt><dd>${u.ageConfirmed ? "Confirmed" : "—"}</dd>
+          <dt>Age 18+ / guardian</dt><dd>${u.isMinor ? "Under 18 · guardian required" : "18 or over"}</dd>
           <dt>Indemnity</dt><dd>${u.indemnityAcceptedAt ? "Accepted" : "—"}</dd>
           <dt>Photo consent</dt><dd>${u.mediaConsent ? "Yes" : "No"}</dd>
         </dl>
         <div class="actions">
           <button class="btn sm" type="button" data-action="approve" data-user="${u.id}">Approve</button>
-          <button class="btn danger sm" type="button" data-action="decline" data-user="${u.id}">Decline</button>
+          ${live ? "" : `<button class="btn danger sm" type="button" data-action="decline" data-user="${u.id}">Decline</button>`}
         </div>
       </div></div>`
     )
@@ -1102,11 +1418,10 @@ function adminActivities() {
     <a class="btn ghost mt16" href="#/admin/activity/new">+ New activity</a>`;
 }
 
-function adminMembers(viewer) {
-  const users = [...store.allUsers()].sort((a, b) => a.fullName.localeCompare(b.fullName));
-  const canEdit = viewer.role === "superadmin";
+function adminMembers(viewer, users) {
+  const canEdit = isSuperRole(viewer.role);
   return `
-    <p class="muted small mt16">${users.filter((u) => u.status === "approved").length} approved · ${store.pendingApplicants().length} pending. ${canEdit ? "Role changes are super-admin only." : "Only a super admin can change roles."}</p>
+    <p class="muted small mt16">${users.filter((u) => u.status === "approved").length} approved · ${users.filter((u) => u.status === "pending").length} pending. ${canEdit ? "Role changes are super-admin only." : "Only a super admin can change roles."}</p>
     ${users
       .map((u) => {
         const roleBadge =
@@ -1132,7 +1447,7 @@ function adminMembers(viewer) {
 
 export function viewAdminActivity(id) {
   const user = store.currentUser();
-  if (!user || !["admin", "superadmin"].includes(user.role)) {
+  if (!user || !isAdminRole(user.role)) {
     return { redirect: "#/account" };
   }
   const isNew = id === "new";
@@ -1220,4 +1535,129 @@ export function viewNotFound(msg = "Page not found.") {
       <p>${esc(msg)}</p>
       <a class="btn ghost mt16" href="#/home" style="display:inline-flex;width:auto;padding:12px 22px">Back home</a>
     </div>`;
+}
+
+// --- Notifications (live / Supabase) -----------------------------------------------------------
+
+export async function viewNotifications() {
+  const rows = await store.listMyNotifications();
+  if (!rows.length) {
+    return `<section class="card"><p class="muted">No notifications.</p></section>`;
+  }
+  return `
+    <section class="card">
+      <p class="kicker">Notifications</p>
+      ${rows.map((n) => `
+        <div class="row ${n.read_at ? "" : "row-unread"}" data-notification-id="${n.id}" data-action="notification-open">
+          <div class="row-body">
+            <strong>${esc(n.title)}</strong>
+            <span class="muted">${esc(n.body)}</span>
+            <span class="muted">${fmtDate(n.created_at)}</span>
+          </div>
+        </div>
+      `).join("")}
+    </section>
+  `;
+}
+
+export async function unreadBadge() {
+  const rows = await store.listMyNotifications();
+  const n = rows.filter((r) => !r.read_at).length;
+  return n > 0 ? `<span class="badge">${n}</span>` : "";
+}
+
+// --- Admin: users (live / Supabase) ------------------------------------------------------------
+
+export async function viewAdminUsers() {
+  if (!isLive()) {
+    // In local mode, fall back to the existing localStorage-backed admin
+    // view so the prototype continues to work for seed accounts.
+    return viewAdmin("approvals");
+  }
+  const cu = await store.getCurrentUser();
+  if (!cu || !["admin", "super_admin"].includes(cu.role)) {
+    return `<section class="card"><p class="muted">You don't have access to this page.</p></section>`;
+  }
+  const [profiles, audit] = await Promise.all([store.listProfiles(), store.listRoleChanges()]);
+  const latestByProfile = new Map();
+  for (const row of audit) {
+    if (!latestByProfile.has(row.profile_id)) latestByProfile.set(row.profile_id, row);
+  }
+  const pending = profiles.filter((p) => p.role === "pending");
+  const members = profiles.filter((p) => p.role !== "pending");
+  const counts = {
+    pending: pending.length,
+    member: profiles.filter((p) => p.role === "member").length,
+    admin: profiles.filter((p) => p.role === "admin").length,
+    super: profiles.filter((p) => p.role === "super_admin").length,
+  };
+  return `
+    <section class="card">
+      <p class="kicker">Admin</p>
+      <h2 class="display">Users</h2>
+      <p class="muted">${counts.pending} pending · ${counts.member} members · ${counts.admin} admins · ${counts.super} super admin</p>
+    </section>
+    ${adminPendingSection(pending, cu)}
+    ${adminMembersSection(members, cu, latestByProfile)}
+  `;
+}
+
+function adminPendingSection(rows, cu) {
+  if (rows.length === 0) {
+    return `<section class="card"><p class="muted">No pending applicants.</p></section>`;
+  }
+  return `
+    <section class="card">
+      <h3 class="section-head">Pending applicants</h3>
+      ${rows.map((p) => `
+        <div class="row" data-profile-id="${p.id}">
+          <img class="avatar" src="${p.avatar_url || ""}" alt="">
+          <div class="row-body">
+            <strong>${esc(p.full_name || p.email)}</strong>
+            <span class="muted">${esc(p.email)} · joined ${fmtDate(p.created_at)}</span>
+          </div>
+          ${cu.role === "admin" || cu.role === "super_admin"
+            ? `<button class="btn btn-primary" data-action="approve" data-id="${p.id}">Approve</button>`
+            : ""}
+        </div>
+      `).join("")}
+    </section>
+  `;
+}
+
+function adminMembersSection(rows, cu, latestByProfile) {
+  if (rows.length === 0) {
+    return `<section class="card"><p class="muted">No members yet.</p></section>`;
+  }
+  return `
+    <section class="card">
+      <h3 class="section-head">Members & admins</h3>
+      ${rows.map((p) => adminMemberRow(p, cu, latestByProfile.get(p.id))).join("")}
+    </section>
+  `;
+}
+
+function adminMemberRow(p, cu, lastChange) {
+  const isSelf = p.id === cu.id;
+  const actions = [];
+  if (!isSelf && cu.role === "super_admin") {
+    if (p.role === "member") actions.push(`<button class="btn" data-action="promote" data-id="${p.id}">Promote to admin</button>`);
+    if (p.role === "admin")  actions.push(`<button class="btn" data-action="demote"  data-id="${p.id}">Demote to member</button>`);
+    if (p.role !== "super_admin") actions.push(`<button class="btn btn-danger" data-action="revoke" data-id="${p.id}">Revoke</button>`);
+  }
+  const auditLine = lastChange
+    ? `<span class="muted">Last change: ${esc(lastChange.old_role)} → ${esc(lastChange.new_role)} on ${fmtDate(lastChange.created_at)}${lastChange.changed_by_profile ? ` by ${esc(lastChange.changed_by_profile.full_name || lastChange.changed_by_profile.email)}` : ""}${lastChange.reason ? ` — “${esc(lastChange.reason)}”` : ""}</span>`
+    : "";
+  return `
+    <div class="row" data-profile-id="${p.id}">
+      <img class="avatar" src="${p.avatar_url || ""}" alt="">
+      <div class="row-body">
+        <strong>${esc(p.full_name || p.email)}</strong>
+        <span class="muted">${esc(p.email)} · ${esc(p.role)} · joined ${fmtDate(p.created_at)}</span>
+        ${auditLine}
+        ${isSelf ? `<span class="muted">You can't change your own role.</span>` : ""}
+      </div>
+      <div class="row-actions">${actions.join("")}</div>
+    </div>
+  `;
 }
