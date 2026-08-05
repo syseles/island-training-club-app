@@ -585,9 +585,7 @@ export async function viewAccount(section, editMode) {
     case undefined:
       return accountMember(user, application);
     case "details":
-      // Live members edit their application details here (async view);
-      // local demo accounts keep the read-only page.
-      return isLive() ? viewAccountDetailsLive(application, editMode) : accountDetails(user);
+      return editMode === "edit" ? accountDetailsEdit(user, application) : accountDetails(user, application);
     case "indemnity":
       return accountIndemnity(user, application);
     case "donor":
@@ -768,21 +766,55 @@ function applicationUnavailableCard() {
     </div></div>`;
 }
 
-function accountDetails(user) {
+function accountLine(label, value) {
+  return `<div class="line"><span>${esc(label)}</span><strong>${esc(value)}</strong></div>`;
+}
+
+function presentValue(value, fallback = "Not provided") {
+  const text = String(value ?? "").trim();
+  return text || fallback;
+}
+
+function heardSourceLabel(value) {
+  return {
+    friend: "Friend",
+    family: "Family",
+    search: "Search",
+    social: "Social media",
+    event: "Event",
+    other: "Other",
+  }[value] || presentValue(value);
+}
+
+function accountDetails(user, application) {
+  if (isLive() && !application) {
+    return `
+    <a class="back-link" href="#/account">← Profile</a>
+    <div class="kicker mt16">Profile · Membership Details</div>
+    <h1 class="display sm">Membership Details.</h1>
+    ${applicationUnavailableCard()}`;
+  }
+  const memberSince = application?.submitted_at || user.appliedAt;
   return `
     <a class="back-link" href="#/account">← Profile</a>
     <div class="kicker mt16">Profile · Membership Details</div>
     <h1 class="display sm">Membership Details.</h1>
     <div class="card mt16"><div class="card-body">
       <div class="receipt-lines" style="margin-top:0;border-top:0">
-        <div class="line"><span>Full name</span><strong>${esc(user.fullName)}</strong></div>
-        <div class="line"><span>Preferred name</span><strong>${esc(user.preferredName)}</strong></div>
-        <div class="line"><span>Email</span><strong>${esc(user.email)}</strong></div>
-        <div class="line"><span>Member since</span><strong>${fmtDay(user.appliedAt)}</strong></div>
-        <div class="line"><span>Phone / WhatsApp</span><strong>${esc(user.phone)}</strong></div>
-        <div class="line"><span>Emergency contact</span><strong>${esc(user.emergencyName)} · ${esc(user.emergencyPhone)}</strong></div>
+        ${accountLine("Full name", user.fullName)}
+        ${accountLine("Preferred name", presentValue(application?.preferred_name || user.preferredName))}
+        ${accountLine("Email", user.email)}
+        ${accountLine("Member since", fmtDay(memberSince))}
+        ${accountLine("Mobile / WhatsApp number", presentValue(application?.mobile || user.phone))}
+        ${accountLine("Age status", application?.is_minor ? "Under 18" : "18 or over")}
+        ${application?.is_minor ? accountLine("Guardian name", presentValue(application?.guardian_name)) : ""}
+        ${application?.is_minor ? accountLine("Guardian phone", presentValue(application?.guardian_phone)) : ""}
+        ${accountLine("Emergency contact name", presentValue(application?.emergency_name || user.emergencyName))}
+        ${accountLine("Emergency contact phone", presentValue(application?.emergency_phone || user.emergencyPhone))}
+        ${accountLine("How you heard about ITC", heardSourceLabel(application?.heard_source || user.heard))}
+        ${application?.heard_detail ? accountLine("Detail", application.heard_detail) : ""}
       </div>
-      <p class="muted small mt16">Profile editing is stubbed in the prototype — fields come from the application form.</p>
+      <a class="btn ghost mt16" href="#/account/details/edit">Update details</a>
     </div></div>`;
 }
 
@@ -1039,21 +1071,20 @@ function applyField(type, name, label, required, value = "") {
 }
 
 function applySelect(name, label, options, required, value = "") {
+  const selectOptions = value && !options.includes(value) ? [value, ...options] : options;
   return `
     <label class="field">
       <span class="field-label">${esc(label)}${required ? " *" : ""}</span>
       <select name="${name}" ${required ? "required" : ""}>
         ${required ? "" : `<option value="">—</option>`}
-        ${options.map((o) => `<option value="${o}" ${o === value ? "selected" : ""}>${esc(o)}</option>`).join("")}
+        ${selectOptions.map((o) => `<option value="${o}" ${o === value ? "selected" : ""}>${esc(heardSourceLabel(o))}</option>`).join("")}
       </select>
     </label>
   `;
 }
 
-// Live "Membership Details": the application form, prefilled from the
-// member's submitted application, reusing data-form="apply" (upsert).
-function viewAccountDetailsLive(app) {
-  if (!app) {
+function accountDetailsEdit(user, application) {
+  if (isLive() && !application) {
     return `
     <a class="back-link" href="#/account">← Profile</a>
     <div class="kicker mt16">Profile · Membership Details</div>
@@ -1061,23 +1092,28 @@ function viewAccountDetailsLive(app) {
     ${applicationUnavailableCard()}`;
   }
   return `
-    <a class="back-link" href="#/account">← Profile</a>
+    <a class="back-link" href="#/account/details">← Membership Details</a>
     <div class="kicker mt16">Profile · Membership Details</div>
     <h1 class="display sm">Membership Details.</h1>
-    <p class="subcopy mt8">The details from your application — update them anytime.</p>
-    <form data-form="apply" data-toast="Saved." class="form-grid mt16">
-      ${applyField("text", "mobile", "Mobile / WhatsApp number", true, app?.mobile)}
-      ${ageStatusField(app?.is_minor)}
-      <div data-minor-only ${app?.is_minor ? "" : "hidden"}>
-        ${applyField("text", "guardian_name", "Guardian name", !!app?.is_minor, app?.guardian_name)}
-        ${applyField("text", "guardian_phone", "Guardian phone", !!app?.is_minor, app?.guardian_phone)}
+    <p class="subcopy mt8">Update the details from your membership application.</p>
+    <div class="card mt16"><div class="card-body">
+      <div class="receipt-lines" style="margin-top:0;border-top:0">
+        ${accountLine("Full name", user.fullName)}
+        ${accountLine("Email", user.email)}
       </div>
-      ${applyField("text", "emergency_name", "Emergency contact name", true, app?.emergency_name)}
-      ${applyField("text", "emergency_phone", "Emergency contact phone", true, app?.emergency_phone)}
-      ${applySelect("heard_source", "How did you hear about ITC?", ["friend","family","search","social","event","other"], true, app?.heard_source)}
-      ${applyField("text", "heard_detail", "Detail (optional)", false, app?.heard_detail)}
-      ${applyField("text", "preferred_name", "Preferred name (optional)", false, app?.preferred_name)}
-      <label class="check"><input type="checkbox" name="photo_consent" ${app?.photo_consent ? "checked" : ""}> I consent to photos/videos of me being used on ITC channels. (Optional)</label>
+    </div></div>
+    <form data-form="membership-details" class="form-grid mt16">
+      ${applyField("text", "mobile", "Mobile / WhatsApp number", true, application?.mobile || user.phone)}
+      ${ageStatusField(application?.is_minor)}
+      <div data-minor-only ${application?.is_minor ? "" : "hidden"}>
+        ${applyField("text", "guardian_name", "Guardian name", !!application?.is_minor, application?.guardian_name)}
+        ${applyField("text", "guardian_phone", "Guardian phone", !!application?.is_minor, application?.guardian_phone)}
+      </div>
+      ${applyField("text", "emergency_name", "Emergency contact name", true, application?.emergency_name || user.emergencyName)}
+      ${applyField("text", "emergency_phone", "Emergency contact phone", true, application?.emergency_phone || user.emergencyPhone)}
+      ${applySelect("heard_source", "How did you hear about ITC?", ["friend","family","search","social","event","other"], true, application?.heard_source || user.heard)}
+      ${applyField("text", "heard_detail", "Detail (optional)", false, application?.heard_detail)}
+      ${applyField("text", "preferred_name", "Preferred name (optional)", false, application?.preferred_name || user.preferredName)}
       <button class="btn btn-primary" type="submit">Save changes</button>
     </form>`;
 }

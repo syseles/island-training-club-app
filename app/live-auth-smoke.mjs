@@ -184,6 +184,54 @@ const indemnity = await views.viewAccount("indemnity");
 if (!indemnity.includes(`Indemnity confirmed on ${confirmedDay}`) || indemnity.includes("To be accepted")) {
   throw new Error("Indemnity page should reflect the live application waiver acceptance date");
 }
+const detailsSummary = await views.viewAccount("details");
+for (const label of [
+  "Full name",
+  "Preferred name",
+  "Email",
+  "Member since",
+  "Mobile / WhatsApp number",
+  "Age status",
+  "Emergency contact name",
+  "Emergency contact phone",
+  "How you heard about ITC",
+]) {
+  if (!detailsSummary.includes(label)) throw new Error(`Live details summary missing ${label}`);
+}
+if (!detailsSummary.includes("18 or over")) {
+  throw new Error("Live details summary should show adult age status");
+}
+if (!detailsSummary.includes('href="#/account/details/edit"')) {
+  throw new Error("Live details summary should link to the edit route");
+}
+if (detailsSummary.includes('data-form="membership-details"') || detailsSummary.includes("Date of birth")) {
+  throw new Error("Live details summary should be a card, not the edit form or DOB UI");
+}
+const detailsEdit = await views.viewAccount("details", "edit");
+if (!detailsEdit.includes('data-form="membership-details"')) {
+  throw new Error("Live details edit route should render the membership-details form");
+}
+if (!detailsEdit.includes("Save changes")) {
+  throw new Error("Live details edit route should render the save action");
+}
+if (!detailsEdit.includes("Riley Runner") || !detailsEdit.includes("runner@example.com")) {
+  throw new Error("Live details edit route should show read-only identity rows");
+}
+if (!detailsEdit.includes('value="+852 6123 4567"')) {
+  throw new Error("Live details edit route should prefill the mobile number");
+}
+if (!/name="age_over_18" value="yes"[^>]*checked/.test(detailsEdit)) {
+  throw new Error("Live details edit route should prefill the adult age radio");
+}
+if (!detailsEdit.includes("data-minor-only") || !detailsEdit.includes("hidden")) {
+  throw new Error("Live details edit route should keep the guardian block conditional");
+}
+if (!detailsEdit.includes('value="Taylor Coach"') || !detailsEdit.includes('value="+852 6777 8888"')) {
+  throw new Error("Live details edit route should prefill emergency contact fields");
+}
+if (detailsEdit.includes('name="photo_consent"')) {
+  throw new Error("Live details edit route should exclude photo consent controls");
+}
 await store.updateMyMembershipDetails({
   mobile: "+852 9000 0000",
   age_over_18: "yes",

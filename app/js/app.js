@@ -105,9 +105,9 @@ async function render() {
       out = views.viewCommunity(arg);
       break;
     case "account":
-      // Awaited: the live Membership Details view is async; sync views
-      // resolve through await unchanged.
-      out = await views.viewAccount(arg);
+      // Awaited: account sections can fetch live application data and use
+      // an optional edit-mode segment such as #/account/details/edit.
+      out = await views.viewAccount(arg, arg2);
       break;
     case "apply": {
       const u = store.currentUser();
@@ -162,13 +162,13 @@ async function render() {
   prevPage = page;
 }
 
-// --- Apply form: toggle minor-only fields when age status changes --------
+// --- Apply/details forms: toggle minor-only fields when age status changes --------
 
 document.addEventListener("change", (e) => {
   const t = e.target;
   if (!(t instanceof HTMLInputElement) || t.name !== "age_over_18") return;
   const form = t.closest("form");
-  if (!form || (form.dataset.form !== "apply" && form.id !== "form-apply")) return;
+  if (!form || (!["apply", "membership-details"].includes(form.dataset.form) && form.id !== "form-apply")) return;
   const block = form.querySelector("[data-minor-only]");
   if (!block) return;
   const isMinor = t.value === "no";
@@ -367,6 +367,20 @@ document.addEventListener("submit", async (e) => {
       await render();
     } catch (err) {
       toast(err.message || "Submit failed");
+    }
+    return;
+  }
+
+  if (form.dataset.form === "membership-details") {
+    e.preventDefault();
+    if (!form.reportValidity()) return;
+    const fd = new FormData(form);
+    try {
+      await store.updateMyMembershipDetails(Object.fromEntries(fd.entries()));
+      toast("Membership details saved");
+      location.hash = "#/account/details";
+    } catch (err) {
+      toast(err.message || "Unable to save membership details", true);
     }
     return;
   }

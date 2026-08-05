@@ -603,10 +603,73 @@ if (memberAcct.includes("member@itc.hk")) {
   failures++;
   console.error("FAIL email should not appear on the Profile face");
 } else console.log("ok  Profile face carries no contact details");
-if (!(await views.viewAccount("details")).includes("member@itc.hk")) {
+const member = store.currentUser();
+const memberDetailsSummary = await views.viewAccount("details");
+if (!memberDetailsSummary.includes("member@itc.hk")) {
   failures++;
   console.error("FAIL email missing from Membership Details sub-page");
 } else console.log("ok  email lives on Membership Details sub-page");
+for (const label of [
+  "Full name",
+  "Preferred name",
+  "Email",
+  "Member since",
+  "Mobile / WhatsApp number",
+  "Age status",
+  "Emergency contact name",
+  "Emergency contact phone",
+  "How you heard about ITC",
+]) {
+  if (!memberDetailsSummary.includes(label)) {
+    failures++;
+    console.error(`FAIL Membership Details summary missing ${label}`);
+  }
+}
+if (!memberDetailsSummary.includes("18 or over")) {
+  failures++;
+  console.error("FAIL Membership Details summary should show adult age status");
+} else console.log("ok  Membership Details summary shows adult age status");
+if (!memberDetailsSummary.includes('href="#/account/details/edit"')) {
+  failures++;
+  console.error("FAIL Membership Details summary should link to the edit route");
+} else console.log("ok  Membership Details summary links to the edit route");
+if (memberDetailsSummary.includes('data-form="membership-details"') || memberDetailsSummary.includes("Date of birth")) {
+  failures++;
+  console.error("FAIL Membership Details summary should be a card, not the edit form or DOB UI");
+} else console.log("ok  Membership Details summary is distinct from the edit form");
+const memberDetailsEdit = await views.viewAccount("details", "edit");
+if (!memberDetailsEdit.includes('data-form="membership-details"')) {
+  failures++;
+  console.error("FAIL Membership Details edit route should render the membership-details form");
+} else console.log("ok  Membership Details edit route renders the membership-details form");
+if (!memberDetailsEdit.includes("Save changes")) {
+  failures++;
+  console.error("FAIL Membership Details edit route missing Save changes");
+}
+if (!memberDetailsEdit.includes(member.fullName) || !memberDetailsEdit.includes(member.email)) {
+  failures++;
+  console.error("FAIL Membership Details edit route should show read-only identity rows");
+}
+if (!memberDetailsEdit.includes(`value="${member.phone}"`)) {
+  failures++;
+  console.error("FAIL Membership Details edit route should prefill the mobile number");
+}
+if (!/name="age_over_18" value="yes"[^>]*checked/.test(memberDetailsEdit)) {
+  failures++;
+  console.error("FAIL Membership Details edit route should prefill the adult age radio");
+}
+if (!memberDetailsEdit.includes("data-minor-only") || !memberDetailsEdit.includes("hidden")) {
+  failures++;
+  console.error("FAIL Membership Details edit route should keep the guardian block conditional");
+}
+if (!memberDetailsEdit.includes(`value="${member.emergencyName}"`) || !memberDetailsEdit.includes(`value="${member.emergencyPhone}"`)) {
+  failures++;
+  console.error("FAIL Membership Details edit route should prefill emergency contact fields");
+}
+if (memberDetailsEdit.includes('name="photo_consent"')) {
+  failures++;
+  console.error("FAIL Membership Details edit route should exclude photo consent controls");
+} else console.log("ok  Membership Details edit route excludes photo consent controls");
 await check("home (member)", () => views.viewHome());
 const memberHome = views.viewHome();
 if (!memberHome.includes("BFT Causeway Bay") || memberHome.includes("Midtown 28")) {
@@ -618,7 +681,6 @@ if (!memberHome.includes("Encouragement of the week")) {
   console.error('FAIL approved home should show "Encouragement of the week"');
 } else console.log('ok  approved home shows "Encouragement of the week"');
 
-const member = store.currentUser();
 const memberApplication = await store.getMyApplication();
 if (
   !memberApplication ||
@@ -981,11 +1043,24 @@ if (!appSrc.includes("await views.viewAccount(")) {
 } else {
   console.log("ok  app.js: account route is awaited");
 }
-if (!viewsSrc.includes("viewAccountDetailsLive")) {
+if (!viewsSrc.includes('data-form="membership-details"') || !viewsSrc.includes("accountDetailsEdit")) {
   failures++;
-  console.error("FAIL views.js: live Membership Details editor missing");
+  console.error("FAIL views.js: Membership Details summary/edit workflow missing");
 } else {
-  console.log("ok  views.js: live Membership Details editor present");
+  console.log("ok  views.js: Membership Details summary/edit workflow present");
+}
+if (!appSrc.includes("await views.viewAccount(arg, arg2)")) {
+  failures++;
+  console.error("FAIL app.js: account route should pass arg2 so #/account/details/edit can render edit mode");
+} else {
+  console.log("ok  app.js: account route passes arg2 to viewAccount");
+}
+const membershipSubmitBlock = appSrc.match(/if \(form\.dataset\.form === "membership-details"\) \{[\s\S]*?\n  \}\n\n  switch \(form\.id\)/);
+if (!membershipSubmitBlock || !membershipSubmitBlock[0].includes('location.hash = "#/account/details"')) {
+  failures++;
+  console.error("FAIL app.js: successful membership saves should return to #/account/details");
+} else {
+  console.log("ok  app.js: successful membership saves return to #/account/details");
 }
 const selfEditMigration = existsSync(
   resolve(__dirname, "../supabase/migrations/20260805000003_self_update_application.sql")
