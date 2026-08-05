@@ -9,11 +9,12 @@
   <link rel="icon" href="../assets/itc/logo.webp">
   <link rel="stylesheet" href="styles.css">
   <script>
-    // Replace these placeholder values with real ones for live deployment.
-    // Vercel injects these via its env-var UI in production; locally you can
-    // edit this block or wrap it with a build-time substitution.
-    window.SUPABASE_URL = "";
-    window.SUPABASE_ANON_KEY = "";
+    // Live deployment values (hardcoded — Vercel does NOT inject env vars
+    // into vanilla static HTML). The anon key is designed to be public; RLS
+    // protects the data behind it. To run against localStorage + seeds
+    // instead, set both to "" before serving locally.
+    window.SUPABASE_URL = "https://krxbvgyolxvmzgysfjkj.supabase.co";
+    window.SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImtyeGJ2Z3lvbHh2bXpneXNmamtqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODU2NzQ2NzEsImV4cCI6MjEwMTI1MDY3MX0.kbkNnSkMINcqziHo12Sl8auaGQ5KtxtqWwCFZlXeyzg";
   </script>
   <script type="module" src="https://esm.sh/@supabase/supabase-js@2"></script>
 </head>
