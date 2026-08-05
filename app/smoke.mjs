@@ -702,6 +702,36 @@ if (!homeNow.includes("Encouragement of the week")) {
   console.log("ok  home shows the weekly encouragement");
 }
 
+// --- every role must apply (incl. the bootstrap super admin) ---
+const maybeRedirect = appSrc.match(/export async function maybeRedirectToApply\(\) \{[\s\S]*?\n\}/);
+if (!maybeRedirect || maybeRedirect[0].includes('cu.role !== "pending"')) {
+  failures++;
+  console.error("FAIL app.js: maybeRedirectToApply should push any user without an application to #/apply, not just pending");
+} else {
+  console.log("ok  app.js: maybeRedirectToApply applies to every role");
+}
+if (viewsSrc.includes('if (cu.role !== "pending")')) {
+  failures++;
+  console.error("FAIL views.js: viewApplyLive should offer the form to any role without an application");
+} else {
+  console.log("ok  views.js: viewApplyLive offers the form to any role without an application");
+}
+if (!appSrc.includes('!isLive() && u && u.status === "approved"')) {
+  failures++;
+  console.error("FAIL app.js: apply route approved-redirect should be local-mode only");
+} else {
+  console.log("ok  app.js: apply route approved-redirect is local-mode only");
+}
+const applyAnyRole = existsSync(resolve(__dirname, "../supabase/migrations/20260805000004_apply_any_role.sql"))
+  ? readFileSync(resolve(__dirname, "../supabase/migrations/20260805000004_apply_any_role.sql"), "utf8")
+  : "";
+if (!applyAnyRole.includes('drop policy "self insert application"')) {
+  failures++;
+  console.error("FAIL migrations: self insert application must allow any role (not just pending)");
+} else {
+  console.log("ok  migrations: self insert application allowed for any role");
+}
+
 // --- store.getCurrentUser fallback (local mode) ---
 store.signOut();
 const localUser = await store.getCurrentUser();
