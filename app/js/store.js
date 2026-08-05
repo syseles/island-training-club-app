@@ -242,7 +242,12 @@ export async function getCurrentUser() {
       .select("*")
       .eq("id", authUser.id)
       .maybeSingle();
-    if (profErr) return null;
+    if (profErr) {
+      // Never fail silently — a broken profile read renders a signed-in
+      // user as a visitor with no clue why (cf. the 42P17 RLS recursion).
+      console.error("profiles fetch failed", profErr);
+      return null;
+    }
     liveProfile = prof || {
       id: authUser.id,
       email: authUser.email,

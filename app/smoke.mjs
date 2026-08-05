@@ -628,6 +628,22 @@ if (!readFileSync(resolve(__dirname, "js/store.js"), "utf8").includes("waiver_ac
   console.log("ok  store.js: saveMyApplication records waiver/privacy/guidelines acceptance");
 }
 
+// the RLS recursion fix must stay: profiles policies go through a
+// SECURITY DEFINER role function, never a self-referential subquery
+const rlsFix = readFileSync(resolve(__dirname, "../supabase/migrations/20260805000002_fix_profiles_rls_recursion.sql"), "utf8");
+if (!rlsFix.includes("security definer") || !rlsFix.includes("current_user_role")) {
+  failures++;
+  console.error("FAIL migrations: profiles RLS recursion fix (current_user_role, security definer) missing");
+} else {
+  console.log("ok  migrations: profiles RLS recursion fix present");
+}
+if (!readFileSync(resolve(__dirname, "js/store.js"), "utf8").includes("profiles fetch failed")) {
+  failures++;
+  console.error("FAIL store.js: profile fetch errors must be logged, never swallowed");
+} else {
+  console.log("ok  store.js: profile fetch errors are logged");
+}
+
 // --- store.getCurrentUser fallback (local mode) ---
 store.signOut();
 const localUser = await store.getCurrentUser();
