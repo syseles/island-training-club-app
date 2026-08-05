@@ -52,6 +52,8 @@ const applicationRows = new Map([
   ],
 ]);
 const applicationUpdates = [];
+let applicationReadError = null;
+let authStateChangeHandler = null;
 const fixedIso = "2026-08-05T02:00:00.000Z";
 const RealDate = Date;
 globalThis.Date = class extends RealDate {
@@ -84,6 +86,10 @@ const fakeSupabase = {
       },
       error: null,
     }),
+    onAuthStateChange(callback) {
+      authStateChangeHandler = callback;
+      return { data: { subscription: { unsubscribe() {} } } };
+    },
   },
   from(table) {
     if (table === "profiles") {
@@ -113,7 +119,7 @@ const fakeSupabase = {
               return {
                 maybeSingle: async () => ({
                   data: structuredClone(applicationRows.get(value) || null),
-                  error: null,
+                  error: applicationReadError,
                 }),
               };
             },
@@ -184,6 +190,23 @@ const indemnity = await views.viewAccount("indemnity");
 if (!indemnity.includes(`Indemnity confirmed on ${confirmedDay}`) || indemnity.includes("To be accepted")) {
   throw new Error("Indemnity page should reflect the live application waiver acceptance date");
 }
+store.currentUser().role = "pending";
+store.currentUser().status = "pending";
+const pendingAccount = await views.viewAccount();
+if (!pendingAccount.includes("+852 6123 4567")) {
+  throw new Error("Pending Profile should render the fetched application phone");
+}
+if (!pendingAccount.includes("Taylor Coach · +852 6777 8888")) {
+  throw new Error("Pending Profile should render the fetched application emergency contact");
+}
+if (!pendingAccount.includes("Accepted")) {
+  throw new Error("Pending Profile should render the fetched application waiver state");
+}
+if (!pendingAccount.includes("Yes")) {
+  throw new Error("Pending Profile should render the fetched application photo consent");
+}
+store.currentUser().role = "super_admin";
+store.currentUser().status = "approved";
 const detailsSummary = await views.viewAccount("details");
 for (const label of [
   "Full name",
@@ -232,6 +255,22 @@ if (!detailsEdit.includes('value="Taylor Coach"') || !detailsEdit.includes('valu
 if (detailsEdit.includes('name="photo_consent"')) {
   throw new Error("Live details edit route should exclude photo consent controls");
 }
+applicationRows.set(authUser.id, {
+  ...applicationRows.get(authUser.id),
+  preferred_name: null,
+});
+const nullPreferredSummary = await views.viewAccount("details");
+if (!nullPreferredSummary.includes("Preferred name</span><strong>Not provided</strong>")) {
+  throw new Error("Null preferred_name should render as Not provided");
+}
+const nullPreferredEdit = await views.viewAccount("details", "edit");
+if (!nullPreferredEdit.includes('name="preferred_name" value=""')) {
+  throw new Error("Null preferred_name should stay blank in the edit form");
+}
+applicationRows.set(authUser.id, {
+  ...applicationRows.get(authUser.id),
+  preferred_name: "Riley",
+});
 const privacySummary = await views.viewAccount("privacy");
 for (const label of [
   "Photo/video consent",
@@ -447,6 +486,75 @@ if (missingPrivacy?.redirect || !missingPrivacy.includes("Application details un
   throw new Error("Live privacy should show an unavailable card when no application exists");
 }
 
+const domListeners = new Map();
+const windowListeners = new Map();
+const makeElement = () => ({
+  children: [],
+  className: "",
+  innerHTML: "",
+  textContent: "",
+  classList: { toggle() {} },
+  appendChild(child) { this.children.push(child); },
+  remove() {},
+  querySelector() { return null; },
+});
+const elements = new Map([
+  ["view", makeElement()],
+  ["bottom-nav", makeElement()],
+  ["top-avatar", makeElement()],
+  ["toast-stack", makeElement()],
+]);
+globalThis.document = {
+  getElementById: (id) => elements.get(id),
+  createElement: () => makeElement(),
+  addEventListener: (event, callback) => domListeners.set(event, callback),
+};
+globalThis.HTMLInputElement = class {};
+globalThis.location = { hash: "#/account" };
+window.location = globalThis.location;
+window.addEventListener = (event, callback) => windowListeners.set(event, callback);
+window.scrollTo = () => {};
+globalThis.setTimeout = () => 0;
+
+const escapedRejections = [];
+const captureRejection = (reason) => escapedRejections.push(reason);
+process.on("unhandledRejection", captureRejection);
+applicationReadError = new Error("Application read failed");
+const app = await import("./js/app.js?application-read-errors");
+await app.bootPromise;
+await new Promise(setImmediate);
+const toastStack = elements.get("toast-stack");
+if (escapedRejections.length || toastStack.children.length !== 1 || toastStack.children[0].textContent !== "Application read failed") {
+  throw new Error("Boot should catch one failed application read and show one error toast");
+}
+
+escapedRejections.length = 0;
+toastStack.children.length = 0;
+let hashRejected = false;
+try {
+  await windowListeners.get("hashchange")();
+} catch {
+  hashRejected = true;
+}
+await new Promise(setImmediate);
+if (hashRejected || escapedRejections.length || toastStack.children.length !== 1 || toastStack.children[0].textContent !== "Application read failed") {
+  throw new Error("Hash changes should catch failed application reads and show one error toast");
+}
+
+escapedRejections.length = 0;
+toastStack.children.length = 0;
+profile.role = "pending";
+location.hash = "#/home";
+await authStateChangeHandler("SIGNED_IN");
+await new Promise(setImmediate);
+if (escapedRejections.length || toastStack.children.length !== 1 || toastStack.children[0].textContent !== "Application read failed") {
+  throw new Error("SIGNED_IN should catch failed application reads and show one error toast");
+}
+process.off("unhandledRejection", captureRejection);
+applicationReadError = null;
+profile.role = "super_admin";
+
+console.log("ok  live application read failures are caught and shown once across async render flows");
 console.log("ok  live OAuth session renders the signed-in home page");
 console.log("ok  live profile renders valid account metadata");
 console.log("ok  live indemnity renders from the application waiver state");

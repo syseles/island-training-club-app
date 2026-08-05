@@ -55,15 +55,17 @@ let prevPage = null;
 // Live-mode auth listener: when Supabase completes sign-in, route the
 // pending user to /apply (if they have not yet submitted an application).
 if (isLive() && supabase) {
-  supabase.auth.onAuthStateChange((event) => {
-    if (event === "SIGNED_IN") {
+  supabase.auth.onAuthStateChange(async (event) => {
+    if (event !== "SIGNED_IN") return;
+    try {
       // Hydrate the synchronous view model before rendering Home. Without
       // this handoff, OAuth succeeds but Home still renders as a visitor.
-      store.getCurrentUser().then(() => {
-        location.hash = "#/home";
-        render();
-        maybeRedirectToApply();
-      }).catch((err) => toast(err.message || "Sign-in failed", true));
+      await store.getCurrentUser();
+      location.hash = "#/home";
+      await render();
+      await maybeRedirectToApply();
+    } catch (err) {
+      toast(err.message || "Sign-in failed", true);
     }
   });
 }
@@ -600,9 +602,17 @@ async function boot() {
   store.load();
   if (isLive()) await store.getCurrentUser();
   if (!location.hash) location.hash = "#/home";
-  window.addEventListener("hashchange", render);
-  render();
-  maybeRedirectToApply();
+  window.addEventListener("hashchange", async () => {
+    try {
+      await render();
+    } catch (err) {
+      toast(err.message || "Unable to load your account", true);
+    }
+  });
+  await render();
+  await maybeRedirectToApply();
 }
 
-boot().catch((err) => toast(err.message || "Unable to load your account", true));
+export const bootPromise = boot().catch((err) => {
+  toast(err.message || "Unable to load your account", true);
+});

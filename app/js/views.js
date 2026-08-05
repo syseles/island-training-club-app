@@ -573,11 +573,9 @@ export async function viewAccount(section, editMode) {
   const user = store.currentUser();
   if (!user) return accountVisitor();
   if (user.status === "pending") {
-    if (isLive()) {
-      const application = await store.getMyApplication();
-      if (!application) return { redirect: "#/apply" };
-    }
-    return accountPending(user);
+    const application = await store.getMyApplication();
+    if (isLive() && !application) return { redirect: "#/apply" };
+    return accountPending(user, application);
   }
   if (user.status === "declined") return accountDeclined(user);
 
@@ -649,7 +647,13 @@ function accountVisitorLocal() {
     </div></div>`;
 }
 
-function accountPending(user) {
+function accountPending(user, application) {
+  const phone = application ? application.mobile : user.phone;
+  const emergencyName = application ? application.emergency_name : user.emergencyName;
+  const emergencyPhone = application ? application.emergency_phone : user.emergencyPhone;
+  const heard = application ? application.heard_source : user.heard;
+  const indemnityAt = application ? application.waiver_accepted_at : user.indemnityAcceptedAt;
+  const photoConsent = application ? application.photo_consent : user.mediaConsent;
   return `
     <div class="kicker">Profile · ${esc(user.email)}</div>
     <h1 class="display">Thanks, ${esc(user.preferredName || user.fullName.split(" ")[0])}.</h1>
@@ -658,12 +662,12 @@ function accountPending(user) {
       <h3>Your application</h3>
       <div class="receipt-lines">
         <div class="line"><span>Name</span><strong>${esc(user.fullName)}</strong></div>
-        <div class="line"><span>Phone</span><strong>${esc(user.phone)}</strong></div>
-        <div class="line"><span>Emergency contact</span><strong>${esc(user.emergencyName)} · ${esc(user.emergencyPhone)}</strong></div>
-        <div class="line"><span>Heard about ITC</span><strong>${esc(user.heard)}</strong></div>
+        <div class="line"><span>Phone</span><strong>${esc(presentValue(phone))}</strong></div>
+        <div class="line"><span>Emergency contact</span><strong>${esc(presentValue(emergencyName))} · ${esc(presentValue(emergencyPhone))}</strong></div>
+        <div class="line"><span>Heard about ITC</span><strong>${esc(heardSourceLabel(heard))}</strong></div>
         ${user.donorId ? `<div class="line"><span>Donor ID</span><strong>${esc(user.donorId)}</strong></div>` : ""}
-        <div class="line"><span>Indemnity</span><strong>${user.indemnityAcceptedAt ? "Accepted" : "—"}</strong></div>
-        <div class="line"><span>Photo consent</span><strong>${user.mediaConsent ? "Yes" : "No"}</strong></div>
+        <div class="line"><span>Indemnity</span><strong>${indemnityAt ? "Accepted" : "—"}</strong></div>
+        <div class="line"><span>Photo consent</span><strong>${photoConsent ? "Yes" : "No"}</strong></div>
       </div>
       ${!isLive() ? `<p class="muted small mt16">Want to see the approval side? Sign out, then use the admin demo profile — your application will be waiting in the queue.</p>` : ""}
     </div></div>
@@ -805,7 +809,7 @@ function accountDetails(user, application) {
     <div class="card mt16"><div class="card-body">
       <div class="receipt-lines" style="margin-top:0;border-top:0">
         ${accountLine("Full name", user.fullName)}
-        ${accountLine("Preferred name", presentValue(application?.preferred_name || user.preferredName))}
+        ${accountLine("Preferred name", presentValue(application ? application.preferred_name : user.preferredName))}
         ${accountLine("Email", user.email)}
         ${accountLine("Member since", fmtDay(memberSince))}
         ${accountLine("Mobile / WhatsApp number", presentValue(application?.mobile || user.phone))}
@@ -1145,7 +1149,7 @@ function accountDetailsEdit(user, application) {
       ${applyField("text", "emergency_phone", "Emergency contact phone", true, application?.emergency_phone || user.emergencyPhone)}
       ${applySelect("heard_source", "How did you hear about ITC?", ["friend","family","search","social","event","other"], true, application?.heard_source || user.heard)}
       ${applyField("text", "heard_detail", "Detail (optional)", false, application?.heard_detail)}
-      ${applyField("text", "preferred_name", "Preferred name (optional)", false, application?.preferred_name || user.preferredName)}
+      ${applyField("text", "preferred_name", "Preferred name (optional)", false, application ? application.preferred_name : user.preferredName)}
       <button class="btn btn-primary" type="submit">Save changes</button>
     </form>`;
 }

@@ -655,6 +655,10 @@ if (!memberDetailsSummary.includes("18 or over")) {
   failures++;
   console.error("FAIL Membership Details summary should show adult age status");
 } else console.log("ok  Membership Details summary shows adult age status");
+if (!memberDetailsSummary.includes("Preferred name</span><strong>CM</strong>")) {
+  failures++;
+  console.error("FAIL Membership Details summary should show the local preferred name");
+} else console.log("ok  Membership Details summary shows the local preferred name");
 if (!memberDetailsSummary.includes('href="#/account/details/edit"')) {
   failures++;
   console.error("FAIL Membership Details summary should link to the edit route");
@@ -696,6 +700,10 @@ if (memberDetailsEdit.includes('name="photo_consent"')) {
   failures++;
   console.error("FAIL Membership Details edit route should exclude photo consent controls");
 } else console.log("ok  Membership Details edit route excludes photo consent controls");
+if (!memberDetailsEdit.includes('name="preferred_name" value="CM"')) {
+  failures++;
+  console.error("FAIL Membership Details edit route should prefill the local preferred name");
+} else console.log("ok  Membership Details edit route prefills the local preferred name");
 member.mediaConsent = true;
 member.whatsappReminders = false;
 member.emailReceipts = true;
@@ -1279,20 +1287,36 @@ if (!viewsSrc.includes("Application details unavailable")) {
 } else {
   console.log("ok  views.js: missing live applications render unavailable cards");
 }
+if (!/window\.addEventListener\("hashchange",[\s\S]*await render\(\)[\s\S]*toast\(/.test(appSrc)) {
+  failures++;
+  console.error("FAIL app.js: hashchange should await render failures and toast them");
+} else {
+  console.log("ok  app.js: hashchange awaits render failures and toasts them");
+}
+if (!/await render\(\);[\s\S]*await maybeRedirectToApply\(\);/.test(appSrc)) {
+  failures++;
+  console.error("FAIL app.js: boot/auth flows should await render and maybeRedirectToApply");
+} else {
+  console.log("ok  app.js: boot/auth flows await render and maybeRedirectToApply");
+}
 if (!appSrc.includes('out = u && u.status === "approved" ? { redirect: "#/account" } : await views.viewApply();')) {
   failures++;
   console.error("FAIL app.js: apply route should redirect approved users to #/account");
 } else {
   console.log("ok  app.js: apply route redirects approved users to #/account");
 }
-const applyAnyRole = existsSync(resolve(__dirname, "../supabase/migrations/20260805000004_apply_any_role.sql"))
-  ? readFileSync(resolve(__dirname, "../supabase/migrations/20260805000004_apply_any_role.sql"), "utf8")
+const restorePendingInsert = existsSync(resolve(__dirname, "../supabase/migrations/20260805000006_restore_pending_self_insert_application.sql"))
+  ? readFileSync(resolve(__dirname, "../supabase/migrations/20260805000006_restore_pending_self_insert_application.sql"), "utf8")
   : "";
-if (!applyAnyRole.includes('drop policy "self insert application"')) {
+if (
+  !restorePendingInsert.includes('drop policy "self insert application"') ||
+  !restorePendingInsert.includes("auth.uid() = profile_id") ||
+  !restorePendingInsert.includes("(select role from public.profiles where id = auth.uid()) = 'pending'")
+) {
   failures++;
-  console.error("FAIL migrations: self insert application must allow any role (not just pending)");
+  console.error("FAIL migrations: self insert application should be restored to pending-only ownership checks");
 } else {
-  console.log("ok  migrations: self insert application allowed for any role");
+  console.log("ok  migrations: self insert application is restored to pending-only ownership checks");
 }
 
 // --- store.getCurrentUser fallback (local mode) ---
