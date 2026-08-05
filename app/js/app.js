@@ -55,18 +55,20 @@ let prevPage = null;
 // Live-mode auth listener: when Supabase completes sign-in, route the
 // pending user to /apply (if they have not yet submitted an application).
 if (isLive() && supabase) {
-  supabase.auth.onAuthStateChange(async (event) => {
+  supabase.auth.onAuthStateChange((event) => {
     if (event !== "SIGNED_IN") return;
-    try {
-      // Hydrate the synchronous view model before rendering Home. Without
-      // this handoff, OAuth succeeds but Home still renders as a visitor.
-      await store.getCurrentUser();
-      location.hash = "#/home";
-      await render();
-      await maybeRedirectToApply();
-    } catch (err) {
-      toast(err.message || "Sign-in failed", true);
-    }
+    setTimeout(async () => {
+      try {
+        // Hydrate the synchronous view model before rendering Home. Without
+        // this handoff, OAuth succeeds but Home still renders as a visitor.
+        await store.getCurrentUser();
+        location.hash = "#/home";
+        await render();
+        await maybeRedirectToApply();
+      } catch (err) {
+        toast(err.message || "Sign-in failed", true);
+      }
+    }, 0);
   });
 }
 

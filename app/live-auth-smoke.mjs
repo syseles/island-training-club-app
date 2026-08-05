@@ -54,6 +54,9 @@ const applicationRows = new Map([
 const applicationUpdates = [];
 let applicationReadError = null;
 let authStateChangeHandler = null;
+let authCallbackLocked = false;
+let sessionReadDuringAuthCallback = false;
+const deferredAuthTasks = [];
 const fixedIso = "2026-08-05T02:00:00.000Z";
 const RealDate = Date;
 globalThis.Date = class extends RealDate {
@@ -73,19 +76,22 @@ globalThis.Date = class extends RealDate {
 
 const fakeSupabase = {
   auth: {
-    getSession: async () => ({
-      data: {
-        session: {
-          access_token: "test-access-token",
-          token_type: "bearer",
-          expires_in: 3600,
-          expires_at: 9999999999,
-          refresh_token: "test-refresh-token",
-          user: authUser,
+    getSession: async () => {
+      if (authCallbackLocked) sessionReadDuringAuthCallback = true;
+      return {
+        data: {
+          session: {
+            access_token: "test-access-token",
+            token_type: "bearer",
+            expires_in: 3600,
+            expires_at: 9999999999,
+            refresh_token: "test-refresh-token",
+            user: authUser,
+          },
         },
-      },
-      error: null,
-    }),
+        error: null,
+      };
+    },
     onAuthStateChange(callback) {
       authStateChangeHandler = callback;
       return { data: { subscription: { unsubscribe() {} } } };
@@ -514,7 +520,20 @@ globalThis.location = { hash: "#/account" };
 window.location = globalThis.location;
 window.addEventListener = (event, callback) => windowListeners.set(event, callback);
 window.scrollTo = () => {};
-globalThis.setTimeout = () => 0;
+globalThis.setTimeout = (callback, delay) => {
+  if (delay === 0) deferredAuthTasks.push(callback);
+  return 0;
+};
+
+async function dispatchAuthStateChange(event) {
+  authCallbackLocked = true;
+  const callbackResult = authStateChangeHandler(event);
+  authCallbackLocked = false;
+  await callbackResult;
+  while (deferredAuthTasks.length) {
+    await deferredAuthTasks.shift()();
+  }
+}
 
 const escapedRejections = [];
 const captureRejection = (reason) => escapedRejections.push(reason);
@@ -544,8 +563,19 @@ if (hashRejected || escapedRejections.length || toastStack.children.length !== 1
 escapedRejections.length = 0;
 toastStack.children.length = 0;
 profile.role = "pending";
+applicationReadError = null;
+location.hash = "#/account";
+await dispatchAuthStateChange("SIGNED_IN");
+if (sessionReadDuringAuthCallback) {
+  throw new Error("SIGNED_IN hydration must begin only after the auth callback lock is released");
+}
+if (location.hash !== "#/apply" || !elements.get("view").innerHTML.includes("Good to see you, Riley.")) {
+  throw new Error("Deferred SIGNED_IN handling should render Home before redirecting a pending applicant to Apply");
+}
+
+applicationReadError = new Error("Application read failed");
 location.hash = "#/home";
-await authStateChangeHandler("SIGNED_IN");
+await dispatchAuthStateChange("SIGNED_IN");
 await new Promise(setImmediate);
 if (escapedRejections.length || toastStack.children.length !== 1 || toastStack.children[0].textContent !== "Application read failed") {
   throw new Error("SIGNED_IN should catch failed application reads and show one error toast");
@@ -554,6 +584,7 @@ process.off("unhandledRejection", captureRejection);
 applicationReadError = null;
 profile.role = "super_admin";
 
+console.log("ok  live SIGNED_IN hydration starts after the auth callback lock is released");
 console.log("ok  live application read failures are caught and shown once across async render flows");
 console.log("ok  live OAuth session renders the signed-in home page");
 console.log("ok  live profile renders valid account metadata");
