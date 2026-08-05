@@ -504,7 +504,7 @@ store.resetDemo();
 // verify the live-mode HTML source exists in views.js and that the live
 // config evaluates correctly when imported fresh. The live render path
 // is verified manually against a deployed staging environment.
-import { readFileSync } from "node:fs";
+import { readFileSync, existsSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -657,11 +657,49 @@ if (!/NAV_FOR = \{[\s\S]*?notifications: "notifications"/.test(appSrc)) {
 } else {
   console.log("ok  app.js: NAV_FOR maps notifications to its own tab");
 }
-if (!/arg === "users"\s*\?\s*await views\.viewAdminUsers\(\)/.test(appSrc)) {
+if (!/arg === "users" \|\| !arg \|\| isLive\(\)[\s\S]{0,120}?viewAdminUsers\(\)/.test(appSrc)) {
   failures++;
   console.error("FAIL app.js: #/admin/users should route to viewAdminUsers");
 } else {
   console.log("ok  app.js: #/admin/users routes to viewAdminUsers");
+}
+
+// --- Admin entry consistency, live profile editing, weekly encouragement ---
+if (!appSrc.includes('arg === "users" || !arg || isLive()')) {
+  failures++;
+  console.error("FAIL app.js: bare #/admin should also reach viewAdminUsers (same page as the Admin tab)");
+} else {
+  console.log("ok  app.js: Admin Tools and the Admin tab land on the same page");
+}
+if (!appSrc.includes("await views.viewAccount(")) {
+  failures++;
+  console.error("FAIL app.js: account route should await (live details view is async)");
+} else {
+  console.log("ok  app.js: account route is awaited");
+}
+if (!viewsSrc.includes("viewAccountDetailsLive")) {
+  failures++;
+  console.error("FAIL views.js: live Membership Details editor missing");
+} else {
+  console.log("ok  views.js: live Membership Details editor present");
+}
+const selfEditMigration = existsSync(
+  resolve(__dirname, "../supabase/migrations/20260805000003_self_update_application.sql")
+)
+  ? readFileSync(resolve(__dirname, "../supabase/migrations/20260805000003_self_update_application.sql"), "utf8")
+  : "";
+if (!selfEditMigration.includes('drop policy "self update application"')) {
+  failures++;
+  console.error("FAIL migrations: members must be able to update their own application (not just pending)");
+} else {
+  console.log("ok  migrations: self update application allowed post-approval");
+}
+const homeNow = views.viewHome();
+if (!homeNow.includes("Encouragement of the week")) {
+  failures++;
+  console.error("FAIL home should show the weekly encouragement below the greeting");
+} else {
+  console.log("ok  home shows the weekly encouragement");
 }
 
 // --- store.getCurrentUser fallback (local mode) ---

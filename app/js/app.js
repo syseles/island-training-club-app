@@ -105,7 +105,9 @@ async function render() {
       out = views.viewCommunity(arg);
       break;
     case "account":
-      out = views.viewAccount(arg);
+      // Awaited: the live Membership Details view is async; sync views
+      // resolve through await unchanged.
+      out = await views.viewAccount(arg);
       break;
     case "apply": {
       const u = store.currentUser();
@@ -124,12 +126,15 @@ async function render() {
     case "admin":
       // #/admin/users is the live admin page; "admin/users" can never be
       // `page` (parseHash splits on "/"), so route on arg here instead.
+      // viewAdminUsers falls back to the local approvals view in local
+      // mode, so bare #/admin (Profile → Admin Tools) and the Admin tab
+      // always land on the same page.
       out =
         arg === "activity"
           ? views.viewAdminActivity(arg2)
-          : arg === "users"
+          : arg === "users" || !arg || isLive()
             ? await views.viewAdminUsers()
-            : views.viewAdmin(arg || "approvals");
+            : views.viewAdmin(arg);
       break;
     case "notifications":
       out = await views.viewNotifications();
@@ -366,7 +371,7 @@ document.addEventListener("submit", async (e) => {
     payload.photo_consent = !!fd.get("photo_consent");
     try {
       await store.saveMyApplication(payload);
-      toast("Application submitted.");
+      toast(form.dataset.toast || "Application submitted.");
       location.hash = "#/home";
       await render();
     } catch (err) {

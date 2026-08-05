@@ -14,6 +14,7 @@ import {
   findSession,
   sessionStarted,
   sessionsInRange,
+  weeklyVerse,
   mondayOf,
   addDays,
   todayLocal,
@@ -214,10 +215,19 @@ export function viewHome() {
     </div>`;
   }
 
+  const verse = weeklyVerse();
+  const encouragement = `
+    <div class="card mt16"><div class="card-body">
+      <span class="kicker">Encouragement of the week</span>
+      <p class="verse-text">“${esc(verse.text)}”</p>
+      <p class="hero-meta">${esc(verse.ref)}</p>
+    </div></div>`;
+
   return `
     <div class="kicker">${esc(fmtDateLong(todayLocal()))} · Hong Kong</div>
     <h1 class="display">${name ? `Good to see you, ${name}.` : "Train together."}</h1>
     ${user && user.status === "pending" ? pendingBanner() : ""}
+    ${encouragement}
     ${guest}
     ${weekSection}
     <div class="section-head"><h2>The Club</h2><a href="#/community">More →</a></div>
@@ -565,7 +575,9 @@ export function viewAccount(section) {
     case undefined:
       return accountMember(user);
     case "details":
-      return accountDetails(user);
+      // Live members edit their application details here (async view);
+      // local demo accounts keep the read-only page.
+      return isLive() ? viewAccountDetailsLive() : accountDetails(user);
     case "indemnity":
       return accountIndemnity(user);
     case "donor":
@@ -964,25 +976,53 @@ function applyFormHtml(cu) {
   `;
 }
 
-function applyField(type, name, label, required) {
+function applyField(type, name, label, required, value = "") {
   return `
     <label class="field">
       <span class="field-label">${esc(label)}${required ? " *" : ""}</span>
-      <input type="${type}" name="${name}" ${required ? "required" : ""}>
+      <input type="${type}" name="${name}" value="${esc(value || "")}" ${required ? "required" : ""}>
     </label>
   `;
 }
 
-function applySelect(name, label, options, required) {
+function applySelect(name, label, options, required, value = "") {
   return `
     <label class="field">
       <span class="field-label">${esc(label)}${required ? " *" : ""}</span>
       <select name="${name}" ${required ? "required" : ""}>
         ${required ? "" : `<option value="">—</option>`}
-        ${options.map((o) => `<option value="${o}">${esc(o)}</option>`).join("")}
+        ${options.map((o) => `<option value="${o}" ${o === value ? "selected" : ""}>${esc(o)}</option>`).join("")}
       </select>
     </label>
   `;
+}
+
+// Live "Membership Details": the application form, prefilled from the
+// member's submitted application, reusing data-form="apply" (upsert).
+async function viewAccountDetailsLive() {
+  const cu = await store.getCurrentUser();
+  if (!cu) return { redirect: "#/account" };
+  const app = await store.getMyApplication();
+  return `
+    <a class="back-link" href="#/account">← Profile</a>
+    <div class="kicker mt16">Profile · Membership Details</div>
+    <h1 class="display sm">Membership Details.</h1>
+    <p class="subcopy mt8">The details from your application — update them anytime.</p>
+    <form data-form="apply" data-toast="Saved." class="form-grid mt16">
+      ${applyField("text", "mobile", "Mobile / WhatsApp number", true, app?.mobile)}
+      ${applyField("date", "date_of_birth", "Date of birth", true, app?.date_of_birth)}
+      <div data-minor-only ${app?.is_minor ? "" : "hidden"}>
+        ${applyField("text", "guardian_name", "Guardian name", true, app?.guardian_name)}
+        ${applyField("text", "guardian_phone", "Guardian phone", true, app?.guardian_phone)}
+      </div>
+      ${applyField("text", "emergency_name", "Emergency contact name", true, app?.emergency_name)}
+      ${applyField("text", "emergency_phone", "Emergency contact phone", true, app?.emergency_phone)}
+      ${applySelect("heard_source", "How did you hear about ITC?", ["friend","family","search","social","event","other"], true, app?.heard_source)}
+      ${applyField("text", "heard_detail", "Detail (optional)", false, app?.heard_detail)}
+      ${applyField("text", "preferred_name", "Preferred name (optional)", false, app?.preferred_name)}
+      <label class="check"><input type="checkbox" name="photo_consent" ${app?.photo_consent ? "checked" : ""}> I consent to photos/videos of me being used on ITC channels. (Optional)</label>
+      <button class="btn btn-primary" type="submit">Save changes</button>
+    </form>`;
 }
 
 export function viewApply() {
