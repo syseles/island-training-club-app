@@ -239,13 +239,16 @@ document.addEventListener("click", async (e) => {
       break;
     }
 
-    case "signout":
-      store.signOut();
+    case "signout": {
+      // signOutLive clears the Supabase session in live mode and falls back
+      // to local signOut otherwise — without it the live session survives.
+      await store.signOutLive();
       toast("Signed out");
       // Back to the sign-in page — the account page IS the visitor front door.
       location.hash = "#/account";
       render();
       break;
+    }
 
     case "sign-in-google":
       store.signInWithGoogle().catch((err) => toast(err.message || "Sign-in failed"));

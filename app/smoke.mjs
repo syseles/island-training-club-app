@@ -536,6 +536,12 @@ if (!signoutBlock || !signoutBlock[1].includes('location.hash = "#/account"')) {
 } else {
   console.log("ok  app.js: signout navigates to #/account");
 }
+if (!signoutBlock || !signoutBlock[1].includes("signOutLive")) {
+  failures++;
+  console.error("FAIL app.js: signout should clear the live Supabase session via signOutLive");
+} else {
+  console.log("ok  app.js: signout clears the live session via signOutLive");
+}
 
 // --- store.getCurrentUser fallback (local mode) ---
 store.signOut();
