@@ -586,30 +586,30 @@ if (!homeFn || !homeFn[0].includes('data-action="sign-in-google"')) {
 } else {
   console.log("ok  views.js: visitor home CTA triggers Google sign-in directly");
 }
-if (!viewsSrc.includes('applyField("tel", "mobile", "Mobile / WhatsApp number", true)')) {
+if (!viewsSrc.includes('applyField("text", "mobile", "Mobile / WhatsApp number", true)')) {
   failures++;
-  console.error("FAIL views.js: short apply form should require mobile");
+  console.error("FAIL views.js: apply form should require mobile");
 } else {
-  console.log("ok  views.js: short apply form requires mobile");
+  console.log("ok  views.js: apply form requires mobile");
 }
-if (!viewsSrc.includes('applyField("text", "emergency_name", "Emergency contact name (optional)", false)')) {
+if (!viewsSrc.includes('applyField("text", "emergency_name", "Emergency contact name", true)')) {
   failures++;
-  console.error("FAIL views.js: emergency contact should be optional in the short apply form");
+  console.error("FAIL views.js: apply form should require emergency contact name");
 } else {
-  console.log("ok  views.js: emergency contact is optional in the short apply form");
+  console.log("ok  views.js: apply form requires emergency contact name");
 }
 const applyFn = viewsSrc.match(/function applyFormHtml\(cu\) \{[\s\S]*?\n\}/);
-if (!applyFn || applyFn[0].includes('name="waiver"') || applyFn[0].includes('name="guidelines"')) {
+if (!applyFn || !applyFn[0].includes('name="waiver"') || !applyFn[0].includes('name="guidelines"') || !applyFn[0].includes('name="privacy"')) {
   failures++;
-  console.error("FAIL views.js: waiver/guidelines checkboxes should move out of the short apply form");
+  console.error("FAIL views.js: apply form should carry waiver, privacy and guidelines checkboxes");
 } else {
-  console.log("ok  views.js: short apply form has no waiver/guidelines checkboxes");
+  console.log("ok  views.js: apply form carries waiver, privacy and guidelines checkboxes");
 }
-if (!readFileSync(resolve(__dirname, "js/store.js"), "utf8").includes("waiver_accepted_at: null")) {
+if (!readFileSync(resolve(__dirname, "js/store.js"), "utf8").includes("waiver_accepted_at: new Date()")) {
   failures++;
-  console.error("FAIL store.js: saveMyApplication should leave waiver/guidelines for later");
+  console.error("FAIL store.js: saveMyApplication should record waiver/privacy/guidelines acceptance");
 } else {
-  console.log("ok  store.js: saveMyApplication leaves waiver/guidelines for later");
+  console.log("ok  store.js: saveMyApplication records waiver/privacy/guidelines acceptance");
 }
 
 // --- store.getCurrentUser fallback (local mode) ---

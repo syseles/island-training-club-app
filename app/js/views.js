@@ -932,20 +932,21 @@ function applyFormHtml(cu) {
       <h2 class="display">Tell us about you</h2>
       <p class="muted">Signed in as <strong>${esc(displayName)}</strong>${cu?.email ? ` · ${esc(cu.email)}` : ""}. We collect this so the team can approve your application and reach you in an emergency.</p>
       <form data-form="apply" class="form-grid">
-        ${applyField("tel", "mobile", "Mobile / WhatsApp number", true)}
-        ${applyField("date", "date_of_birth", "Date of birth (optional)", false)}
+        ${applyField("text", "mobile", "Mobile / WhatsApp number", true)}
+        ${applyField("date", "date_of_birth", "Date of birth", true)}
         <div data-minor-only hidden>
           ${applyField("text", "guardian_name", "Guardian name", true)}
           ${applyField("text", "guardian_phone", "Guardian phone", true)}
         </div>
-        ${applyField("text", "emergency_name", "Emergency contact name (optional)", false)}
-        ${applyField("text", "emergency_phone", "Emergency contact phone (optional)", false)}
-        ${applySelect("heard_source", "How did you hear about ITC? (optional)", ["friend","family","search","social","event","other"], false)}
+        ${applyField("text", "emergency_name", "Emergency contact name", true)}
+        ${applyField("text", "emergency_phone", "Emergency contact phone", true)}
+        ${applySelect("heard_source", "How did you hear about ITC?", ["friend","family","search","social","event","other"], true)}
         ${applyField("text", "heard_detail", "Detail (optional)", false)}
         ${applyField("text", "preferred_name", "Preferred name (optional)", false)}
         <label class="check"><input type="checkbox" name="photo_consent"> I consent to photos/videos of me being used on ITC channels. (Optional)</label>
+        <label class="check"><input type="checkbox" name="waiver" required> I accept the participation waiver. (⏳ text pending ITC review)</label>
         <label class="check"><input type="checkbox" name="privacy" required> I accept the privacy policy. (⏳ text pending ITC review)</label>
-        <p class="muted small">Emergency contact, indemnity and community guidelines can be completed later from your Profile.</p>
+        <label class="check"><input type="checkbox" name="guidelines" required> I accept the community guidelines. (⏳ text pending ITC review)</label>
         <button class="btn btn-primary" type="submit">Submit application</button>
       </form>
     </section>

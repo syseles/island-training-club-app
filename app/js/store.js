@@ -345,25 +345,23 @@ export async function saveMyApplication(form) {
   }
   const cu = await getCurrentUser();
   if (!cu) throw new Error("Not signed in");
-  // Short application: only mobile + privacy consent are collected up
-  // front; everything else is optional and completable later from Profile.
-  const isMinor = form.date_of_birth ? computeIsMinor(form.date_of_birth) : false;
+  const isMinor = computeIsMinor(form.date_of_birth);
   const row = {
     profile_id: cu.id,
     mobile: form.mobile,
-    date_of_birth: form.date_of_birth || null,
+    date_of_birth: form.date_of_birth,
     is_minor: isMinor,
     guardian_name: isMinor ? form.guardian_name : null,
     guardian_phone: isMinor ? form.guardian_phone : null,
-    emergency_name: form.emergency_name || null,
-    emergency_phone: form.emergency_phone || null,
-    heard_source: form.heard_source || null,
+    emergency_name: form.emergency_name,
+    emergency_phone: form.emergency_phone,
+    heard_source: form.heard_source,
     heard_detail: form.heard_detail || null,
     preferred_name: form.preferred_name || null,
     photo_consent: !!form.photo_consent,
-    waiver_accepted_at: null,
+    waiver_accepted_at: new Date().toISOString(),
     privacy_accepted_at: new Date().toISOString(),
-    guidelines_accepted_at: null,
+    guidelines_accepted_at: new Date().toISOString(),
   };
   const { error } = await supabase.from("applications").upsert(row);
   if (error) throw error;

@@ -35,6 +35,10 @@
 
 Stage 1 was shortened per product decision: the application collects only **mobile + privacy consent** up front; date of birth, emergency contact, heard-source, waiver and guidelines acceptances are optional and completable later from the Profile page. This required migration `supabase/migrations/20260805000001_short_application.sql` dropping the NOT NULL constraints on `date_of_birth`, `emergency_name`, `emergency_phone`, `heard_source`, `waiver_accepted_at`, `guidelines_accepted_at`. Also: the visitor home CTA triggers Google sign-in directly in live mode (no intermediate account-page hop), sign-in routes to `#/home` (pending users are then pushed to `#/apply` by the existing guard), and demo affordances are hidden in live mode.
 
+## Amendment 2 (2026-08-05)
+
+Short-form decision **reverted**: the full application form stands — mobile, DOB, emergency name/phone and heard_source required; waiver, privacy and guidelines checkboxes required; heard detail, preferred name and photo consent optional. Migration `20260805000001_short_application.sql` is kept (a more permissive DB is harmless; the form enforces the required fields).
+
 ## Section 2 — Stage 1: application after Google sign-in (`feature/auth-identity`)
 
 - First Google sign-in → land directly on `#/apply`.
