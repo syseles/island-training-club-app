@@ -567,6 +567,40 @@ if (!/!isLive\(\)[\s\S]{0,200}data-action="reset-demo"/.test(viewsSrc)) {
   console.log("ok  views.js: Reset demo data button is local-only");
 }
 
+// --- Live auth: home CTA + short application form ---
+const homeFn = viewsSrc.match(/export function viewHome\(\) \{[\s\S]*?\n\}/);
+if (!homeFn || !homeFn[0].includes('data-action="sign-in-google"')) {
+  failures++;
+  console.error("FAIL views.js: visitor home CTA should trigger Google sign-in directly in live mode");
+} else {
+  console.log("ok  views.js: visitor home CTA triggers Google sign-in directly");
+}
+if (!viewsSrc.includes('applyField("tel", "mobile", "Mobile / WhatsApp number", true)')) {
+  failures++;
+  console.error("FAIL views.js: short apply form should require mobile");
+} else {
+  console.log("ok  views.js: short apply form requires mobile");
+}
+if (!viewsSrc.includes('applyField("text", "emergency_name", "Emergency contact name (optional)", false)')) {
+  failures++;
+  console.error("FAIL views.js: emergency contact should be optional in the short apply form");
+} else {
+  console.log("ok  views.js: emergency contact is optional in the short apply form");
+}
+const applyFn = viewsSrc.match(/function applyFormHtml\(cu\) \{[\s\S]*?\n\}/);
+if (!applyFn || applyFn[0].includes('name="waiver"') || applyFn[0].includes('name="guidelines"')) {
+  failures++;
+  console.error("FAIL views.js: waiver/guidelines checkboxes should move out of the short apply form");
+} else {
+  console.log("ok  views.js: short apply form has no waiver/guidelines checkboxes");
+}
+if (!readFileSync(resolve(__dirname, "js/store.js"), "utf8").includes("waiver_accepted_at: null")) {
+  failures++;
+  console.error("FAIL store.js: saveMyApplication should leave waiver/guidelines for later");
+} else {
+  console.log("ok  store.js: saveMyApplication leaves waiver/guidelines for later");
+}
+
 // --- store.getCurrentUser fallback (local mode) ---
 store.signOut();
 const localUser = await store.getCurrentUser();

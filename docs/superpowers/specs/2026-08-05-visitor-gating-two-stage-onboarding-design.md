@@ -31,6 +31,10 @@
 - **Sign-out → `#/account`** (was `#/home`). The account page *is* the sign-in page for visitors, so signing out lands you where you'd sign back in.
 - Schedule tab stays browsable for visitors. Free activity pages: unchanged (fully open). Tapping a **paid** activity as a visitor routes to `#/account` with a "Sign in to book" prompt (replacing the current paid-activity visitor view).
 
+## Amendment (2026-08-05, post-review)
+
+Stage 1 was shortened per product decision: the application collects only **mobile + privacy consent** up front; date of birth, emergency contact, heard-source, waiver and guidelines acceptances are optional and completable later from the Profile page. This required migration `supabase/migrations/20260805000001_short_application.sql` dropping the NOT NULL constraints on `date_of_birth`, `emergency_name`, `emergency_phone`, `heard_source`, `waiver_accepted_at`, `guidelines_accepted_at`. Also: the visitor home CTA triggers Google sign-in directly in live mode (no intermediate account-page hop), sign-in routes to `#/home` (pending users are then pushed to `#/apply` by the existing guard), and demo affordances are hidden in live mode.
+
 ## Section 2 — Stage 1: application after Google sign-in (`feature/auth-identity`)
 
 - First Google sign-in → land directly on `#/apply`.

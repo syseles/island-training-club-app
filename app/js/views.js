@@ -156,7 +156,9 @@ export function viewHome() {
       <span class="kicker">New to ITC?</span>
       <h3 class="mt8">Everyone is welcome</h3>
       <p class="hero-meta">Free activities are open to all — just show up. Membership is free too; sign in and an ITC leader approves every application before paid booking unlocks.</p>
-      <a class="btn mt16" href="#/account">${isLive() ? "Continue with Google" : "Sign in or join"}</a>
+      ${isLive()
+        ? `<button class="btn mt16" type="button" data-action="sign-in-google">Continue with Google</button>`
+        : `<a class="btn mt16" href="#/account">Sign in or join</a>`}
       <p class="muted small mt8">New here? You'll be guided through a short application after sign-in.</p>
     </div></div>`
     : "";
@@ -930,21 +932,20 @@ function applyFormHtml(cu) {
       <h2 class="display">Tell us about you</h2>
       <p class="muted">Signed in as <strong>${esc(displayName)}</strong>${cu?.email ? ` · ${esc(cu.email)}` : ""}. We collect this so the team can approve your application and reach you in an emergency.</p>
       <form data-form="apply" class="form-grid">
-        ${applyField("text", "mobile", "Mobile / WhatsApp number", true)}
-        ${applyField("date", "date_of_birth", "Date of birth", true)}
+        ${applyField("tel", "mobile", "Mobile / WhatsApp number", true)}
+        ${applyField("date", "date_of_birth", "Date of birth (optional)", false)}
         <div data-minor-only hidden>
           ${applyField("text", "guardian_name", "Guardian name", true)}
           ${applyField("text", "guardian_phone", "Guardian phone", true)}
         </div>
-        ${applyField("text", "emergency_name", "Emergency contact name", true)}
-        ${applyField("text", "emergency_phone", "Emergency contact phone", true)}
-        ${applySelect("heard_source", "How did you hear about ITC?", ["friend","family","search","social","event","other"], true)}
+        ${applyField("text", "emergency_name", "Emergency contact name (optional)", false)}
+        ${applyField("text", "emergency_phone", "Emergency contact phone (optional)", false)}
+        ${applySelect("heard_source", "How did you hear about ITC? (optional)", ["friend","family","search","social","event","other"], false)}
         ${applyField("text", "heard_detail", "Detail (optional)", false)}
         ${applyField("text", "preferred_name", "Preferred name (optional)", false)}
         <label class="check"><input type="checkbox" name="photo_consent"> I consent to photos/videos of me being used on ITC channels. (Optional)</label>
-        <label class="check"><input type="checkbox" name="waiver" required> I accept the participation waiver. (⏳ text pending ITC review)</label>
         <label class="check"><input type="checkbox" name="privacy" required> I accept the privacy policy. (⏳ text pending ITC review)</label>
-        <label class="check"><input type="checkbox" name="guidelines" required> I accept the community guidelines. (⏳ text pending ITC review)</label>
+        <p class="muted small">Emergency contact, indemnity and community guidelines can be completed later from your Profile.</p>
         <button class="btn btn-primary" type="submit">Submit application</button>
       </form>
     </section>
@@ -965,6 +966,7 @@ function applySelect(name, label, options, required) {
     <label class="field">
       <span class="field-label">${esc(label)}${required ? " *" : ""}</span>
       <select name="${name}" ${required ? "required" : ""}>
+        ${required ? "" : `<option value="">—</option>`}
         ${options.map((o) => `<option value="${o}">${esc(o)}</option>`).join("")}
       </select>
     </label>
