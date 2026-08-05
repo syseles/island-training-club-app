@@ -25,7 +25,12 @@ export function toast(msg, isErr = false) {
 // --- Router ----------------------------------------------------------------------
 
 function parseHash() {
-  return location.hash
+  const raw = location.hash;
+  // Supabase OAuth redirects land on /app/#access_token=… — auth params,
+  // not a route. supabase-js strips the hash via history.replaceState,
+  // which never fires hashchange, so guard here as well as on SIGNED_IN.
+  if (raw.startsWith("#access_token")) return [];
+  return raw
     .replace(/^#\/?/, "")
     .split("/")
     .filter(Boolean);
@@ -50,7 +55,13 @@ let prevPage = null;
 // pending user to /apply (if they have not yet submitted an application).
 if (isLive() && supabase) {
   supabase.auth.onAuthStateChange((event) => {
-    if (event === "SIGNED_IN") maybeRedirectToApply();
+    if (event === "SIGNED_IN") {
+      // Send every sign-in home (setting the hash fires hashchange →
+      // render); pending users without an application are then pushed
+      // to /apply by maybeRedirectToApply.
+      location.hash = "#/home";
+      maybeRedirectToApply();
+    }
   });
 }
 

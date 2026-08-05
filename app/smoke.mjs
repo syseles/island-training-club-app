@@ -542,6 +542,30 @@ if (!signoutBlock || !signoutBlock[1].includes("signOutLive")) {
 } else {
   console.log("ok  app.js: signout clears the live session via signOutLive");
 }
+if (!appSrc.includes('"#access_token"')) {
+  failures++;
+  console.error("FAIL app.js: router should ignore Supabase #access_token hashes");
+} else {
+  console.log("ok  app.js: router ignores #access_token hashes");
+}
+if (!/SIGNED_IN[\s\S]{0,300}location\.hash = "#\/home"/.test(appSrc)) {
+  failures++;
+  console.error("FAIL app.js: SIGNED_IN should route to #/home");
+} else {
+  console.log("ok  app.js: SIGNED_IN routes to #/home");
+}
+if (!/!isLive\(\)[\s\S]{0,200}admin demo profile/.test(viewsSrc)) {
+  failures++;
+  console.error("FAIL views.js: pending view's demo-profile tip should be local-only");
+} else {
+  console.log("ok  views.js: pending view's demo-profile tip is local-only");
+}
+if (!/!isLive\(\)[\s\S]{0,200}data-action="reset-demo"/.test(viewsSrc)) {
+  failures++;
+  console.error("FAIL views.js: Reset demo data button should be local-only");
+} else {
+  console.log("ok  views.js: Reset demo data button is local-only");
+}
 
 // --- store.getCurrentUser fallback (local mode) ---
 store.signOut();

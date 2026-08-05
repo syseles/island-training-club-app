@@ -630,7 +630,7 @@ function accountPending(user) {
         <div class="line"><span>Indemnity</span><strong>${user.indemnityAcceptedAt ? "Accepted" : "—"}</strong></div>
         <div class="line"><span>Photo consent</span><strong>${user.mediaConsent ? "Yes" : "No"}</strong></div>
       </div>
-      <p class="muted small mt16">Want to see the approval side? Sign out, then use the admin demo profile — your application will be waiting in the queue.</p>
+      ${!isLive() ? `<p class="muted small mt16">Want to see the approval side? Sign out, then use the admin demo profile — your application will be waiting in the queue.</p>` : ""}
     </div></div>
     <div class="btn-row">
       <a class="btn ghost" href="#/schedule">Browse the schedule</a>
@@ -700,7 +700,7 @@ function accountMember(user) {
 
     <div class="btn-row">
       <button class="btn ghost" type="button" data-action="signout">Sign out</button>
-      <button class="btn danger sm" type="button" data-action="reset-demo">Reset demo data</button>
+      ${!isLive() ? `<button class="btn danger sm" type="button" data-action="reset-demo">Reset demo data</button>` : ""}
     </div>`;
 }
 
