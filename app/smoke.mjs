@@ -522,6 +522,15 @@ if (!viewsSrc.includes('if (!cu) return { redirect: "#/account" };')) {
   console.log("ok  views.js: viewApplyLive redirects visitors to #/account");
 }
 
+const appSrc = readFileSync(resolve(__dirname, "js/app.js"), "utf8");
+const signoutBlock = appSrc.match(/case "signout":([\s\S]*?)break;/);
+if (!signoutBlock || !signoutBlock[1].includes('location.hash = "#/account"')) {
+  failures++;
+  console.error("FAIL app.js: signout should navigate to #/account");
+} else {
+  console.log("ok  app.js: signout navigates to #/account");
+}
+
 // --- store.getCurrentUser fallback (local mode) ---
 store.signOut();
 const localUser = await store.getCurrentUser();

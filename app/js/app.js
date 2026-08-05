@@ -242,7 +242,8 @@ document.addEventListener("click", async (e) => {
     case "signout":
       store.signOut();
       toast("Signed out");
-      location.hash = "#/home";
+      // Back to the sign-in page — the account page IS the visitor front door.
+      location.hash = "#/account";
       render();
       break;
 
