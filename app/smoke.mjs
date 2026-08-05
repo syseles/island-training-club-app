@@ -1,6 +1,18 @@
 // Headless smoke test: render every view for every user state.
 // Run: node --input-type=module < smoke.mjs  (from the app/ directory)
 
+import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
+
+const liveAuth = spawnSync(process.execPath, [fileURLToPath(new URL("./live-auth-smoke.mjs", import.meta.url))], {
+  encoding: "utf8",
+});
+if (liveAuth.stdout) process.stdout.write(liveAuth.stdout);
+if (liveAuth.status !== 0) {
+  if (liveAuth.stderr) process.stderr.write(liveAuth.stderr);
+  process.exit(liveAuth.status || 1);
+}
+
 // --- localStorage shim ---
 const mem = new Map();
 globalThis.localStorage = {
@@ -477,7 +489,6 @@ store.resetDemo();
 // config evaluates correctly when imported fresh. The live render path
 // is verified manually against a deployed staging environment.
 import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 

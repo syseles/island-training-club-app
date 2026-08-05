@@ -29,6 +29,7 @@ const STATE_VERSION = 8;
 // page load. The TTL is short so role flips and welcome notifications
 // surface promptly after the admin takes an action.
 let liveProfile = null;
+let liveUser = null;
 let liveProfileFetchedAt = 0;
 const LIVE_PROFILE_TTL_MS = 30_000;
 
@@ -189,6 +190,7 @@ export function resetDemo() {
 // --- Session / auth ----------------------------------------------------------
 
 export function currentUser() {
+  if (isLive()) return liveUser;
   if (!state.sessionUserId) return null;
   return state.users.find((u) => u.id === state.sessionUserId) ?? null;
 }
@@ -218,6 +220,7 @@ export function demoSignIn(role) {
 
 export function signOut() {
   liveProfile = null;
+  liveUser = null;
   liveProfileFetchedAt = 0;
   state.sessionUserId = null;
   save();
@@ -226,9 +229,12 @@ export function signOut() {
 // --- Live (Supabase) auth helpers --------------------------------------------
 
 export async function getCurrentUser() {
-  if (!isLive || !supabase) return currentUser();
+  if (!isLive() || !supabase) return currentUser();
   const { data: sessData, error: sessErr } = await supabase.auth.getSession();
-  if (sessErr || !sessData.session) return null;
+  if (sessErr || !sessData.session) {
+    liveUser = null;
+    return null;
+  }
   const authUser = sessData.session.user;
   if (!liveProfile || Date.now() - liveProfileFetchedAt > LIVE_PROFILE_TTL_MS) {
     const { data: prof, error: profErr } = await supabase
@@ -246,12 +252,18 @@ export async function getCurrentUser() {
     };
     liveProfileFetchedAt = Date.now();
   }
-  return {
+  const fullName = liveProfile.full_name || liveProfile.email || "ITC Member";
+  liveUser = {
     id: liveProfile.id,
     email: liveProfile.email,
+    fullName,
+    preferredName: fullName.split(" ")[0],
+    avatarUrl: liveProfile.avatar_url,
     role: liveProfile.role,
+    status: liveProfile.role === "pending" ? "pending" : "approved",
     profile: liveProfile,
   };
+  return liveUser;
 }
 
 export async function signInWithGoogle() {
@@ -268,6 +280,7 @@ export async function signInWithGoogle() {
 export async function signOutLive() {
   if (!isLive() || !supabase) return signOut();
   liveProfile = null;
+  liveUser = null;
   liveProfileFetchedAt = 0;
   const { error } = await supabase.auth.signOut();
   if (error) throw error;

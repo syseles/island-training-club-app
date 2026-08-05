@@ -56,11 +56,13 @@ let prevPage = null;
 if (isLive() && supabase) {
   supabase.auth.onAuthStateChange((event) => {
     if (event === "SIGNED_IN") {
-      // Send every sign-in home (setting the hash fires hashchange →
-      // render); pending users without an application are then pushed
-      // to /apply by maybeRedirectToApply.
-      location.hash = "#/home";
-      maybeRedirectToApply();
+      // Hydrate the synchronous view model before rendering Home. Without
+      // this handoff, OAuth succeeds but Home still renders as a visitor.
+      store.getCurrentUser().then(() => {
+        location.hash = "#/home";
+        render();
+        maybeRedirectToApply();
+      }).catch((err) => toast(err.message || "Sign-in failed", true));
     }
   });
 }
@@ -549,8 +551,13 @@ function form_kind_toggle(select) {
 
 // --- Boot ---------------------------------------------------------------------------------------
 
-store.load();
-if (!location.hash) location.hash = "#/home";
-window.addEventListener("hashchange", render);
-render();
-maybeRedirectToApply();
+async function boot() {
+  store.load();
+  if (isLive()) await store.getCurrentUser();
+  if (!location.hash) location.hash = "#/home";
+  window.addEventListener("hashchange", render);
+  render();
+  maybeRedirectToApply();
+}
+
+boot().catch((err) => toast(err.message || "Unable to load your account", true));
