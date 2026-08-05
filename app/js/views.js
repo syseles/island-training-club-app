@@ -905,7 +905,7 @@ function accountHistory(user) {
 
 export async function viewApplyLive() {
   const cu = await store.getCurrentUser();
-  if (!cu) return `<section class="card"><p class="muted">Please sign in first.</p></section>`;
+  if (!cu) return { redirect: "#/account" };
   if (cu.role !== "pending") {
     return `<section class="card"><p class="muted">Your application has already been processed.</p></section>`;
   }

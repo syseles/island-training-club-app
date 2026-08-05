@@ -509,6 +509,18 @@ if (!viewsSrc.includes("accountVisitorLive")) {
 } else {
   console.log("ok  views.js: contains accountVisitorLive function");
 }
+if (viewsSrc.includes("Please sign in first")) {
+  failures++;
+  console.error("FAIL views.js: the 'Please sign in first' wall should be gone");
+} else {
+  console.log("ok  views.js: no 'Please sign in first' wall");
+}
+if (!viewsSrc.includes('if (!cu) return { redirect: "#/account" };')) {
+  failures++;
+  console.error("FAIL views.js: viewApplyLive should redirect visitors to #/account");
+} else {
+  console.log("ok  views.js: viewApplyLive redirects visitors to #/account");
+}
 
 // --- store.getCurrentUser fallback (local mode) ---
 store.signOut();
