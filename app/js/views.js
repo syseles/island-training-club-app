@@ -109,6 +109,11 @@ const ICONS = {
 
 // --- Bottom nav / avatar --------------------------------------------------------
 
+// Live roles use super_admin; local seed roles use superadmin.
+const ADMIN_ROLES = ["admin", "superadmin", "super_admin"];
+const isAdminRole = (role) => ADMIN_ROLES.includes(role);
+const isSuperRole = (role) => ["superadmin", "super_admin"].includes(role);
+
 const NAV_ITEMS = [
   { key: "home", label: "Home", icon: "home", href: "#/home" },
   { key: "schedule", label: "Schedule", icon: "calendar", href: "#/schedule" },
@@ -119,7 +124,7 @@ const NAV_ITEMS = [
 ];
 
 export function navHTML(routeKey, user) {
-  const isAdmin = user && ["admin", "superadmin", "super_admin"].includes(user.role);
+  const isAdmin = user && isAdminRole(user.role);
   const isSignedIn = !!user;
   return NAV_ITEMS.filter((i) => {
     if (!i.roles) return true;
@@ -660,7 +665,7 @@ function accountDeclined(user) {
 }
 
 function accountMember(user) {
-  const isAdmin = ["admin", "superadmin"].includes(user.role);
+  const isAdmin = isAdminRole(user.role);
 
   const roleLabel = {
     member: "Active member",
@@ -1082,7 +1087,7 @@ export function viewCheckout(sessionId) {
 export function viewBooking(bookingId) {
   const b = store.getBooking(bookingId);
   const user = store.currentUser();
-  if (!b || !user || (b.userId !== user.id && !["admin", "superadmin"].includes(user.role))) {
+  if (!b || !user || (b.userId !== user.id && !isAdminRole(user.role))) {
     return viewNotFound("Booking not found.");
   }
   const s = b.snapshot;
@@ -1119,7 +1124,7 @@ export function viewBooking(bookingId) {
 export function viewReceipt(receiptId) {
   const r = store.getReceipt(receiptId);
   const user = store.currentUser();
-  if (!r || !user || (r.userId !== user.id && !["admin", "superadmin"].includes(user.role))) {
+  if (!r || !user || (r.userId !== user.id && !isAdminRole(user.role))) {
     return viewNotFound("Receipt not found.");
   }
   return `
@@ -1141,7 +1146,7 @@ export function viewReceipt(receiptId) {
 
 export function viewAdmin(tab = "approvals") {
   const user = store.currentUser();
-  if (!user || !["admin", "superadmin"].includes(user.role)) {
+  if (!user || !isAdminRole(user.role)) {
     return { redirect: "#/account" };
   }
   const tabs = `
@@ -1221,7 +1226,7 @@ function adminActivities() {
 
 function adminMembers(viewer) {
   const users = [...store.allUsers()].sort((a, b) => a.fullName.localeCompare(b.fullName));
-  const canEdit = viewer.role === "superadmin";
+  const canEdit = isSuperRole(viewer.role);
   return `
     <p class="muted small mt16">${users.filter((u) => u.status === "approved").length} approved · ${store.pendingApplicants().length} pending. ${canEdit ? "Role changes are super-admin only." : "Only a super admin can change roles."}</p>
     ${users
@@ -1249,7 +1254,7 @@ function adminMembers(viewer) {
 
 export function viewAdminActivity(id) {
   const user = store.currentUser();
-  if (!user || !["admin", "superadmin"].includes(user.role)) {
+  if (!user || !isAdminRole(user.role)) {
     return { redirect: "#/account" };
   }
   const isNew = id === "new";

@@ -644,6 +644,26 @@ if (!readFileSync(resolve(__dirname, "js/store.js"), "utf8").includes("profiles 
   console.log("ok  store.js: profile fetch errors are logged");
 }
 
+// --- Live roles + nav mapping ---
+if (viewsSrc.includes('["admin", "superadmin"]')) {
+  failures++;
+  console.error("FAIL views.js: admin role checks must include super_admin (live role)");
+} else {
+  console.log("ok  views.js: admin role checks include super_admin");
+}
+if (!/NAV_FOR = \{[\s\S]*?notifications: "notifications"/.test(appSrc)) {
+  failures++;
+  console.error("FAIL app.js: NAV_FOR should map notifications -> notifications");
+} else {
+  console.log("ok  app.js: NAV_FOR maps notifications to its own tab");
+}
+if (!/arg === "users"\s*\?\s*await views\.viewAdminUsers\(\)/.test(appSrc)) {
+  failures++;
+  console.error("FAIL app.js: #/admin/users should route to viewAdminUsers");
+} else {
+  console.log("ok  app.js: #/admin/users routes to viewAdminUsers");
+}
+
 // --- store.getCurrentUser fallback (local mode) ---
 store.signOut();
 const localUser = await store.getCurrentUser();

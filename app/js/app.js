@@ -47,6 +47,7 @@ const NAV_FOR = {
   booking: "account",
   receipt: "account",
   admin: "admin",
+  notifications: "notifications",
 };
 
 let prevPage = null;
@@ -121,10 +122,14 @@ async function render() {
       out = views.viewReceipt(arg);
       break;
     case "admin":
-      out = arg === "activity" ? views.viewAdminActivity(arg2) : views.viewAdmin(arg || "approvals");
-      break;
-    case "admin/users":
-      out = await views.viewAdminUsers();
+      // #/admin/users is the live admin page; "admin/users" can never be
+      // `page` (parseHash splits on "/"), so route on arg here instead.
+      out =
+        arg === "activity"
+          ? views.viewAdminActivity(arg2)
+          : arg === "users"
+            ? await views.viewAdminUsers()
+            : views.viewAdmin(arg || "approvals");
       break;
     case "notifications":
       out = await views.viewNotifications();
