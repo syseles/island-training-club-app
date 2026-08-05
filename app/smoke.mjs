@@ -13,6 +13,105 @@ if (liveAuth.status !== 0) {
   process.exit(liveAuth.status || 1);
 }
 
+const liveApply = spawnSync(process.execPath, [
+  "--input-type=module",
+  "-e",
+  `
+const mem = new Map();
+globalThis.localStorage = {
+  getItem: (key) => (mem.has(key) ? mem.get(key) : null),
+  setItem: (key, value) => mem.set(key, String(value)),
+  removeItem: (key) => mem.delete(key),
+};
+const authUser = {
+  id: "live-pending-user",
+  email: "pending@example.com",
+  user_metadata: { full_name: "Pending Person" },
+};
+const profile = {
+  id: authUser.id,
+  email: authUser.email,
+  full_name: "Pending Person",
+  role: "pending",
+  created_at: "2026-08-05T00:00:00.000Z",
+  updated_at: "2026-08-05T00:00:00.000Z",
+};
+const fakeSupabase = {
+  auth: {
+    getSession: async () => ({
+      data: {
+        session: {
+          access_token: "test-access-token",
+          token_type: "bearer",
+          expires_in: 3600,
+          expires_at: 9999999999,
+          refresh_token: "test-refresh-token",
+          user: authUser,
+        },
+      },
+      error: null,
+    }),
+  },
+  from(table) {
+    if (table === "profiles") {
+      return {
+        select() {
+          return {
+            eq(column, value) {
+              if (column !== "id" || value !== authUser.id) throw new Error("Profile query mismatch");
+              return { maybeSingle: async () => ({ data: profile, error: null }) };
+            },
+          };
+        },
+      };
+    }
+    if (table === "applications") {
+      return {
+        select() {
+          return {
+            eq(column, value) {
+              if (column !== "profile_id" || value !== authUser.id) throw new Error("Application query mismatch");
+              return { maybeSingle: async () => ({ data: null, error: null }) };
+            },
+          };
+        },
+      };
+    }
+    throw new Error("Unexpected table: " + table);
+  },
+};
+globalThis.window = {
+  SUPABASE_URL: "https://example.supabase.co",
+  SUPABASE_ANON_KEY: "test-anon-key",
+  supabase: { createClient: () => fakeSupabase },
+};
+const store = await import("./js/store.js");
+const views = await import("./js/views.js");
+store.load();
+await store.getCurrentUser();
+const applyHtml = await views.viewApply();
+if (typeof applyHtml !== "string") throw new Error("Live apply did not render HTML");
+if (!applyHtml.includes('name="age_over_18"') ||
+    !applyHtml.includes('value="yes"') ||
+    !applyHtml.includes('value="no"') ||
+    applyHtml.includes('name="date_of_birth"')) {
+  throw new Error("Live apply should require Yes/No age status and omit DOB");
+}
+if (!applyHtml.includes("data-minor-only")) {
+  throw new Error("Live apply should mark guardian fields as minor-only");
+}
+console.log("ok  live apply uses age status instead of DOB");
+  `,
+], {
+  encoding: "utf8",
+  cwd: fileURLToPath(new URL(".", import.meta.url)),
+});
+if (liveApply.stdout) process.stdout.write(liveApply.stdout);
+if (liveApply.status !== 0) {
+  if (liveApply.stderr) process.stderr.write(liveApply.stderr);
+  process.exit(liveApply.status || 1);
+}
+
 // --- localStorage shim ---
 const mem = new Map();
 globalThis.localStorage = {
@@ -139,10 +238,23 @@ if (!views.viewCommunity("nope").includes("Page not found")) {
 } else console.log("ok  unknown Community section 404s");
 check("account (visitor)", () => views.viewAccount());
 check("apply", () => views.viewApply());
-if (!views.viewApply().includes('name="donorId"')) {
+const localApplyHtml = views.viewApply();
+if (!localApplyHtml.includes('name="donorId"')) {
   failures++;
   console.error("FAIL apply form missing optional Donor ID field");
 } else console.log("ok  apply form collects optional Donor ID");
+if (!localApplyHtml.includes('name="age_over_18"') ||
+    !localApplyHtml.includes('value="yes"') ||
+    !localApplyHtml.includes('value="no"') ||
+    localApplyHtml.includes('name="date_of_birth"') ||
+    localApplyHtml.includes('name="ageConfirmed"')) {
+  failures++;
+  console.error("FAIL application should require Yes/No age status and omit DOB");
+} else console.log("ok  local apply uses age status instead of DOB");
+if (!localApplyHtml.includes("data-minor-only")) {
+  failures++;
+  console.error("FAIL application guardian fields should be marked minor-only");
+} else console.log("ok  application guardian fields are marked minor-only");
 check("checkout (visitor) -> redirect", () => views.viewCheckout(paid.id));
 const adminVisitorOut = await views.viewAdmin("approvals");
 check("admin (visitor) -> redirect", () => adminVisitorOut);
@@ -184,12 +296,36 @@ const applyRes = store.applyForMembership({
   emergencyName: "E Person",
   emergencyPhone: "+852 8765 4321",
   heard: "A friend",
-  ageConfirmed: true,
+  ageOver18: "yes",
   mediaConsent: false,
   donorId: "Not applicable",
   indemnity: true,
 });
 if (!applyRes.ok) throw new Error("apply failed");
+if (applyRes.user.isMinor !== false) {
+  failures++;
+  console.error("FAIL adult application should store isMinor as false");
+} else console.log("ok  adult application stores isMinor false");
+const applyMinorRes = store.applyForMembership({
+  fullName: "Minor Person",
+  preferredName: "Minor",
+  email: "minor@example.com",
+  phone: "+852 2222 3333",
+  emergencyName: "Guardian Contact",
+  emergencyPhone: "+852 3333 4444",
+  heard: "Instagram",
+  ageOver18: "no",
+  guardianName: "Guardian Person",
+  guardianPhone: "+852 5555 6666",
+  mediaConsent: false,
+  donorId: "",
+  indemnity: true,
+});
+if (!applyMinorRes.ok) throw new Error("minor apply failed");
+if (applyMinorRes.user.isMinor !== true) {
+  failures++;
+  console.error("FAIL minor application should store isMinor as true");
+} else console.log("ok  minor application stores isMinor true");
 if (applyRes.user.donorId !== null) {
   failures++;
   console.error('FAIL "Not applicable" donor ID should normalize to null');

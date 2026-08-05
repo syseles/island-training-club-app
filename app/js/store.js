@@ -361,14 +361,15 @@ export async function saveMyApplication(form) {
   }
   const cu = await getCurrentUser();
   if (!cu) throw new Error("Not signed in");
-  const isMinor = computeIsMinor(form.date_of_birth);
+  const isMinor = parseAgeOver18(form.age_over_18);
+  const guardian = guardianFields(isMinor, form.guardian_name, form.guardian_phone);
   const row = {
     profile_id: cu.id,
     mobile: form.mobile,
-    date_of_birth: form.date_of_birth,
+    date_of_birth: null,
     is_minor: isMinor,
-    guardian_name: isMinor ? form.guardian_name : null,
-    guardian_phone: isMinor ? form.guardian_phone : null,
+    guardian_name: guardian.name,
+    guardian_phone: guardian.phone,
     emergency_name: form.emergency_name,
     emergency_phone: form.emergency_phone,
     heard_source: form.heard_source,
@@ -383,13 +384,20 @@ export async function saveMyApplication(form) {
   if (error) throw error;
 }
 
-function computeIsMinor(dob) {
-  const d = new Date(dob);
-  const now = new Date();
-  let age = now.getFullYear() - d.getFullYear();
-  const m = now.getMonth() - d.getMonth();
-  if (m < 0 || (m === 0 && now.getDate() < d.getDate())) age--;
-  return age < 18;
+function parseAgeOver18(value) {
+  if (value === "yes") return false;
+  if (value === "no") return true;
+  throw new Error("Choose whether you are 18 or over");
+}
+
+function guardianFields(isMinor, name, phone) {
+  if (!isMinor) return { name: null, phone: null };
+  const guardianName = String(name || "").trim();
+  const guardianPhone = String(phone || "").trim();
+  if (!guardianName || !guardianPhone) {
+    throw new Error("Enter guardian name and phone");
+  }
+  return { name: guardianName, phone: guardianPhone };
 }
 
 // --- Notifications (B; Supabase) -----------------------------------------------
@@ -420,6 +428,8 @@ export function applyForMembership(form) {
   if (state.users.some((u) => u.email.toLowerCase() === email)) {
     return { ok: false, reason: "duplicate" };
   }
+  const isMinor = parseAgeOver18(form.ageOver18);
+  const guardian = guardianFields(isMinor, form.guardianName, form.guardianPhone);
   const user = {
     id: uid("u"),
     role: "pending",
@@ -428,7 +438,6 @@ export function applyForMembership(form) {
     preferredName: form.preferredName.trim(),
     email,
     phone: form.phone.trim(),
-    ageConfirmed: !!form.ageConfirmed,
     emergencyName: form.emergencyName.trim(),
     emergencyPhone: form.emergencyPhone.trim(),
     heard: form.heard.trim(),
@@ -437,7 +446,9 @@ export function applyForMembership(form) {
     // Joining requires accepting the health & liability indemnity; the
     // timestamp is the member's acceptance record (Profile > Indemnity).
     indemnityAcceptedAt: form.indemnity ? Date.now() : null,
-    isMinor: false,
+    isMinor,
+    guardianName: guardian.name,
+    guardianPhone: guardian.phone,
     privacyAcceptedAt: Date.now(),
     whatsappReminders: false,
     emailReceipts: false,
@@ -468,7 +479,7 @@ export async function listPendingApplications() {
     emergencyPhone: a.emergency_phone,
     heard: a.heard_source,
     appliedAt: a.submitted_at,
-    ageConfirmed: true,
+    isMinor: !!a.is_minor,
     indemnityAcceptedAt: a.waiver_accepted_at,
     mediaConsent: a.photo_consent,
   }));

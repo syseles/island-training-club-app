@@ -955,10 +955,10 @@ function applyFormHtml(cu) {
       <p class="muted">Signed in as <strong>${esc(displayName)}</strong>${cu?.email ? ` · ${esc(cu.email)}` : ""}. We collect this so the team can approve your application and reach you in an emergency.</p>
       <form data-form="apply" class="form-grid">
         ${applyField("text", "mobile", "Mobile / WhatsApp number", true)}
-        ${applyField("date", "date_of_birth", "Date of birth", true)}
+        ${ageStatusField()}
         <div data-minor-only hidden>
-          ${applyField("text", "guardian_name", "Guardian name", true)}
-          ${applyField("text", "guardian_phone", "Guardian phone", true)}
+          ${applyField("text", "guardian_name", "Guardian name", false)}
+          ${applyField("text", "guardian_phone", "Guardian phone", false)}
         </div>
         ${applyField("text", "emergency_name", "Emergency contact name", true)}
         ${applyField("text", "emergency_phone", "Emergency contact phone", true)}
@@ -973,6 +973,15 @@ function applyFormHtml(cu) {
       </form>
     </section>
   `;
+}
+
+function ageStatusField(isMinor) {
+  return `
+    <fieldset class="field age-status">
+      <legend>Are you 18 or over? *</legend>
+      <label><input type="radio" name="age_over_18" value="yes" ${isMinor === false ? "checked" : ""} required> Yes</label>
+      <label><input type="radio" name="age_over_18" value="no" ${isMinor === true ? "checked" : ""} required> No</label>
+    </fieldset>`;
 }
 
 function applyField(type, name, label, required, value = "") {
@@ -1009,10 +1018,10 @@ async function viewAccountDetailsLive() {
     <p class="subcopy mt8">The details from your application — update them anytime.</p>
     <form data-form="apply" data-toast="Saved." class="form-grid mt16">
       ${applyField("text", "mobile", "Mobile / WhatsApp number", true, app?.mobile)}
-      ${applyField("date", "date_of_birth", "Date of birth", true, app?.date_of_birth)}
+      ${ageStatusField(app?.is_minor)}
       <div data-minor-only ${app?.is_minor ? "" : "hidden"}>
-        ${applyField("text", "guardian_name", "Guardian name", true, app?.guardian_name)}
-        ${applyField("text", "guardian_phone", "Guardian phone", true, app?.guardian_phone)}
+        ${applyField("text", "guardian_name", "Guardian name", !!app?.is_minor, app?.guardian_name)}
+        ${applyField("text", "guardian_phone", "Guardian phone", !!app?.is_minor, app?.guardian_phone)}
       </div>
       ${applyField("text", "emergency_name", "Emergency contact name", true, app?.emergency_name)}
       ${applyField("text", "emergency_phone", "Emergency contact phone", true, app?.emergency_phone)}
@@ -1061,8 +1070,13 @@ function viewApplyLocal() {
         <input id="ap-donor" name="donorId" placeholder="e.g. CHUI-08879" autocomplete="off">
         <div class="hint">For members who already give through IECC — your last name, a hyphen, then a 4- or 5-digit number (e.g. CHUI-8879). Leave blank or write “Not applicable” — you can add it later from your Profile.</div>
       </div>
-      <label class="check"><input type="checkbox" name="ageConfirmed" required>
-        <span>I confirm I am 18 or over, or that a parent/guardian will accompany me to sessions. *</span></label>
+      ${ageStatusField()}
+      <div data-minor-only hidden>
+        <div class="field-row">
+          <div class="field"><label for="ap-guardian-name">Guardian name *</label><input id="ap-guardian-name" name="guardianName"></div>
+          <div class="field"><label for="ap-guardian-phone">Guardian phone *</label><input id="ap-guardian-phone" name="guardianPhone" type="tel"></div>
+        </div>
+      </div>
       <label class="check"><input type="checkbox" name="indemnity" required>
         <span>I accept the health &amp; liability indemnity — I confirm I am fit to take part, I join ITC activities at my own risk, and I release ITC and its leaders from liability. *</span></label>
       <label class="check"><input type="checkbox" name="guidelines" required>
@@ -1246,7 +1260,7 @@ function adminApprovals(pending, { live = false } = {}) {
           <dt>Phone</dt><dd>${esc(u.phone)}</dd>
           <dt>Emergency</dt><dd>${esc(u.emergencyName)} · ${esc(u.emergencyPhone)}</dd>
           <dt>Heard via</dt><dd>${esc(u.heard)}</dd>
-          <dt>Age 18+ / guardian</dt><dd>${u.ageConfirmed ? "Confirmed" : "—"}</dd>
+          <dt>Age 18+ / guardian</dt><dd>${u.isMinor ? "Under 18 · guardian required" : "18 or over"}</dd>
           <dt>Indemnity</dt><dd>${u.indemnityAcceptedAt ? "Accepted" : "—"}</dd>
           <dt>Photo consent</dt><dd>${u.mediaConsent ? "Yes" : "No"}</dd>
         </dl>

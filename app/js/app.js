@@ -166,29 +166,22 @@ async function render() {
   prevPage = page;
 }
 
-// --- Live apply form: toggle minor-only fields when DOB changes ---------
+// --- Apply form: toggle minor-only fields when age status changes --------
 
 document.addEventListener("change", (e) => {
   const t = e.target;
-  if (!(t instanceof HTMLInputElement) || t.name !== "date_of_birth") return;
-  const form = t.closest('form[data-form="apply"]');
-  if (!form) return;
+  if (!(t instanceof HTMLInputElement) || t.name !== "age_over_18") return;
+  const form = t.closest("form");
+  if (!form || (form.dataset.form !== "apply" && form.id !== "form-apply")) return;
   const block = form.querySelector("[data-minor-only]");
   if (!block) return;
-  const age = computeAge(t.value);
-  const isMinor = age < 18 && age >= 0;
+  const isMinor = t.value === "no";
   block.hidden = !isMinor;
-  block.querySelectorAll("input").forEach((el) => { el.required = isMinor; });
+  block.querySelectorAll("input").forEach((input) => {
+    input.required = isMinor;
+    if (!isMinor) input.value = "";
+  });
 });
-
-function computeAge(dob) {
-  const d = new Date(dob);
-  const now = new Date();
-  let age = now.getFullYear() - d.getFullYear();
-  const m = now.getMonth() - d.getMonth();
-  if (m < 0 || (m === 0 && now.getDate() < d.getDate())) age--;
-  return age;
-}
 
 // --- ICS download -------------------------------------------------------------------
 
@@ -407,21 +400,28 @@ document.addEventListener("submit", async (e) => {
         errEl.innerHTML = `<div class="form-error">That Donor ID doesn’t look right — it needs a hyphen between your last name and the 4- or 5-digit number (e.g. CHUI-08879 or CHUI-8879). Please enter it again, or leave it blank if you don’t have one.</div>`;
         return;
       }
-      const res = store.applyForMembership({
-        fullName: fd.get("fullName") || "",
-        preferredName: fd.get("preferredName") || "",
-        email: fd.get("email") || "",
-        phone: fd.get("phone") || "",
-        emergencyName: fd.get("emergencyName") || "",
-        emergencyPhone: fd.get("emergencyPhone") || "",
-        heard: fd.get("heard") || "",
-        ageConfirmed: fd.get("ageConfirmed") === "on",
-        mediaConsent: fd.get("mediaConsent") === "on",
-        donorId: fd.get("donorId") || "",
-        indemnity: fd.get("indemnity") === "on",
-      });
-      if (!res.ok) {
-        errEl.innerHTML = `<div class="form-error">An application already exists for that email — try signing in instead.</div>`;
+      try {
+        const res = store.applyForMembership({
+          fullName: fd.get("fullName") || "",
+          preferredName: fd.get("preferredName") || "",
+          email: fd.get("email") || "",
+          phone: fd.get("phone") || "",
+          emergencyName: fd.get("emergencyName") || "",
+          emergencyPhone: fd.get("emergencyPhone") || "",
+          heard: fd.get("heard") || "",
+          ageOver18: fd.get("age_over_18"),
+          guardianName: fd.get("guardianName") || "",
+          guardianPhone: fd.get("guardianPhone") || "",
+          mediaConsent: fd.get("mediaConsent") === "on",
+          donorId: fd.get("donorId") || "",
+          indemnity: fd.get("indemnity") === "on",
+        });
+        if (!res.ok) {
+          errEl.innerHTML = `<div class="form-error">An application already exists for that email — try signing in instead.</div>`;
+          return;
+        }
+      } catch (err) {
+        errEl.innerHTML = `<div class="form-error">${err.message || "Application failed."}</div>`;
         return;
       }
       toast("Application submitted — a leader will review it");
