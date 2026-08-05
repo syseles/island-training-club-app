@@ -69,6 +69,15 @@ const pendingProfiles = [
     created_at: "2026-08-05T04:00:00.000Z",
   },
 ];
+const declinedProfiles = [
+  {
+    id: "declined-member",
+    email: "declined@example.com",
+    full_name: "Declined Runner",
+    role: "declined",
+    created_at: "2026-08-05T05:00:00.000Z",
+  },
+];
 applicationRows.set("pending-submitted", {
   ...structuredClone(applicationRows.get(authUser.id)),
   profile_id: "pending-submitted",
@@ -140,7 +149,11 @@ const fakeSupabase = {
                 throw new Error("Profile list query should order by created_at ascending");
               }
               return Promise.resolve({
-                data: [structuredClone(profile), ...structuredClone(pendingProfiles)],
+                data: [
+                  structuredClone(profile),
+                  ...structuredClone(pendingProfiles),
+                  ...structuredClone(declinedProfiles),
+                ],
                 error: null,
               });
             },
@@ -232,6 +245,20 @@ if (!submitted?.applicationSubmitted || incomplete?.applicationSubmitted !== fal
 }
 if (queue.some((item) => item.id === authUser.id)) {
   throw new Error("Approved/admin profiles must not enter the approval queue");
+}
+const approvalsHtml = await views.viewAdmin("approvals");
+if (!approvalsHtml.includes("Application not submitted")) {
+  throw new Error("Approvals must explain incomplete pending profiles");
+}
+if (!approvalsHtml.match(/data-user="pending-incomplete"[^>]*disabled/)) {
+  throw new Error("Incomplete pending profiles must have disabled decisions");
+}
+if (!approvalsHtml.includes('data-action="decline" data-user="pending-submitted"')) {
+  throw new Error("Submitted live applications must expose Decline");
+}
+const membersHtml = await views.viewAdmin("members");
+if (!/Declined Runner[\s\S]*badge danger">Declined</.test(membersHtml)) {
+  throw new Error("Members must badge declined profiles as Declined");
 }
 await store.decideApplication(submitted.id, "declined");
 if (!profileUpdates.some((update) => update.id === submitted.id && update.role === "declined")) {

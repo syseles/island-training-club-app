@@ -272,16 +272,15 @@ document.addEventListener("click", async (e) => {
       store.signInWithGoogle().catch((err) => toast(err.message || "Sign-in failed"));
       break;
 
-    case "approve":
     case "promote":
     case "demote": {
-      const roleMap = { approve: "member", promote: "admin", demote: "member" };
-      const msgMap  = { approve: "Approved.", promote: "Promoted to admin.", demote: "Demoted to member." };
+      const roleMap = { promote: "admin", demote: "member" };
+      const msgMap  = { promote: "Promoted to admin.", demote: "Demoted to member." };
       const id = el.dataset.id;
       try {
         await store.updateProfileRole(id, roleMap[action]);
         toast(msgMap[action]);
-        render();
+        await render();
       } catch (err) {
         toast(err.message || "Action failed");
       }
@@ -323,18 +322,18 @@ document.addEventListener("click", async (e) => {
       }
       break;
 
-    case "approve": {
-      store.approveApplicant(el.dataset.user);
-      toast("Applicant approved — they now have member access");
-      render();
+    case "approve":
+    case "decline": {
+      const decision = action === "approve" ? "member" : "declined";
+      try {
+        await store.decideApplication(el.dataset.user, decision);
+        toast(action === "approve" ? "Approved." : "Declined.");
+        await render();
+      } catch (err) {
+        toast(err.message || "Decision failed", true);
+      }
       break;
     }
-
-    case "decline":
-      store.declineApplicant(el.dataset.user);
-      toast("Applicant declined");
-      render();
-      break;
 
     case "cancel-booking":
       if (confirm("Cancel this booking? A full refund will be issued (prototype rule).")) {

@@ -1202,17 +1202,36 @@ if (viewsSrc.includes('href: "#/admin/users"')) {
   console.log("ok  views.js: Admin nav item links to #/admin");
 }
 const storeSrc2 = readFileSync(resolve(__dirname, "js/store.js"), "utf8");
-if (!storeSrc2.includes("listPendingApplications")) {
+if (!storeSrc2.includes("listApprovalCandidates")) {
   failures++;
-  console.error("FAIL store.js: live approvals need listPendingApplications");
+  console.error("FAIL store.js: live approvals need listApprovalCandidates");
 } else {
-  console.log("ok  store.js: listPendingApplications present");
+  console.log("ok  store.js: listApprovalCandidates present");
 }
-if (!viewsSrc.includes("await store.listPendingApplications()")) {
+if (!viewsSrc.includes("adminApprovals(await store.listApprovalCandidates())")) {
   failures++;
-  console.error("FAIL views.js: live approvals tab should read Supabase applications, not demo seeds");
+  console.error("FAIL views.js: approvals tab should render approval candidates, not submitted applications only");
 } else {
-  console.log("ok  views.js: approvals tab reads live applications");
+  console.log("ok  views.js: approvals tab reads approval candidates");
+}
+const approvalCaseCount = (appSrc.match(/case "approve"/g) || []).length;
+if (approvalCaseCount !== 1) {
+  failures++;
+  console.error(`FAIL app.js: admin approvals should have exactly one case "approve" block, found ${approvalCaseCount}`);
+} else {
+  console.log('ok  app.js: admin approvals have one case "approve" block');
+}
+if (!/case "approve":\s*case "decline":\s*\{[\s\S]*await store\.decideApplication\(el\.dataset\.user, decision\)/.test(appSrc)) {
+  failures++;
+  console.error("FAIL app.js: approve/decline must share one decideApplication handler");
+} else {
+  console.log("ok  app.js: approve/decline share decideApplication");
+}
+if (!appSrc.includes('const decision = action === "approve" ? "member" : "declined";')) {
+  failures++;
+  console.error("FAIL app.js: decline must map to the declined decision");
+} else {
+  console.log("ok  app.js: decline maps to declined");
 }
 if (!appSrc.includes("await views.viewAccount(")) {
   failures++;

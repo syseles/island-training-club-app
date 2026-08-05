@@ -1342,7 +1342,7 @@ export async function viewAdmin(tab = "approvals") {
             fullName: p.full_name || p.email,
             email: p.email,
             role: p.role === "super_admin" ? "superadmin" : p.role,
-            status: p.role === "pending" ? "pending" : "approved",
+            status: p.role === "pending" ? "pending" : p.role === "declined" ? "declined" : "approved",
           }))
           .sort((a, b) => a.fullName.localeCompare(b.fullName))
       : [...store.allUsers()].sort((a, b) => a.fullName.localeCompare(b.fullName));
@@ -1352,7 +1352,7 @@ export async function viewAdmin(tab = "approvals") {
       ? adminActivities()
       : tab === "members"
         ? adminMembers(user, memberUsers)
-        : adminApprovals(await store.listPendingApplications(), { live: isLive() });
+        : adminApprovals(await store.listApprovalCandidates());
 
   return `
     <div class="kicker">Admin</div>
@@ -1361,17 +1361,39 @@ export async function viewAdmin(tab = "approvals") {
     ${body}`;
 }
 
-function adminApprovals(pending, { live = false } = {}) {
+function adminApprovals(pending) {
   if (!pending.length) {
     return `<div class="empty">No pending applications. New signups will land here.</div>`;
   }
   return pending
-    .map(
-      (u) => `
+    .map((u) => {
+      const joined = new Date(u.appliedAt).toLocaleDateString("en-HK", { day: "numeric", month: "short" });
+      if (!u.applicationSubmitted) {
+        return `
       <div class="card booking-card applicant"><div class="card-body">
         <header>
           <div>
-            <div class="kicker dim" style="margin-top:0">Applied ${new Date(u.appliedAt).toLocaleDateString("en-HK", { day: "numeric", month: "short" })}</div>
+            <div class="kicker dim" style="margin-top:0">Joined ${joined}</div>
+            <h3 class="mt8">${esc(u.fullName)}</h3>
+          </div>
+          <span class="badge warn">Pending</span>
+        </header>
+        <dl>
+          <dt>Email</dt><dd>${esc(u.email)}</dd>
+        </dl>
+        <p class="hero-meta mt8"><strong>Application not submitted</strong></p>
+        <p class="muted small">This pending profile has not finished the membership application yet, so approval stays locked until they submit it.</p>
+        <div class="actions">
+          <button class="btn sm" type="button" data-action="approve" data-user="${u.id}" disabled>Approve</button>
+          <button class="btn danger sm" type="button" data-action="decline" data-user="${u.id}" disabled>Decline</button>
+        </div>
+      </div></div>`;
+      }
+      return `
+      <div class="card booking-card applicant"><div class="card-body">
+        <header>
+          <div>
+            <div class="kicker dim" style="margin-top:0">Applied ${joined}</div>
             <h3 class="mt8">${esc(u.fullName)}</h3>
           </div>
           <span class="badge warn">Pending</span>
@@ -1387,10 +1409,10 @@ function adminApprovals(pending, { live = false } = {}) {
         </dl>
         <div class="actions">
           <button class="btn sm" type="button" data-action="approve" data-user="${u.id}">Approve</button>
-          ${live ? "" : `<button class="btn danger sm" type="button" data-action="decline" data-user="${u.id}">Decline</button>`}
+          <button class="btn danger sm" type="button" data-action="decline" data-user="${u.id}">Decline</button>
         </div>
-      </div></div>`
-    )
+      </div></div>`;
+    })
     .join("");
 }
 
@@ -1617,7 +1639,7 @@ function adminPendingSection(rows, cu) {
             <span class="muted">${esc(p.email)} · joined ${fmtDate(p.created_at)}</span>
           </div>
           ${cu.role === "admin" || cu.role === "super_admin"
-            ? `<button class="btn btn-primary" data-action="approve" data-id="${p.id}">Approve</button>`
+            ? `<button class="btn btn-primary" data-action="approve" data-user="${p.id}">Approve</button>`
             : ""}
         </div>
       `).join("")}
