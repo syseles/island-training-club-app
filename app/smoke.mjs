@@ -182,6 +182,30 @@ const allUpcoming = store.upcomingSessions(14);
 const paid = allUpcoming.find((s) => s.kind === "paid" && !data.sessionStarted(s));
 const free = allUpcoming.find((s) => s.kind === "free");
 if (!paid || !free) throw new Error("expected both paid and free sessions in window");
+// --- HYROX demo attendance cleanup: no simulated strangers ---
+// The club has one real member and no sign-ups yet, so HYROX sessions must
+// show full capacity and an empty attendee list in fresh state.
+for (const a of data.SEED_ACTIVITIES.filter((x) => x.category === "HYROX")) {
+  if ("baseBooked" in a) {
+    failures++;
+    console.error(`FAIL seed activity ${a.id} still simulates demand (baseBooked)`);
+  }
+}
+console.log("ok  HYROX seeds carry no simulated bookings");
+const hyroxUpcoming = allUpcoming.find((s) => s.category === "HYROX" && !data.sessionStarted(s));
+if (!hyroxUpcoming) throw new Error("expected an upcoming HYROX session");
+if (store.attendeesFor(hyroxUpcoming).length !== 0) {
+  failures++;
+  console.error("FAIL fresh state should have no HYROX attendees");
+} else console.log("ok  fresh state has no HYROX attendees");
+if (store.spotsLeft(hyroxUpcoming) !== hyroxUpcoming.capacity) {
+  failures++;
+  console.error("FAIL HYROX spots should equal capacity with no bookings");
+} else console.log("ok  HYROX spots equal capacity with no bookings");
+if (store.bookingsForUser("u-member").length !== 0) {
+  failures++;
+  console.error("FAIL seeded member should have no bookings after cleanup");
+} else console.log("ok  seeded member has no bookings");
 await check("activity paid (visitor)", () => views.viewActivity(paid.id));
 await check("activity free (visitor)", () => views.viewActivity(free.id));
 await check("community", () => views.viewCommunity());
@@ -587,10 +611,10 @@ if (memberAcct.includes("CHUI-08879")) {
   failures++;
   console.error("FAIL donor ID should not appear on the Profile card face");
 } else console.log("ok  seeded member card faces carry no donor details");
-if (!(await views.viewAccount("payments")).includes("ITC-2026-0048")) {
+if (!(await views.viewAccount("payments")).includes("No payments yet")) {
   failures++;
-  console.error("FAIL seeded receipts missing from Payments sub-page");
-} else console.log("ok  seeded receipts show on Payments sub-page");
+  console.error("FAIL seeded member Payments sub-page should be empty after cleanup");
+} else console.log("ok  seeded member has no receipts");
 if (!memberAcct.includes("Indemnity confirmed on")) {
   failures++;
   console.error("FAIL seeded member should have indemnity confirmed");
@@ -672,10 +696,10 @@ if (memberDetailsEdit.includes('name="photo_consent"')) {
 } else console.log("ok  Membership Details edit route excludes photo consent controls");
 await check("home (member)", () => views.viewHome());
 const memberHome = views.viewHome();
-if (!memberHome.includes("BFT Causeway Bay") || memberHome.includes("Midtown 28")) {
+if (!memberHome.includes("Nothing booked this week")) {
   failures++;
-  console.error('FAIL "My week" should show only the member\'s booked 11:15 HYROX');
-} else console.log('ok  "My week" shows only the member\'s booked session');
+  console.error('FAIL "My week" should be empty for the seeded member after cleanup');
+} else console.log('ok  "My week" is empty for the seeded member');
 if (!memberHome.includes("Encouragement of the week")) {
   failures++;
   console.error('FAIL approved home should show "Encouragement of the week"');

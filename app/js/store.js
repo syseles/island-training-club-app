@@ -8,8 +8,6 @@
 import {
   SEED_ACTIVITIES,
   SEED_USERS,
-  seedBookings,
-  seedReceipts,
   sessionsInRange,
   sessionStarted,
   todayLocal,
@@ -50,8 +48,8 @@ function freshState() {
     sessionUserId: null,
     activities: structuredClone(SEED_ACTIVITIES),
     users: structuredClone(SEED_USERS).map(backfillProfilePreferences),
-    bookings: seedBookings(),
-    receipts: seedReceipts(),
+    bookings: [],
+    receipts: [],
     receiptCounter: 49,
     prayers: [],
   };
@@ -86,15 +84,6 @@ function migrate() {
         structuredClone(a)
       )
     );
-    // Seed-owned bookings/receipts are replaced outright: their snapshots
-    // describe the old session. User-created records are left untouched.
-    for (const [key, seeded] of [
-      ["bookings", seedBookings()],
-      ["receipts", seedReceipts()],
-    ]) {
-      const ids = new Set(seeded.map((r) => r.id));
-      state[key] = [...state[key].filter((r) => !ids.has(r.id)), ...seeded];
-    }
   }
   if (v < 3) {
     // v3: Run Club moved to Mon 7:30 PM with venue TBC; Water Sports Evening
@@ -721,13 +710,9 @@ export function spotsLeft(session) {
 }
 
 export function attendeesFor(session) {
-  // Simulated member list: seed bookings plus any local bookings.
-  const pool = [
-    "Jason M.", "Natalie C.", "Marco S.", "Jenny W.", "Kelvin T.",
-    "Chris P.", "Wing L.", "Sam H.", "Rachel N.", "Tom Y.",
-    "Grace F.", "Ben K.", "Michelle O.", "Alex Z.",
-  ];
-  const names = pool.slice(0, Math.min(session.baseBooked || 0, pool.length));
+  // Real bookings only — no simulated strangers. The list must reflect who
+  // actually signed up.
+  const names = [];
   for (const b of activeBookingsForSession(session.id)) {
     const u = state.users.find((x) => x.id === b.userId);
     if (u) names.unshift(`${u.preferredName || u.fullName} ${u.fullName.split(" ").pop()[0]}.`);

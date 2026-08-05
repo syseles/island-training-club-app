@@ -77,7 +77,6 @@ export const SEED_ACTIVITIES = [
     memberNote: "Gym entry fee is included in the session price.",
     price: 180, // HKD
     capacity: 18, // placeholder
-    baseBooked: 9, // simulated demand from other members
     published: true,
   },
   {
@@ -96,7 +95,6 @@ export const SEED_ACTIVITIES = [
     memberNote: "Gym entry fee is included in the session price.",
     price: 180, // HKD
     capacity: 18, // placeholder
-    baseBooked: 14, // simulated demand from other members
     published: true,
   },
 ];
@@ -183,77 +181,6 @@ export const SEED_USERS = [
     indemnityAcceptedAt: null,
   },
 ];
-
-// --- Seed bookings -----------------------------------------------------------
-// Snapshot fields keep the member area renderable even after the schedule
-// window rolls forward.
-
-export function seedBookings() {
-  const past = saturdayOnOrBefore(todayLocal());
-  const next = addDays(past, 7);
-  const act = SEED_ACTIVITIES.find((a) => a.id === "hyrox");
-  return [
-    {
-      id: "b-seed-past",
-      userId: "u-member",
-      sessionId: `hyrox-${isoDate(past)}`,
-      status: "attended",
-      createdAt: daysAgo(9),
-      snapshot: sessionSnapshot(act, past),
-    },
-    {
-      id: "b-seed-next",
-      userId: "u-member",
-      sessionId: `hyrox-${isoDate(next)}`,
-      status: "confirmed",
-      createdAt: daysAgo(3),
-      snapshot: sessionSnapshot(act, next),
-    },
-  ];
-}
-
-export function seedReceipts() {
-  const past = saturdayOnOrBefore(todayLocal());
-  const next = addDays(past, 7);
-  return [
-    {
-      id: "r-seed-past",
-      number: "ITC-2026-0041",
-      bookingId: "b-seed-past",
-      userId: "u-member",
-      amount: 180,
-      currency: "HKD",
-      cardLast4: "4242",
-      status: "paid",
-      issuedAt: daysAgo(9),
-      line: `ITC HYROX — ${fmtDate(past)} 11:15 AM`,
-    },
-    {
-      id: "r-seed-next",
-      number: "ITC-2026-0048",
-      bookingId: "b-seed-next",
-      userId: "u-member",
-      amount: 180,
-      currency: "HKD",
-      cardLast4: "4242",
-      status: "paid",
-      issuedAt: daysAgo(3),
-      line: `ITC HYROX — ${fmtDate(next)} 11:15 AM`,
-    },
-  ];
-}
-
-function sessionSnapshot(act, date) {
-  return {
-    name: act.name,
-    kind: act.kind,
-    dateISO: isoDate(date),
-    time: act.time,
-    durationMin: act.durationMin,
-    location: act.location,
-    price: act.price ?? null,
-  };
-}
 
 export const ANNOUNCEMENTS = [
   {
@@ -354,12 +281,6 @@ export function addDays(date, n) {
 export function mondayOf(date) {
   const d = new Date(date.getTime());
   const offset = (d.getDay() + 6) % 7; // Monday = 0
-  return addDays(d, -offset);
-}
-
-function saturdayOnOrBefore(date) {
-  const d = new Date(date.getTime());
-  const offset = (d.getDay() + 1) % 7; // days since Saturday
   return addDays(d, -offset);
 }
 
