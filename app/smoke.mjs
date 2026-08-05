@@ -956,6 +956,47 @@ store.resetDemo();
   }
 }
 
+// --- v10 migration: HYROX demo attendance data stripped ---
+store.resetDemo();
+{
+  const raw = JSON.parse(mem.get("itc.prototype.v1"));
+  raw.version = 9;
+  // simulate pre-cleanup persisted state: simulated demand counters plus
+  // seed-owned and user-created bookings side by side
+  raw.activities.find((a) => a.id === "hyrox").baseBooked = 14;
+  raw.activities.find((a) => a.id === "hyrox-midtown").baseBooked = 9;
+  const snap = (dateISO) => ({ name: "ITC HYROX", kind: "paid", dateISO, time: "11:15", durationMin: 75, location: "BFT Causeway Bay", price: 180 });
+  raw.bookings.push(
+    { id: "b-seed-past", userId: "u-member", sessionId: "hyrox-2026-07-25", status: "attended", createdAt: 1, snapshot: snap("2026-07-25") },
+    { id: "b-seed-next", userId: "u-member", sessionId: "hyrox-2026-08-08", status: "confirmed", createdAt: 2, snapshot: snap("2026-08-08") },
+    { id: "b-user-1", userId: "u-member", sessionId: "hyrox-2026-08-08", status: "confirmed", createdAt: 3, snapshot: snap("2026-08-08") }
+  );
+  raw.receipts.push(
+    { id: "r-seed-past", bookingId: "b-seed-past", userId: "u-member", amount: 180, currency: "HKD", status: "paid", issuedAt: 1, line: "x" },
+    { id: "r-seed-next", bookingId: "b-seed-next", userId: "u-member", amount: 180, currency: "HKD", status: "paid", issuedAt: 2, line: "x" }
+  );
+  mem.set("itc.prototype.v1", JSON.stringify(raw));
+  store.load();
+  if (store.activities().some((a) => "baseBooked" in a)) {
+    failures++;
+    console.error("FAIL v10 migration should strip baseBooked from activities");
+  } else console.log("ok  v10 migration strips baseBooked");
+  const migratedIds = store.bookingsForUser("u-member").map((b) => b.id);
+  if (migratedIds.length !== 1 || migratedIds[0] !== "b-user-1") {
+    failures++;
+    console.error(`FAIL v10 migration should remove seed bookings only, got ${JSON.stringify(migratedIds)}`);
+  } else console.log("ok  v10 migration removes seed bookings, keeps user bookings");
+  const persisted = JSON.parse(mem.get("itc.prototype.v1"));
+  if ((persisted.receipts || []).length !== 0) {
+    failures++;
+    console.error("FAIL v10 migration should remove seed receipts");
+  } else console.log("ok  v10 migration removes seed receipts");
+  if (persisted.version !== 10) {
+    failures++;
+    console.error(`FAIL state version should be 10 after migration, got ${persisted.version}`);
+  } else console.log("ok  state version is 10");
+}
+
 // --- viewAccount live-mode branch ---
 // The live-mode HTML is rendered when isLive() is true at viewAccount
 // call time. We can't re-route views.js's captured config import to a

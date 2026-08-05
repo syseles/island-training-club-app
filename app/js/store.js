@@ -21,7 +21,7 @@ import {
 import { supabase, isLive } from "./config.js";
 
 const STORAGE_KEY = "itc.prototype.v1";
-const STATE_VERSION = 9;
+const STATE_VERSION = 10;
 
 // Live-mode (Supabase) session cache. Avoids hammering the DB on every
 // page load. The TTL is short so role flips and welcome notifications
@@ -174,6 +174,19 @@ function migrate() {
     if (!Array.isArray(state.prayers)) state.prayers = [];
   }
   if (v < 9) state.users.forEach(backfillProfilePreferences);
+  if (v < 10) {
+    // v10: HYROX demo attendance cleanup — the club no longer simulates
+    // demand. Strip the seeded baseBooked counters and remove the old
+    // seed-owned bookings/receipts so "Who's coming" and spots left reflect
+    // real sign-ups only. User-created records are untouched.
+    for (const a of state.activities) {
+      if (a.id === "hyrox" || a.id === "hyrox-midtown") delete a.baseBooked;
+    }
+    const seedBookingIds = new Set(["b-seed-past", "b-seed-next"]);
+    const seedReceiptIds = new Set(["r-seed-past", "r-seed-next"]);
+    state.bookings = state.bookings.filter((b) => !seedBookingIds.has(b.id));
+    state.receipts = state.receipts.filter((r) => !seedReceiptIds.has(r.id));
+  }
   state.version = STATE_VERSION;
 }
 
