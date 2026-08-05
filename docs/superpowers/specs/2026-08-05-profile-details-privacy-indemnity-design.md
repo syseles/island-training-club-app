@@ -110,7 +110,7 @@ Live application data used by Profile must be freshly read after successful upda
 - The age question requires an explicit Yes or No; no unselected state can be submitted.
 - Choosing “No” makes guardian name and phone visible and required. Choosing “Yes” hides and clears them.
 - Failed Supabase reads or writes show an error toast and do not falsely navigate or claim success.
-- A missing application redirects the signed-in user to the application flow rather than rendering fabricated details.
+- In live mode, only pending users missing an application redirect to the application flow. Approved, admin, and super-admin users missing an application never redirect to `#/apply`; application-dependent Profile sections render a clear “Application details unavailable” card and must not render fabricated details, edit forms, acceptance forms, or an indemnity “To be accepted” status.
 - Indemnity acceptance is idempotent; an existing timestamp is preserved.
 
 ## Testing

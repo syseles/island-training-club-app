@@ -299,12 +299,36 @@ if (!refreshedIndemnity.includes(`Indemnity confirmed on ${confirmedDay}`) || re
   throw new Error("Indemnity page should rerender from the accepted live waiver timestamp");
 }
 applicationRows.delete(authUser.id);
-const redirectToApply = await views.viewAccount("details");
-if (!redirectToApply || redirectToApply.redirect !== "#/apply") {
-  throw new Error("Live account details should redirect to #/apply when no application exists");
+const missingAccount = await views.viewAccount();
+if (missingAccount?.redirect) {
+  throw new Error("Approved/admin users missing an application must not redirect from Profile");
+}
+if (!missingAccount.includes("Application details unavailable")) {
+  throw new Error("Profile should clearly say application details are unavailable");
+}
+if (missingAccount.includes("To be accepted")) {
+  throw new Error("Profile must not claim indemnity is merely to-be-accepted without an application");
+}
+const missingDetails = await views.viewAccount("details");
+if (missingDetails?.redirect || !missingDetails.includes("Application details unavailable")) {
+  throw new Error("Live account details should show an unavailable card when no application exists");
+}
+if (missingDetails.includes('data-form="apply"') || missingDetails.includes("Save changes")) {
+  throw new Error("Missing application details must not render an edit/application form");
+}
+const missingIndemnity = await views.viewAccount("indemnity");
+if (missingIndemnity?.redirect || !missingIndemnity.includes("Application details unavailable")) {
+  throw new Error("Live indemnity should show an unavailable card when no application exists");
+}
+if (missingIndemnity.includes("To be accepted") || missingIndemnity.includes("Accept &amp; Confirm")) {
+  throw new Error("Missing application indemnity must not render an accept form or to-be-accepted claim");
+}
+const missingPrivacy = await views.viewAccount("privacy");
+if (missingPrivacy?.redirect || !missingPrivacy.includes("Application details unavailable")) {
+  throw new Error("Live privacy should show an unavailable card when no application exists");
 }
 
 console.log("ok  live OAuth session renders the signed-in home page");
 console.log("ok  live profile renders valid account metadata");
 console.log("ok  live indemnity renders from the application waiver state");
-console.log("ok  live account details redirect to #/apply without an application");
+console.log("ok  live approved/admin missing-application Profile sections render unavailable cards");

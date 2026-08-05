@@ -402,7 +402,7 @@ Do not restrict by approval status.
 
 - [ ] **Step 4: Make account Profile and Indemnity application-backed**
 
-Make `viewAccount(section, editMode)` async. Fetch `const application = await store.getMyApplication()` for signed-in Profile sections that need application data. In live mode, return `{ redirect: "#/apply" }` when no application exists; add a regression for this direct-route case. Pass `application` to `accountMember(user, application)` and `accountIndemnity(user, application)`. Use:
+Make `viewAccount(section, editMode)` async. Fetch `const application = await store.getMyApplication()` for signed-in Profile sections that need application data. In live mode, only pending users missing an application redirect to `#/apply`. Approved, admin, and super-admin users missing an application render a clear “Application details unavailable” card on application-dependent Profile sections; they must not see edit/acceptance forms or an indemnity “To be accepted” status. Pass `application` to `accountMember(user, application)` and `accountIndemnity(user, application)`. Use:
 
 ```js
 const indemnityAt = application?.waiver_accepted_at || user.indemnityAcceptedAt;

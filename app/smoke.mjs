@@ -1019,6 +1019,12 @@ if (!viewsSrc.includes('if (cu.role !== "pending")')) {
 } else {
   console.log("ok  views.js: viewApplyLive is pending-only");
 }
+if (!viewsSrc.includes("Application details unavailable")) {
+  failures++;
+  console.error("FAIL views.js: missing live applications should render an unavailable card, not redirect or fabricate details");
+} else {
+  console.log("ok  views.js: missing live applications render unavailable cards");
+}
 if (!appSrc.includes('out = u && u.status === "approved" ? { redirect: "#/account" } : await views.viewApply();')) {
   failures++;
   console.error("FAIL app.js: apply route should redirect approved users to #/account");

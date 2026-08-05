@@ -569,12 +569,17 @@ function communityAnnouncements() {
 export async function viewAccount(section, editMode) {
   const user = store.currentUser();
   if (!user) return accountVisitor();
-  if (user.status === "pending") return accountPending(user);
+  if (user.status === "pending") {
+    if (isLive()) {
+      const application = await store.getMyApplication();
+      if (!application) return { redirect: "#/apply" };
+    }
+    return accountPending(user);
+  }
   if (user.status === "declined") return accountDeclined(user);
 
-  const needsApplication = section === undefined || section === "details" || section === "indemnity";
+  const needsApplication = section === undefined || section === "details" || section === "indemnity" || section === "privacy";
   const application = needsApplication ? await store.getMyApplication() : null;
-  if (isLive() && needsApplication && !application) return { redirect: "#/apply" };
 
   switch (section) {
     case undefined:
@@ -590,7 +595,7 @@ export async function viewAccount(section, editMode) {
     case "payments":
       return accountPayments(user);
     case "privacy":
-      return accountPrivacy(user);
+      return accountPrivacy(user, application);
     case "history":
       return accountHistory(user);
     default:
@@ -683,7 +688,8 @@ function accountDeclined(user) {
 
 function accountMember(user, application) {
   const isAdmin = isAdminRole(user.role);
-  const indemnityAt = application?.waiver_accepted_at || user.indemnityAcceptedAt;
+  const applicationMissing = isLive() && !application;
+  const indemnityAt = application?.waiver_accepted_at || (!applicationMissing ? user.indemnityAcceptedAt : null);
 
   const roleLabel = {
     member: "Active member",
@@ -715,17 +721,21 @@ function accountMember(user, application) {
 
     <div class="profile-rows">
       ${isAdmin ? profileRow("#/admin", ICONS.shield, "Admin Tools", "Approvals, activities and members") : ""}
-      ${profileRow("#/account/details", ICONS.user, "Membership Details", "Contact and emergency information")}
+      ${profileRow("#/account/details", ICONS.user, "Membership Details", applicationMissing ? "Application details unavailable" : "Contact and emergency information")}
       ${profileRow(
         "#/account/indemnity",
         ICONS.check,
         "Indemnity",
-        indemnityAt ? `Indemnity confirmed on ${fmtDay(indemnityAt)}` : "To be accepted",
-        { cls: indemnityAt ? "ok" : "todo" }
+        applicationMissing
+          ? "Application details unavailable"
+          : indemnityAt
+            ? `Indemnity confirmed on ${fmtDay(indemnityAt)}`
+            : "To be accepted",
+        { cls: indemnityAt ? "ok" : applicationMissing ? "" : "todo" }
       )}
       ${profileRow("#/account/donor", ICONS.heart, "Donor Profile", "Donor ID and e-receipt details")}
       ${profileRow("#/account/payments", ICONS.dollar, "Payments & Receipts", "Bookings, donations and orders")}
-      ${profileRow("#/account/privacy", ICONS.bell, "Privacy & Notifications", "Consent and communication choices")}
+      ${profileRow("#/account/privacy", ICONS.bell, "Privacy & Notifications", applicationMissing ? "Application details unavailable" : "Consent and communication choices")}
       ${profileRow("#/account/history", ICONS.clock, "History", "Activity history")}
     </div>
 
@@ -747,6 +757,15 @@ function profileRow(href, icon, title, status, { cls = "" } = {}) {
       </span>
       ${ICONS.chevron}
     </a>`;
+}
+
+function applicationUnavailableCard() {
+  return `
+    <div class="card mt16"><div class="card-body">
+      <span class="kicker">Application</span>
+      <h3 class="mt8">Application details unavailable</h3>
+      <p class="hero-meta">We couldn’t find the membership application details for this approved account. Please contact an ITC leader so they can review the account record.</p>
+    </div></div>`;
 }
 
 function accountDetails(user) {
@@ -788,6 +807,14 @@ function linkCard(href, title, status, { sub = "", cls = "" } = {}) {
 // before launch. The apply form captures acceptance at join time; this page
 // catches members who joined before that requirement existed.
 function accountIndemnity(user, application) {
+  if (isLive() && !application) {
+    return `
+    <a class="back-link" href="#/account">← Profile</a>
+    <div class="kicker mt16">Profile · Indemnity</div>
+    <h1 class="display sm">Health &amp; Liability Indemnity.</h1>
+    ${applicationUnavailableCard()}
+    <p class="muted small mt16">Draft wording — the final indemnity will be confirmed with ITC leadership before launch.</p>`;
+  }
   const at = application?.waiver_accepted_at || user.indemnityAcceptedAt;
   return `
     <a class="back-link" href="#/account">← Profile</a>
@@ -880,17 +907,28 @@ function accountPayments(user) {
     }`;
 }
 
-function accountPrivacy(user) {
+function accountPrivacy(user, application) {
+  if (isLive() && !application) {
+    return `
+    <a class="back-link" href="#/account">← Profile</a>
+    <div class="kicker mt16">Profile · Privacy &amp; Notifications</div>
+    <h1 class="display sm">Privacy &amp; Notifications.</h1>
+    ${applicationUnavailableCard()}`;
+  }
+  const mediaConsent = application ? !!application.photo_consent : !!user.mediaConsent;
+  const whatsappReminders = application ? !!application.whatsapp_reminders : !!user.whatsappReminders;
+  const emailReceipts = application ? !!application.email_receipts : !!user.emailReceipts;
+  const communityNews = application ? !!application.community_news : !!user.communityNews;
   return `
     <a class="back-link" href="#/account">← Profile</a>
     <div class="kicker mt16">Profile · Privacy &amp; Notifications</div>
     <h1 class="display sm">Privacy &amp; Notifications.</h1>
     <div class="card mt16"><div class="card-body">
       <div class="receipt-lines" style="margin-top:0;border-top:0">
-        <div class="line"><span>Photos at sessions</span><strong>${user.mediaConsent ? "Allowed" : "Not allowed"}</strong></div>
-        <div class="line"><span>WhatsApp session reminders</span><strong>On</strong></div>
-        <div class="line"><span>Email receipts</span><strong>On</strong></div>
-        <div class="line"><span>Community news</span><strong>Off</strong></div>
+        <div class="line"><span>Photos at sessions</span><strong>${mediaConsent ? "Allowed" : "Not allowed"}</strong></div>
+        <div class="line"><span>WhatsApp session reminders</span><strong>${whatsappReminders ? "On" : "Off"}</strong></div>
+        <div class="line"><span>Email receipts</span><strong>${emailReceipts ? "On" : "Off"}</strong></div>
+        <div class="line"><span>Community news</span><strong>${communityNews ? "On" : "Off"}</strong></div>
       </div>
       <p class="muted small mt16">Privacy and notification settings are stubbed for setup — they’ll be configurable here before launch.</p>
     </div></div>`;
@@ -1015,6 +1053,13 @@ function applySelect(name, label, options, required, value = "") {
 // Live "Membership Details": the application form, prefilled from the
 // member's submitted application, reusing data-form="apply" (upsert).
 function viewAccountDetailsLive(app) {
+  if (!app) {
+    return `
+    <a class="back-link" href="#/account">← Profile</a>
+    <div class="kicker mt16">Profile · Membership Details</div>
+    <h1 class="display sm">Membership Details.</h1>
+    ${applicationUnavailableCard()}`;
+  }
   return `
     <a class="back-link" href="#/account">← Profile</a>
     <div class="kicker mt16">Profile · Membership Details</div>
