@@ -521,6 +521,12 @@ if (!viewsSrc.includes('if (!cu) return { redirect: "#/account" };')) {
 } else {
   console.log("ok  views.js: viewApplyLive redirects visitors to #/account");
 }
+if (!viewsSrc.includes("Signed in as")) {
+  failures++;
+  console.error("FAIL views.js: apply form should show the signed-in Google identity");
+} else {
+  console.log("ok  views.js: apply form shows the signed-in identity");
+}
 
 const appSrc = readFileSync(resolve(__dirname, "js/app.js"), "utf8");
 const signoutBlock = appSrc.match(/case "signout":([\s\S]*?)break;/);

@@ -919,15 +919,16 @@ export async function viewApplyLive() {
       </section>
     `;
   }
-  return applyFormHtml();
+  return applyFormHtml(cu);
 }
 
-function applyFormHtml() {
+function applyFormHtml(cu) {
+  const displayName = cu?.profile?.full_name || cu?.email || "";
   return `
     <section class="card">
       <p class="kicker">Application</p>
       <h2 class="display">Tell us about you</h2>
-      <p class="muted">We collect this so the team can approve your application and reach you in an emergency.</p>
+      <p class="muted">Signed in as <strong>${esc(displayName)}</strong>${cu?.email ? ` · ${esc(cu.email)}` : ""}. We collect this so the team can approve your application and reach you in an emergency.</p>
       <form data-form="apply" class="form-grid">
         ${applyField("text", "mobile", "Mobile / WhatsApp number", true)}
         ${applyField("date", "date_of_birth", "Date of birth", true)}
