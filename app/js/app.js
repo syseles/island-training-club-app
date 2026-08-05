@@ -128,17 +128,15 @@ async function render() {
       out = views.viewReceipt(arg);
       break;
     case "admin":
-      // #/admin/users is the live admin page; "admin/users" can never be
-      // `page` (parseHash splits on "/"), so route on arg here instead.
-      // viewAdminUsers falls back to the local approvals view in local
-      // mode, so bare #/admin (Profile → Admin Tools) and the Admin tab
-      // always land on the same page.
+      // The tabbed admin page (approvals / activities / members) is the
+      // canonical admin surface — Admin Tools and the Admin tab both land
+      // here. #/admin/users stays as the role-audit subpage.
       out =
         arg === "activity"
           ? views.viewAdminActivity(arg2)
-          : arg === "users" || !arg || isLive()
+          : arg === "users"
             ? await views.viewAdminUsers()
-            : views.viewAdmin(arg);
+            : await views.viewAdmin(arg || "approvals");
       break;
     case "notifications":
       out = await views.viewNotifications();

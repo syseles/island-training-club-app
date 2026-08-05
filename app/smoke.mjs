@@ -144,7 +144,8 @@ if (!views.viewApply().includes('name="donorId"')) {
   console.error("FAIL apply form missing optional Donor ID field");
 } else console.log("ok  apply form collects optional Donor ID");
 check("checkout (visitor) -> redirect", () => views.viewCheckout(paid.id));
-check("admin (visitor) -> redirect", () => views.viewAdmin("approvals"));
+const adminVisitorOut = await views.viewAdmin("approvals");
+check("admin (visitor) -> redirect", () => adminVisitorOut);
 check("notfound", () => views.viewNotFound());
 
 // free activity must never show booking/capacity language
@@ -246,9 +247,12 @@ if (!pendHtml.includes("Booking locked")) {
 
 // --- Admin approval flow ---
 store.demoSignIn("admin");
-check("admin approvals", () => views.viewAdmin("approvals"));
-check("admin activities", () => views.viewAdmin("activities"));
-check("admin members", () => views.viewAdmin("members"));
+const adminApprovalsOut = await views.viewAdmin("approvals");
+check("admin approvals", () => adminApprovalsOut);
+const adminActivitiesOut = await views.viewAdmin("activities");
+check("admin activities", () => adminActivitiesOut);
+const adminMembersOut = await views.viewAdmin("members");
+check("admin members", () => adminMembersOut);
 check("admin activity edit", () => views.viewAdminActivity("hyrox"));
 check("admin activity new", () => views.viewAdminActivity("new"));
 const newApplicant = store.pendingApplicants().find((u) => u.email === "test@example.com");
@@ -657,7 +661,7 @@ if (!/NAV_FOR = \{[\s\S]*?notifications: "notifications"/.test(appSrc)) {
 } else {
   console.log("ok  app.js: NAV_FOR maps notifications to its own tab");
 }
-if (!/arg === "users" \|\| !arg \|\| isLive\(\)[\s\S]{0,120}?viewAdminUsers\(\)/.test(appSrc)) {
+if (!/arg === "users"\s*\?\s*await views\.viewAdminUsers\(\)/.test(appSrc)) {
   failures++;
   console.error("FAIL app.js: #/admin/users should route to viewAdminUsers");
 } else {
@@ -665,11 +669,30 @@ if (!/arg === "users" \|\| !arg \|\| isLive\(\)[\s\S]{0,120}?viewAdminUsers\(\)/
 }
 
 // --- Admin entry consistency, live profile editing, weekly encouragement ---
-if (!appSrc.includes('arg === "users" || !arg || isLive()')) {
+if (!/:\s*await views\.viewAdmin\(arg \|\| "approvals"\)/.test(appSrc)) {
   failures++;
-  console.error("FAIL app.js: bare #/admin should also reach viewAdminUsers (same page as the Admin tab)");
+  console.error("FAIL app.js: bare #/admin should render the tabbed admin page (same as Admin Tools)");
 } else {
   console.log("ok  app.js: Admin Tools and the Admin tab land on the same page");
+}
+if (viewsSrc.includes('href: "#/admin/users"')) {
+  failures++;
+  console.error("FAIL views.js: Admin nav item should link to #/admin (the tabbed admin page)");
+} else {
+  console.log("ok  views.js: Admin nav item links to #/admin");
+}
+const storeSrc2 = readFileSync(resolve(__dirname, "js/store.js"), "utf8");
+if (!storeSrc2.includes("listPendingApplications")) {
+  failures++;
+  console.error("FAIL store.js: live approvals need listPendingApplications");
+} else {
+  console.log("ok  store.js: listPendingApplications present");
+}
+if (!viewsSrc.includes("await store.listPendingApplications()")) {
+  failures++;
+  console.error("FAIL views.js: live approvals tab should read Supabase applications, not demo seeds");
+} else {
+  console.log("ok  views.js: approvals tab reads live applications");
 }
 if (!appSrc.includes("await views.viewAccount(")) {
   failures++;

@@ -121,7 +121,7 @@ const NAV_ITEMS = [
   { key: "community", label: "Community", icon: "people", href: "#/community" },
   { key: "notifications", label: "Notifications", icon: "bell", href: "#/notifications", roles: ["signed-in"] },
   { key: "account", label: "Account", icon: "user", href: "#/account" },
-  { key: "admin", label: "Admin", icon: "shield", href: "#/admin/users", roles: ["admin", "superadmin", "super_admin"] },
+  { key: "admin", label: "Admin", icon: "shield", href: "#/admin", roles: ["admin", "superadmin", "super_admin"] },
 ];
 
 export function navHTML(routeKey, user) {
@@ -1184,7 +1184,7 @@ export function viewReceipt(receiptId) {
 
 // --- Admin --------------------------------------------------------------------------------------
 
-export function viewAdmin(tab = "approvals") {
+export async function viewAdmin(tab = "approvals") {
   const user = store.currentUser();
   if (!user || !isAdminRole(user.role)) {
     return { redirect: "#/account" };
@@ -1196,8 +1196,28 @@ export function viewAdmin(tab = "approvals") {
         .join("")}
     </nav>`;
 
+  // Live mode reads real data (Supabase applications + profiles); local
+  // mode keeps the seed-backed demo lists.
+  let memberUsers = null;
+  if (tab === "members") {
+    memberUsers = isLive()
+      ? (await store.listProfiles())
+          .map((p) => ({
+            id: p.id,
+            fullName: p.full_name || p.email,
+            email: p.email,
+            role: p.role === "super_admin" ? "superadmin" : p.role,
+            status: p.role === "pending" ? "pending" : "approved",
+          }))
+          .sort((a, b) => a.fullName.localeCompare(b.fullName))
+      : [...store.allUsers()].sort((a, b) => a.fullName.localeCompare(b.fullName));
+  }
   const body =
-    tab === "activities" ? adminActivities() : tab === "members" ? adminMembers(user) : adminApprovals();
+    tab === "activities"
+      ? adminActivities()
+      : tab === "members"
+        ? adminMembers(user, memberUsers)
+        : adminApprovals(await store.listPendingApplications(), { live: isLive() });
 
   return `
     <div class="kicker">Admin</div>
@@ -1206,8 +1226,7 @@ export function viewAdmin(tab = "approvals") {
     ${body}`;
 }
 
-function adminApprovals() {
-  const pending = store.pendingApplicants();
+function adminApprovals(pending, { live = false } = {}) {
   if (!pending.length) {
     return `<div class="empty">No pending applications. New signups will land here.</div>`;
   }
@@ -1233,7 +1252,7 @@ function adminApprovals() {
         </dl>
         <div class="actions">
           <button class="btn sm" type="button" data-action="approve" data-user="${u.id}">Approve</button>
-          <button class="btn danger sm" type="button" data-action="decline" data-user="${u.id}">Decline</button>
+          ${live ? "" : `<button class="btn danger sm" type="button" data-action="decline" data-user="${u.id}">Decline</button>`}
         </div>
       </div></div>`
     )
@@ -1264,11 +1283,10 @@ function adminActivities() {
     <a class="btn ghost mt16" href="#/admin/activity/new">+ New activity</a>`;
 }
 
-function adminMembers(viewer) {
-  const users = [...store.allUsers()].sort((a, b) => a.fullName.localeCompare(b.fullName));
+function adminMembers(viewer, users) {
   const canEdit = isSuperRole(viewer.role);
   return `
-    <p class="muted small mt16">${users.filter((u) => u.status === "approved").length} approved · ${store.pendingApplicants().length} pending. ${canEdit ? "Role changes are super-admin only." : "Only a super admin can change roles."}</p>
+    <p class="muted small mt16">${users.filter((u) => u.status === "approved").length} approved · ${users.filter((u) => u.status === "pending").length} pending. ${canEdit ? "Role changes are super-admin only." : "Only a super admin can change roles."}</p>
     ${users
       .map((u) => {
         const roleBadge =

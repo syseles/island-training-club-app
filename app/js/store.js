@@ -435,6 +435,30 @@ export function applyForMembership(form) {
   return { ok: true, user };
 }
 
+// Live: pending applications joined with their profiles, mapped to the
+// shape the admin approvals cards render. Local: the seed applicants.
+export async function listPendingApplications() {
+  if (!isLive() || !supabase) return pendingApplicants();
+  const { data, error } = await supabase
+    .from("applications")
+    .select("*, profiles!inner(id, email, full_name, role)")
+    .eq("profiles.role", "pending");
+  if (error) throw error;
+  return (data || []).map((a) => ({
+    id: a.profiles.id,
+    fullName: a.profiles.full_name || a.profiles.email,
+    email: a.profiles.email,
+    phone: a.mobile,
+    emergencyName: a.emergency_name,
+    emergencyPhone: a.emergency_phone,
+    heard: a.heard_source,
+    appliedAt: a.submitted_at,
+    ageConfirmed: true,
+    indemnityAcceptedAt: a.waiver_accepted_at,
+    mediaConsent: a.photo_consent,
+  }));
+}
+
 export function pendingApplicants() {
   return state.users
     .filter((u) => u.status === "pending")
