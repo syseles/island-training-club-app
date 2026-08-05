@@ -1350,8 +1350,15 @@ if (!adminDecisionSql.includes("'declined'") || !adminDecisionSql.includes("prof
 } else if (!adminDecisionSql.includes("role in ('member', 'declined')")) {
   failures++;
   console.error("FAIL migrations: admin decision migration must allow submitted applications to be approved or declined");
+} else if (
+  !adminDecisionSql.includes("exists (") ||
+  !adminDecisionSql.includes("submitted_application.profile_id = public.profiles.id") ||
+  !adminDecisionSql.includes("submitted_application.submitted_at is not null")
+) {
+  failures++;
+  console.error("FAIL migrations: admin decisions must require a submitted application for the target profile");
 } else {
-  console.log("ok  migration supports approve and decline decisions");
+  console.log("ok  migration limits approve and decline decisions to submitted applications");
 }
 
 // --- store.getCurrentUser fallback (local mode) ---

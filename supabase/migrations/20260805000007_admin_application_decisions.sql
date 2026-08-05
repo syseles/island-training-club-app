@@ -18,4 +18,12 @@ create policy "admin decide pending"
     ) = 'admin'
     and role = 'pending'
   )
-  with check (role in ('member', 'declined'));
+  with check (
+    role in ('member', 'declined')
+    and exists (
+      select 1
+      from public.applications as submitted_application
+      where submitted_application.profile_id = public.profiles.id
+        and submitted_application.submitted_at is not null
+    )
+  );

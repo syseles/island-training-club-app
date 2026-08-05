@@ -86,6 +86,10 @@ applicationRows.set("pending-submitted", {
 const applicationUpdates = [];
 const profileUpdates = [];
 let applicationReadError = null;
+let profileListError = null;
+let applicationListError = null;
+let profileUpdateError = null;
+let profileUpdateResult = "row";
 let authStateChangeHandler = null;
 let authCallbackLocked = false;
 const deferredAuthTasks = [];
@@ -154,24 +158,40 @@ const fakeSupabase = {
                   ...structuredClone(pendingProfiles),
                   ...structuredClone(declinedProfiles),
                 ],
-                error: null,
+                error: profileListError,
               });
             },
           };
         },
         update(patch) {
-          return {
+          let targetId = null;
+          let expectedRole = null;
+          const result = {
             eq(column, value) {
-              if (column !== "id") {
-                throw new Error("Profile update did not target a profile id");
-              }
-              profileUpdates.push({ id: value, ...structuredClone(patch) });
-              if (value === profile.id) Object.assign(profile, patch);
-              const pendingProfile = pendingProfiles.find((item) => item.id === value);
-              if (pendingProfile) Object.assign(pendingProfile, patch);
-              return Promise.resolve({ error: null });
+              if (column === "id") targetId = value;
+              else if (column === "role") expectedRole = value;
+              else throw new Error(`Unexpected profile update filter: ${column}`);
+              return result;
+            },
+            select(columns) {
+              if (columns !== "id, role") throw new Error("Profile update must return id and role");
+              return {
+                single: async () => {
+                  const target = targetId === profile.id
+                    ? profile
+                    : pendingProfiles.find((item) => item.id === targetId);
+                  profileUpdates.push({ id: targetId, expectedRole, ...structuredClone(patch) });
+                  if (profileUpdateError) return { data: null, error: profileUpdateError };
+                  if (profileUpdateResult === "zero" || !target || (expectedRole && target.role !== expectedRole)) {
+                    return { data: null, error: null };
+                  }
+                  Object.assign(target, patch);
+                  return { data: { id: targetId, role: target.role }, error: null };
+                },
+              };
             },
           };
+          return result;
         },
       };
     }
@@ -193,7 +213,7 @@ const fakeSupabase = {
             then(resolve, reject) {
               return Promise.resolve({
                 data: Array.from(applicationRows.values()).map((row) => structuredClone(row)),
-                error: null,
+                error: applicationListError,
               }).then(resolve, reject);
             },
           };
@@ -250,19 +270,24 @@ const approvalsHtml = await views.viewAdmin("approvals");
 if (!approvalsHtml.includes("Application not submitted")) {
   throw new Error("Approvals must explain incomplete pending profiles");
 }
-if (!approvalsHtml.match(/data-user="pending-incomplete"[^>]*disabled/)) {
-  throw new Error("Incomplete pending profiles must have disabled decisions");
-}
-if (!approvalsHtml.includes('data-action="decline" data-user="pending-submitted"')) {
-  throw new Error("Submitted live applications must expose Decline");
+const decisionButton = (profileId, action) => approvalsHtml.match(
+  new RegExp(`<button[^>]*data-action="${action}"[^>]*data-user="${profileId}"[^>]*>`)
+)?.[0] || "";
+for (const action of ["approve", "decline"]) {
+  assert.match(decisionButton("pending-incomplete", action), /\sdisabled(?:\s|>)/,
+    `Incomplete ${action} must be disabled`);
+  assert.doesNotMatch(decisionButton("pending-submitted", action), /\sdisabled(?:\s|>)/,
+    `Submitted ${action} must be enabled`);
 }
 const membersHtml = await views.viewAdmin("members");
 if (!/Declined Runner[\s\S]*badge danger">Declined</.test(membersHtml)) {
   throw new Error("Members must badge declined profiles as Declined");
 }
 await store.decideApplication(submitted.id, "declined");
-if (!profileUpdates.some((update) => update.id === submitted.id && update.role === "declined")) {
-  throw new Error("Decline must persist the declined profile role");
+if (!profileUpdates.some((update) =>
+  update.id === submitted.id && update.role === "declined" && update.expectedRole === "pending"
+)) {
+  throw new Error("Decline must change exactly the targeted pending profile role");
 }
 await assert.rejects(
   () => store.decideApplication(incomplete.id, "member"),
@@ -668,6 +693,53 @@ try {
 await new Promise(setImmediate);
 if (hashRejected || escapedRejections.length || toastStack.children.length !== 1 || toastStack.children[0].textContent !== "Application read failed") {
   throw new Error("Hash changes should catch failed application reads and show one error toast");
+}
+
+// Approval queue failures must be truthful and preserve the last good queue.
+applicationReadError = null;
+profile.role = "super_admin";
+pendingProfiles.find((item) => item.id === "pending-submitted").role = "pending";
+location.hash = "#/admin";
+toastStack.children.length = 0;
+await windowListeners.get("hashchange")();
+const retainedQueueHtml = elements.get("view").innerHTML;
+assert.match(retainedQueueHtml, /Submitted Runner/);
+assert.match(retainedQueueHtml, /Incomplete Runner/);
+
+for (const [errorType, setError] of [
+  ["Profile queue read failed", (error) => { profileListError = error; }],
+  ["Application queue read failed", (error) => { applicationListError = error; }],
+]) {
+  const error = new Error(errorType);
+  setError(error);
+  toastStack.children.length = 0;
+  await assert.rejects(() => store.listApprovalCandidates(), new RegExp(errorType));
+  await windowListeners.get("hashchange")();
+  assert.equal(elements.get("view").innerHTML, retainedQueueHtml, `${errorType} must retain prior queue UI`);
+  assert.deepEqual(toastStack.children.map((item) => item.textContent), [errorType]);
+  assert.equal(toastStack.children.some((item) => /Approved\.|Declined\./.test(item.textContent)), false);
+  setError(null);
+}
+
+const click = domListeners.get("click");
+const approvalClick = {
+  target: {
+    closest: () => ({ dataset: { action: "approve", user: "pending-submitted" } }),
+  },
+};
+for (const [expectedError, configure] of [
+  ["Profile update failed", () => { profileUpdateError = new Error("Profile update failed"); }],
+  ["Application decision conflict.", () => { profileUpdateResult = "zero"; }],
+]) {
+  toastStack.children.length = 0;
+  configure();
+  await click(approvalClick);
+  assert.equal(elements.get("view").innerHTML, retainedQueueHtml, `${expectedError} must retain prior queue UI`);
+  assert.deepEqual(toastStack.children.map((item) => item.textContent), [expectedError]);
+  assert.equal(toastStack.children.some((item) => item.textContent === "Approved."), false,
+    `${expectedError} must not produce a success toast`);
+  profileUpdateError = null;
+  profileUpdateResult = "row";
 }
 
 escapedRejections.length = 0;

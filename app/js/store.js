@@ -331,16 +331,21 @@ export async function listRoleChanges() {
   return data || [];
 }
 
-export async function updateProfileRole(profileId, newRole, reason) {
+export async function updateProfileRole(profileId, newRole, reason, expectedRole = null) {
   if (!isLive() || !supabase) {
     setRole(profileId, newRole);
     return;
   }
-  const { error } = await supabase
+  let query = supabase
     .from("profiles")
     .update({ role: newRole })
     .eq("id", profileId);
+  if (expectedRole) query = query.eq("role", expectedRole);
+  const { data, error } = await query.select("id, role").single();
   if (error) throw error;
+  if (!data || data.id !== profileId || data.role !== newRole) {
+    throw new Error("Application decision conflict.");
+  }
   // The DB trigger writes role_changes + welcome notification automatically.
   // Persisting `reason` to role_changes.reason requires a small Postgres
   // RPC that sets a session-local config; deferred. ⏳
@@ -673,7 +678,7 @@ export async function decideApplication(profileId, decision) {
   const candidate = (await listApprovalCandidates()).find((item) => item.id === profileId);
   if (!candidate) throw new Error("Pending application not found.");
   if (!candidate.applicationSubmitted) throw new Error("Application not submitted.");
-  await updateProfileRole(profileId, decision);
+  await updateProfileRole(profileId, decision, undefined, "pending");
 }
 
 export function pendingApplicants() {
