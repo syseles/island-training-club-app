@@ -265,10 +265,11 @@ store.resetDemo();
   // seed-owned and user-created bookings side by side
   raw.activities.find((a) => a.id === "hyrox").baseBooked = 14;
   raw.activities.find((a) => a.id === "hyrox-midtown").baseBooked = 9;
+  const snap = (dateISO) => ({ name: "ITC HYROX", kind: "paid", dateISO, time: "11:15", durationMin: 75, location: "BFT Causeway Bay", price: 180 });
   raw.bookings.push(
-    { id: "b-seed-past", userId: "u-member", sessionId: "hyrox-2026-07-25", status: "attended", createdAt: 1, snapshot: {} },
-    { id: "b-seed-next", userId: "u-member", sessionId: "hyrox-2026-08-08", status: "confirmed", createdAt: 2, snapshot: {} },
-    { id: "b-user-1", userId: "u-member", sessionId: "hyrox-2026-08-08", status: "confirmed", createdAt: 3, snapshot: {} }
+    { id: "b-seed-past", userId: "u-member", sessionId: "hyrox-2026-07-25", status: "attended", createdAt: 1, snapshot: snap("2026-07-25") },
+    { id: "b-seed-next", userId: "u-member", sessionId: "hyrox-2026-08-08", status: "confirmed", createdAt: 2, snapshot: snap("2026-08-08") },
+    { id: "b-user-1", userId: "u-member", sessionId: "hyrox-2026-08-08", status: "confirmed", createdAt: 3, snapshot: snap("2026-08-08") }
   );
   raw.receipts.push(
     { id: "r-seed-past", bookingId: "b-seed-past", userId: "u-member", amount: 180, currency: "HKD", status: "paid", issuedAt: 1, line: "x" },
