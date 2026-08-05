@@ -1005,25 +1005,25 @@ if (!viewsSrc.includes('${user ? encouragement : ""}')) {
   console.log('ok  views.js: home encouragement is gated by a signed-in user');
 }
 
-// --- every role must apply (incl. the bootstrap super admin) ---
+// --- only pending users are pushed to the application form ---
 const maybeRedirect = appSrc.match(/export async function maybeRedirectToApply\(\) \{[\s\S]*?\n\}/);
-if (!maybeRedirect || maybeRedirect[0].includes('cu.role !== "pending"')) {
+if (!maybeRedirect || !maybeRedirect[0].includes('cu.role !== "pending"')) {
   failures++;
-  console.error("FAIL app.js: maybeRedirectToApply should push any user without an application to #/apply, not just pending");
+  console.error("FAIL app.js: maybeRedirectToApply should only push pending users without an application to #/apply");
 } else {
-  console.log("ok  app.js: maybeRedirectToApply applies to every role");
+  console.log("ok  app.js: maybeRedirectToApply is pending-only");
 }
-if (viewsSrc.includes('if (cu.role !== "pending")')) {
+if (!viewsSrc.includes('if (cu.role !== "pending")')) {
   failures++;
-  console.error("FAIL views.js: viewApplyLive should offer the form to any role without an application");
+  console.error("FAIL views.js: viewApplyLive should show the form only to pending users");
 } else {
-  console.log("ok  views.js: viewApplyLive offers the form to any role without an application");
+  console.log("ok  views.js: viewApplyLive is pending-only");
 }
-if (!appSrc.includes('!isLive() && u && u.status === "approved"')) {
+if (!appSrc.includes('out = u && u.status === "approved" ? { redirect: "#/account" } : await views.viewApply();')) {
   failures++;
-  console.error("FAIL app.js: apply route approved-redirect should be local-mode only");
+  console.error("FAIL app.js: apply route should redirect approved users to #/account");
 } else {
-  console.log("ok  app.js: apply route approved-redirect is local-mode only");
+  console.log("ok  app.js: apply route redirects approved users to #/account");
 }
 const applyAnyRole = existsSync(resolve(__dirname, "../supabase/migrations/20260805000004_apply_any_role.sql"))
   ? readFileSync(resolve(__dirname, "../supabase/migrations/20260805000004_apply_any_role.sql"), "utf8")

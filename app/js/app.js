@@ -71,9 +71,7 @@ if (isLive() && supabase) {
 export async function maybeRedirectToApply() {
   if (!isLive()) return;
   const cu = await store.getCurrentUser();
-  // Every role applies — including the bootstrap super admin. No
-  // application on file → the form is the first stop after sign-in.
-  if (!cu) return;
+  if (!cu || cu.role !== "pending") return;
   const app = await store.getMyApplication();
   if (!app && window.location.hash !== "#/apply") {
     window.location.hash = "#/apply";
@@ -113,9 +111,7 @@ async function render() {
       break;
     case "apply": {
       const u = store.currentUser();
-      // The approved-redirect is local-mode only; in live mode
-      // viewApplyLive decides (any role may still need to apply).
-      out = !isLive() && u && u.status === "approved" ? { redirect: "#/account" } : await views.viewApply();
+      out = u && u.status === "approved" ? { redirect: "#/account" } : await views.viewApply();
       break;
     }
     case "checkout":

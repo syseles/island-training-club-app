@@ -937,17 +937,18 @@ function accountHistory(user) {
 export async function viewApplyLive() {
   const cu = await store.getCurrentUser();
   if (!cu) return { redirect: "#/account" };
+  if (cu.role !== "pending") {
+    return `<section class="card"><p class="muted">Your application has already been processed.</p></section>`;
+  }
   const existing = await store.getMyApplication();
   if (existing) {
-    return cu.role === "pending"
-      ? `
+    return `
       <section class="card">
         <p class="kicker">Application</p>
         <h2 class="display">Awaiting review</h2>
         <p class="muted">Your application was submitted on ${fmtDate(existing.submitted_at)}. An admin will review it shortly.</p>
       </section>
-    `
-      : `<section class="card"><p class="muted">Your application has already been processed.</p></section>`;
+    `;
   }
   return applyFormHtml(cu);
 }
