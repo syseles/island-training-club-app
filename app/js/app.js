@@ -813,7 +813,6 @@ document.addEventListener("submit", async (e) => {
         photo: "../assets/itc/main.webp",
         price: fd.get("price"),
         capacity: fd.get("capacity"),
-        baseBooked: fd.get("baseBooked"),
         published: fd.get("published") === "on",
       });
       toast(res.created ? "Activity created" : "Activity saved");
