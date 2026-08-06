@@ -33,6 +33,22 @@ docs/                product brief, handoff, brainstorming notes
 README.md            what the project is
 ```
 
+## Agent execution policy
+
+The model selected in the parent Pi session is the source of truth for all work. See `docs/agent-execution-policy.md` for the rationale and operating modes.
+
+- Inline work runs in the current parent session with its selected provider, model, and reasoning level.
+- Subagents are allowed when useful, but every child must use the parent's exact `PI_PROVIDER`, `PI_MODEL`, and `PI_REASONING_LEVEL` values.
+- Never choose a different child model or reasoning level based on cost, speed, task complexity, review role, retries, or fix-loop escalation.
+- Before dispatching a child, read the current `PI_*` values from the shell environment and pass them explicitly:
+
+  ```sh
+  pi -p --model "$PI_PROVIDER/$PI_MODEL" --thinking "$PI_REASONING_LEVEL" ...
+  ```
+
+- If any required `PI_*` value is unavailable, execute inline or ask the user; do not guess.
+- A different child model or reasoning level requires the user's explicit approval for that dispatch.
+
 ## Branching model
 
 Three long-lived branches. Agents must not collapse them.
