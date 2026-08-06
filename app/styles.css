@@ -1045,6 +1045,113 @@ a.profile-row:hover .pr-text strong { color: var(--accent); }
   border: 0;
 }
 
+/* ---- Notifications ---------------------------------------------------- */
+
+.notification-header { margin-top: 16px; }
+
+.notification-sections {
+  display: grid;
+  gap: 14px;
+  margin-top: 20px;
+}
+
+.notification-section .card-body { padding: 18px; }
+
+.notification-section h2 {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: 21px;
+  font-weight: 900;
+  letter-spacing: -.02em;
+}
+
+.notification-list {
+  display: grid;
+  gap: 1px;
+  margin-top: 12px;
+  overflow: hidden;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-sm);
+  background: var(--line-soft);
+}
+
+.notification-row {
+  display: grid;
+  grid-template-columns: 8px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  min-height: 44px;
+  padding: 13px 14px;
+  border: 0;
+  background: var(--surface-3);
+  color: var(--ink);
+  text-align: left;
+  cursor: pointer;
+  transition: background-color .18s ease, color .18s ease;
+}
+
+.notification-row:hover { background: #171d1a; }
+.notification-row.unread { background: rgba(202, 255, 49, .09); }
+.notification-row.unread:hover { background: rgba(202, 255, 49, .14); }
+
+.notification-unread {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 0 3px rgba(202, 255, 49, .12);
+}
+
+.notification-copy,
+.notification-time {
+  min-width: 0;
+}
+
+.notification-copy {
+  display: grid;
+  gap: 2px;
+  overflow-wrap: anywhere;
+}
+
+.notification-copy strong { font-size: 13.5px; }
+.notification-copy > span { color: var(--muted); font-size: 12.5px; }
+.notification-row.unread .notification-copy > span { color: var(--ink); }
+
+.notification-time {
+  display: grid;
+  gap: 2px;
+  color: var(--muted);
+  font-size: 10.5px;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.notification-time span:first-child {
+  color: var(--ink);
+  font-weight: 700;
+}
+
+.notification-empty {
+  margin: 12px 0 0;
+  padding: 14px 0 2px;
+  border-top: 1px solid var(--line-soft);
+  color: var(--muted);
+  font-size: 12.5px;
+}
+
+@media (max-width: 420px) {
+  .notification-row { grid-template-columns: 8px minmax(0, 1fr); }
+  .notification-time {
+    grid-column: 2;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 10px;
+    text-align: left;
+    white-space: normal;
+  }
+}
+
 /* ---- Community -------------------------------------------------------- */
 
 .leader-card { display: grid; grid-template-columns: 86px 1fr; }

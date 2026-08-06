@@ -160,6 +160,26 @@ const store = await import("./js/store.js");
 const views = await import("./js/views.js");
 const data = await import("./js/data.js");
 
+const notificationNow = new Date("2026-08-05T06:40:00.000Z");
+const notificationHelperCases = [
+  [data.notificationRelativeTime?.("2026-08-05T06:39:45.000Z", notificationNow), "Just now"],
+  [data.notificationRelativeTime?.("2026-08-05T06:35:00.000Z", notificationNow), "5 minutes ago"],
+  [data.notificationRelativeTime?.("2026-08-05T04:40:00.000Z", notificationNow), "2 hours ago"],
+  [data.notificationRelativeTime?.("2026-08-04T06:40:00.000Z", notificationNow), "Yesterday"],
+];
+for (const [actual, expected] of notificationHelperCases) {
+  if (actual !== expected) throw new Error(`notificationRelativeTime: expected ${expected}, got ${actual}`);
+}
+if (!/5 Aug 2026, 2:32 PM HKT/.test(data.notificationHktTime?.("2026-08-05T06:32:00.000Z") || "")) {
+  throw new Error("notificationHktTime must format exact Asia/Hong_Kong time independently of host timezone");
+}
+if (data.notificationDestination?.("admin_application_submitted") !== "#/admin/approvals" ||
+    data.notificationDestination?.("admin_role_changed") !== "#/admin/members" ||
+    data.notificationDestination?.("welcome") !== "#/account") {
+  throw new Error("notificationDestination must preserve operational and member route semantics");
+}
+console.log("ok  deterministic notification helper contracts");
+
 let failures = 0;
 async function check(label, fn) {
   try {

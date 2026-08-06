@@ -437,6 +437,41 @@ export function mapsUrl(session) {
 }
 
 // ============================================================================
+// Notifications — deterministic display helpers
+// ============================================================================
+
+export function notificationRelativeTime(value, now = new Date()) {
+  const seconds = Math.max(0, Math.floor((now - new Date(value)) / 1000));
+  if (seconds < 60) return "Just now";
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes} minute${minutes === 1 ? "" : "s"} ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours} hour${hours === 1 ? "" : "s"} ago`;
+  if (hours < 48) return "Yesterday";
+  const days = Math.floor(hours / 24);
+  return `${days} days ago`;
+}
+
+export function notificationHktTime(value) {
+  const formatted = new Intl.DateTimeFormat("en-HK", {
+    timeZone: "Asia/Hong_Kong",
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
+  }).format(new Date(value));
+  return `${formatted.replace(/\b(am|pm)\b/i, (period) => period.toUpperCase())} HKT`;
+}
+
+export function notificationDestination(kind) {
+  if (kind === "admin_application_submitted") return "#/admin/approvals";
+  if (kind.startsWith("admin_")) return "#/admin/members";
+  return "#/account";
+}
+
+// ============================================================================
 // Weekly encouragement — rotating verse, Sunday–Saturday weeks
 // ============================================================================
 // To rotate: append verses to lengthen the cycle (it wraps when the list

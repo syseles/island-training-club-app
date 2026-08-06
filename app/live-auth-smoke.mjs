@@ -53,6 +53,32 @@ const applicationRows = new Map([
     },
   ],
 ]);
+const notificationRows = [
+  {
+    id: 'notification-admin-application',
+    kind: 'admin_application_submitted',
+    title: 'Application <submitted>',
+    body: 'Review Riley & approve.',
+    created_at: '2026-08-05T06:35:00.000Z',
+    read_at: null,
+  },
+  {
+    id: 'notification-admin-role',
+    kind: 'admin_role_changed',
+    title: 'Role changed',
+    body: 'A member role changed.',
+    created_at: '2026-08-05T04:40:00.000Z',
+    read_at: '2026-08-05T05:00:00.000Z',
+  },
+  {
+    id: 'notification-welcome',
+    kind: 'welcome',
+    title: 'Welcome to ITC',
+    body: 'Your membership is ready.',
+    created_at: '2026-08-05T06:32:00.000Z',
+    read_at: null,
+  },
+];
 const approvedProfiles = [
   {
     id: "approved-admin",
@@ -230,6 +256,21 @@ const fakeSupabase = {
         },
       };
     }
+    if (table === "notifications") {
+      return {
+        select(columns) {
+          if (columns !== "*") throw new Error("Notification query should select all row fields");
+          return {
+            order(column, options) {
+              if (column !== "created_at" || options?.ascending !== false) {
+                throw new Error("Notifications should be newest first");
+              }
+              return Promise.resolve({ data: structuredClone(notificationRows), error: null });
+            },
+          };
+        },
+      };
+    }
     if (table === "applications") {
       return {
         select() {
@@ -390,6 +431,33 @@ const renderedUser = store.currentUser();
 if (!renderedUser || renderedUser.id !== authUser.id) {
   throw new Error("A fetched Supabase session was not available to synchronous views");
 }
+const notificationNow = new RealDate("2026-08-05T06:40:00.000Z");
+const adminNotificationsHtml = await views.viewNotifications(notificationNow);
+assert.match(adminNotificationsHtml, /<h1[^>]*>Notifications<\/h1>/);
+assert.match(adminNotificationsHtml, /<h2[^>]*>Club operations<\/h2>/);
+assert.match(adminNotificationsHtml, /<h2[^>]*>My notifications<\/h2>/);
+const operationsHtml = adminNotificationsHtml.split("Club operations</h2>")[1].split("My notifications</h2>")[0];
+const personalHtml = adminNotificationsHtml.split("My notifications</h2>")[1];
+assert.match(operationsHtml, /Application &lt;submitted&gt;/);
+assert.match(operationsHtml, /Role changed/);
+assert.doesNotMatch(operationsHtml, /Welcome to ITC/);
+assert.match(personalHtml, /Welcome to ITC/);
+assert.doesNotMatch(personalHtml, /Application &lt;submitted&gt;|Role changed/);
+assert.doesNotMatch(adminNotificationsHtml, /Application <submitted>|Riley & approve/,
+  "Notification content must be HTML escaped");
+assert.equal((adminNotificationsHtml.match(/<button class="notification-row/g) || []).length, 3,
+  "Every notification row must be a semantic button");
+assert.match(adminNotificationsHtml, /class="notification-row unread"[^>]*type="button"/);
+assert.match(adminNotificationsHtml, /class="notification-unread"[^>]*aria-label="Unread"/);
+assert.match(adminNotificationsHtml, /5 minutes ago/);
+assert.match(adminNotificationsHtml, /5 Aug 2026, 2:32 PM HKT/);
+assert.match(operationsHtml, /data-destination="#\/admin\/approvals"/);
+assert.match(personalHtml, /data-destination="#\/account"/);
+renderedUser.role = "member";
+const memberNotificationsHtml = await views.viewNotifications(notificationNow);
+assert.doesNotMatch(memberNotificationsHtml, /Club operations|Application &lt;submitted&gt;|Role changed/);
+assert.match(memberNotificationsHtml, /My notifications|Welcome to ITC/);
+renderedUser.role = "super_admin";
 const liveApplication = await store.getMyApplication();
 if (!liveApplication || liveApplication.waiver_accepted_at !== "2026-08-05T01:00:00.000Z") {
   throw new Error("waiver missing");

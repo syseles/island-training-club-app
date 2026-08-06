@@ -24,6 +24,9 @@ import {
   fmtTime,
   fmtMoney,
   initials,
+  notificationRelativeTime,
+  notificationHktTime,
+  notificationDestination,
 } from "./data.js";
 
 const esc = (s) =>
@@ -1612,25 +1615,53 @@ export function viewNotFound(msg = "Page not found.") {
 
 // --- Notifications (live / Supabase) -----------------------------------------------------------
 
-export async function viewNotifications() {
+export async function viewNotifications(now = new Date()) {
+  const user = store.currentUser();
   const rows = await store.listMyNotifications();
-  if (!rows.length) {
-    return `<section class="card"><p class="muted">No notifications.</p></section>`;
-  }
+  const operational = rows.filter((notification) => notification.kind.startsWith("admin_"));
+  const personal = rows.filter((notification) => !notification.kind.startsWith("admin_"));
+
+  const notificationRow = (notification) => {
+    const unread = !notification.read_at;
+    return `
+      <button class="notification-row${unread ? " unread" : ""}" type="button"
+        data-action="notification-open"
+        data-notification-id="${esc(notification.id)}"
+        data-notification-read="${unread ? "false" : "true"}"
+        data-destination="${esc(notificationDestination(notification.kind))}">
+        ${unread ? `<span class="notification-unread" aria-label="Unread"></span>` : ""}
+        <span class="notification-copy">
+          <strong>${esc(notification.title)}</strong>
+          <span>${esc(notification.body)}</span>
+        </span>
+        <span class="notification-time">
+          <span>${esc(notificationRelativeTime(notification.created_at, now))}</span>
+          <span>${esc(notificationHktTime(notification.created_at))}</span>
+        </span>
+      </button>`;
+  };
+
+  const notificationSection = (title, sectionRows, emptyCopy) => `
+    <section class="card notification-section" aria-labelledby="notification-${esc(title.toLowerCase().replaceAll(" ", "-"))}">
+      <div class="card-body">
+        <h2 id="notification-${esc(title.toLowerCase().replaceAll(" ", "-"))}">${esc(title)}</h2>
+        ${sectionRows.length
+          ? `<div class="notification-list">${sectionRows.map(notificationRow).join("")}</div>`
+          : `<p class="notification-empty">${esc(emptyCopy)}</p>`}
+      </div>
+    </section>`;
+
   return `
-    <section class="card">
-      <p class="kicker">Notifications</p>
-      ${rows.map((n) => `
-        <div class="row ${n.read_at ? "" : "row-unread"}" data-notification-id="${n.id}" data-action="notification-open">
-          <div class="row-body">
-            <strong>${esc(n.title)}</strong>
-            <span class="muted">${esc(n.body)}</span>
-            <span class="muted">${fmtDate(n.created_at)}</span>
-          </div>
-        </div>
-      `).join("")}
-    </section>
-  `;
+    <header class="notification-header">
+      <p class="kicker">Inbox</p>
+      <h1 class="display sm">Notifications</h1>
+    </header>
+    <div class="notification-sections">
+      ${isAdminRole(user?.role)
+        ? notificationSection("Club operations", operational, "No Club operations notifications.")
+        : ""}
+      ${notificationSection("My notifications", personal, "No personal notifications.")}
+    </div>`;
 }
 
 export async function unreadBadge() {
