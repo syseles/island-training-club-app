@@ -18,7 +18,8 @@ insert into auth.users (id, email, raw_user_meta_data) values
   ('10000000-0000-0000-0000-000000000003', 'member-test@itc.invalid', '{}'::jsonb),
   ('10000000-0000-0000-0000-000000000004', 'applicant-one@itc.invalid', '{}'::jsonb),
   ('10000000-0000-0000-0000-000000000005', 'applicant-two@itc.invalid', '{}'::jsonb),
-  ('10000000-0000-0000-0000-000000000006', 'fallback-target@itc.invalid', '{}'::jsonb);
+  ('10000000-0000-0000-0000-000000000006', 'fallback-target@itc.invalid', '{}'::jsonb),
+  ('10000000-0000-0000-0000-000000000007', 'unsupported-target@itc.invalid', '{}'::jsonb);
 
 update public.profiles set full_name = 'Owner Test', role = 'super_admin'
  where id = '10000000-0000-0000-0000-000000000001';
@@ -32,6 +33,8 @@ update public.profiles set full_name = 'Applicant Two', role = 'pending'
  where id = '10000000-0000-0000-0000-000000000005';
 update public.profiles set full_name = 'Fallback Target', role = 'member'
  where id = '10000000-0000-0000-0000-000000000006';
+update public.profiles set full_name = 'Unsupported Target', role = 'member'
+ where id = '10000000-0000-0000-0000-000000000007';
 truncate public.notifications, public.role_changes;
 select set_config('request.jwt.claim.sub', '10000000-0000-0000-0000-000000000001', true);
 
@@ -99,6 +102,26 @@ select pg_temp.assert_true(
   'revocation kind/fan-out is incorrect'
 );
 
+-- Unsupported transitions remain in the complete audit trail but do not create
+-- an operational notification.
+create temporary table operational_notification_checkpoint as
+select count(*)::bigint as count
+  from public.notifications
+ where kind like 'admin_%';
+update public.profiles set role = 'declined'
+ where id = '10000000-0000-0000-0000-000000000007';
+select pg_temp.assert_true(
+  exists (select 1 from public.role_changes
+           where profile_id = '10000000-0000-0000-0000-000000000007'
+             and old_role = 'member' and new_role = 'declined'),
+  'unsupported transition must still be audited'
+);
+select pg_temp.assert_true(
+  (select count(*) from public.notifications where kind like 'admin_%') =
+    (select count from operational_notification_checkpoint),
+  'unsupported transition must not create an operational notification'
+);
+
 -- A service operation without a matching actor profile keeps a nullable audit
 -- actor and uses the approved fallback copy.
 select set_config('request.jwt.claim.sub', '20000000-0000-0000-0000-000000000099', true);
@@ -116,6 +139,10 @@ select pg_temp.assert_true(
 );
 
 -- Browser privileges plus self-row RLS form the complete mutation boundary.
+select pg_temp.assert_true(
+  has_table_privilege('authenticated', 'public.notifications', 'SELECT'),
+  'authenticated must be able to select own notifications'
+);
 select pg_temp.assert_true(
   has_column_privilege('authenticated', 'public.notifications', 'read_at', 'UPDATE'),
   'authenticated must be able to update read_at'
