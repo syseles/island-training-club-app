@@ -155,6 +155,34 @@ export async function maybeRedirectToApply() {
 
 let renderGeneration = 0;
 
+function renderNotificationChrome(user, active, generation, rowsPromise = null) {
+  notificationEl.hidden = !user;
+  notificationEl.innerHTML = user ? views.notificationBellHTML(0, active) : "";
+  if (!user) {
+    notificationEl.removeAttribute("aria-label");
+    notificationEl.removeAttribute("aria-current");
+    return null;
+  }
+
+  notificationEl.setAttribute("aria-label", "Notifications");
+  if (active) notificationEl.setAttribute("aria-current", "page");
+  else notificationEl.removeAttribute("aria-current");
+
+  // Best-effort and detached from ordinary route renders. The Notifications
+  // page passes its own request so page content and the badge share one query.
+  const request = rowsPromise || store.listMyNotifications();
+  request.then((rows) => {
+    if (generation !== renderGeneration) return;
+    const unreadCount = rows.filter((row) => !row.read_at).length;
+    notificationEl.innerHTML = views.notificationBellHTML(unreadCount, active);
+    notificationEl.setAttribute(
+      "aria-label",
+      unreadCount ? `Notifications, ${unreadCount} unread` : "Notifications"
+    );
+  }).catch(() => {});
+  return request;
+}
+
 async function renderWithFeedback() {
   const generation = ++renderGeneration;
   viewEl.setAttribute("aria-busy", "true");
@@ -184,6 +212,17 @@ async function render(generation = renderGeneration) {
   // the week and day you were looking at.
   if (page === "schedule" && !["schedule", "activity", "checkout"].includes(prevPage)) {
     views.resetScheduleState();
+  }
+
+  const notificationsActive = page === "notifications";
+  const routeUser = store.currentUser();
+  let notificationRowsPromise = null;
+
+  // Commit the bell and its active state before the Notifications request can
+  // delay route content. This same promise is also consumed by the page.
+  if (notificationsActive) {
+    notificationRowsPromise = routeUser ? store.listMyNotifications() : Promise.resolve([]);
+    renderNotificationChrome(routeUser, true, generation, notificationRowsPromise);
   }
 
   let out;
@@ -230,7 +269,7 @@ async function render(generation = renderGeneration) {
             : await views.viewAdmin(arg || "approvals");
       break;
     case "notifications":
-      out = await views.viewNotifications();
+      out = await views.viewNotifications(new Date(), await notificationRowsPromise);
       break;
     default:
       out = views.viewNotFound();
@@ -251,29 +290,7 @@ async function render(generation = renderGeneration) {
   avatarEl.classList.toggle("is-empty", !user);
   avatarEl.innerHTML = views.avatarHTML(user);
 
-  const notificationsActive = page === "notifications";
-  notificationEl.hidden = !user;
-  notificationEl.innerHTML = user ? views.notificationBellHTML(0, notificationsActive) : "";
-  if (user) {
-    notificationEl.setAttribute("aria-label", "Notifications");
-    if (notificationsActive) notificationEl.setAttribute("aria-current", "page");
-    else notificationEl.removeAttribute("aria-current");
-
-    // Best-effort and deliberately detached from the route render: the bell
-    // is usable immediately even if the count query is slow or unavailable.
-    store.listMyNotifications().then((rows) => {
-      if (generation !== renderGeneration) return;
-      const unreadCount = rows.filter((row) => !row.read_at).length;
-      notificationEl.innerHTML = views.notificationBellHTML(unreadCount, notificationsActive);
-      notificationEl.setAttribute(
-        "aria-label",
-        unreadCount ? `Notifications, ${unreadCount} unread` : "Notifications"
-      );
-    }).catch(() => {});
-  } else {
-    notificationEl.removeAttribute("aria-label");
-    notificationEl.removeAttribute("aria-current");
-  }
+  if (!notificationsActive) renderNotificationChrome(user, false, generation);
   window.scrollTo({ top: 0 });
   viewEl.focus({ preventScroll: true });
   prevPage = page;
@@ -435,7 +452,7 @@ document.addEventListener("click", async (e) => {
       const id = el.closest("[data-notification-id]").dataset.notificationId;
       try {
         await store.markNotificationRead(id);
-        render();
+        await renderWithFeedback();
       } catch (err) {
         toast(err.message || "Failed to mark read");
       }

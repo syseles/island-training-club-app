@@ -150,7 +150,7 @@ const notificationHost = '<a id="top-notifications" class="top-icon-button" href
 if (!indexHtml.includes(notificationHost) || indexHtml.indexOf(notificationHost) > indexHtml.indexOf('id="top-avatar"')) {
   throw new Error("app shell must provide a visitor-hidden semantic notification link before the avatar");
 }
-for (const contract of [".top-icon-button", "width: 44px", "height: 44px", ".notification-badge"]) {
+for (const contract of [".top-icon-button", "width: 44px", "height: 44px", ".notification-badge", "env(safe-area-inset-top)"]) {
   if (!stylesCss.includes(contract)) throw new Error(`missing notification bell CSS contract: ${contract}`);
 }
 console.log("ok  shared UI and accessibility foundation contracts");

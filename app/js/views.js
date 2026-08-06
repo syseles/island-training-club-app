@@ -1619,9 +1619,9 @@ export function viewNotFound(msg = "Page not found.") {
 
 // --- Notifications (live / Supabase) -----------------------------------------------------------
 
-export async function viewNotifications(now = new Date()) {
+export async function viewNotifications(now = new Date(), prefetchedRows = null) {
   const user = store.currentUser();
-  const rows = await store.listMyNotifications();
+  const rows = prefetchedRows ?? await store.listMyNotifications();
   const normalizedKind = (notification) =>
     typeof notification?.kind === "string" ? notification.kind.trim() : "";
   const operational = rows.filter((notification) => normalizedKind(notification).startsWith("admin_"));

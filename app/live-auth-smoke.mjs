@@ -140,6 +140,7 @@ let applicationReadGate = null;
 const applicationReadGates = [];
 let notificationReadError = null;
 let notificationReadGate = null;
+let notificationQueryCount = 0;
 let profileListError = null;
 let profileListErrorAfterUpdate = null;
 let applicationListError = null;
@@ -275,6 +276,7 @@ const fakeSupabase = {
               if (column !== "created_at" || options?.ascending !== false) {
                 throw new Error("Notifications should be newest first");
               }
+              notificationQueryCount++;
               const rows = structuredClone(notificationRows);
               const error = notificationReadError;
               const gate = notificationReadGate;
@@ -282,6 +284,16 @@ const fakeSupabase = {
               notificationReadGate = null;
               if (gate) await gate;
               return { data: rows, error };
+            },
+          };
+        },
+        update(patch) {
+          return {
+            async eq(column, value) {
+              if (column !== "id") throw new Error("Notification update should target its id");
+              const row = notificationRows.find((item) => item.id === value);
+              if (row) Object.assign(row, structuredClone(patch));
+              return { error: null };
             },
           };
         },
@@ -1024,12 +1036,44 @@ assert.equal(notificationBell.getAttribute("aria-label"), "Notifications, 3 unre
   "a stale unread query must not overwrite newer chrome");
 notificationRows.pop();
 
+const directRouteGate = deferred();
+notificationReadGate = directRouteGate.promise;
+const queriesBeforeDirectRoute = notificationQueryCount;
 location.hash = "#/notifications";
-await windowListeners.get("hashchange")();
-await new Promise(setImmediate);
+const directRouteRender = windowListeners.get("hashchange")();
+assert.equal(notificationBell.hidden, false,
+  "a direct Notifications route must commit signed-in chrome before its query resolves");
+assert.equal(notificationBell.getAttribute("aria-label"), "Notifications");
 assert.equal(notificationBell.getAttribute("aria-current"), "page");
+assert.equal(notificationQueryCount, queriesBeforeDirectRoute + 1,
+  "the Notifications page and unread badge must share one query");
+directRouteGate.resolve();
+await directRouteRender;
+await new Promise(setImmediate);
+assert.equal(notificationQueryCount, queriesBeforeDirectRoute + 1,
+  "resolving the direct route must not start a second unread query");
+assert.equal(notificationBell.getAttribute("aria-label"), "Notifications, 2 unread");
 assert.doesNotMatch(elements.get("bottom-nav").innerHTML, /aria-current="page"/,
   "Notifications must not activate a bottom navigation item");
+
+// A mark-read rerender advances the generation. An older query from this same
+// route may finish later, but its pre-mutation count cannot replace the new one.
+const sameRouteStaleGate = deferred();
+notificationReadGate = sameRouteStaleGate.promise;
+const sameRouteStaleRender = windowListeners.get("hashchange")();
+const notificationControl = makeElement();
+notificationControl.dataset = { action: "notification-open" };
+notificationControl.closest = (selector) => selector === "[data-action]"
+  ? notificationControl
+  : { dataset: { notificationId: "notification-admin-application" } };
+const markReadRender = domListeners.get("click")({ target: notificationControl });
+await markReadRender;
+assert.equal(notificationBell.getAttribute("aria-label"), "Notifications, 1 unread");
+sameRouteStaleGate.resolve();
+await sameRouteStaleRender;
+await new Promise(setImmediate);
+assert.equal(notificationBell.getAttribute("aria-label"), "Notifications, 1 unread",
+  "a stale same-route count must not overwrite the post-mark-read generation");
 
 // Approval queue failures must be truthful and preserve the last good queue.
 applicationReadError = null;

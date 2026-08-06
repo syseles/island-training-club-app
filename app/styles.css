@@ -149,7 +149,7 @@ input, select, textarea { font: inherit; }
   align-items: center;
   gap: 12px;
   min-height: 60px;
-  padding: 10px 18px;
+  padding: calc(10px + env(safe-area-inset-top)) 18px 10px;
   border-bottom: 1px solid var(--line-soft);
   background: rgba(3, 5, 4, .88);
   backdrop-filter: blur(14px);
