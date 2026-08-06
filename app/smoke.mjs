@@ -35,6 +35,27 @@ function check(label, fn) {
 
 store.load();
 
+const anniversary = data.ANNOUNCEMENTS[0];
+if (
+  data.ANNOUNCEMENTS.length !== 1 ||
+  anniversary?.title !== "Island Training Club turns 2" ||
+  anniversary?.milestones?.length !== 5
+) {
+  failures++;
+  console.error("FAIL announcement seeds should contain only the structured ITC anniversary");
+} else console.log("ok  announcement seeds contain only the ITC anniversary");
+
+for (const oldTitle of [
+  "Sunday service at IECC",
+  "New Wednesday venue being scouted",
+  "Marathon fundraiser passes first milestone",
+]) {
+  if (data.ANNOUNCEMENTS.some((item) => item.title === oldTitle)) {
+    failures++;
+    console.error(`FAIL old announcement seed remains: ${oldTitle}`);
+  }
+}
+
 // --- Visitor state ---
 store.signOut();
 check("home (visitor)", () => views.viewHome());
