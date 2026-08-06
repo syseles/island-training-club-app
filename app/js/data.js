@@ -257,22 +257,19 @@ function sessionSnapshot(act, date) {
 
 export const ANNOUNCEMENTS = [
   {
-    id: "ann-1",
-    title: "Sunday service at IECC",
-    body: "Several of us worship at Island Evangelical Community Church on Sundays — 10:30 AM. Come as you are, and look for the ITC crowd after the service.",
-    postedAt: daysAgo(3),
-  },
-  {
-    id: "ann-2",
-    title: "New Wednesday venue being scouted",
-    body: "Leaders are trialling alternate spots for Wednesday Night Training. Watch the session page — venue updates land there first.",
-    postedAt: daysAgo(6),
-  },
-  {
-    id: "ann-3",
-    title: "Marathon fundraiser passes first milestone",
-    body: "Thank you! The Standard Chartered Marathon 2027 milestone was reached for community outreach.",
-    postedAt: daysAgo(9),
+    id: "ann-itc-turns-2",
+    title: "Island Training Club turns 2",
+    postedAt: new Date(2026, 7, 6, 12).getTime(),
+    lead: "Today, August 6, 2026 marks 2 years of Island Training Club.",
+    milestones: [
+      { value: "620", label: "members strong" },
+      { value: "14", label: "committed leaders" },
+      { value: "1", label: "unwavering vision" },
+      { value: "1", label: "clear mission" },
+      { value: "1", label: "God who made this all possible" },
+    ],
+    body: "On behalf of the ITC Leadership and Coaching Team, we are blessed to share this journey with you! We should all be proud of how far we’ve come and look forward to much more 👊",
+    commitment: "We will continue our commitment to serve our God and this community, doing our best to create and maintain a space where you grow in fitness, friendship, community and faith.",
   },
 ];
 

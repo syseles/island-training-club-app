@@ -404,17 +404,64 @@ export function viewCommunity(section) {
   }
 }
 
+function communityHeading(user) {
+  if (!user) return "Find your place in the crew.";
+  if (user.status === "pending") return "You’re welcome here.";
+  if (user.status === "approved") return "Connect and grow with us.";
+  return "Find your place in the crew.";
+}
+
 function communityHome() {
+  const user = store.currentUser();
+  const announcement = ANNOUNCEMENTS[0];
   return `
-    <div class="kicker">Community</div>
-    <h1 class="display">Connect and grow with us.</h1>
-    <p class="subcopy mt8">Island Training Club is a Hong Kong training community with a Christian foundation — open to everyone. Training is the doorway; here are the ways to go deeper.</p>
-    <div class="link-cards">
-      ${linkCard("#/community/prayers", "Prayers", "Ask for prayer, or pray with us")}
-      ${linkCard("#/community/fellowship", "Fellowship", "Small groups and community life")}
-      ${linkCard("#/community/meals", "Ad-Hoc Meals", "Share a meal with us after sessions")}
-      ${linkCard("#/community/announcements", "Announcements", "News from the church and the community")}
-      ${linkCard("#/community/about", "About Island Training Club", "Mission, coaches and leadership")}
+    <div class="community-pulse">
+      <div class="kicker">Community</div>
+      <h1 class="display">${esc(communityHeading(user))}</h1>
+      <p class="subcopy mt8">Island Training Club is a Hong Kong training community with a Christian foundation — open to everyone. Training is the doorway; find your next way to connect.</p>
+
+      <section class="community-feature" aria-labelledby="next-connection-title">
+        <span class="kicker">Next connection</span>
+        <h2 id="next-connection-title">Post-training dinner</h2>
+        <p>Date and venue are announced in the session WhatsApp group a few days ahead.</p>
+        <div class="community-feature-actions">
+          <button class="btn sm" type="button" data-action="connect-interest" data-topic="the next ad-hoc meal">Count me in</button>
+          <a class="btn ghost sm" href="#/community/meals">View details</a>
+        </div>
+      </section>
+
+      <div class="community-section-head">
+        <h2>Latest from ITC</h2>
+        <a href="#/community/announcements">All announcements →</a>
+      </div>
+      ${announcement ? `
+        <a class="community-announcement-preview" href="#/community/announcements">
+          <span class="kicker dim">${esc(fmtDay(announcement.postedAt))} · ITC Anniversary</span>
+          <h3>${esc(announcement.title)}</h3>
+          <p>${esc(announcement.lead)}</p>
+        </a>` : `
+        <div class="community-announcement-preview empty">No announcements yet.</div>`}
+
+      <div class="community-section-head"><h2>Ways to connect</h2></div>
+      <div class="community-action-grid">
+        <a class="community-action-card" href="#/community/prayers">
+          <span class="community-action-icon">${ICONS.heart}</span>
+          <h3>Prayer</h3>
+          <p>Share privately with our leaders.</p>
+        </a>
+        <a class="community-action-card" href="#/community/fellowship">
+          <span class="community-action-icon">${ICONS.people}</span>
+          <h3>Fellowship</h3>
+          <p>Small groups and community life.</p>
+        </a>
+      </div>
+
+      <div class="community-section-head"><h2>Explore</h2></div>
+      <nav class="community-explore" aria-label="Explore the ITC community">
+        <a href="#/community/meals">Meals</a>
+        <a href="#/community/announcements">Announcements</a>
+        <a href="#/community/about">About ITC</a>
+      </nav>
     </div>`;
 }
 
@@ -506,22 +553,34 @@ function communityMeals() {
 }
 
 function communityAnnouncements() {
+  const announcement = ANNOUNCEMENTS[0];
+  if (!announcement) {
+    return `
+      <a class="back-link" href="#/community">← Community</a>
+      <div class="kicker mt16">Community · Announcements</div>
+      <h1 class="display sm">Announcements.</h1>
+      <div class="empty mt16">No announcements yet.</div>`;
+  }
   return `
     <a class="back-link" href="#/community">← Community</a>
-    <div class="kicker mt16">Community · Announcements</div>
-    <h1 class="display sm">Announcements.</h1>
-    <p class="subcopy mt8">News from the church and the community.</p>
-    <div class="stack mt16">
-      ${ANNOUNCEMENTS.map(
-        (a) => `
-        <div class="card"><div class="card-body">
-          <span class="kicker dim">${fmtDay(a.postedAt)}</span>
-          <h3 class="mt8">${esc(a.title)}</h3>
-          <p class="hero-meta">${esc(a.body)}</p>
-        </div></div>`
-      ).join("")}
-    </div>
-    <p class="muted small mt16">Draft announcements — real posts come from ITC leadership and IECC comms.</p>`;
+    <article class="anniversary-story">
+      <div class="kicker">${esc(fmtDay(announcement.postedAt))} · ITC Anniversary</div>
+      <h1 class="display sm">${esc(announcement.title)}.</h1>
+      <p class="subcopy mt8">${esc(announcement.lead)}</p>
+      <div class="anniversary-hero">
+        <strong aria-label="2 years">2<span>yrs</span></strong>
+        <div><h2>Look what God has built.</h2><p>One community, growing stronger together.</p></div>
+      </div>
+      <div class="milestone-grid">
+        ${announcement.milestones.map((item) => `
+          <div class="milestone">
+            <strong>${esc(item.value)}</strong>
+            <span>${esc(item.label)}</span>
+          </div>`).join("")}
+      </div>
+      <p class="anniversary-message">${esc(announcement.body)}</p>
+      <blockquote class="anniversary-commitment">${esc(announcement.commitment)}</blockquote>
+    </article>`;
 }
 
 export function viewAccount(section) {
