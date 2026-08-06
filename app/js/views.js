@@ -120,7 +120,7 @@ const NAV_ITEMS = [
   { key: "home", label: "Home", icon: "home", href: "#/home" },
   { key: "schedule", label: "Schedule", icon: "calendar", href: "#/schedule" },
   { key: "community", label: "Community", icon: "people", href: "#/community" },
-  { key: "giving", label: "Giving", icon: "heart", href: "#/giving" },
+  { key: "giving", label: "Giving", icon: "heart", href: "#/giving", roles: ["signed-in"] },
   { key: "notifications", label: "Notifications", icon: "bell", href: "#/notifications", roles: ["signed-in"] },
   { key: "account", label: "Account", icon: "user", href: "#/account" },
   { key: "admin", label: "Admin", icon: "shield", href: "#/admin", roles: ["admin", "superadmin", "super_admin"] },
@@ -449,8 +449,28 @@ export function resetGivingState() {
   givingState.ref = null;
 }
 
+function givingLocked(user) {
+  const declined = user?.status === "declined";
+  return `
+    <div class="kicker">Giving &amp; Fundraising</div>
+    <h1 class="display">Giving access.</h1>
+    <div class="card mt16"><div class="card-body">
+      <div class="locked-note">🔒 Giving is available to approved ITC members.</div>
+      <h3 class="mt16">${declined ? "Speak with a leader" : "Your application is under review"}</h3>
+      <p class="hero-meta">${declined
+        ? "Please contact an ITC leader if you would like to discuss your membership decision and Giving access."
+        : "Giving access will unlock after an ITC leader reviews and approves your membership application."}</p>
+      <div class="btn-row">
+        <a class="btn" href="#/account">View Profile</a>
+        <a class="btn ghost" href="#/schedule">View Schedule</a>
+      </div>
+    </div></div>`;
+}
+
 export function viewGiving() {
   const user = store.currentUser();
+  if (!user || user.status !== "approved") return givingLocked(user);
+
   const raised = store.campaignRaised();
   const goal = GIVING_CAMPAIGN.goalHKD;
   const pct = Math.min(100, Math.round((raised / goal) * 100));

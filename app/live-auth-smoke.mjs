@@ -298,6 +298,19 @@ await store.getCurrentUser();
 if (store.currentUser().status !== "declined") {
   throw new Error("Live declined profiles must hydrate with declined status");
 }
+const liveGivingSensitiveCopy = ["Give via FPS", "Current campaign", "I’ve made the transfer", "Giving history"];
+const declinedGiving = views.viewGiving();
+if (!declinedGiving.includes("contact an ITC leader") ||
+    liveGivingSensitiveCopy.some((copy) => declinedGiving.includes(copy))) {
+  throw new Error("Live declined profiles must receive content-safe locked Giving");
+}
+profile.role = "pending";
+await store.getCurrentUser();
+const pendingGiving = views.viewGiving();
+if (!pendingGiving.includes("approved ITC members") ||
+    liveGivingSensitiveCopy.some((copy) => pendingGiving.includes(copy))) {
+  throw new Error("Live pending profiles must receive content-safe locked Giving");
+}
 profile.role = "super_admin";
 await store.getCurrentUser();
 const renderedUser = store.currentUser();
@@ -681,6 +694,17 @@ const toastStack = elements.get("toast-stack");
 if (escapedRejections.length || toastStack.children.length !== 1 || toastStack.children[0].textContent !== "Application read failed") {
   throw new Error("Boot should catch one failed application read and show one error toast");
 }
+
+// A direct visitor route must redirect before Giving content is committed.
+store.signOut();
+const visitorSentinel = "visitor route has not committed Giving";
+elements.get("view").innerHTML = visitorSentinel;
+location.hash = "#/giving";
+await windowListeners.get("hashchange")();
+if (location.hash !== "#/account" || elements.get("view").innerHTML !== visitorSentinel) {
+  throw new Error("Visitor #/giving must redirect to #/account before committing Giving HTML");
+}
+await store.getCurrentUser();
 
 escapedRejections.length = 0;
 toastStack.children.length = 0;

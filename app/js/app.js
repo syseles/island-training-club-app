@@ -110,7 +110,7 @@ async function render() {
       out = views.viewCommunity(arg);
       break;
     case "giving":
-      out = views.viewGiving();
+      out = store.currentUser() ? views.viewGiving() : { redirect: "#/account" };
       break;
     case "account":
       // Awaited: account sections can fetch live application data and use

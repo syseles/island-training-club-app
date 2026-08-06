@@ -249,7 +249,21 @@ if (!views.viewCommunity("prayers").includes('id="form-prayer"')) {
   failures++;
   console.error("FAIL prayers page missing the request form");
 } else console.log("ok  prayers page has the request form");
-check("giving (visitor)", () => views.viewGiving());for (const [section, title] of [
+const givingSensitiveCopy = [
+  "Give via FPS",
+  "Current campaign",
+  "Campaign progress",
+  "I’ve made the transfer",
+  "Giving history",
+  "Donation history",
+];
+const visitorNav = views.navHTML("home", null);
+if (visitorNav.includes("#/giving")) {
+  failures++;
+  console.error("FAIL visitor navigation must hide Giving");
+} else console.log("ok  visitor navigation hides Giving");
+
+for (const [section, title] of [
   ["prayers", "Prayers."],
   ["fellowship", "Fellowship."],
   ["meals", "Ad-Hoc Meals."],
@@ -367,6 +381,20 @@ if (!applyRes.user.indemnityAcceptedAt) {
 
 // pending users see "My Week" but with free sessions only — paid booking
 // is locked until approval, so paid rows would be dead ends
+const pendingUser = store.currentUser();
+const pendingNav = views.navHTML("giving", pendingUser);
+const pendingGiving = views.viewGiving();
+if (!pendingNav.includes("#/giving")) {
+  failures++;
+  console.error("FAIL pending navigation must retain Giving");
+} else if (
+  !pendingGiving.includes("approved ITC members") ||
+  givingSensitiveCopy.some((copy) => pendingGiving.includes(copy))
+) {
+  failures++;
+  console.error("FAIL pending Giving must be locked without Giving content");
+} else console.log("ok  pending Giving is content-safe and retains navigation");
+
 const pendingHome = views.viewHome();
 if (!pendingHome.includes("My Week")) {
   failures++;
@@ -423,10 +451,32 @@ const adminActivitiesOut = await views.viewAdmin("activities");
 await check("admin activities", () => adminActivitiesOut);
 const adminMembersOut = await views.viewAdmin("members");
 await check("admin members", () => adminMembersOut);
+const adminGiving = views.viewGiving();
+if (!views.navHTML("giving", store.currentUser()).includes("#/giving") ||
+    !adminGiving.includes("Give via FPS") || !adminGiving.includes("Current campaign") ||
+    !adminGiving.includes("Giving history")) {
+  failures++;
+  console.error("FAIL Admin must retain the full Giving flow");
+} else console.log("ok  Admin retains the full Giving flow");
 await check("admin activity edit", () => views.viewAdminActivity("hyrox"));
 await check("admin activity new", () => views.viewAdminActivity("new"));
 const newApplicant = store.pendingApplicants().find((u) => u.email === "test@example.com");
 store.approveApplicant(newApplicant.id);
+const minorApplicant = store.pendingApplicants().find((u) => u.email === "minor@example.com");
+store.declineApplicant(minorApplicant.id);
+store.signIn("minor@example.com");
+const declinedNav = views.navHTML("giving", store.currentUser());
+const declinedGiving = views.viewGiving();
+if (!declinedNav.includes("#/giving")) {
+  failures++;
+  console.error("FAIL declined navigation must retain Giving");
+} else if (
+  !declinedGiving.includes("contact an ITC leader") ||
+  givingSensitiveCopy.some((copy) => declinedGiving.includes(copy))
+) {
+  failures++;
+  console.error("FAIL declined Giving must be locked without Giving content");
+} else console.log("ok  declined Giving is content-safe and retains navigation");
 console.log("ok  admin approved new applicant");
 
 // --- Member booking + payment flow ---
@@ -888,7 +938,22 @@ if (writtenIndemnity !== 1780000000000 || store.currentUser().indemnityAcceptedA
   console.log("ok  acceptMyIndemnity writes one local timestamp when absent");
 }
 // Giving flow remains available after integrating auth/profile behavior.
-await check("giving (member)", () => views.viewGiving());
+const memberGiving = await check("giving (member)", () => views.viewGiving());
+if (!views.navHTML("giving", member).includes("#/giving") ||
+    !memberGiving.includes("Give via FPS") || !memberGiving.includes("Current campaign") ||
+    !memberGiving.includes("Giving history")) {
+  failures++;
+  console.error("FAIL approved members must retain the full Giving flow");
+} else console.log("ok  approved members retain the full Giving flow");
+store.demoSignIn("superadmin");
+const superGiving = views.viewGiving();
+if (!views.navHTML("giving", store.currentUser()).includes("#/giving") ||
+    !superGiving.includes("Give via FPS") || !superGiving.includes("Current campaign") ||
+    !superGiving.includes("Giving history")) {
+  failures++;
+  console.error("FAIL Super Admin must retain the full Giving flow");
+} else console.log("ok  Super Admin retains the full Giving flow");
+store.demoSignIn("member");
 const raisedBefore = store.campaignRaised();
 const donation = store.recordDonation({
   userId: member.id,
