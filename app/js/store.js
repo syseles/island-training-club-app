@@ -387,6 +387,7 @@ function localApplication(user) {
     whatsapp_reminders: !!user.whatsappReminders,
     email_receipts: !!user.emailReceipts,
     community_news: !!user.communityNews,
+    donor_id: user.donorId || null,
   };
 }
 
@@ -518,6 +519,30 @@ export async function updateMyPrivacyPreferences(form) {
     .single();
   if (error) throw error;
   return data;
+}
+
+export async function updateMyDonorId(raw) {
+  const donorId = normalizeDonorId(raw);
+  if (!donorId || donorIdProblem(donorId)) throw new Error("Enter a valid Donor ID");
+
+  if (!isLive() || !supabase) {
+    const user = currentUser();
+    if (!user) throw new Error("Not signed in");
+    user.donorId = donorId;
+    save();
+    return donorId;
+  }
+
+  const cu = await getCurrentUser();
+  if (!cu) throw new Error("Not signed in");
+  const { data, error } = await supabase
+    .from("applications")
+    .update({ donor_id: donorId })
+    .eq("profile_id", cu.id)
+    .select("donor_id")
+    .single();
+  if (error) throw error;
+  return data.donor_id;
 }
 
 export async function acceptMyIndemnity() {

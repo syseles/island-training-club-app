@@ -115,6 +115,140 @@ if (liveApply.status !== 0) {
   process.exit(liveApply.status || 1);
 }
 
+const liveDonorId = spawnSync(process.execPath, [
+  "--input-type=module",
+  "-e",
+  `
+const mem = new Map();
+globalThis.localStorage = {
+  getItem: (key) => (mem.has(key) ? mem.get(key) : null),
+  setItem: (key, value) => mem.set(key, String(value)),
+  removeItem: (key) => mem.delete(key),
+};
+const authUser = {
+  id: "live-member-user",
+  email: "member@example.com",
+  user_metadata: { full_name: "Member Person" },
+};
+const profile = {
+  id: authUser.id,
+  email: authUser.email,
+  full_name: "Member Person",
+  avatar_url: null,
+  role: "member",
+  created_at: "2026-08-05T00:00:00.000Z",
+  updated_at: "2026-08-05T00:00:00.000Z",
+};
+const application = {
+  profile_id: authUser.id,
+  mobile: "91234567",
+  date_of_birth: null,
+  is_minor: false,
+  guardian_name: null,
+  guardian_phone: null,
+  emergency_name: "Emergency Person",
+  emergency_phone: "98765432",
+  heard_source: "friend",
+  heard_detail: null,
+  preferred_name: "Member",
+  photo_consent: false,
+  waiver_accepted_at: "2026-08-05T00:00:00.000Z",
+  privacy_accepted_at: "2026-08-05T00:00:00.000Z",
+  guidelines_accepted_at: "2026-08-05T00:00:00.000Z",
+  submitted_at: "2026-08-05T00:00:00.000Z",
+  updated_at: "2026-08-05T00:00:00.000Z",
+  whatsapp_reminders: false,
+  email_receipts: false,
+  community_news: false,
+  donor_id: null,
+};
+const fakeSupabase = {
+  auth: {
+    getSession: async () => ({
+      data: {
+        session: {
+          access_token: "test-access-token",
+          token_type: "bearer",
+          expires_in: 3600,
+          expires_at: 9999999999,
+          refresh_token: "test-refresh-token",
+          user: authUser,
+        },
+      },
+      error: null,
+    }),
+  },
+  from(table) {
+    if (table === "profiles") {
+      return {
+        select() {
+          return {
+            eq(column, value) {
+              if (column !== "id" || value !== authUser.id) throw new Error("Profile query mismatch");
+              return { maybeSingle: async () => ({ data: profile, error: null }) };
+            },
+          };
+        },
+      };
+    }
+    if (table === "applications") {
+      return {
+        select() {
+          return {
+            eq(column, value) {
+              if (column !== "profile_id" || value !== authUser.id) throw new Error("Application query mismatch");
+              return { maybeSingle: async () => ({ data: { ...application }, error: null }) };
+            },
+          };
+        },
+        update(patch) {
+          if (Object.keys(patch).join(",") !== "donor_id") throw new Error("Donor update changed unrelated fields");
+          Object.assign(application, patch);
+          return {
+            eq(column, value) {
+              if (column !== "profile_id" || value !== authUser.id) throw new Error("Donor update mismatch");
+              return {
+                select() {
+                  return { single: async () => ({ data: { ...application }, error: null }) };
+                },
+              };
+            },
+          };
+        },
+      };
+    }
+    throw new Error("Unexpected table: " + table);
+  },
+};
+globalThis.window = {
+  SUPABASE_URL: "https://example.supabase.co",
+  SUPABASE_ANON_KEY: "test-anon-key",
+  supabase: { createClient: () => fakeSupabase },
+};
+const store = await import("./js/store.js");
+const views = await import("./js/views.js");
+store.load();
+await store.getCurrentUser();
+const saved = await store.updateMyDonorId("chui 8879");
+if (saved !== "CHUI-8879" || application.donor_id !== "CHUI-8879") {
+  throw new Error("Live donor ID was not normalized and persisted");
+}
+const donorHtml = await views.viewAccount("donor");
+if (!donorHtml.includes("CHUI-8879") || donorHtml.includes("Not provided")) {
+  throw new Error("Live Donor Profile did not render the persisted donor ID");
+}
+console.log("ok  live donor ID saves and renders from the member application");
+  `,
+], {
+  encoding: "utf8",
+  cwd: fileURLToPath(new URL(".", import.meta.url)),
+});
+if (liveDonorId.stdout) process.stdout.write(liveDonorId.stdout);
+if (liveDonorId.status !== 0) {
+  if (liveDonorId.stderr) process.stderr.write(liveDonorId.stderr);
+  process.exit(liveDonorId.status || 1);
+}
+
 // --- Shared UI and accessibility foundations ---
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const indexHtml = readFileSync(resolve(__dirname, "index.html"), "utf8");
