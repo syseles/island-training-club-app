@@ -35,6 +35,85 @@ function check(label, fn) {
 
 store.load();
 
+// --- Clean fresh state ---
+const fresh = JSON.parse(mem.get("itc.prototype.v1"));
+if (fresh.users.length || fresh.bookings.length || fresh.receipts.length || fresh.sessionUserId) {
+  failures++;
+  console.error("FAIL fresh state should have no users, bookings, receipts or session");
+} else console.log("ok  fresh state has no identities or transactions");
+if (!fresh.activities.length || fresh.activities.some((a) => "baseBooked" in a)) {
+  failures++;
+  console.error("FAIL fresh activities should remain without baseBooked");
+} else console.log("ok  fresh activities remain without simulated demand");
+const visitorAccount = views.viewAccount();
+for (const banned of [
+  "owner@itc.hk",
+  "admin@itc.hk",
+  "member@itc.hk",
+  'data-action="demo-signin"',
+  "one-tap demo",
+  "reset-demo",
+]) {
+  if (visitorAccount.toLowerCase().includes(banned.toLowerCase())) {
+    failures++;
+    console.error(`FAIL visitor Account contains removed demo content: ${banned}`);
+  }
+}
+console.log("ok  visitor Account has no demo identities or controls");
+const announcements = views.viewCommunity("announcements");
+for (const fake of [
+  "Sunday service at IECC",
+  "New Wednesday venue being scouted",
+  "Marathon fundraiser passes first milestone",
+]) {
+  if (announcements.includes(fake)) {
+    failures++;
+    console.error(`FAIL announcements contain fake runtime post: ${fake}`);
+  }
+}
+console.log("ok  announcements contain no generic fake posts");
+
+// Neutral local records drive authenticated smoke paths; clean installs do
+// not receive these fixtures. Keep fixture identities under .example.test.
+const fixtureSession = data
+  .sessionsInRange(fresh.activities, data.todayLocal(), 14)
+  .find((s) => s.kind === "paid" && !data.sessionStarted(s));
+if (!fixtureSession) throw new Error("expected a future paid fixture session");
+const fixtureState = {
+  ...fresh,
+  users: [
+    {
+      id: "test-admin-1", role: "admin", status: "approved", fullName: "Test Admin",
+      preferredName: "Admin", email: "test-admin@example.test", phone: "+852 5000 0001",
+      emergencyName: "Test Contact", emergencyPhone: "+852 5000 9001", heard: "Test fixture",
+      ageConfirmed: true, appliedAt: Date.now() - 86400000, indemnityAcceptedAt: Date.now() - 86400000,
+    },
+    {
+      id: "test-member-1", role: "member", status: "approved", fullName: "Existing Member",
+      preferredName: "Existing", email: "test-member@example.test", phone: "+852 5000 0002",
+      emergencyName: "Test Contact", emergencyPhone: "+852 5000 9002", heard: "Test fixture",
+      ageConfirmed: true, donorId: "TEST-1234", appliedAt: Date.now() - 172800000,
+      indemnityAcceptedAt: Date.now() - 172800000,
+    },
+  ],
+  bookings: [{
+    id: "test-booking-1", userId: "test-member-1", sessionId: fixtureSession.id,
+    status: "confirmed", createdAt: Date.now() - 3600000,
+    snapshot: {
+      name: fixtureSession.name, kind: fixtureSession.kind, dateISO: fixtureSession.dateISO,
+      time: fixtureSession.time, durationMin: fixtureSession.durationMin,
+      location: fixtureSession.location, price: fixtureSession.price,
+    },
+  }],
+  receipts: [{
+    id: "test-receipt-1", number: "TEST-RECEIPT-0001", bookingId: "test-booking-1",
+    userId: "test-member-1", amount: fixtureSession.price, currency: "HKD", cardLast4: "1111",
+    status: "paid", issuedAt: Date.now() - 3600000, line: "Neutral fixture receipt",
+  }],
+};
+mem.set("itc.prototype.v1", JSON.stringify(fixtureState));
+store.load();
+
 // --- Visitor state ---
 store.signOut();
 check("home (visitor)", () => views.viewHome());
@@ -135,7 +214,7 @@ if (!paidHtml.includes("HK$") || !paidHtml.includes("badge paid")) {
 const applyRes = store.applyForMembership({
   fullName: "Test Person",
   preferredName: "Test",
-  email: "test@example.com",
+  email: "new-member@example.test",
   phone: "+852 1234 5678",
   emergencyName: "E Person",
   emergencyPhone: "+852 8765 4321",
@@ -186,18 +265,18 @@ if (!pendHtml.includes("Booking locked")) {
 } else console.log("ok  pending user blocked from paid booking");
 
 // --- Admin approval flow ---
-store.demoSignIn("admin");
+store.signIn("test-admin@example.test");
 check("admin approvals", () => views.viewAdmin("approvals"));
 check("admin activities", () => views.viewAdmin("activities"));
 check("admin members", () => views.viewAdmin("members"));
 check("admin activity edit", () => views.viewAdminActivity("hyrox"));
 check("admin activity new", () => views.viewAdminActivity("new"));
-const newApplicant = store.pendingApplicants().find((u) => u.email === "test@example.com");
+const newApplicant = store.pendingApplicants().find((u) => u.email === "new-member@example.test");
 store.approveApplicant(newApplicant.id);
 console.log("ok  admin approved new applicant");
 
 // --- Member booking + payment flow ---
-const signIn = store.signIn("test@example.com");
+const signIn = store.signIn("new-member@example.test");
 if (!signIn.ok || signIn.user.status !== "approved") throw new Error("approval did not take effect");
 check("account (new member)", () => views.viewAccount());
 
@@ -368,44 +447,44 @@ if (!histHtml.includes("booking-card") || !histHtml.includes("Cancelled")) {
   console.error("FAIL History sub-page missing past bookings");
 } else console.log("ok  History sub-page lists past bookings");
 
-// --- Seeded member view ---
-store.demoSignIn("member");
-check("account (seeded member)", () => views.viewAccount());
+// --- Existing member fixture view ---
+store.signIn("test-member@example.test");
+check("account (existing member)", () => views.viewAccount());
 const memberAcct = views.viewAccount();
-if (!views.viewAccount("donor").includes("CHUI-08879")) {
+if (!views.viewAccount("donor").includes("TEST-1234")) {
   failures++;
-  console.error("FAIL seeded member donor ID not shown in Donor Profile");
-} else console.log("ok  seeded member donor ID shown in Donor Profile");
-if (memberAcct.includes("CHUI-08879")) {
+  console.error("FAIL fixture member donor ID not shown in Donor Profile");
+} else console.log("ok  fixture member donor ID shown in Donor Profile");
+if (memberAcct.includes("TEST-1234")) {
   failures++;
   console.error("FAIL donor ID should not appear on the Profile card face");
-} else console.log("ok  seeded member card faces carry no donor details");
-if (!views.viewAccount("payments").includes("ITC-2026-0048")) {
+} else console.log("ok  fixture member card faces carry no donor details");
+if (!views.viewAccount("payments").includes("TEST-RECEIPT-0001")) {
   failures++;
-  console.error("FAIL seeded receipts missing from Payments sub-page");
-} else console.log("ok  seeded receipts show on Payments sub-page");
+  console.error("FAIL fixture receipt missing from Payments sub-page");
+} else console.log("ok  fixture receipt shows on Payments sub-page");
 if (!memberAcct.includes("Indemnity confirmed on")) {
   failures++;
-  console.error("FAIL seeded member should have indemnity confirmed");
-} else console.log("ok  seeded member indemnity confirmed");
+  console.error("FAIL fixture member should have indemnity confirmed");
+} else console.log("ok  fixture member indemnity confirmed");
 if (!memberAcct.includes('class="kicker">Profile</div>') || memberAcct.includes("Member Profile") || memberAcct.includes("’s training")) {
   failures++;
   console.error('FAIL Profile header should read "Profile" with no name headline');
 } else console.log('ok  Profile header reads "Profile"');
-if (memberAcct.includes("member@itc.hk")) {
+if (memberAcct.includes("test-member@example.test")) {
   failures++;
   console.error("FAIL email should not appear on the Profile face");
 } else console.log("ok  Profile face carries no contact details");
-if (!views.viewAccount("details").includes("member@itc.hk")) {
+if (!views.viewAccount("details").includes("test-member@example.test")) {
   failures++;
   console.error("FAIL email missing from Membership Details sub-page");
 } else console.log("ok  email lives on Membership Details sub-page");
 check("home (member)", () => views.viewHome());
 const memberHome = views.viewHome();
-if (!memberHome.includes("BFT Causeway Bay") || memberHome.includes("Midtown 28")) {
+if (!memberHome.includes(fixtureSession.location)) {
   failures++;
-  console.error('FAIL "My week" should show only the member\'s booked 11:15 HYROX');
-} else console.log('ok  "My week" shows only the member\'s booked session');
+  console.error('FAIL "My week" should show the fixture member\'s booked session');
+} else console.log('ok  "My week" shows only the fixture member\'s booked session');
 // community: prayer request records locally (no public reader by design)
 const member = store.currentUser();
 const prayer = store.recordPrayer({ userId: member.id, name: member.fullName, request: "Smoke test request" });
@@ -418,29 +497,76 @@ if (!ics.includes("BEGIN:VEVENT") || !ics.includes(free.name)) throw new Error("
 console.log("ok  ICS generation");
 
 // --- v7 migration: legacy hyphen-less donor IDs get repaired on load ---
-store.resetDemo();
+store.resetLocalData();
 {
   const raw = JSON.parse(mem.get("itc.prototype.v1"));
   raw.version = 6;
-  raw.users.find((u) => u.id === "u-member").donorId = "CHUI08879"; // no separator
-  raw.users.find((u) => u.id === "u-admin").donorId = "not a real id"; // unrecognizable
+  raw.users = [
+    { id: "legacy-member-1", email: "legacy-one@example.test", donorId: "TEST1234" },
+    { id: "legacy-member-2", email: "legacy-two@example.test", donorId: "not a real id" },
+  ];
   mem.set("itc.prototype.v1", JSON.stringify(raw));
   store.load();
-  const fixed = store.allUsers().find((u) => u.id === "u-member").donorId;
-  if (fixed !== "CHUI-08879") {
+  const fixed = store.allUsers().find((u) => u.id === "legacy-member-1").donorId;
+  if (fixed !== "TEST-1234") {
     failures++;
-    console.error(`FAIL v7 migration should repair CHUI08879 -> CHUI-08879, got ${fixed}`);
+    console.error(`FAIL v7 migration should repair TEST1234 -> TEST-1234, got ${fixed}`);
   } else console.log("ok  v7 migration inserts the missing hyphen");
-  const cleared = store.allUsers().find((u) => u.id === "u-admin").donorId;
+  const cleared = store.allUsers().find((u) => u.id === "legacy-member-2").donorId;
   if (cleared !== null) {
     failures++;
     console.error(`FAIL v7 migration should clear unrecognizable donor ID, got ${cleared}`);
   } else console.log("ok  v7 migration clears unrecognizable donor ID");
 }
 
+// --- v9 migration: exact legacy demo sentinels are removed, local records survive ---
+store.resetLocalData();
+{
+  const raw = JSON.parse(mem.get("itc.prototype.v1"));
+  raw.version = 8;
+  raw.sessionUserId = "u-admin";
+  raw.users = [
+    { id: "u-super", email: "owner@itc.hk" },
+    { id: "u-admin", email: " ADMIN@ITC.HK " },
+    { id: "u-member", email: "member@itc.hk" },
+    { id: "u-pend-1", email: "marco.santos@example.com" },
+    { id: "u-pend-2", email: "jenny.wu@example.com" },
+    { id: "renamed-demo-owner", email: " OWNER@ITC.HK " },
+    { id: "test-member-1", email: "real-member@example.test", donorId: "REAL-1234" },
+  ];
+  raw.bookings = [
+    { id: "b-seed-past", userId: "u-member", sessionId: "hyrox-legacy-past" },
+    { id: "b-seed-next", userId: "renamed-demo-owner", sessionId: "hyrox-legacy-next" },
+    { id: "real-booking-1", userId: "test-member-1", sessionId: "hyrox-real" },
+  ];
+  raw.receipts = [
+    { id: "r-seed-past", bookingId: "b-seed-past", userId: "u-member" },
+    { id: "r-seed-next", bookingId: "b-seed-next", userId: "renamed-demo-owner" },
+    { id: "real-receipt-1", bookingId: "real-booking-1", userId: "test-member-1" },
+  ];
+  raw.activities[0].baseBooked = 7;
+  raw.activities[0].location = "Genuine admin edit";
+  mem.set("itc.prototype.v1", JSON.stringify(raw));
+  store.load();
+  const migrated = JSON.parse(mem.get("itc.prototype.v1"));
+  const preserved = migrated.users.length === 1 && migrated.users[0].id === "test-member-1"
+    && migrated.bookings.length === 1 && migrated.bookings[0].id === "real-booking-1"
+    && migrated.receipts.length === 1 && migrated.receipts[0].id === "real-receipt-1"
+    && migrated.activities[0].location === "Genuine admin edit";
+  const cleaned = migrated.version === 9 && migrated.sessionUserId === null
+    && migrated.activities.every((a) => !("baseBooked" in a));
+  if (!preserved || !cleaned) {
+    failures++;
+    console.error("FAIL v9 migration should remove exact demo records/demand and preserve unmatched local records");
+  } else console.log("ok  v9 migration removes only exact demo records and simulated demand");
+}
+
 // --- Reset ---
-store.resetDemo();
-console.log("ok  reset");
+const reset = store.resetLocalData();
+if (reset.users.length || reset.bookings.length || reset.receipts.length) {
+  failures++;
+  console.error("FAIL resetLocalData should restore the clean baseline");
+} else console.log("ok  resetLocalData restores clean local state");
 
 console.log(failures ? `\n${failures} FAILURE(S)` : "\nAll smoke tests passed.");
 process.exit(failures ? 1 : 0);
