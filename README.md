@@ -79,6 +79,7 @@ Version 1 is the chosen starting point.
 - [Phase-one product brief](docs/phase-one-product-brief.md)
 - [Detailed brainstorming notebook](docs/itc-web-app-product-notes.md)
 - [Collaboration handoff](docs/handoff.md)
+- [Agent execution guide](docs/agent-execution-guide.md)
 
 ## Phase-One Summary
 
