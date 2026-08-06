@@ -673,6 +673,40 @@ for (const [version, absentKey] of [
   }
 }
 
+// --- v8/v9 prayer state is repaired before migrations or early return ---
+for (const [version, prayerShape] of [
+  [8, "null"],
+  [8, "missing"],
+  [9, "null"],
+  [9, "missing"],
+]) {
+  store.resetLocalData();
+  const raw = JSON.parse(mem.get("itc.prototype.v1"));
+  raw.version = version;
+  if (prayerShape === "missing") delete raw.prayers;
+  else raw.prayers = null;
+  mem.set("itc.prototype.v1", JSON.stringify(raw));
+  try {
+    store.load();
+    const recorded = store.recordPrayer({
+      userId: null,
+      name: "Migration tester",
+      request: `v${version} ${prayerShape} prayer regression`,
+    });
+    const migrated = JSON.parse(mem.get("itc.prototype.v1"));
+    if (!recorded.id
+      || !Array.isArray(migrated.prayers)
+      || migrated.prayers.length !== 1
+      || migrated.prayers[0].id !== recorded.id) {
+      throw new Error("recordPrayer did not persist into a normalized array");
+    }
+    console.log(`ok  v${version} ${prayerShape} prayers normalize and recordPrayer works`);
+  } catch (err) {
+    failures++;
+    console.error(`FAIL v${version} ${prayerShape} prayers should normalize before load returns: ${err.message}`);
+  }
+}
+
 // --- v9 migration: exact legacy demo sentinels are removed, local records survive ---
 store.resetLocalData();
 {
@@ -698,6 +732,13 @@ store.resetLocalData();
     { id: "r-seed-next", bookingId: "b-seed-next", userId: "renamed-demo-owner" },
     { id: "real-receipt-1", bookingId: "real-booking-1", userId: "test-member-1" },
   ];
+  raw.prayers = [{
+    id: "real-prayer-1",
+    userId: "test-member-1",
+    name: "Existing Member",
+    request: "Please preserve this genuine prayer",
+    createdAt: Date.now() - 7200000,
+  }];
   raw.activities[0].baseBooked = 7;
   raw.activities[0].location = "Genuine admin edit";
   mem.set("itc.prototype.v1", JSON.stringify(raw));
@@ -706,6 +747,7 @@ store.resetLocalData();
   const preserved = migrated.users.length === 1 && migrated.users[0].id === "test-member-1"
     && migrated.bookings.length === 1 && migrated.bookings[0].id === "real-booking-1"
     && migrated.receipts.length === 1 && migrated.receipts[0].id === "real-receipt-1"
+    && migrated.prayers.length === 1 && migrated.prayers[0].id === "real-prayer-1"
     && migrated.activities[0].location === "Genuine admin edit";
   const cleaned = migrated.version === 9 && migrated.sessionUserId === null
     && migrated.activities.every((a) => !("baseBooked" in a));

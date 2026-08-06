@@ -55,7 +55,7 @@ function migrate() {
   // Persisted prototypes may predate individual collections or contain null
   // values. Normalize them before any legacy step (or current-version return)
   // so each migration can safely iterate while preserving valid records.
-  for (const key of ["users", "activities", "bookings", "receipts"]) {
+  for (const key of ["users", "activities", "bookings", "receipts", "prayers"]) {
     if (!Array.isArray(state[key])) state[key] = [];
   }
 
