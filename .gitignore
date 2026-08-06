@@ -13,3 +13,5 @@ dist/
 
 # Pi package clones (project-local installs)
 .pi/git/
+
+.superpowers/sdd/

@@ -25,6 +25,10 @@ import {
   fmtTime,
   fmtMoney,
   initials,
+  notificationRelativeTime,
+  notificationHktTime,
+  notificationDestination,
+  notificationCategory,
 } from "./data.js";
 
 const esc = (s) =>
@@ -115,15 +119,22 @@ const ICONS = {
 const ADMIN_ROLES = ["admin", "superadmin", "super_admin"];
 const isAdminRole = (role) => ADMIN_ROLES.includes(role);
 const isSuperRole = (role) => ["superadmin", "super_admin"].includes(role);
+const normalizedRole = (role) => role === "super_admin" ? "superadmin" : role;
+const roleLabel = (role) => ({
+  member: "Member",
+  admin: "Admin",
+  superadmin: "Super Admin",
+}[normalizedRole(role)] || String(role || ""));
+
+export const adminMemberFilters = { query: "", status: "all", role: "all" };
 
 const NAV_ITEMS = [
   { key: "home", label: "Home", icon: "home", href: "#/home" },
   { key: "schedule", label: "Schedule", icon: "calendar", href: "#/schedule" },
   { key: "community", label: "Community", icon: "people", href: "#/community" },
   { key: "giving", label: "Giving", icon: "heart", href: "#/giving", roles: ["signed-in"] },
-  { key: "notifications", label: "Notifications", icon: "bell", href: "#/notifications", roles: ["signed-in"] },
+
   { key: "account", label: "Account", icon: "user", href: "#/account" },
-  { key: "admin", label: "Admin", icon: "shield", href: "#/admin", roles: ["admin", "superadmin", "super_admin"] },
 ];
 
 export function navHTML(routeKey, user) {
@@ -145,6 +156,11 @@ export function navHTML(routeKey, user) {
 
 export function avatarHTML(user) {
   return user ? initials(user.fullName) : ICONS.user;
+}
+
+export function notificationBellHTML(unreadCount = 0, active = false) {
+  const visibleCount = unreadCount > 99 ? "99+" : String(unreadCount);
+  return `${ICONS.bell}${unreadCount ? `<span class="notification-badge" aria-hidden="true">${visibleCount}</span>` : ""}`;
 }
 
 // ============================================================================
@@ -1514,7 +1530,7 @@ export async function viewAdmin(tab = "approvals") {
   const tabs = `
     <nav class="admin-tabs">
       ${["approvals", "activities", "members"]
-        .map((t) => `<a href="#/admin/${t}" class="${t === tab ? "active" : ""}">${t}</a>`)
+        .map((t) => `<a href="#/admin/${t}" class="${t === tab ? "active" : ""}"${t === tab ? ' aria-current="page"' : ""}>${t}</a>`)
         .join("")}
     </nav>`;
 
@@ -1550,57 +1566,65 @@ export async function viewAdmin(tab = "approvals") {
 
 function adminApprovals(pending) {
   if (!pending.length) {
-    return `<div class="empty">No pending applications. New signups will land here.</div>`;
+    return `<div class="empty">No pending members. New signups will land here.</div>`;
   }
-  return pending
-    .map((u) => {
-      const joined = new Date(u.appliedAt).toLocaleDateString("en-HK", { day: "numeric", month: "short" });
-      if (!u.applicationSubmitted) {
-        return `
-      <div class="card booking-card applicant"><div class="card-body">
-        <header>
-          <div>
-            <div class="kicker dim" style="margin-top:0">Joined ${joined}</div>
-            <h3 class="mt8">${esc(u.fullName)}</h3>
-          </div>
-          <span class="badge warn">Pending</span>
-        </header>
-        <dl>
-          <dt>Email</dt><dd>${esc(u.email)}</dd>
-        </dl>
-        <p class="hero-meta mt8"><strong>Application not submitted</strong></p>
-        <p class="muted small">This pending profile has not finished the membership application yet, so approval stays locked until they submit it.</p>
-        <div class="actions">
-          <button class="btn sm" type="button" data-action="approve" data-user="${u.id}" disabled>Approve</button>
-          <button class="btn danger sm" type="button" data-action="decline" data-user="${u.id}" disabled>Decline</button>
+
+  const ready = pending.filter((item) => item.applicationSubmitted);
+  const awaiting = pending.filter((item) => !item.applicationSubmitted);
+  const section = (title, items, emptyCopy, renderCard) => `
+    <section class="approval-group">
+      <div class="section-head"><h2>${title} (${items.length})</h2></div>
+      ${items.length ? items.map(renderCard).join("") : `<div class="empty">${emptyCopy}</div>`}
+    </section>`;
+  const decisionButton = (u, action, extraClass = "") => `
+    <button class="btn ${extraClass}sm" type="button" data-action="${action}" data-user="${esc(u.id)}" data-applicant-name="${esc(u.fullName)}">${action === "approve" ? "Approve" : "Decline"}</button>`;
+  const joinedDate = (u) => new Date(u.appliedAt).toLocaleDateString("en-HK", { day: "numeric", month: "short" });
+  const readyCard = (u) => `
+    <div class="card booking-card applicant" id="approval-${esc(u.id)}" data-approval-card data-applicant-name="${esc(u.fullName)}"><div class="card-body">
+      <header>
+        <div>
+          <div class="kicker dim" style="margin-top:0">Applied ${joinedDate(u)}</div>
+          <h3 class="mt8">${esc(u.fullName)}</h3>
         </div>
-      </div></div>`;
-      }
-      return `
-      <div class="card booking-card applicant"><div class="card-body">
-        <header>
-          <div>
-            <div class="kicker dim" style="margin-top:0">Applied ${joined}</div>
-            <h3 class="mt8">${esc(u.fullName)}</h3>
-          </div>
-          <span class="badge warn">Pending</span>
-        </header>
-        <dl>
-          <dt>Email</dt><dd>${esc(u.email)}</dd>
-          <dt>Phone</dt><dd>${esc(u.phone)}</dd>
-          <dt>Emergency</dt><dd>${esc(u.emergencyName)} · ${esc(u.emergencyPhone)}</dd>
-          <dt>Heard via</dt><dd>${esc(u.heard)}</dd>
-          <dt>Age 18+ / guardian</dt><dd>${u.isMinor ? "Under 18 · guardian required" : "18 or over"}</dd>
-          <dt>Indemnity</dt><dd>${u.indemnityAcceptedAt ? "Accepted" : "—"}</dd>
-          <dt>Photo consent</dt><dd>${u.mediaConsent ? "Yes" : "No"}</dd>
-        </dl>
-        <div class="actions">
-          <button class="btn sm" type="button" data-action="approve" data-user="${u.id}">Approve</button>
-          <button class="btn danger sm" type="button" data-action="decline" data-user="${u.id}">Decline</button>
+        <span class="badge warn">Pending</span>
+      </header>
+      <dl>
+        <dt>Email</dt><dd>${esc(u.email)}</dd>
+        <dt>Phone</dt><dd>${esc(u.phone)}</dd>
+        <dt>Emergency</dt><dd>${esc(u.emergencyName)} · ${esc(u.emergencyPhone)}</dd>
+        <dt>Heard via</dt><dd>${esc(u.heard)}</dd>
+        <dt>Age 18+ / guardian</dt><dd>${u.isMinor ? "Under 18 · guardian required" : "18 or over"}</dd>
+        <dt>Indemnity</dt><dd>${u.indemnityAcceptedAt ? "Accepted" : "—"}</dd>
+        <dt>Photo consent</dt><dd>${u.mediaConsent ? "Yes" : "No"}</dd>
+      </dl>
+      <div class="actions">
+        ${decisionButton(u, "approve")}
+        ${decisionButton(u, "decline", "danger ")}
+      </div>
+      <div class="decision-error" role="alert" hidden></div>
+    </div></div>`;
+  const awaitingCard = (u) => `
+    <div class="card booking-card applicant applicant-awaiting" id="approval-${esc(u.id)}" data-approval-card data-applicant-name="${esc(u.fullName)}"><div class="card-body">
+      <header>
+        <div>
+          <div class="kicker dim" style="margin-top:0">Joined ${joinedDate(u)}</div>
+          <h3 class="mt8">${esc(u.fullName)}</h3>
         </div>
-      </div></div>`;
-    })
-    .join("");
+        <span class="badge neutral">Awaiting</span>
+      </header>
+      <dl><dt>Email</dt><dd>${esc(u.email)}</dd></dl>
+      <p class="hero-meta mt8"><strong>Application not submitted</strong></p>
+      <p class="muted small">This pending profile has not finished the membership application yet, so approval stays locked until they submit it.</p>
+      <div class="actions">
+        <button class="btn sm" type="button" data-action="approve" data-user="${esc(u.id)}" data-applicant-name="${esc(u.fullName)}" disabled>Approve</button>
+        <button class="btn danger sm" type="button" data-action="decline" data-user="${esc(u.id)}" data-applicant-name="${esc(u.fullName)}" disabled>Decline</button>
+      </div>
+    </div></div>`;
+
+  return [
+    section("Ready for review", ready, "No applications ready for review.", readyCard),
+    section("Awaiting application", awaiting, "No members awaiting an application.", awaitingCard),
+  ].join("");
 }
 
 function adminActivities() {
@@ -1629,29 +1653,66 @@ function adminActivities() {
 
 function adminMembers(viewer, users) {
   const canEdit = isSuperRole(viewer.role);
+  const query = adminMemberFilters.query.trim().toLocaleLowerCase();
+  const filtered = users.filter((u) => {
+    const matchesQuery = !query || `${u.fullName || ""} ${u.email || ""}`.toLocaleLowerCase().includes(query);
+    const matchesStatus = adminMemberFilters.status === "all" || u.status === adminMemberFilters.status;
+    const matchesRole = adminMemberFilters.role === "all" || normalizedRole(u.role) === adminMemberFilters.role;
+    return matchesQuery && matchesStatus && matchesRole;
+  });
+  const option = (value, label, selected) =>
+    `<option value="${value}" ${selected === value ? "selected" : ""}>${label}</option>`;
+  const filterChip = (key, value, label) =>
+    `<button id="member-filter-${key}-${value}" type="button" data-action="admin-member-filter" data-filter-key="${key}" data-filter-value="${value}" aria-pressed="${adminMemberFilters[key] === value}">${label}</button>`;
+  const activeFilters = [
+    query ? `search “${esc(adminMemberFilters.query.trim())}”` : "",
+    adminMemberFilters.status !== "all" ? `status ${adminMemberFilters.status[0].toUpperCase()}${adminMemberFilters.status.slice(1)}` : "",
+    adminMemberFilters.role !== "all" ? `role ${roleLabel(adminMemberFilters.role)}` : "",
+  ].filter(Boolean).join(", ");
+  const rows = filtered.map((u) => {
+    const role = normalizedRole(u.role);
+    const roleBadge =
+      u.status === "pending"
+        ? '<span class="badge warn">Pending</span>'
+        : u.status === "declined"
+          ? '<span class="badge danger">Declined</span>'
+          : `<span class="badge ${role === "member" ? "free" : role === "admin" ? "paid" : "warn"}">${roleLabel(role)}</span>`;
+    const editor = canEdit && u.status === "approved" && u.id !== viewer.id
+      ? `<div class="member-role-actions">
+          <label class="sr-only" for="member-role-${esc(u.id)}">Role for ${esc(u.fullName)}</label>
+          <select id="member-role-${esc(u.id)}" class="role-select" data-change="set-role" data-user="${esc(u.id)}" data-member-name="${esc(u.fullName)}" data-current-role="${role}">
+            ${["member", "admin", "superadmin"].map((r) => option(r, roleLabel(r), role)).join("")}
+          </select>
+          <button class="btn danger sm" type="button" data-action="revoke-member" data-user="${esc(u.id)}" data-member-name="${esc(u.fullName)}">Revoke access</button>
+        </div>`
+      : roleBadge;
+    return `
+      <div class="member-row">
+        <div class="who"><strong>${esc(u.fullName)}</strong><span>${esc(u.email)}</span></div>
+        ${editor}
+      </div>`;
+  }).join("");
+  const hasActiveFilters = adminMemberFilters.query.length > 0 ||
+    adminMemberFilters.status !== "all" || adminMemberFilters.role !== "all";
   return `
-    <p class="muted small mt16">${users.filter((u) => u.status === "approved").length} approved · ${users.filter((u) => u.status === "pending").length} pending. ${canEdit ? "Role changes are super-admin only." : "Only a super admin can change roles."}</p>
-    ${users
-      .map((u) => {
-        const roleBadge =
-          u.status === "pending"
-            ? '<span class="badge warn">Pending</span>'
-            : u.status === "declined"
-              ? '<span class="badge danger">Declined</span>'
-              : `<span class="badge ${u.role === "member" ? "free" : u.role === "admin" ? "paid" : "warn"}">${u.role}</span>`;
-        const editor =
-          canEdit && u.status === "approved" && u.id !== viewer.id
-            ? `<select class="role-select" data-change="set-role" data-user="${u.id}">
-                 ${["member", "admin", "superadmin"].map((r) => `<option value="${r}" ${u.role === r ? "selected" : ""}>${r}</option>`).join("")}
-               </select>`
-            : roleBadge;
-        return `
-          <div class="member-row">
-            <div class="who"><strong>${esc(u.fullName)}</strong><span>${esc(u.email)}</span></div>
-            ${editor}
-          </div>`;
-      })
-      .join("")}`;
+    <p class="muted small mt16">${canEdit ? "Role changes are Super Admin only." : "Only a Super Admin can change roles."}</p>
+    <div class="member-filters" aria-label="Filter members">
+      <div class="field"><label for="member-search">Search members</label><input id="member-search" type="search" value="${esc(adminMemberFilters.query)}" placeholder="Name or email" data-input="member-search"></div>
+      <fieldset class="admin-filter-group">
+        <legend>Status</legend>
+        <div class="admin-filter-chips">
+          ${filterChip("status", "all", "All")}${filterChip("status", "approved", "Approved")}${filterChip("status", "pending", "Pending")}${filterChip("status", "declined", "Declined")}
+        </div>
+      </fieldset>
+      <fieldset class="admin-filter-group">
+        <legend>Role</legend>
+        <div class="admin-filter-chips">
+          ${filterChip("role", "all", "All roles")}${filterChip("role", "member", "Member")}${filterChip("role", "admin", "Admin")}${filterChip("role", "superadmin", "Super Admin")}
+        </div>
+      </fieldset>
+      ${hasActiveFilters ? '<button class="admin-filters-clear" type="button" data-action="admin-member-filters-clear">Clear filters</button>' : ""}
+    </div>
+    <div class="member-results">${rows || `<div class="empty">No members match${activeFilters ? ` ${activeFilters}` : " these filters"}.</div>`}</div>`;
 }
 
 export function viewAdminActivity(id) {
@@ -1748,125 +1809,98 @@ export function viewNotFound(msg = "Page not found.") {
 
 // --- Notifications (live / Supabase) -----------------------------------------------------------
 
-export async function viewNotifications() {
-  const rows = await store.listMyNotifications();
-  if (!rows.length) {
-    return `<section class="card"><p class="muted">No notifications.</p></section>`;
-  }
-  return `
-    <section class="card">
-      <p class="kicker">Notifications</p>
-      ${rows.map((n) => `
-        <div class="row ${n.read_at ? "" : "row-unread"}" data-notification-id="${n.id}" data-action="notification-open">
-          <div class="row-body">
-            <strong>${esc(n.title)}</strong>
-            <span class="muted">${esc(n.body)}</span>
-            <span class="muted">${fmtDate(n.created_at)}</span>
-          </div>
-        </div>
-      `).join("")}
-    </section>
-  `;
-}
+export const notificationFilters = { kind: "all" };
 
-export async function unreadBadge() {
-  const rows = await store.listMyNotifications();
-  const n = rows.filter((r) => !r.read_at).length;
-  return n > 0 ? `<span class="badge">${n}</span>` : "";
-}
+const ADMIN_NOTIFICATION_FILTERS = [
+  ["all", "All"],
+  ["application", "Applications"],
+  ["decision", "Decisions"],
+  ["role", "Role changes"],
+  ["club", "Club updates"],
+  ["personal", "My account"],
+];
+const MEMBER_NOTIFICATION_FILTERS = ADMIN_NOTIFICATION_FILTERS.filter(([kind]) =>
+  ["all", "club", "personal"].includes(kind)
+);
+const NOTIFICATION_CATEGORY_LABELS = {
+  application: "Application",
+  decision: "Decision",
+  role: "Role change",
+  club: "Club update",
+  personal: "My account",
+};
 
-// --- Admin: users (live / Supabase) ------------------------------------------------------------
+export async function viewNotifications(now = new Date(), prefetchedRows = null) {
+  const user = store.currentUser();
+  const rows = prefetchedRows ?? await store.listMyNotifications();
+  const admin = isAdminRole(user?.role);
+  const availableFilters = admin ? ADMIN_NOTIFICATION_FILTERS : MEMBER_NOTIFICATION_FILTERS;
+  const availableKinds = new Set(availableFilters.map(([kind]) => kind));
+  const activeKind = availableKinds.has(notificationFilters.kind) ? notificationFilters.kind : "all";
+  notificationFilters.kind = activeKind;
 
-export async function viewAdminUsers() {
-  if (!isLive()) {
-    // In local mode, fall back to the existing localStorage-backed admin
-    // view so the prototype continues to work for seed accounts.
-    return viewAdmin("approvals");
-  }
-  const cu = await store.getCurrentUser();
-  if (!cu || !["admin", "super_admin"].includes(cu.role)) {
-    return `<section class="card"><p class="muted">You don't have access to this page.</p></section>`;
-  }
-  const [profiles, audit] = await Promise.all([store.listProfiles(), store.listRoleChanges()]);
-  const latestByProfile = new Map();
-  for (const row of audit) {
-    if (!latestByProfile.has(row.profile_id)) latestByProfile.set(row.profile_id, row);
-  }
-  const pending = profiles.filter((p) => p.role === "pending");
-  const members = profiles.filter((p) => p.role !== "pending");
-  const counts = {
-    pending: pending.length,
-    member: profiles.filter((p) => p.role === "member").length,
-    admin: profiles.filter((p) => p.role === "admin").length,
-    super: profiles.filter((p) => p.role === "super_admin").length,
+  // Keep the existing member boundary even for unknown future admin kinds:
+  // malformed categories fall back safely without exposing operational rows.
+  const visibleRows = rows.filter((notification) => {
+    const kind = typeof notification?.kind === "string" ? notification.kind.trim() : "";
+    return admin || !kind.startsWith("admin_");
+  }).sort((a, b) => {
+    const aTime = Date.parse(a?.created_at);
+    const bTime = Date.parse(b?.created_at);
+    return (Number.isFinite(bTime) ? bTime : -Infinity) - (Number.isFinite(aTime) ? aTime : -Infinity);
+  });
+  const filteredRows = activeKind === "all"
+    ? visibleRows
+    : visibleRows.filter((notification) => notificationCategory(notification?.kind) === activeKind);
+
+  const notificationRow = (notification) => {
+    const unread = !notification?.read_at;
+    const kind = typeof notification?.kind === "string" ? notification.kind.trim() : "";
+    const category = notificationCategory(kind);
+    const relativeTime = notificationRelativeTime(notification?.created_at, now);
+    const exactTime = notificationHktTime(notification?.created_at);
+    const time = relativeTime && exactTime
+      ? `<span>${esc(relativeTime)}</span><span>${esc(exactTime)}</span>`
+      : `<span>Time unavailable</span>`;
+    return `
+      <button class="notification-row${unread ? " unread" : ""}" type="button"
+        data-action="notification-open"
+        data-notification-id="${esc(notification?.id)}"
+        data-notification-read="${unread ? "false" : "true"}"
+        data-destination="${esc(notificationDestination(kind))}">
+        <span class="notification-unread" ${unread ? `aria-label="Unread"` : `aria-hidden="true"`}></span>
+        <span class="notification-copy">
+          <span class="notification-kind-badge">${esc(NOTIFICATION_CATEGORY_LABELS[category])}</span>
+          <strong>${esc(notification?.title)}</strong>
+          <span>${esc(notification?.body)}</span>
+        </span>
+        <span class="notification-time">${time}</span>
+      </button>`;
   };
-  return `
-    <section class="card">
-      <p class="kicker">Admin</p>
-      <h2 class="display">Users</h2>
-      <p class="muted">${counts.pending} pending · ${counts.member} members · ${counts.admin} admins · ${counts.super} super admin</p>
-    </section>
-    ${adminPendingSection(pending, cu)}
-    ${adminMembersSection(members, cu, latestByProfile)}
-  `;
-}
 
-function adminPendingSection(rows, cu) {
-  if (rows.length === 0) {
-    return `<section class="card"><p class="muted">No pending applicants.</p></section>`;
-  }
-  return `
-    <section class="card">
-      <h3 class="section-head">Pending applicants</h3>
-      ${rows.map((p) => `
-        <div class="row" data-profile-id="${p.id}">
-          <img class="avatar" src="${p.avatar_url || ""}" alt="">
-          <div class="row-body">
-            <strong>${esc(p.full_name || p.email)}</strong>
-            <span class="muted">${esc(p.email)} · joined ${fmtDate(p.created_at)}</span>
-          </div>
-          ${cu.role === "admin" || cu.role === "super_admin"
-            ? `<button class="btn btn-primary" data-action="approve" data-user="${p.id}">Approve</button>`
-            : ""}
-        </div>
-      `).join("")}
-    </section>
-  `;
-}
+  const activeLabel = availableFilters.find(([kind]) => kind === activeKind)?.[1] || "All";
+  const emptyCopy = activeKind === "all" ? "No notifications in All." : `No ${activeLabel} notifications.`;
+  const wholeInboxEmpty = visibleRows.length === 0;
+  const filterButtons = availableFilters.map(([kind, label]) => `
+    <button type="button" data-action="notification-filter" data-notification-filter="${kind}"
+      aria-pressed="${kind === activeKind ? "true" : "false"}">${esc(label)}</button>`).join("");
 
-function adminMembersSection(rows, cu, latestByProfile) {
-  if (rows.length === 0) {
-    return `<section class="card"><p class="muted">No members yet.</p></section>`;
-  }
   return `
-    <section class="card">
-      <h3 class="section-head">Members & admins</h3>
-      ${rows.map((p) => adminMemberRow(p, cu, latestByProfile.get(p.id))).join("")}
-    </section>
-  `;
-}
-
-function adminMemberRow(p, cu, lastChange) {
-  const isSelf = p.id === cu.id;
-  const actions = [];
-  if (!isSelf && cu.role === "super_admin") {
-    if (p.role === "member") actions.push(`<button class="btn" data-action="promote" data-id="${p.id}">Promote to admin</button>`);
-    if (p.role === "admin")  actions.push(`<button class="btn" data-action="demote"  data-id="${p.id}">Demote to member</button>`);
-    if (p.role !== "super_admin") actions.push(`<button class="btn btn-danger" data-action="revoke" data-id="${p.id}">Revoke</button>`);
-  }
-  const auditLine = lastChange
-    ? `<span class="muted">Last change: ${esc(lastChange.old_role)} → ${esc(lastChange.new_role)} on ${fmtDate(lastChange.created_at)}${lastChange.changed_by_profile ? ` by ${esc(lastChange.changed_by_profile.full_name || lastChange.changed_by_profile.email)}` : ""}${lastChange.reason ? ` — “${esc(lastChange.reason)}”` : ""}</span>`
-    : "";
-  return `
-    <div class="row" data-profile-id="${p.id}">
-      <img class="avatar" src="${p.avatar_url || ""}" alt="">
-      <div class="row-body">
-        <strong>${esc(p.full_name || p.email)}</strong>
-        <span class="muted">${esc(p.email)} · ${esc(p.role)} · joined ${fmtDate(p.created_at)}</span>
-        ${auditLine}
-        ${isSelf ? `<span class="muted">You can't change your own role.</span>` : ""}
-      </div>
-      <div class="row-actions">${actions.join("")}</div>
+    <header class="notification-header">
+      <p class="kicker">Inbox</p>
+      <h1 class="display sm">Notifications</h1>
+    </header>
+    <div class="notification-filter-scroll">
+      <div class="notification-filter-chips" role="group" aria-label="Filter notifications">${filterButtons}</div>
     </div>
-  `;
+    ${wholeInboxEmpty
+      ? `<div class="empty notification-inbox-empty"><p>New notifications will appear here.</p></div>`
+      : ""}
+    <section class="card notification-section" aria-label="${esc(activeLabel)} notifications">
+      <div class="card-body">
+        ${filteredRows.length
+          ? `<div class="notification-list">${filteredRows.map(notificationRow).join("")}</div>`
+          : `<p class="notification-empty">${esc(emptyCopy)}</p>`}
+      </div>
+    </section>`;
 }
