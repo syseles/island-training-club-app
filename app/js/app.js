@@ -100,6 +100,26 @@ async function refreshAfterAdminMutation(successMessage) {
   }
 }
 
+function campaignFormPayload(form) {
+  const fd = new FormData(form);
+  return {
+    id: form.dataset.campaign || "",
+    title: fd.get("title"),
+    description: fd.get("description"),
+    goalHKD: fd.get("goalHKD"),
+    fpsId: fd.get("fpsId"),
+    fpsPayee: fd.get("fpsPayee"),
+  };
+}
+
+function clearCampaignError(form) {
+  const host = form?.querySelector?.("#campaign-error");
+  if (!host) return;
+  host.textContent = "";
+  host.className = "";
+  host.removeAttribute("role");
+}
+
 function showCampaignError(control, message) {
   const host = control?.closest?.("form")?.querySelector?.("#campaign-error");
   if (!host) return;
@@ -642,17 +662,30 @@ document.addEventListener("click", async (e) => {
       break;
 
     case "campaign-publish": {
-      const name = el.dataset.campaignName || "this campaign";
+      const form = el.closest?.("form");
+      if (!form || !form.reportValidity()) break;
+      clearCampaignError(form);
+      const payload = campaignFormPayload(form);
+      const name = String(payload.title || "").trim() || "this campaign";
       if (!window.confirm(`Publish “${name}”? Approved members will be notified.`)) break;
+      let saved = false;
       let refreshResult = null;
       try {
         await withBusyControl(el, "Publishing…", async () => {
-          await store.publishGivingCampaign(el.dataset.campaign);
+          const campaign = await store.saveGivingCampaign(payload);
+          saved = true;
+          await store.publishGivingCampaign(campaign.id);
           refreshResult = await refreshAfterAdminMutation(`“${name}” published.`);
         });
-        if (refreshResult && !refreshResult.refreshed) el.disabled = true;
+        if (refreshResult && !refreshResult.refreshed) {
+          showCampaignError(el, refreshResult.message);
+          el.disabled = true;
+        }
       } catch (err) {
-        const message = err.message || "Unable to publish campaign";
+        const detail = err.message || (saved ? "Unable to publish campaign" : "Unable to save campaign");
+        const message = saved
+          ? `Campaign changes saved, but publication failed. ${detail}`
+          : `Campaign was not saved or published. ${detail}`;
         showCampaignError(el, message);
         toast(message, true);
       }
@@ -668,7 +701,10 @@ document.addEventListener("click", async (e) => {
           await store.closeGivingCampaign(el.dataset.campaign);
           refreshResult = await refreshAfterAdminMutation(`“${name}” closed.`);
         });
-        if (refreshResult && !refreshResult.refreshed) el.disabled = true;
+        if (refreshResult && !refreshResult.refreshed) {
+          showCampaignError(el, refreshResult.message);
+          el.disabled = true;
+        }
       } catch (err) {
         const message = err.message || "Unable to close campaign";
         showCampaignError(el, message);
@@ -855,7 +891,11 @@ document.addEventListener("submit", async (e) => {
       g.name = name;
       g.note = String(fd.get("note") || "").trim();
       g.ref = `GIVE-${Math.random().toString(36).slice(2, 8).toUpperCase()}`;
-      render();
+      try {
+        await renderWithFeedback();
+      } catch (err) {
+        toast(err.message || "Unable to load Giving instructions", true);
+      }
       break;
     }
 
@@ -930,30 +970,24 @@ document.addEventListener("submit", async (e) => {
       if (!form.reportValidity()) return;
       const control = form.querySelector('[type="submit"]');
       const errorHost = form.querySelector("#campaign-error");
-      if (errorHost) {
-        errorHost.textContent = "";
-        errorHost.className = "";
-        errorHost.removeAttribute("role");
-      }
-      const fd = new FormData(form);
+      clearCampaignError(form);
       let refreshFailed = false;
       await withBusyControl(control, "Saving…", async () => {
         try {
-          const campaign = await store.saveGivingCampaign({
-            id: form.dataset.campaign || "",
-            title: fd.get("title"),
-            description: fd.get("description"),
-            goalHKD: fd.get("goalHKD"),
-            fpsId: fd.get("fpsId"),
-            fpsPayee: fd.get("fpsPayee"),
-          });
+          const campaign = await store.saveGivingCampaign(campaignFormPayload(form));
           toast(form.dataset.campaign ? "Campaign saved." : "Campaign draft created.");
           location.hash = `#/admin/campaign/${campaign.id}`;
           try {
             await renderWithFeedback();
           } catch (refreshError) {
             refreshFailed = true;
-            toast(`Change saved, but this Admin view could not refresh. ${refreshError.message || "Refresh failed"}`, true);
+            const message = `Change saved, but this Admin view could not refresh. ${refreshError.message || "Refresh failed"}`;
+            if (errorHost) {
+              errorHost.textContent = message;
+              errorHost.className = "form-error";
+              errorHost.setAttribute("role", "alert");
+            }
+            toast(message, true);
           }
         } catch (err) {
           const message = err.message || "Unable to save campaign";

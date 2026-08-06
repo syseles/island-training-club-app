@@ -491,6 +491,7 @@ export async function viewGiving() {
   const campaign = await store.getActiveGivingCampaign();
   const gifts = store.donationsForUser(user.id);
   if (!campaign) {
+    resetGivingState();
     return `
       <div class="kicker">Giving &amp; Fundraising</div>
       <h1 class="display">Every step can give back.</h1>
@@ -501,7 +502,10 @@ export async function viewGiving() {
       ${gifts.length ? `<div class="section-head"><h2>Giving history</h2></div>${givingHistory(gifts)}` : ""}`;
   }
 
-  givingState.campaignId = campaign.id;
+  if (givingState.campaignId !== campaign.id) {
+    resetGivingState();
+    givingState.campaignId = campaign.id;
+  }
   const raised = store.campaignRaised(campaign);
   const goal = Number(campaign.goalHKD) || 0;
   const pct = goal > 0 ? Math.min(100, Math.round((raised / goal) * 100)) : 0;

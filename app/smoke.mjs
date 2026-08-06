@@ -417,6 +417,7 @@ const publishedEdit = await store.saveGivingCampaign({ ...publishedCampaign, des
 if (publishedEdit.status !== "published" || publishedEdit.publishedAt !== publicationTime) {
   throw new Error("published edits must not repeat the publication transition");
 }
+views.givingState.campaignId = campaignDraft.id;
 views.givingState.step = 2;
 views.givingState.ref = "GIVE-SMOKE";
 const activeGivingHtml = await views.viewGiving();
@@ -463,9 +464,61 @@ await assert.rejects(() => store.saveGivingCampaign({ ...nextDraft, title: "Memb
 if ((await views.viewAdminCampaign(nextDraft.id)).redirect !== "#/account") {
   throw new Error("members must be denied Admin Giving routes");
 }
+
+// A flow retained while Giving is closed must never carry its intent or thank-you
+// into the next campaign, and the no-campaign view clears every flow field.
+views.givingState.campaignId = closedCampaign.id;
+views.givingState.step = 2;
+views.givingState.amount = 777;
+views.givingState.name = "Campaign A donor";
+views.givingState.note = "For A";
+views.givingState.ref = "GIVE-A";
+store.demoSignIn("admin");
+await store.publishGivingCampaign(nextDraft.id);
+store.demoSignIn("member");
+const nextCampaignGiving = await views.viewGiving();
+if (!nextCampaignGiving.includes('id="form-giving"') || views.givingState.campaignId !== nextDraft.id ||
+    views.givingState.step !== 1 || views.givingState.amount !== 200 || views.givingState.name ||
+    views.givingState.note || views.givingState.ref !== null) {
+  throw new Error("campaign B must start a clean Giving flow after campaign A step 2");
+}
+views.givingState.step = 3;
+views.givingState.amount = 888;
+views.givingState.name = "Campaign B donor";
+views.givingState.note = "For B";
+views.givingState.ref = "GIVE-B";
+store.demoSignIn("admin");
+await store.closeGivingCampaign(nextDraft.id);
+const thirdDraft = await store.saveGivingCampaign({
+  title: "Third campaign",
+  description: "A fresh campaign after a retained thank-you.",
+  goalHKD: 12000,
+  fpsId: "3333333",
+  fpsPayee: "Island Evangelical Community Church",
+});
+await store.publishGivingCampaign(thirdDraft.id);
+store.demoSignIn("member");
+const thirdCampaignGiving = await views.viewGiving();
+if (!thirdCampaignGiving.includes('id="form-giving"') || views.givingState.campaignId !== thirdDraft.id ||
+    views.givingState.step !== 1 || views.givingState.ref !== null) {
+  throw new Error("campaign C must start a clean Giving flow after campaign B step 3");
+}
+views.givingState.step = 2;
+views.givingState.amount = 999;
+views.givingState.name = "No campaign donor";
+views.givingState.note = "Stale";
+views.givingState.ref = "GIVE-STALE";
+store.demoSignIn("admin");
+await store.closeGivingCampaign(thirdDraft.id);
+store.demoSignIn("member");
+await views.viewGiving();
+if (views.givingState.campaignId !== null || views.givingState.step !== 1 || views.givingState.amount !== 200 ||
+    views.givingState.name || views.givingState.note || views.givingState.ref !== null) {
+  throw new Error("no-campaign Giving must clear the entire retained flow");
+}
 store.resetDemo();
 views.resetGivingState();
-console.log("ok  local Giving campaign lifecycle and role guards");
+console.log("ok  local Giving campaign lifecycle, flow isolation, and role guards");
 
 // --- Visitor state ---
 store.signOut();
@@ -2247,6 +2300,14 @@ globalThis.document = {
   addEventListener: (event, callback) => localDomListeners.set(event, callback),
 };
 globalThis.HTMLInputElement = class {};
+globalThis.HTMLFormElement = class {};
+const NativeFormData = globalThis.FormData;
+globalThis.FormData = class {
+  constructor(form) { this.values = new Map(Object.entries(form?.formValues || {})); }
+  get(name) { return this.values.get(name) ?? null; }
+  entries() { return this.values.entries(); }
+  [Symbol.iterator]() { return this.entries(); }
+};
 globalThis.location = { hash: "#/admin/members" };
 globalThis.window = {
   location: globalThis.location,
@@ -2263,6 +2324,7 @@ await localApp.bootPromise;
 const localClick = localDomListeners.get("click");
 const localChange = localDomListeners.get("change");
 const localInput = localDomListeners.get("input");
+const localSubmit = localDomListeners.get("submit");
 const localToasts = localElements.get("toast-stack");
 const localToastText = () => localToasts.children.map((item) => item.textContent);
 const clearLocalToasts = () => { localToasts.children.length = 0; };
@@ -2370,51 +2432,251 @@ const delegatedCampaign = await store.saveGivingCampaign({
   fpsId: "1234567",
   fpsPayee: "Island Evangelical Community Church",
 });
-const campaignError = makeLocalElement();
-const campaignForm = makeLocalElement();
-campaignForm.querySelector = (selector) => selector === "#campaign-error" ? campaignError : null;
-const campaignAction = (action) => {
-  const control = localControl({ action, campaign: delegatedCampaign.id, campaignName: delegatedCampaign.title });
+const makeCampaignForm = (campaign, values = {}) => {
+  const error = makeLocalElement();
+  const submit = localControl({});
+  submit.textContent = "Save changes";
+  const form = Object.assign(new HTMLFormElement(), makeLocalElement(), {
+    id: "form-campaign",
+    dataset: { campaign: campaign.id },
+    formValues: {
+      title: campaign.title,
+      description: campaign.description,
+      goalHKD: String(campaign.goalHKD),
+      fpsId: campaign.fpsId,
+      fpsPayee: campaign.fpsPayee,
+      ...values,
+    },
+    validity: true,
+    reportValidity() { return this.validity; },
+  });
+  form.querySelector = (selector) => selector === "#campaign-error"
+    ? error
+    : selector === '[type="submit"]'
+      ? submit
+      : null;
+  return { form, error, submit };
+};
+const campaignAction = (action, campaign, form) => {
+  const control = localControl({ action, campaign: campaign.id, campaignName: campaign.title });
   control.textContent = action === "campaign-publish" ? "Publish campaign" : "Close campaign";
-  control.closest = (selector) => selector === "form" ? campaignForm : control;
+  control.closest = (selector) => selector === "form" ? form : control;
   return control;
 };
 let campaignConfirm = "";
 window.confirm = (message) => { campaignConfirm = message; return true; };
-store.campaigns().find((item) => item.id === delegatedCampaign.id).fpsId = "";
+
+// Native-invalid unsaved fields stop before confirmation or mutation.
+const invalidEditor = makeCampaignForm(delegatedCampaign, { title: "" });
+invalidEditor.form.validity = false;
+const invalidPublish = campaignAction("campaign-publish", delegatedCampaign, invalidEditor.form);
+await localClick({ target: invalidPublish });
+if (campaignConfirm || store.campaigns().find((item) => item.id === delegatedCampaign.id)?.status !== "draft" ||
+    invalidPublish.disabled || invalidPublish.hasAttribute("aria-busy")) {
+  failures++;
+  console.error("FAIL invalid unsaved campaign publish must stop at form validation");
+} else console.log("ok  invalid unsaved campaign publish stops before confirmation");
+
+// Valid visible edits are saved first, used in confirmation, and then published.
 clearLocalToasts();
-const invalidPublish = campaignAction("campaign-publish");
-const pendingInvalidPublish = localClick({ target: invalidPublish });
-if (!invalidPublish.disabled || invalidPublish.textContent !== "Publishing…" ||
-    invalidPublish.getAttribute("aria-busy") !== "true") {
+const validEditor = makeCampaignForm(delegatedCampaign, {
+  title: "Visible Unsaved Title",
+  description: "Visible unsaved description.",
+  goalHKD: "6200",
+  fpsId: "7654321",
+  fpsPayee: "Visible Unsaved Payee",
+});
+const validPublish = campaignAction("campaign-publish", delegatedCampaign, validEditor.form);
+const pendingValidPublish = localClick({ target: validPublish });
+if (!validPublish.disabled || validPublish.textContent !== "Publishing…" ||
+    validPublish.getAttribute("aria-busy") !== "true") {
   failures++;
   console.error("FAIL campaign publish must expose inherited busy feedback immediately");
 }
-await pendingInvalidPublish;
-if (campaignConfirm !== "Publish “Delegated Campaign”? Approved members will be notified." ||
-    invalidPublish.disabled || invalidPublish.textContent !== "Publish campaign" ||
-    campaignError.getAttribute("role") !== "alert" || !campaignError.textContent.includes("FPS ID") ||
-    localToastText().some((text) => /published\.$/.test(text))) {
+await pendingValidPublish;
+const persistedPublished = store.campaigns().find((item) => item.id === delegatedCampaign.id);
+if (campaignConfirm !== "Publish “Visible Unsaved Title”? Approved members will be notified." ||
+    persistedPublished?.status !== "published" || persistedPublished.title !== "Visible Unsaved Title" ||
+    persistedPublished.description !== "Visible unsaved description." || persistedPublished.goalHKD !== 6200 ||
+    persistedPublished.fpsId !== "7654321" || persistedPublished.fpsPayee !== "Visible Unsaved Payee" ||
+    !localToastText().includes("“Visible Unsaved Title” published.")) {
   failures++;
-  console.error("FAIL rejected campaign publish must confirm, recover, and expose an accessible error");
-} else console.log("ok  rejected campaign publish confirms and recovers accessibly");
-store.campaigns().find((item) => item.id === delegatedCampaign.id).fpsId = "1234567";
-clearLocalToasts();
-const validPublish = campaignAction("campaign-publish");
-await localClick({ target: validPublish });
-if (store.campaigns().find((item) => item.id === delegatedCampaign.id)?.status !== "published" ||
-    !localToastText().includes("“Delegated Campaign” published.")) {
-  failures++;
-  console.error("FAIL delegated campaign publication must mutate and report success");
-} else console.log("ok  delegated campaign publication reports confirmed mutation success");
-const closeCampaign = campaignAction("campaign-close");
+  console.error("FAIL publish must persist current valid form values before transition");
+} else console.log("ok  publish saves visible valid edits and confirms their current title");
+
+// Cancellation, successful close, rejected close, and refresh-after-close feedback.
+let closeCampaign = campaignAction("campaign-close", persistedPublished, validEditor.form);
 window.confirm = (message) => { campaignConfirm = message; return false; };
 await localClick({ target: closeCampaign });
-if (campaignConfirm !== "Close “Delegated Campaign”? Closed campaigns cannot be edited or republished." ||
+if (campaignConfirm !== "Close “Visible Unsaved Title”? Closed campaigns cannot be edited or republished." ||
     store.campaigns().find((item) => item.id === delegatedCampaign.id)?.status !== "published") {
   failures++;
   console.error("FAIL campaign close must name the campaign and respect cancellation");
 } else console.log("ok  campaign close names the campaign and respects cancellation");
+window.confirm = () => true;
+clearLocalToasts();
+await localClick({ target: closeCampaign });
+if (store.campaigns().find((item) => item.id === delegatedCampaign.id)?.status !== "closed" ||
+    !localToastText().includes("“Visible Unsaved Title” closed.")) {
+  failures++;
+  console.error("FAIL successful campaign close must mutate and report success");
+} else console.log("ok  successful campaign close reports confirmed mutation");
+clearLocalToasts();
+const rejectedClose = campaignAction("campaign-close", persistedPublished, validEditor.form);
+await localClick({ target: rejectedClose });
+if (!validEditor.error.textContent.includes("published") || rejectedClose.disabled ||
+    localToastText().includes("“Visible Unsaved Title” closed.")) {
+  failures++;
+  console.error("FAIL rejected campaign close must recover without false success");
+} else console.log("ok  rejected campaign close recovers without false success");
+
+// A stale Publish event can save a now-published campaign but must describe the
+// subsequent transition rejection as a partial success rather than a save failure.
+const partialDraft = await store.saveGivingCampaign({
+  title: "Partial Campaign",
+  description: "Partial publication fixture.",
+  goalHKD: 7000,
+  fpsId: "7000000",
+  fpsPayee: "Partial Payee",
+});
+const partialEditor = makeCampaignForm(partialDraft, { title: "Partially Saved Title" });
+await store.publishGivingCampaign(partialDraft.id);
+clearLocalToasts();
+const partialPublish = campaignAction("campaign-publish", partialDraft, partialEditor.form);
+await localClick({ target: partialPublish });
+if (store.campaigns().find((item) => item.id === partialDraft.id)?.title !== "Partially Saved Title" ||
+    !partialEditor.error.textContent.includes("Campaign changes saved, but publication failed") ||
+    partialPublish.disabled || localToastText().some((text) => /Partially Saved Title” published/.test(text))) {
+  failures++;
+  console.error("FAIL partial publish failure must truthfully distinguish save from transition");
+} else console.log("ok  partial publish failure truthfully reports the saved edit");
+await store.closeGivingCampaign(partialDraft.id);
+
+const refreshPublishDraft = await store.saveGivingCampaign({
+  title: "Publish Refresh Campaign",
+  description: "Publication refresh fixture.",
+  goalHKD: 7500,
+  fpsId: "7500000",
+  fpsPayee: "Publish Refresh Payee",
+});
+const refreshPublishEditor = makeCampaignForm(refreshPublishDraft);
+const refreshPublishControl = campaignAction("campaign-publish", refreshPublishDraft, refreshPublishEditor.form);
+const publishRefreshView = localElements.get("view");
+let publishRefreshHtml = publishRefreshView.innerHTML;
+let rejectPublishRefresh = true;
+Object.defineProperty(publishRefreshView, "innerHTML", {
+  configurable: true,
+  get: () => publishRefreshHtml,
+  set(value) {
+    if (rejectPublishRefresh) {
+      rejectPublishRefresh = false;
+      throw new Error("forced publish refresh failure");
+    }
+    publishRefreshHtml = value;
+  },
+});
+clearLocalToasts();
+await localClick({ target: refreshPublishControl });
+if (store.campaigns().find((item) => item.id === refreshPublishDraft.id)?.status !== "published" ||
+    !refreshPublishEditor.error.textContent.includes("Change saved, but this Admin view could not refresh") ||
+    !refreshPublishControl.disabled || !localToastText().includes("“Publish Refresh Campaign” published.")) {
+  failures++;
+  console.error("FAIL publish refresh failure must preserve and truthfully report publication");
+} else console.log("ok  publish refresh failure truthfully preserves publication");
+delete publishRefreshView.innerHTML;
+publishRefreshView.innerHTML = publishRefreshHtml;
+await store.closeGivingCampaign(refreshPublishDraft.id);
+
+// Ordinary form Save persists visible data; a committed save whose rerender
+// throws remains reported as saved and locks the stale submit control.
+const saveDraft = await store.saveGivingCampaign({
+  title: "Save Campaign",
+  description: "Save behavior fixture.",
+  goalHKD: 8000,
+  fpsId: "8000000",
+  fpsPayee: "Save Payee",
+});
+const saveEditor = makeCampaignForm(saveDraft, { title: "Saved Through Form" });
+clearLocalToasts();
+await localSubmit({ target: saveEditor.form, preventDefault() {} });
+if (store.campaigns().find((item) => item.id === saveDraft.id)?.title !== "Saved Through Form" ||
+    !localToastText().includes("Campaign saved.")) {
+  failures++;
+  console.error("FAIL campaign Save must persist current form data");
+} else console.log("ok  campaign Save persists current form data");
+const refreshEditor = makeCampaignForm(store.campaigns().find((item) => item.id === saveDraft.id), { title: "Saved Before Refresh Failure" });
+const localView = localElements.get("view");
+let currentViewHtml = localView.innerHTML;
+let rejectNextCommit = true;
+Object.defineProperty(localView, "innerHTML", {
+  configurable: true,
+  get: () => currentViewHtml,
+  set(value) {
+    if (rejectNextCommit) {
+      rejectNextCommit = false;
+      throw new Error("forced refresh failure");
+    }
+    currentViewHtml = value;
+  },
+});
+clearLocalToasts();
+await localSubmit({ target: refreshEditor.form, preventDefault() {} });
+if (store.campaigns().find((item) => item.id === saveDraft.id)?.title !== "Saved Before Refresh Failure" ||
+    !refreshEditor.error.textContent.includes("Change saved, but this Admin view could not refresh") ||
+    !refreshEditor.submit.disabled) {
+  failures++;
+  console.error("FAIL save refresh failure must preserve and truthfully report the mutation");
+} else console.log("ok  save refresh failure truthfully preserves the mutation");
+delete localView.innerHTML;
+localView.innerHTML = currentViewHtml;
+
+// Amount submission awaits a generation-owning render: a later route wins
+// while the campaign lookup is pending, and a rejected render is handled by
+// the submit listener rather than escaping as an unhandled rejection.
+await store.publishGivingCampaign(saveDraft.id);
+store.demoSignIn("member");
+location.hash = "#/giving";
+await localWindowListeners.get("hashchange")();
+const givingError = makeLocalElement();
+const givingForm = Object.assign(new HTMLFormElement(), makeLocalElement(), {
+  id: "form-giving",
+  dataset: {},
+  formValues: { amount: "450", name: "Async Donor", note: "Async path" },
+});
+givingForm.querySelector = (selector) => selector === "#giving-error" ? givingError : null;
+views.givingState.step = 1;
+const pendingGivingSubmit = localSubmit({ target: givingForm, preventDefault() {} });
+location.hash = "#/home";
+await localWindowListeners.get("hashchange")();
+await pendingGivingSubmit;
+if (!localView.innerHTML.includes("My Week") || localView.innerHTML.includes("I’ve made the transfer") ||
+    localElements.get("route-loader").hidden !== true || localView.hasAttribute("aria-busy")) {
+  failures++;
+  console.error("FAIL delayed Giving amount render must not overwrite a newer route generation");
+} else console.log("ok  delayed Giving amount render suppresses its stale generation");
+location.hash = "#/giving";
+views.resetGivingState();
+views.givingState.campaignId = saveDraft.id;
+const activeCampaignRecord = store.campaigns().find((item) => item.id === saveDraft.id);
+const activeGoal = activeCampaignRecord.goalHKD;
+Object.defineProperty(activeCampaignRecord, "goalHKD", {
+  configurable: true,
+  get() { throw new Error("rejected active campaign lookup"); },
+});
+clearLocalToasts();
+await localSubmit({ target: givingForm, preventDefault() {} });
+Object.defineProperty(activeCampaignRecord, "goalHKD", {
+  configurable: true,
+  writable: true,
+  value: activeGoal,
+});
+if (!localToastText().includes("rejected active campaign lookup") ||
+    localElements.get("route-loader").hidden !== true || localView.hasAttribute("aria-busy")) {
+  failures++;
+  console.error("FAIL rejected active-campaign lookup on amount submit must recover without a busy leak");
+} else console.log("ok  rejected active-campaign lookup on amount submit is handled without a busy leak");
+
+globalThis.FormData = NativeFormData;
 globalThis.setTimeout = realSetTimeout;
 globalThis.clearTimeout = realClearTimeout;
 
