@@ -380,8 +380,11 @@ document.addEventListener("click", async (e) => {
       if (!window.confirm(`Revoke ${name}’s access and move them to Pending?`)) break;
       try {
         await withBusyControl(el, "Revoking…", async () => {
-          if (isLive()) await store.updateProfileRole(el.dataset.user, "pending");
-          else store.setRole(el.dataset.user, "pending");
+          if (isLive()) {
+            await store.updateProfileRole(el.dataset.user, "pending");
+          } else if (!store.setRole(el.dataset.user, "pending")) {
+            throw new Error("Unable to confirm revoked access.");
+          }
           await renderWithFeedback();
           toast(`${name} moved to Pending.`);
         });
@@ -745,8 +748,8 @@ document.addEventListener("change", async (e) => {
           if (isLive()) {
             const liveRole = el.value === "superadmin" ? "super_admin" : el.value;
             await store.updateProfileRole(el.dataset.user, liveRole);
-          } else {
-            store.setRole(el.dataset.user, el.value);
+          } else if (!store.setRole(el.dataset.user, el.value)) {
+            throw new Error("Unable to confirm the role change.");
           }
           await renderWithFeedback();
           toast(`${name} is now ${targetLabel}.`);

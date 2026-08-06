@@ -1600,6 +1600,170 @@ if (!viewsSrc.includes('#/notifications')) {
   console.log("ok  views.js: references #/notifications");
 }
 
+// --- Delegated local member-role behavior ---
+// Exercise app.js in local mode so stale events cannot produce false success,
+// successful changes use setRole(), and filter-only UI state stays in memory.
+store.resetDemo();
+store.demoSignIn("superadmin");
+const localDomListeners = new Map();
+const localWindowListeners = new Map();
+let localActiveElement = null;
+const makeLocalElement = () => ({
+  children: [],
+  className: "",
+  innerHTML: "",
+  textContent: "",
+  hidden: false,
+  disabled: false,
+  attributes: new Map(),
+  classList: { toggle() {} },
+  appendChild(child) { this.children.push(child); },
+  setAttribute(name, value) { this.attributes.set(name, String(value)); },
+  getAttribute(name) { return this.attributes.get(name) ?? null; },
+  hasAttribute(name) { return this.attributes.has(name); },
+  removeAttribute(name) { this.attributes.delete(name); },
+  focus() { localActiveElement = this; },
+  remove() {},
+  querySelector() { return null; },
+});
+const localElements = new Map([
+  ["view", makeLocalElement()],
+  ["bottom-nav", makeLocalElement()],
+  ["top-avatar", makeLocalElement()],
+  ["toast-stack", makeLocalElement()],
+  ["route-loader", makeLocalElement()],
+]);
+localElements.get("route-loader").hidden = true;
+globalThis.document = {
+  get activeElement() { return localActiveElement; },
+  getElementById: (id) => localElements.get(id),
+  createElement: () => makeLocalElement(),
+  addEventListener: (event, callback) => localDomListeners.set(event, callback),
+};
+globalThis.HTMLInputElement = class {};
+globalThis.location = { hash: "#/admin/members" };
+globalThis.window = {
+  location: globalThis.location,
+  confirm: () => true,
+  addEventListener: (event, callback) => localWindowListeners.set(event, callback),
+  scrollTo() {},
+};
+const realSetTimeout = globalThis.setTimeout;
+const realClearTimeout = globalThis.clearTimeout;
+globalThis.setTimeout = () => 1;
+globalThis.clearTimeout = () => {};
+const localApp = await import("./js/app.js?local-admin-delegation");
+await localApp.bootPromise;
+const localClick = localDomListeners.get("click");
+const localChange = localDomListeners.get("change");
+const localInput = localDomListeners.get("input");
+const localToasts = localElements.get("toast-stack");
+const localToastText = () => localToasts.children.map((item) => item.textContent);
+const clearLocalToasts = () => { localToasts.children.length = 0; };
+const localControl = (dataset, value = "") => {
+  const control = makeLocalElement();
+  control.tagName = dataset.change === "set-role" ? "SELECT" : "BUTTON";
+  control.dataset = dataset;
+  control.value = value;
+  control.closest = () => control;
+  return control;
+};
+
+const staleLocalRole = localControl({
+  change: "set-role",
+  user: "removed-member",
+  memberName: "Removed Member",
+  currentRole: "member",
+}, "admin");
+await localChange({ target: staleLocalRole });
+if (staleLocalRole.value !== "member" || staleLocalRole.disabled || staleLocalRole.hasAttribute("aria-busy") ||
+    localToastText().join("|") !== "Member not found." || localToastText().some((text) => /is now/.test(text))) {
+  failures++;
+  console.error("FAIL stale local role event must restore its select without a success toast");
+} else console.log("ok  stale local role event restores without false success");
+
+clearLocalToasts();
+const rejectedLocalRevoke = localControl({
+  action: "revoke-member",
+  user: "u-pend-1",
+  memberName: "Marco Santos",
+});
+rejectedLocalRevoke.textContent = "Revoke access";
+await localClick({ target: rejectedLocalRevoke });
+if (rejectedLocalRevoke.textContent !== "Revoke access" || rejectedLocalRevoke.disabled ||
+    rejectedLocalRevoke.hasAttribute("aria-busy") ||
+    localToastText().join("|") !== "Only approved members can change roles." ||
+    localToastText().some((text) => /moved to Pending/.test(text))) {
+  failures++;
+  console.error("FAIL rejected local revoke must restore its button without a success toast");
+} else console.log("ok  rejected local revoke restores without false success");
+
+clearLocalToasts();
+const localDemotion = localControl({
+  change: "set-role",
+  user: "u-admin",
+  memberName: "Tina",
+  currentRole: "admin",
+}, "member");
+await localChange({ target: localDemotion });
+if (store.allUsers().find((user) => user.id === "u-admin")?.role !== "member" ||
+    localToastText().join("|") !== "Tina is now Member.") {
+  failures++;
+  console.error("FAIL delegated local demotion must mutate through setRole and toast success");
+} else console.log("ok  delegated local demotion confirms setRole success");
+
+clearLocalToasts();
+const localRevoke = localControl({ action: "revoke-member", user: "u-member", memberName: "CM Chui" });
+localRevoke.textContent = "Revoke access";
+await localClick({ target: localRevoke });
+const revokedLocalUser = store.allUsers().find((user) => user.id === "u-member");
+if (revokedLocalUser?.role !== "pending" || revokedLocalUser?.status !== "pending" ||
+    localToastText().join("|") !== "CM Chui moved to Pending.") {
+  failures++;
+  console.error("FAIL delegated local revoke must confirm role and status mutation");
+} else console.log("ok  delegated local revoke confirms setRole success");
+
+const persistedBeforeFilters = mem.get("itc.prototype.v1");
+const searchFilter = localControl({ input: "member-search" }, "tina");
+searchFilter.getAttribute = () => null;
+searchFilter.selectionStart = 4;
+await localInput({ target: searchFilter });
+const statusFilter = localControl({ change: "member-status-filter" }, "approved");
+await localChange({ target: statusFilter });
+const roleFilter = localControl({ change: "member-role-filter" }, "admin");
+await localChange({ target: roleFilter });
+if (mem.get("itc.prototype.v1") !== persistedBeforeFilters ||
+    views.adminMemberFilters.query !== "tina" || views.adminMemberFilters.status !== "approved" ||
+    views.adminMemberFilters.role !== "admin") {
+  failures++;
+  console.error("FAIL delegated member filters must remain in memory and avoid localStorage writes");
+} else console.log("ok  delegated member filters do not persist");
+views.adminMemberFilters.query = "";
+views.adminMemberFilters.status = "all";
+views.adminMemberFilters.role = "all";
+globalThis.setTimeout = realSetTimeout;
+globalThis.clearTimeout = realClearTimeout;
+
+// Direct callers receive checked failures for every rejected local transition.
+for (const [userId, role, message] of [
+  ["missing-user", "admin", "Member not found."],
+  ["u-pend-1", "admin", "Only approved members can change roles."],
+  ["u-admin", "owner", "Invalid role transition."],
+  ["u-admin", "member", "Member already has that role."],
+]) {
+  try {
+    store.setRole(userId, role);
+    failures++;
+    console.error(`FAIL setRole(${userId}, ${role}) should reject`);
+  } catch (err) {
+    if (err.message !== message) {
+      failures++;
+      console.error(`FAIL setRole(${userId}, ${role}) returned ${err.message}`);
+    }
+  }
+}
+console.log("ok  local setRole rejects missing, non-approved, and invalid transitions");
+
 // --- Reset ---
 store.resetDemo();
 console.log("ok  reset");

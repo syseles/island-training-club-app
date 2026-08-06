@@ -54,3 +54,36 @@ The full suite ended with `All smoke tests passed.`
 ## Concerns
 
 None.
+
+## Fix Round 1
+
+### Status
+
+Complete. The Medium false-success finding and delegated-test gaps are resolved.
+
+### Changes
+
+- Made local `setRole()` return the mutated user or throw for missing targets, non-approved targets, unsupported roles, and no-op role transitions. The local `updateProfileRole()` fallback now forwards that checked result.
+- Kept revocation's existing approved-to-pending state rule and normalized the live `super_admin` spelling for local callers.
+- Updated delegated revoke and role-select handlers to require confirmed local mutation before rerendering or showing success. Existing busy cleanup restores buttons/selects, and role-select errors restore the prior value.
+- Added delegated local regressions for stale role targets and rejected revokes with restored controls and no success toast.
+- Added successful local/live promotion, demotion, and revoke dispatch coverage, a rejected live stale-target case, direct invalid-transition contracts, and delegated filter checks proving no localStorage persistence.
+
+### Verification
+
+Passed:
+
+```sh
+node app/live-auth-smoke.mjs
+node app/smoke.mjs
+node --check app/js/views.js
+node --check app/js/app.js
+node --check app/js/store.js
+node --check app/live-auth-smoke.mjs
+node --check app/smoke.mjs
+git diff --check
+```
+
+### Concerns
+
+None.

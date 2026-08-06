@@ -942,6 +942,49 @@ profileUpdateGate = null;
 assert.equal(successfulRoleSelect.disabled, false);
 assert.equal(successfulRoleSelect.hasAttribute("aria-busy"), false);
 assert.ok(profileUpdates.some((update) => update.id === "approved-member" && update.role === "admin"));
+assert.ok(toastStack.children.some((item) => item.textContent === "Micah Member is now Admin."));
+
+// Successful delegated demotion and revocation both dispatch through the live
+// role API and only announce success after the returned row confirms mutation.
+toastStack.children.length = 0;
+const successfulDemotion = makeElement();
+successfulDemotion.tagName = "SELECT";
+successfulDemotion.dataset = { change: "set-role", user: "approved-admin", memberName: "Tina Admin", currentRole: "admin" };
+successfulDemotion.value = "member";
+successfulDemotion.closest = () => successfulDemotion;
+await change({ target: successfulDemotion });
+assert.ok(profileUpdates.some((update) => update.id === "approved-admin" && update.role === "member"));
+assert.deepEqual(toastStack.children.map((item) => item.textContent), ["Tina Admin is now Member."]);
+
+toastStack.children.length = 0;
+const successfulRevoke = makeElement();
+successfulRevoke.textContent = "Revoke access";
+successfulRevoke.dataset = { action: "revoke-member", user: "approved-member", memberName: "Micah Member" };
+successfulRevoke.closest = () => successfulRevoke;
+await click({ target: successfulRevoke });
+assert.ok(profileUpdates.some((update) => update.id === "approved-member" && update.role === "pending"));
+assert.deepEqual(toastStack.children.map((item) => item.textContent), ["Micah Member moved to Pending."]);
+
+// A stale delegated target restores its select and never emits false success.
+toastStack.children.length = 0;
+profileUpdateResult = "zero";
+const staleRoleSelect = makeElement();
+staleRoleSelect.tagName = "SELECT";
+staleRoleSelect.dataset = { change: "set-role", user: "removed-member", memberName: "Removed Member", currentRole: "member" };
+staleRoleSelect.value = "admin";
+staleRoleSelect.closest = () => staleRoleSelect;
+await change({ target: staleRoleSelect });
+profileUpdateResult = "row";
+assert.equal(staleRoleSelect.value, "member");
+assert.equal(staleRoleSelect.disabled, false);
+assert.equal(staleRoleSelect.hasAttribute("aria-busy"), false);
+assert.deepEqual(toastStack.children.map((item) => item.textContent), ["Application decision conflict."]);
+assert.equal(toastStack.children.some((item) => /is now Admin/.test(item.textContent)), false);
+
+// Restore fixture roles so later approval-queue regressions retain their
+// original baseline independently of these member-action tests.
+approvedProfiles.find((item) => item.id === "approved-admin").role = "admin";
+approvedProfiles.find((item) => item.id === "approved-member").role = "member";
 location.hash = "#/admin";
 await windowListeners.get("hashchange")();
 

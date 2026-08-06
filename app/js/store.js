@@ -332,10 +332,7 @@ export async function listRoleChanges() {
 }
 
 export async function updateProfileRole(profileId, newRole, reason, expectedRole = null) {
-  if (!isLive() || !supabase) {
-    setRole(profileId, newRole);
-    return;
-  }
+  if (!isLive() || !supabase) return setRole(profileId, newRole);
   let query = supabase
     .from("profiles")
     .update({ role: newRole })
@@ -705,13 +702,22 @@ export function declineApplicant(userId) {
 
 export function setRole(userId, role) {
   const user = state.users.find((u) => u.id === userId);
-  if (!user || user.status !== "approved") return;
-  user.role = role;
+  if (!user) throw new Error("Member not found.");
+  if (user.status !== "approved") throw new Error("Only approved members can change roles.");
+
+  const nextRole = role === "super_admin" ? "superadmin" : role;
+  if (!["member", "admin", "superadmin", "pending"].includes(nextRole)) {
+    throw new Error("Invalid role transition.");
+  }
+  if (user.role === nextRole) throw new Error("Member already has that role.");
+
+  user.role = nextRole;
   // Revocation returns an approved local demo account to the same pending
   // access state used by live profiles. Re-approval still goes through the
   // existing application decision flow.
-  if (role === "pending") user.status = "pending";
+  if (nextRole === "pending") user.status = "pending";
   save();
+  return user;
 }
 
 // Donor ID is optional at sign-up; members who skipped it (or answered
