@@ -1,6 +1,8 @@
 // Focused regression for the Supabase OAuth -> synchronous view handoff.
 // Run directly with: node app/live-auth-smoke.mjs
 
+import assert from "node:assert/strict";
+
 const mem = new Map();
 globalThis.localStorage = {
   getItem: (key) => (mem.has(key) ? mem.get(key) : null),
@@ -51,8 +53,43 @@ const applicationRows = new Map([
     },
   ],
 ]);
+const pendingProfiles = [
+  {
+    id: "pending-submitted",
+    email: "submitted@example.com",
+    full_name: "Submitted Runner",
+    role: "pending",
+    created_at: "2026-08-05T03:00:00.000Z",
+  },
+  {
+    id: "pending-incomplete",
+    email: "incomplete@example.com",
+    full_name: "Incomplete Runner",
+    role: "pending",
+    created_at: "2026-08-05T04:00:00.000Z",
+  },
+];
+const declinedProfiles = [
+  {
+    id: "declined-member",
+    email: "declined@example.com",
+    full_name: "Declined Runner",
+    role: "declined",
+    created_at: "2026-08-05T05:00:00.000Z",
+  },
+];
+applicationRows.set("pending-submitted", {
+  ...structuredClone(applicationRows.get(authUser.id)),
+  profile_id: "pending-submitted",
+  profiles: pendingProfiles[0],
+});
 const applicationUpdates = [];
+const profileUpdates = [];
 let applicationReadError = null;
+let profileListError = null;
+let applicationListError = null;
+let profileUpdateError = null;
+let profileUpdateResult = "row";
 let authStateChangeHandler = null;
 let authCallbackLocked = false;
 const deferredAuthTasks = [];
@@ -111,7 +148,50 @@ const fakeSupabase = {
                 maybeSingle: async () => ({ data: profile, error: null }),
               };
             },
+            order(column, options) {
+              if (column !== "created_at" || options?.ascending !== true) {
+                throw new Error("Profile list query should order by created_at ascending");
+              }
+              return Promise.resolve({
+                data: [
+                  structuredClone(profile),
+                  ...structuredClone(pendingProfiles),
+                  ...structuredClone(declinedProfiles),
+                ],
+                error: profileListError,
+              });
+            },
           };
+        },
+        update(patch) {
+          let targetId = null;
+          let expectedRole = null;
+          const result = {
+            eq(column, value) {
+              if (column === "id") targetId = value;
+              else if (column === "role") expectedRole = value;
+              else throw new Error(`Unexpected profile update filter: ${column}`);
+              return result;
+            },
+            select(columns) {
+              if (columns !== "id, role") throw new Error("Profile update must return id and role");
+              return {
+                single: async () => {
+                  const target = targetId === profile.id
+                    ? profile
+                    : pendingProfiles.find((item) => item.id === targetId);
+                  profileUpdates.push({ id: targetId, expectedRole, ...structuredClone(patch) });
+                  if (profileUpdateError) return { data: null, error: profileUpdateError };
+                  if (profileUpdateResult === "zero" || !target || (expectedRole && target.role !== expectedRole)) {
+                    return { data: null, error: null };
+                  }
+                  Object.assign(target, patch);
+                  return { data: { id: targetId, role: target.role }, error: null };
+                },
+              };
+            },
+          };
+          return result;
         },
       };
     }
@@ -129,6 +209,12 @@ const fakeSupabase = {
                   error: applicationReadError,
                 }),
               };
+            },
+            then(resolve, reject) {
+              return Promise.resolve({
+                data: Array.from(applicationRows.values()).map((row) => structuredClone(row)),
+                error: applicationListError,
+              }).then(resolve, reject);
             },
           };
         },
@@ -170,6 +256,49 @@ const store = await import("./js/store.js");
 const views = await import("./js/views.js");
 store.load();
 
+await store.getCurrentUser();
+const queue = await store.listApprovalCandidates();
+const submitted = queue.find((item) => item.id === "pending-submitted");
+const incomplete = queue.find((item) => item.id === "pending-incomplete");
+if (!submitted?.applicationSubmitted || incomplete?.applicationSubmitted !== false) {
+  throw new Error("Approval queue must include both pending groups");
+}
+if (queue.some((item) => item.id === authUser.id)) {
+  throw new Error("Approved/admin profiles must not enter the approval queue");
+}
+const approvalsHtml = await views.viewAdmin("approvals");
+if (!approvalsHtml.includes("Application not submitted")) {
+  throw new Error("Approvals must explain incomplete pending profiles");
+}
+const decisionButton = (profileId, action) => approvalsHtml.match(
+  new RegExp(`<button[^>]*data-action="${action}"[^>]*data-user="${profileId}"[^>]*>`)
+)?.[0] || "";
+for (const action of ["approve", "decline"]) {
+  assert.match(decisionButton("pending-incomplete", action), /\sdisabled(?:\s|>)/,
+    `Incomplete ${action} must be disabled`);
+  assert.doesNotMatch(decisionButton("pending-submitted", action), /\sdisabled(?:\s|>)/,
+    `Submitted ${action} must be enabled`);
+}
+const membersHtml = await views.viewAdmin("members");
+if (!/Declined Runner[\s\S]*badge danger">Declined</.test(membersHtml)) {
+  throw new Error("Members must badge declined profiles as Declined");
+}
+await store.decideApplication(submitted.id, "declined");
+if (!profileUpdates.some((update) =>
+  update.id === submitted.id && update.role === "declined" && update.expectedRole === "pending"
+)) {
+  throw new Error("Decline must change exactly the targeted pending profile role");
+}
+await assert.rejects(
+  () => store.decideApplication(incomplete.id, "member"),
+  /Application not submitted/
+);
+profile.role = "declined";
+await store.getCurrentUser();
+if (store.currentUser().status !== "declined") {
+  throw new Error("Live declined profiles must hydrate with declined status");
+}
+profile.role = "super_admin";
 await store.getCurrentUser();
 const renderedUser = store.currentUser();
 if (!renderedUser || renderedUser.id !== authUser.id) {
@@ -564,6 +693,53 @@ try {
 await new Promise(setImmediate);
 if (hashRejected || escapedRejections.length || toastStack.children.length !== 1 || toastStack.children[0].textContent !== "Application read failed") {
   throw new Error("Hash changes should catch failed application reads and show one error toast");
+}
+
+// Approval queue failures must be truthful and preserve the last good queue.
+applicationReadError = null;
+profile.role = "super_admin";
+pendingProfiles.find((item) => item.id === "pending-submitted").role = "pending";
+location.hash = "#/admin";
+toastStack.children.length = 0;
+await windowListeners.get("hashchange")();
+const retainedQueueHtml = elements.get("view").innerHTML;
+assert.match(retainedQueueHtml, /Submitted Runner/);
+assert.match(retainedQueueHtml, /Incomplete Runner/);
+
+for (const [errorType, setError] of [
+  ["Profile queue read failed", (error) => { profileListError = error; }],
+  ["Application queue read failed", (error) => { applicationListError = error; }],
+]) {
+  const error = new Error(errorType);
+  setError(error);
+  toastStack.children.length = 0;
+  await assert.rejects(() => store.listApprovalCandidates(), new RegExp(errorType));
+  await windowListeners.get("hashchange")();
+  assert.equal(elements.get("view").innerHTML, retainedQueueHtml, `${errorType} must retain prior queue UI`);
+  assert.deepEqual(toastStack.children.map((item) => item.textContent), [errorType]);
+  assert.equal(toastStack.children.some((item) => /Approved\.|Declined\./.test(item.textContent)), false);
+  setError(null);
+}
+
+const click = domListeners.get("click");
+const approvalClick = {
+  target: {
+    closest: () => ({ dataset: { action: "approve", user: "pending-submitted" } }),
+  },
+};
+for (const [expectedError, configure] of [
+  ["Profile update failed", () => { profileUpdateError = new Error("Profile update failed"); }],
+  ["Application decision conflict.", () => { profileUpdateResult = "zero"; }],
+]) {
+  toastStack.children.length = 0;
+  configure();
+  await click(approvalClick);
+  assert.equal(elements.get("view").innerHTML, retainedQueueHtml, `${expectedError} must retain prior queue UI`);
+  assert.deepEqual(toastStack.children.map((item) => item.textContent), [expectedError]);
+  assert.equal(toastStack.children.some((item) => item.textContent === "Approved."), false,
+    `${expectedError} must not produce a success toast`);
+  profileUpdateError = null;
+  profileUpdateResult = "row";
 }
 
 escapedRejections.length = 0;
