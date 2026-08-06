@@ -5,58 +5,11 @@
    ========================================================================== */
 
 @font-face {
-  font-family: "Barlow";
-  src: url("../assets/fonts/barlow-400-latin.woff2") format("woff2");
+  font-family: "Archivo";
+  src: url("../assets/fonts/archivo-latin-variable.woff2") format("woff2");
   font-style: normal;
-  font-weight: 400;
-  font-display: swap;
-}
-
-@font-face {
-  font-family: "Barlow";
-  src: url("../assets/fonts/barlow-500-latin.woff2") format("woff2");
-  font-style: normal;
-  font-weight: 500;
-  font-display: swap;
-}
-
-@font-face {
-  font-family: "Barlow";
-  src: url("../assets/fonts/barlow-600-latin.woff2") format("woff2");
-  font-style: normal;
-  font-weight: 600;
-  font-display: swap;
-}
-
-@font-face {
-  font-family: "Barlow";
-  src: url("../assets/fonts/barlow-700-latin.woff2") format("woff2");
-  font-style: normal;
-  font-weight: 700;
-  font-display: swap;
-}
-
-@font-face {
-  font-family: "Barlow Condensed";
-  src: url("../assets/fonts/barlow-condensed-700-latin.woff2") format("woff2");
-  font-style: normal;
-  font-weight: 700;
-  font-display: swap;
-}
-
-@font-face {
-  font-family: "Barlow Condensed";
-  src: url("../assets/fonts/barlow-condensed-800-latin.woff2") format("woff2");
-  font-style: normal;
-  font-weight: 800;
-  font-display: swap;
-}
-
-@font-face {
-  font-family: "Barlow Condensed";
-  src: url("../assets/fonts/barlow-condensed-900-latin.woff2") format("woff2");
-  font-style: normal;
-  font-weight: 900;
+  font-weight: 100 900;
+  font-stretch: 100%;
   font-display: swap;
 }
 
@@ -77,8 +30,8 @@
   --radius-lg: 20px;
   --radius: 14px;
   --radius-sm: 10px;
-  --font: "Barlow", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  --font-display: "Barlow Condensed", "Arial Narrow", sans-serif;
+  --font: "Archivo", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-display: "Archivo", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   --nav-h: 66px;
   --shell-w: 520px;
@@ -98,14 +51,16 @@ body {
   color: var(--ink);
   font-family: var(--font);
   font-size: 15px;
+  font-weight: 400;
   line-height: 1.5;
   -webkit-font-smoothing: antialiased;
 }
 
 img { display: block; max-width: 100%; }
 a { color: inherit; }
-button { font: inherit; color: inherit; }
-input, select, textarea { font: inherit; }
+button { font: inherit; color: inherit; font-weight: 600; }
+input, select, textarea { font: inherit; font-weight: 600; }
+strong { font-weight: 700; }
 
 .skip-link {
   position: fixed;
@@ -171,13 +126,13 @@ input, select, textarea { font: inherit; }
 
 .top-wordmark strong {
   font-size: 12px;
-  font-weight: 900;
+  font-weight: 700;
   letter-spacing: .08em;
 }
 
 .top-wordmark span {
   font-size: 10px;
-  font-weight: 800;
+  font-weight: 700;
   letter-spacing: .16em;
 }
 
@@ -230,7 +185,7 @@ input, select, textarea { font: inherit; }
   background: var(--accent);
   color: var(--accent-ink);
   font-size: 12px;
-  font-weight: 800;
+  font-weight: 700;
   text-decoration: none;
   letter-spacing: .02em;
 }
@@ -274,7 +229,7 @@ input, select, textarea { font: inherit; }
   color: var(--muted);
   text-decoration: none;
   font-size: 11px;
-  font-weight: 800;
+  font-weight: 700;
   letter-spacing: .06em;
   text-transform: uppercase;
   border-radius: var(--radius-sm);
@@ -288,7 +243,7 @@ input, select, textarea { font: inherit; }
 
 .kicker {
   font-size: 12px;
-  font-weight: 800;
+  font-weight: 700;
   letter-spacing: .1em;
   text-transform: uppercase;
   color: var(--accent);
@@ -299,9 +254,8 @@ input, select, textarea { font: inherit; }
 .display {
   margin: 8px 0 0;
   font-family: var(--font-display);
-  font-stretch: condensed;
   font-size: 40px;
-  font-weight: 900;
+  font-weight: 800;
   letter-spacing: -.045em;
   line-height: .94;
 }
@@ -326,7 +280,7 @@ input, select, textarea { font: inherit; }
   margin: 0;
   font-family: var(--font-display);
   font-size: 20px;
-  font-weight: 900;
+  font-weight: 800;
   letter-spacing: -.02em;
 }
 
@@ -341,7 +295,7 @@ input, select, textarea { font: inherit; }
   padding: 5px 9px;
   border-radius: 999px;
   font-size: 11px;
-  font-weight: 900;
+  font-weight: 700;
   letter-spacing: .07em;
   text-transform: uppercase;
   white-space: nowrap;
@@ -381,7 +335,7 @@ input, select, textarea { font: inherit; }
   background: var(--accent);
   color: var(--accent-ink);
   font-size: 13px;
-  font-weight: 900;
+  font-weight: 700;
   letter-spacing: .05em;
   text-transform: uppercase;
   text-decoration: none;
@@ -424,7 +378,7 @@ input, select, textarea { font: inherit; }
 .card h3 {
   margin: 0;
   font-size: 17px;
-  font-weight: 900;
+  font-weight: 800;
   letter-spacing: -.02em;
 }
 
@@ -511,13 +465,13 @@ a.link-card > .card-body > svg {
   background: var(--accent-ink);
   color: var(--accent);
   font-size: 22px;
-  font-weight: 900;
+  font-weight: 700;
   letter-spacing: .02em;
 }
 
 .ph-role {
   font-size: 11px;
-  font-weight: 800;
+  font-weight: 700;
   letter-spacing: .22em;
   text-transform: uppercase;
 }
@@ -525,9 +479,8 @@ a.link-card > .card-body > svg {
 .ph-id h1 {
   margin: 5px 0 3px;
   font-family: var(--font-display);
-  font-stretch: condensed;
   font-size: 26px;
-  font-weight: 900;
+  font-weight: 800;
   letter-spacing: -.03em;
   line-height: 1;
   color: var(--accent-ink);
@@ -544,7 +497,7 @@ a.link-card > .card-body > svg {
 
 .ph-stats > div { flex: 1; text-align: center; }
 
-.ph-stats strong { display: block; font-size: 20px; font-weight: 900; }
+.ph-stats strong { display: block; font-size: 20px; font-weight: 700; }
 
 .ph-stats span { font-size: 11px; color: rgba(5, 7, 4, .62); }
 
@@ -583,7 +536,7 @@ a.profile-row .pr-text {
 
 a.profile-row .pr-text strong {
   font-size: 14.5px;
-  font-weight: 800;
+  font-weight: 700;
   letter-spacing: -.01em;
 }
 
@@ -617,7 +570,7 @@ a.profile-row:hover .pr-text strong { color: var(--accent); }
 
 .session-row time {
   font-size: 12px;
-  font-weight: 900;
+  font-weight: 700;
   line-height: 1.35;
   color: var(--ink);
 }
@@ -634,7 +587,7 @@ a.profile-row:hover .pr-text strong { color: var(--accent); }
 .session-row h3 {
   margin: 0;
   font-size: 14px;
-  font-weight: 900;
+  font-weight: 800;
   letter-spacing: -.015em;
   text-transform: uppercase;
 }
@@ -655,7 +608,7 @@ a.profile-row:hover .pr-text strong { color: var(--accent); }
 
 .session-row .spots {
   font-size: 12px;
-  font-weight: 800;
+  font-weight: 700;
   color: var(--muted);
 }
 
@@ -701,14 +654,14 @@ a.profile-row:hover .pr-text strong { color: var(--accent); }
   background: transparent;
   color: var(--muted);
   font-size: 12px;
-  font-weight: 800;
+  font-weight: 700;
   letter-spacing: .05em;
   text-transform: uppercase;
   cursor: pointer;
   padding: 6px 0;
 }
 
-.day-cell strong { font-size: 15px; color: var(--ink); font-weight: 900; }
+.day-cell strong { font-size: 15px; color: var(--ink); font-weight: 700; }
 
 .day-cell .dot {
   width: 5px;
@@ -749,7 +702,7 @@ a.profile-row:hover .pr-text strong { color: var(--accent); }
   color: var(--muted);
   padding: 10px 13px;
   font-size: 11px;
-  font-weight: 800;
+  font-weight: 700;
   letter-spacing: .05em;
   text-transform: uppercase;
   cursor: pointer;
@@ -774,7 +727,7 @@ a.profile-row:hover .pr-text strong { color: var(--accent); }
   border: 0;
   color: var(--muted);
   font-size: 11px;
-  font-weight: 800;
+  font-weight: 700;
   letter-spacing: .06em;
   text-transform: uppercase;
   cursor: pointer;
@@ -810,7 +763,7 @@ a.profile-row:hover .pr-text strong { color: var(--accent); }
 .meta-grid small {
   display: block;
   font-size: 12px;
-  font-weight: 800;
+  font-weight: 700;
   letter-spacing: .07em;
   text-transform: uppercase;
   color: var(--faint);
@@ -868,7 +821,7 @@ a.profile-row:hover .pr-text strong { color: var(--accent); }
   display: block;
   margin-bottom: 6px;
   font-size: 12px;
-  font-weight: 800;
+  font-weight: 700;
   letter-spacing: .08em;
   text-transform: uppercase;
   color: var(--muted);
@@ -972,7 +925,7 @@ a.profile-row:hover .pr-text strong { color: var(--accent); }
 }
 
 .receipt-lines .line span { color: var(--muted); }
-.receipt-lines .line.total { font-weight: 900; font-size: 15px; }
+.receipt-lines .line.total { font-weight: 700; font-size: 15px; }
 .receipt-lines .line.total span { color: var(--ink); }
 
 /* ---- Admin ------------------------------------------------------------ */
@@ -998,7 +951,7 @@ a.profile-row:hover .pr-text strong { color: var(--accent); }
   color: var(--muted);
   text-decoration: none;
   font-size: 11px;
-  font-weight: 800;
+  font-weight: 700;
   letter-spacing: .06em;
   text-transform: uppercase;
 }
@@ -1030,27 +983,68 @@ a.profile-row:hover .pr-text strong { color: var(--accent); }
   font-weight: 600;
 }
 
-.member-summary {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
+.member-filters { margin-top: 12px; }
+
+.admin-filter-group {
+  min-width: 0;
+  margin: 14px 0 0;
+  padding: 0;
+  border: 0;
 }
 
-.member-summary span {
-  padding: 8px 10px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-sm);
-  color: var(--muted);
+.admin-filter-group legend {
+  margin-bottom: 6px;
+  color: var(--ink);
   font-size: 12px;
+  font-weight: 700;
 }
 
-.member-summary strong { color: var(--ink); }
+.admin-filter-chips {
+  display: flex;
+  gap: 8px;
+  max-width: 100%;
+  padding: 4px;
+  margin: -4px;
+  overflow-x: auto;
+  scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
+}
 
-.member-filters {
-  display: grid;
-  grid-template-columns: minmax(0, 2fr) 1fr 1fr;
-  gap: 10px;
-  align-items: end;
+.admin-filter-chips::-webkit-scrollbar { display: none; }
+
+.admin-filter-chips button {
+  flex: 0 0 auto;
+  min-height: 44px;
+  padding: 9px 14px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface-3);
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.2;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.admin-filter-chips button[aria-pressed="true"] {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--accent-ink);
+}
+
+.admin-filters-clear {
+  min-height: 44px;
+  margin-top: 10px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 700;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  cursor: pointer;
 }
 
 .role-select { width: auto; min-height: 44px; padding: 10px; font-size: 12px; }
@@ -1204,7 +1198,7 @@ a.profile-row:hover .pr-text strong { color: var(--accent); }
 .leader-card img { width: 86px; height: 100%; min-height: 110px; object-fit: cover; }
 .leader-card .card-body { padding: 13px 14px; }
 .leader-card h3 { font-size: 14px; }
-.leader-card .role { margin-top: 3px; font-size: 10.5px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; color: var(--accent); }
+.leader-card .role { margin-top: 3px; font-size: 10.5px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--accent); }
 .leader-card p { margin: 8px 0 0; font-size: 12px; color: var(--muted); }
 
 .stack { display: grid; gap: 12px; margin-top: 12px; }
@@ -1251,7 +1245,7 @@ a.profile-row:hover .pr-text strong { color: var(--accent); }
   border: 0;
   color: var(--muted);
   font-size: 11px;
-  font-weight: 800;
+  font-weight: 700;
   letter-spacing: .08em;
   text-transform: uppercase;
   cursor: pointer;
@@ -1275,7 +1269,7 @@ a.profile-row:hover .pr-text strong { color: var(--accent); }
   background: var(--surface-3);
   color: var(--accent);
   font-size: 12px;
-  font-weight: 800;
+  font-weight: 700;
   box-shadow: 0 8px 24px rgba(0, 0, 0, .4);
 }
 
@@ -1301,7 +1295,7 @@ a.profile-row:hover .pr-text strong { color: var(--accent); }
   background: var(--accent);
   color: var(--accent-ink);
   font-size: 12.5px;
-  font-weight: 800;
+  font-weight: 700;
   letter-spacing: .02em;
   box-shadow: 0 14px 40px rgba(0, 0, 0, .5);
   animation: toast-in .22s ease-out;
@@ -1324,8 +1318,7 @@ a.profile-row:hover .pr-text strong { color: var(--accent); }
 }
 
 @media (max-width: 420px) {
-  .field-row,
-  .member-filters { grid-template-columns: 1fr; gap: 0; }
+  .field-row { grid-template-columns: 1fr; gap: 0; }
   .booking-card .actions { flex-wrap: wrap; }
   .member-row { align-items: flex-start; flex-wrap: wrap; }
   .member-role-actions { width: 100%; justify-content: space-between; }

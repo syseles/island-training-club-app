@@ -2,7 +2,7 @@
 // Run: node --input-type=module < smoke.mjs  (from the app/ directory)
 
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -120,19 +120,53 @@ const indexHtml = readFileSync(resolve(__dirname, "index.html"), "utf8");
 const stylesCss = readFileSync(resolve(__dirname, "styles.css"), "utf8");
 const viewsSource = readFileSync(resolve(__dirname, "js/views.js"), "utf8");
 for (const path of [
-  "../assets/fonts/barlow-400-latin.woff2",
-  "../assets/fonts/barlow-500-latin.woff2",
-  "../assets/fonts/barlow-600-latin.woff2",
-  "../assets/fonts/barlow-700-latin.woff2",
-  "../assets/fonts/barlow-condensed-700-latin.woff2",
-  "../assets/fonts/barlow-condensed-800-latin.woff2",
-  "../assets/fonts/barlow-condensed-900-latin.woff2",
-  "../assets/fonts/OFL-Barlow.txt",
+  "../assets/fonts/archivo-latin-variable.woff2",
+  "../assets/fonts/OFL-Archivo.txt",
 ]) {
   if (!existsSync(new URL(path, import.meta.url))) throw new Error(`missing self-hosted font asset: ${path}`);
 }
-if (!indexHtml.includes('rel="preload"') || !indexHtml.includes("barlow-400-latin.woff2")) {
-  throw new Error("primary Barlow font must be preloaded");
+const fontFiles = readdirSync(new URL("../assets/fonts/", import.meta.url));
+if (fontFiles.some((name) => /barlow/i.test(name)) || /barlow/i.test(indexHtml) || /barlow/i.test(stylesCss)) {
+  throw new Error("Barlow assets, declarations, and preloads must be removed");
+}
+const archivoFont = readFileSync(new URL("../assets/fonts/archivo-latin-variable.woff2", import.meta.url));
+const archivoLicense = readFileSync(new URL("../assets/fonts/OFL-Archivo.txt", import.meta.url), "utf8");
+if (archivoFont.subarray(0, 4).toString("ascii") !== "wOF2" || !archivoLicense.includes("SIL Open Font License, Version 1.1")) {
+  throw new Error("Archivo must include a valid WOFF2 asset and OFL 1.1 license");
+}
+if (!indexHtml.includes('rel="preload" href="../assets/fonts/archivo-latin-variable.woff2" as="font" type="font/woff2" crossorigin')) {
+  throw new Error("primary Archivo variable font must be preloaded");
+}
+const fontFaces = stylesCss.match(/@font-face\s*{[^}]*}/gs) || [];
+if (fontFaces.length !== 1 || !/font-family:\s*"Archivo";[^}]*archivo-latin-variable\.woff2[^}]*font-style:\s*normal;[^}]*font-weight:\s*100 900;[^}]*font-stretch:\s*100%;[^}]*font-display:\s*swap;/s.test(fontFaces[0])) {
+  throw new Error("Archivo must have one normal-width variable font face");
+}
+const archivoStack = '"Archivo", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+if (!stylesCss.includes(`--font: ${archivoStack};`) || !stylesCss.includes(`--font-display: ${archivoStack};`)) {
+  throw new Error("normal and display font tokens must resolve to Archivo");
+}
+if (!stylesCss.includes("--font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;") ||
+    !stylesCss.includes(".mono { font-family: var(--font-mono); }")) {
+  throw new Error("technical monospace typography must remain unchanged");
+}
+const ordinaryUiCss = stylesCss.replace(fontFaces[0], "");
+if (/font-weight:\s*900\b/.test(ordinaryUiCss) ||
+    !/body\s*{[^}]*font-weight:\s*400\b/s.test(ordinaryUiCss) ||
+    !/button\s*{[^}]*font-weight:\s*600\b/s.test(ordinaryUiCss) ||
+    !/input, select, textarea\s*{[^}]*font-weight:\s*600\b/s.test(ordinaryUiCss)) {
+  throw new Error("ordinary Archivo body and control weights must follow the readable hierarchy");
+}
+for (const selector of [".display", ".section-head h2", ".card h3", ".ph-id h1", ".session-row h3"]) {
+  const escapedSelector = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  if (!new RegExp(`${escapedSelector}\\s*{[^}]*font-weight:\\s*800\\b`, "s").test(ordinaryUiCss)) {
+    throw new Error(`ordinary Archivo heading must use weight 800: ${selector}`);
+  }
+}
+for (const selector of [".kicker", ".badge", ".btn", ".chip", ".admin-tabs a", ".admin-filter-chips button", ".admin-filters-clear"]) {
+  const escapedSelector = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  if (!new RegExp(`${escapedSelector}\\s*{[^}]*font-weight:\\s*700\\b`, "s").test(ordinaryUiCss)) {
+    throw new Error(`ordinary Archivo label/control must use weight 700: ${selector}`);
+  }
 }
 for (const contract of ["@font-face", "font-display: swap", ":focus-visible", "prefers-reduced-motion", "max-width: 420px"]) {
   if (!stylesCss.includes(contract)) throw new Error(`missing accessibility CSS contract: ${contract}`);
@@ -532,28 +566,48 @@ if (!/href="#\/admin\/activities" class="active" aria-current="page"/.test(admin
 } else console.log("ok  active Admin tab exposes aria-current page");
 const adminMembersOut = await views.viewAdmin("members");
 await check("admin members", () => adminMembersOut);
-const adminStatusCounts = Object.fromEntries(["approved", "pending", "declined"].map((status) => [
-  status,
-  store.allUsers().filter((user) => user.status === status).length,
-]));
-for (const contract of [
-  new RegExp(`Approved[^\\d]*${adminStatusCounts.approved}`),
-  new RegExp(`Pending[^\\d]*${adminStatusCounts.pending}`),
-  new RegExp(`Declined[^\\d]*${adminStatusCounts.declined}`),
-  /Search members/,
-  />Super Admin</,
-  />Admin</,
-  />Member</,
-]) {
-  if (!contract.test(adminMembersOut)) {
-    failures++;
-    console.error(`FAIL Admin members missing ${contract}`);
+if (/member-summary|Member status counts|data-change="member-(?:status|role)-filter"/.test(adminMembersOut)) {
+  failures++;
+  console.error("FAIL Admin members must omit redundant counts and native filter selects");
+}
+if ((adminMembersOut.match(/class="admin-filter-chips"/g) || []).length !== 2 ||
+    !/<fieldset class="admin-filter-group">[\s\S]*?<legend>Status<\/legend>/.test(adminMembersOut) ||
+    !/<fieldset class="admin-filter-group">[\s\S]*?<legend>Role<\/legend>/.test(adminMembersOut)) {
+  failures++;
+  console.error("FAIL Admin member chips must render as labeled semantic groups");
+}
+const chipCss = stylesCss.match(/\.admin-filter-chips \{[\s\S]*?\n\}/)?.[0] || "";
+const chipButtonCss = stylesCss.match(/\.admin-filter-chips button \{[\s\S]*?\n\}/)?.[0] || "";
+if (!/overflow-x:\s*auto/.test(chipCss) || !/gap:\s*8px/.test(chipCss) ||
+    !/min-height:\s*44px/.test(chipButtonCss) || !/white-space:\s*nowrap/.test(chipButtonCss) ||
+    !/button\[aria-pressed="true"\]/.test(stylesCss)) {
+  failures++;
+  console.error("FAIL Admin member chips need accessible Night Circuit sizing, overflow, and active styles");
+}
+for (const [key, options] of Object.entries({
+  status: [["all", "All"], ["approved", "Approved"], ["pending", "Pending"], ["declined", "Declined"]],
+  role: [["all", "All roles"], ["member", "Member"], ["admin", "Admin"], ["superadmin", "Super Admin"]],
+})) {
+  for (const [value, label] of options) {
+    const chip = new RegExp(`<button[^>]*data-action="admin-member-filter"[^>]*data-filter-key="${key}"[^>]*data-filter-value="${value}"[^>]*aria-pressed="${value === "all"}"[^>]*>${label}</button>`);
+    if (!chip.test(adminMembersOut)) {
+      failures++;
+      console.error(`FAIL Admin members missing ${key} chip ${label}`);
+    }
   }
+}
+if (!/Search members/.test(adminMembersOut) || !/(?:Role changes are Super Admin only|Only a Super Admin can change roles)/.test(adminMembersOut) || /Clear filters/.test(adminMembersOut)) {
+  failures++;
+  console.error("FAIL default Admin member filters must preserve guidance/search and hide Clear filters");
 }
 views.adminMemberFilters.query = "tina";
 views.adminMemberFilters.status = "approved";
 views.adminMemberFilters.role = "admin";
 const filteredAdminMembers = await views.viewAdmin("members");
+if (!/data-action="admin-member-filters-clear"[^>]*>Clear filters</.test(filteredAdminMembers)) {
+  failures++;
+  console.error("FAIL active Admin member filters must show Clear filters");
+}
 if (!filteredAdminMembers.includes("Tina") || filteredAdminMembers.includes("CM Chui") || filteredAdminMembers.includes("Marco Santos")) {
   failures++;
   console.error("FAIL Admin member search/status/role filters must combine truthfully");
@@ -1966,13 +2020,13 @@ const searchFilter = localControl({ input: "member-search" }, "tina");
 searchFilter.getAttribute = () => null;
 searchFilter.selectionStart = 4;
 await localInput({ target: searchFilter });
-const statusFilter = localControl({ change: "member-status-filter" }, "approved");
-localElements.set("member-status", statusFilter);
-await localChange({ target: statusFilter });
+const statusFilter = localControl({ action: "admin-member-filter", filterKey: "status", filterValue: "approved" });
+localElements.set("member-filter-status-approved", statusFilter);
+await localClick({ target: statusFilter });
 const statusFocusRestored = localActiveElement === statusFilter;
-const roleFilter = localControl({ change: "member-role-filter" }, "admin");
-localElements.set("member-role", roleFilter);
-await localChange({ target: roleFilter });
+const roleFilter = localControl({ action: "admin-member-filter", filterKey: "role", filterValue: "admin" });
+localElements.set("member-filter-role-admin", roleFilter);
+await localClick({ target: roleFilter });
 if (mem.get("itc.prototype.v1") !== persistedBeforeFilters ||
     views.adminMemberFilters.query !== "tina" || views.adminMemberFilters.status !== "approved" ||
     views.adminMemberFilters.role !== "admin") {
@@ -1981,11 +2035,17 @@ if (mem.get("itc.prototype.v1") !== persistedBeforeFilters ||
 } else console.log("ok  delegated member filters do not persist");
 if (!statusFocusRestored || localActiveElement !== roleFilter) {
   failures++;
-  console.error("FAIL status and role filters must restore corresponding focus after rerender");
-} else console.log("ok  status and role filters restore corresponding focus after rerender");
-views.adminMemberFilters.query = "";
-views.adminMemberFilters.status = "all";
-views.adminMemberFilters.role = "all";
+  console.error("FAIL status and role chips must restore corresponding focus after rerender");
+} else console.log("ok  status and role chips restore corresponding focus after rerender");
+const resetSearch = localControl({ input: "member-search" });
+localElements.set("member-search", resetSearch);
+const clearFilters = localControl({ action: "admin-member-filters-clear" });
+await localClick({ target: clearFilters });
+if (views.adminMemberFilters.query || views.adminMemberFilters.status !== "all" ||
+    views.adminMemberFilters.role !== "all" || localActiveElement !== resetSearch) {
+  failures++;
+  console.error("FAIL Clear filters must reset all view-local filters and focus search");
+} else console.log("ok  Clear filters resets all filters and focuses search");
 globalThis.setTimeout = realSetTimeout;
 globalThis.clearTimeout = realClearTimeout;
 

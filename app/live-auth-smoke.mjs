@@ -437,9 +437,16 @@ for (const action of ["approve", "decline"]) {
     `Submitted ${action} must be enabled`);
 }
 const membersHtml = await views.viewAdmin("members");
-assert.match(membersHtml, /Approved[^\d]*3/);
-assert.match(membersHtml, /Pending[^\d]*2/);
-assert.match(membersHtml, /Declined[^\d]*1/);
+assert.doesNotMatch(membersHtml, /member-summary|Member status counts|data-change="member-(?:status|role)-filter"/);
+for (const [key, options] of Object.entries({
+  status: [["all", "All"], ["approved", "Approved"], ["pending", "Pending"], ["declined", "Declined"]],
+  role: [["all", "All roles"], ["member", "Member"], ["admin", "Admin"], ["superadmin", "Super Admin"]],
+})) {
+  for (const [value, label] of options) {
+    assert.match(membersHtml, new RegExp(`<button[^>]*data-action="admin-member-filter"[^>]*data-filter-key="${key}"[^>]*data-filter-value="${value}"[^>]*aria-pressed="${value === "all"}"[^>]*>${label}</button>`));
+  }
+}
+assert.doesNotMatch(membersHtml, /Clear filters/);
 if (!/Declined Runner[\s\S]*badge danger">Declined</.test(membersHtml)) {
   throw new Error("Members must badge declined profiles as Declined");
 }
@@ -454,6 +461,7 @@ views.adminMemberFilters.query = "tina";
 views.adminMemberFilters.status = "approved";
 views.adminMemberFilters.role = "admin";
 const filteredMembersHtml = await views.viewAdmin("members");
+assert.match(filteredMembersHtml, /data-action="admin-member-filters-clear"[^>]*>Clear filters</);
 assert.match(filteredMembersHtml, /Tina Admin/);
 for (const excluded of ["Riley Runner", "Micah Member", "Submitted Runner", "Declined Runner"]) {
   assert.doesNotMatch(filteredMembersHtml, new RegExp(excluded));
