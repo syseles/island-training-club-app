@@ -2,7 +2,7 @@
 // Run: node --input-type=module < smoke.mjs  (from the app/ directory)
 
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -120,19 +120,33 @@ const indexHtml = readFileSync(resolve(__dirname, "index.html"), "utf8");
 const stylesCss = readFileSync(resolve(__dirname, "styles.css"), "utf8");
 const viewsSource = readFileSync(resolve(__dirname, "js/views.js"), "utf8");
 for (const path of [
-  "../assets/fonts/barlow-400-latin.woff2",
-  "../assets/fonts/barlow-500-latin.woff2",
-  "../assets/fonts/barlow-600-latin.woff2",
-  "../assets/fonts/barlow-700-latin.woff2",
-  "../assets/fonts/barlow-condensed-700-latin.woff2",
-  "../assets/fonts/barlow-condensed-800-latin.woff2",
-  "../assets/fonts/barlow-condensed-900-latin.woff2",
-  "../assets/fonts/OFL-Barlow.txt",
+  "../assets/fonts/archivo-latin-variable.woff2",
+  "../assets/fonts/OFL-Archivo.txt",
 ]) {
   if (!existsSync(new URL(path, import.meta.url))) throw new Error(`missing self-hosted font asset: ${path}`);
 }
-if (!indexHtml.includes('rel="preload"') || !indexHtml.includes("barlow-400-latin.woff2")) {
-  throw new Error("primary Barlow font must be preloaded");
+const fontFiles = readdirSync(new URL("../assets/fonts/", import.meta.url));
+if (fontFiles.some((name) => /barlow/i.test(name)) || /barlow/i.test(indexHtml) || /barlow/i.test(stylesCss)) {
+  throw new Error("Barlow assets, declarations, and preloads must be removed");
+}
+const archivoFont = readFileSync(new URL("../assets/fonts/archivo-latin-variable.woff2", import.meta.url));
+const archivoLicense = readFileSync(new URL("../assets/fonts/OFL-Archivo.txt", import.meta.url), "utf8");
+if (archivoFont.subarray(0, 4).toString("ascii") !== "wOF2" || !archivoLicense.includes("SIL Open Font License, Version 1.1")) {
+  throw new Error("Archivo must include a valid WOFF2 asset and OFL 1.1 license");
+}
+if (!indexHtml.includes('rel="preload" href="../assets/fonts/archivo-latin-variable.woff2" as="font" type="font/woff2" crossorigin')) {
+  throw new Error("primary Archivo variable font must be preloaded");
+}
+const fontFaces = stylesCss.match(/@font-face\s*{[^}]*}/gs) || [];
+if (fontFaces.length !== 1 || !/font-family:\s*"Archivo";[^}]*archivo-latin-variable\.woff2[^}]*font-style:\s*normal;[^}]*font-weight:\s*100 900;[^}]*font-stretch:\s*100%;[^}]*font-display:\s*swap;/s.test(fontFaces[0])) {
+  throw new Error("Archivo must have one normal-width variable font face");
+}
+const archivoStack = '"Archivo", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+if (!stylesCss.includes(`--font: ${archivoStack};`) || !stylesCss.includes(`--font-display: ${archivoStack};`)) {
+  throw new Error("normal and display font tokens must resolve to Archivo");
+}
+if (!stylesCss.includes("--font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;")) {
+  throw new Error("technical monospace token must remain system monospace");
 }
 for (const contract of ["@font-face", "font-display: swap", ":focus-visible", "prefers-reduced-motion", "max-width: 420px"]) {
   if (!stylesCss.includes(contract)) throw new Error(`missing accessibility CSS contract: ${contract}`);

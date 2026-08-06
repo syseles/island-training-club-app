@@ -5,58 +5,11 @@
    ========================================================================== */
 
 @font-face {
-  font-family: "Barlow";
-  src: url("../assets/fonts/barlow-400-latin.woff2") format("woff2");
+  font-family: "Archivo";
+  src: url("../assets/fonts/archivo-latin-variable.woff2") format("woff2");
   font-style: normal;
-  font-weight: 400;
-  font-display: swap;
-}
-
-@font-face {
-  font-family: "Barlow";
-  src: url("../assets/fonts/barlow-500-latin.woff2") format("woff2");
-  font-style: normal;
-  font-weight: 500;
-  font-display: swap;
-}
-
-@font-face {
-  font-family: "Barlow";
-  src: url("../assets/fonts/barlow-600-latin.woff2") format("woff2");
-  font-style: normal;
-  font-weight: 600;
-  font-display: swap;
-}
-
-@font-face {
-  font-family: "Barlow";
-  src: url("../assets/fonts/barlow-700-latin.woff2") format("woff2");
-  font-style: normal;
-  font-weight: 700;
-  font-display: swap;
-}
-
-@font-face {
-  font-family: "Barlow Condensed";
-  src: url("../assets/fonts/barlow-condensed-700-latin.woff2") format("woff2");
-  font-style: normal;
-  font-weight: 700;
-  font-display: swap;
-}
-
-@font-face {
-  font-family: "Barlow Condensed";
-  src: url("../assets/fonts/barlow-condensed-800-latin.woff2") format("woff2");
-  font-style: normal;
-  font-weight: 800;
-  font-display: swap;
-}
-
-@font-face {
-  font-family: "Barlow Condensed";
-  src: url("../assets/fonts/barlow-condensed-900-latin.woff2") format("woff2");
-  font-style: normal;
-  font-weight: 900;
+  font-weight: 100 900;
+  font-stretch: 100%;
   font-display: swap;
 }
 
@@ -77,8 +30,8 @@
   --radius-lg: 20px;
   --radius: 14px;
   --radius-sm: 10px;
-  --font: "Barlow", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  --font-display: "Barlow Condensed", "Arial Narrow", sans-serif;
+  --font: "Archivo", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-display: "Archivo", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   --nav-h: 66px;
   --shell-w: 520px;
@@ -258,7 +211,6 @@ input, select, textarea { font: inherit; }
 .display {
   margin: 8px 0 0;
   font-family: var(--font-display);
-  font-stretch: condensed;
   font-size: 40px;
   font-weight: 900;
   letter-spacing: -.045em;
@@ -484,7 +436,6 @@ a.link-card > .card-body > svg {
 .ph-id h1 {
   margin: 5px 0 3px;
   font-family: var(--font-display);
-  font-stretch: condensed;
   font-size: 26px;
   font-weight: 900;
   letter-spacing: -.03em;
