@@ -640,12 +640,7 @@ function accountVisitorLocal() {
         <div id="signin-error"></div>
         <button class="btn mt16" type="submit">Sign in</button>
       </form>
-      <p class="muted small mt16">Prototype: there is no password — sign in with a seeded email, or use a one-tap demo profile.</p>
-      <div class="btn-row">
-        <button class="btn ghost sm" type="button" data-action="demo-signin" data-role="member">Demo · Continue as member (CM)</button>
-        <button class="btn ghost sm" type="button" data-action="demo-signin" data-role="admin">Demo · Continue as admin (Tina)</button>
-        <button class="btn ghost sm" type="button" data-action="demo-signin" data-role="superadmin">Demo · Continue as super admin (Arnold)</button>
-      </div>
+      <p class="muted small mt16">This local prototype has no password. Sign in with the email used for an application on this device.</p>
     </div></div>
     <div class="card mt16"><div class="card-body">
       <h3>Not a member yet?</h3>
@@ -676,7 +671,6 @@ function accountPending(user, application) {
         <div class="line"><span>Indemnity</span><strong>${indemnityAt ? "Accepted" : "—"}</strong></div>
         <div class="line"><span>Photo consent</span><strong>${photoConsent ? "Yes" : "No"}</strong></div>
       </div>
-      ${!isLive() ? `<p class="muted small mt16">Want to see the approval side? Sign out, then use the admin demo profile — your application will be waiting in the queue.</p>` : ""}
     </div></div>
     <div class="btn-row">
       <a class="btn ghost" href="#/schedule">Browse the schedule</a>
@@ -753,7 +747,6 @@ function accountMember(user, application) {
 
     <div class="btn-row">
       <button class="btn ghost" type="button" data-action="signout">Sign out</button>
-      ${!isLive() ? `<button class="btn danger sm" type="button" data-action="reset-demo">Reset demo data</button>` : ""}
     </div>`;
 }
 
@@ -1339,7 +1332,7 @@ export async function viewAdmin(tab = "approvals") {
     </nav>`;
 
   // Live mode reads real data (Supabase applications + profiles); local
-  // mode keeps the seed-backed demo lists.
+  // mode keeps the local prototype lists.
   let memberUsers = null;
   if (tab === "members") {
     memberUsers = isLive()

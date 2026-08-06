@@ -15,9 +15,18 @@ are only used when no env vars are injected.
 
 ## Local development
 
-For local dev, edit `app/index.html`'s inline `<script>` block to set
+Without Supabase configuration, local state starts empty. A membership
+application creates a pending local profile that can sign in again by email.
+There are no seeded identities or administrative controls in local mode.
+
+For administrative testing, configure Supabase live mode or use the historical
+`archive/demo` branch. The archive is demonstration-only and must not be used
+as a production source branch.
+
+To use live mode locally, edit `app/index.html`'s inline `<script>` block to set
 `window.SUPABASE_URL` and `window.SUPABASE_ANON_KEY` to your dev Supabase
-project's values. Refresh the page after changes.
+project's values. Refresh the page after changes. Manage live identities in
+Supabase Admin; this cleanup does not change the schema or delete live users.
 
 ## First-sign-in caveat
 
@@ -35,7 +44,7 @@ update public.profiles
 
 Two paths:
 
-- Via the admin panel: a super_admin signs in → `/admin/users` → find the
+- Via the admin panel: a super_admin signs in → `/admin/members` → find the
   member → **Promote to admin**. The DB trigger logs the change in
   `role_changes` automatically.
 - Via SQL (when no super_admin exists yet):

@@ -7,7 +7,6 @@
 
 import {
   SEED_ACTIVITIES,
-  SEED_USERS,
   sessionsInRange,
   sessionStarted,
   todayLocal,
@@ -21,7 +20,7 @@ import {
 import { supabase, isLive } from "./config.js";
 
 const STORAGE_KEY = "itc.prototype.v1";
-const STATE_VERSION = 10;
+const STATE_VERSION = 11;
 
 // Live-mode (Supabase) session cache. Avoids hammering the DB on every
 // page load. The TTL is short so role flips and welcome notifications
@@ -47,10 +46,10 @@ function freshState() {
     version: STATE_VERSION,
     sessionUserId: null,
     activities: structuredClone(SEED_ACTIVITIES),
-    users: structuredClone(SEED_USERS).map(backfillProfilePreferences),
+    users: [],
     bookings: [],
     receipts: [],
-    receiptCounter: 49,
+    receiptCounter: 1,
     prayers: [],
   };
 }
@@ -71,6 +70,12 @@ export function load() {
 // seed-data revision. Each step runs once per version so admin edits made
 // afterwards are not reverted on the next load.
 function migrate() {
+  // Persisted prototypes may predate individual collections or contain null
+  // values. Normalize every collection before a legacy step or early return.
+  for (const key of ["users", "activities", "bookings", "receipts", "prayers"]) {
+    if (!Array.isArray(state[key])) state[key] = [];
+  }
+
   const v = state.version || 0;
   if (v >= STATE_VERSION) return;
   if (v < 2) {
@@ -87,24 +92,13 @@ function migrate() {
   }
   if (v < 3) {
     // v3: Run Club moved to Mon 7:30 PM with venue TBC; Water Sports Evening
-    // renamed ITC Swimming at 7:30 PM; leaders renamed (Arnold Wong, Tina,
-    // CM Chui). Activities are replaced in place from the seed; seed users
-    // get the new names only, keeping any role/status changes.
+    // renamed ITC Swimming at 7:30 PM. Activities are replaced in place
+    // from the current activity configuration.
     const seedAct = new Map(SEED_ACTIVITIES.map((a) => [a.id, a]));
     state.activities = state.activities.map((a) =>
       a.id === "run" || a.id === "water"
         ? structuredClone(seedAct.get(a.id))
         : a
-    );
-    const seedUser = new Map(SEED_USERS.map((u) => [u.id, u]));
-    state.users = state.users.map((u) =>
-      seedUser.has(u.id)
-        ? {
-            ...u,
-            fullName: seedUser.get(u.id).fullName,
-            preferredName: seedUser.get(u.id).preferredName,
-          }
-        : u
     );
   }
   if (v < 4) {
@@ -176,9 +170,8 @@ function migrate() {
   if (v < 9) state.users.forEach(backfillProfilePreferences);
   if (v < 10) {
     // v10: HYROX demo attendance cleanup — the club no longer simulates
-    // demand. Strip the seeded baseBooked counters and remove the old
-    // seed-owned bookings/receipts so "Who's coming" and spots left reflect
-    // real sign-ups only. User-created records are untouched.
+    // demand. Strip the seeded baseBooked counters and remove old seed-owned
+    // transactions. User-created records are untouched.
     for (const a of state.activities) {
       if (a.id === "hyrox" || a.id === "hyrox-midtown") delete a.baseBooked;
     }
@@ -187,6 +180,38 @@ function migrate() {
     state.bookings = state.bookings.filter((b) => !seedBookingIds.has(b.id));
     state.receipts = state.receipts.filter((r) => !seedReceiptIds.has(r.id));
   }
+  if (v < 11) {
+    // v11: remove only identities shipped by the historical local demo.
+    // Normalized email matching also catches records whose IDs changed.
+    const demoIds = new Set(["u-super", "u-admin", "u-member", "u-pend-1", "u-pend-2"]);
+    const demoEmails = new Set([
+      "owner@itc.hk",
+      "admin@itc.hk",
+      "member@itc.hk",
+      "marco.santos@example.com",
+      "jenny.wu@example.com",
+    ]);
+    const removedUserIds = new Set(demoIds);
+    state.users = state.users.filter((user) => {
+      const matches = demoIds.has(user.id)
+        || demoEmails.has(String(user.email ?? "").trim().toLowerCase());
+      if (matches) removedUserIds.add(user.id);
+      return !matches;
+    });
+    if (removedUserIds.has(state.sessionUserId)) state.sessionUserId = null;
+
+    const removedBookingIds = new Set();
+    state.bookings = state.bookings.filter((booking) => {
+      const remove = removedUserIds.has(booking.userId);
+      if (remove) removedBookingIds.add(booking.id);
+      return !remove;
+    });
+    state.receipts = state.receipts.filter(
+      (receipt) => !removedUserIds.has(receipt.userId)
+        && !removedBookingIds.has(receipt.bookingId)
+    );
+    for (const activity of state.activities) delete activity.baseBooked;
+  }
   state.version = STATE_VERSION;
 }
 
@@ -194,7 +219,7 @@ function save() {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
 }
 
-export function resetDemo() {
+export function resetLocalData() {
   localStorage.removeItem(STORAGE_KEY);
   return load();
 }
@@ -217,14 +242,6 @@ export function signIn(email) {
     save();
     return { ok: true, user, declined: true };
   }
-  state.sessionUserId = user.id;
-  save();
-  return { ok: true, user };
-}
-
-export function demoSignIn(role) {
-  const user = state.users.find((u) => u.role === role && u.status === "approved");
-  if (!user) return { ok: false, reason: "not-found" };
   state.sessionUserId = user.id;
   save();
   return { ok: true, user };
@@ -712,8 +729,8 @@ export function setRole(userId, role) {
   if (user.role === nextRole) throw new Error("Member already has that role.");
 
   user.role = nextRole;
-  // Revocation returns an approved local demo account to the same pending
-  // access state used by live profiles. Re-approval still goes through the
+  // Revocation returns an approved local account to the same pending access
+  // state used by live profiles. Re-approval still goes through the
   // existing application decision flow.
   if (nextRole === "pending") user.status = "pending";
   save();
