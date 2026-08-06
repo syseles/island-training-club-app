@@ -448,6 +448,23 @@ const notificationDate = (value) => {
 
 const notificationKind = (kind) => typeof kind === "string" ? kind.trim() : "";
 
+const NOTIFICATION_CATEGORIES = new Map([
+  ["admin_application_submitted", "application"],
+  ["admin_application_approved", "decision"],
+  ["admin_application_declined", "decision"],
+  ["admin_role_promoted", "role"],
+  ["admin_role_demoted", "role"],
+  ["admin_membership_revoked", "role"],
+  // Retain a stable category for notifications created before transition-
+  // specific role kinds were introduced.
+  ["admin_role_changed", "role"],
+  ["giving_campaign_published", "club"],
+]);
+
+export function notificationCategory(kind) {
+  return NOTIFICATION_CATEGORIES.get(notificationKind(kind)) || "personal";
+}
+
 export function notificationRelativeTime(value, now = new Date()) {
   const createdAt = notificationDate(value);
   const currentTime = notificationDate(now);
@@ -482,6 +499,7 @@ export function notificationDestination(kind) {
   const normalizedKind = notificationKind(kind);
   if (normalizedKind === "admin_application_submitted") return "#/admin/approvals";
   if (normalizedKind.startsWith("admin_")) return "#/admin/members";
+  if (normalizedKind === "giving_campaign_published") return "#/giving";
   return "#/account";
 }
 

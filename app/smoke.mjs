@@ -238,8 +238,25 @@ for (const invalidTime of [undefined, "", "not-a-date"]) {
     throw new Error("Malformed notification timestamps must use a stable empty helper fallback");
   }
 }
+const notificationCategoryCases = [
+  ["admin_application_submitted", "application"],
+  ["admin_application_approved", "decision"],
+  ["admin_application_declined", "decision"],
+  ["admin_role_promoted", "role"],
+  ["admin_role_demoted", "role"],
+  ["admin_membership_revoked", "role"],
+  ["giving_campaign_published", "club"],
+  ["welcome", "personal"],
+  [null, "personal"],
+  [{ malformed: true }, "personal"],
+];
+for (const [kind, expected] of notificationCategoryCases) {
+  const actual = data.notificationCategory?.(kind);
+  if (actual !== expected) throw new Error(`notificationCategory: expected ${expected}, got ${actual}`);
+}
 if (data.notificationDestination?.("admin_application_submitted") !== "#/admin/approvals" ||
     data.notificationDestination?.(" admin_role_changed ") !== "#/admin/members" ||
+    data.notificationDestination?.("giving_campaign_published") !== "#/giving" ||
     data.notificationDestination?.("welcome") !== "#/account" ||
     data.notificationDestination?.(null) !== "#/account") {
   throw new Error("notificationDestination must normalize kinds and preserve route semantics");

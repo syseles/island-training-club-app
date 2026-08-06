@@ -166,6 +166,7 @@ export async function maybeRedirectToApply() {
 }
 
 let renderGeneration = 0;
+let notificationRouteRows = null;
 
 function renderNotificationChrome(user, active, generation, rowsPromise = null) {
   notificationEl.hidden = !user;
@@ -281,7 +282,8 @@ async function render(generation = renderGeneration) {
             : await views.viewAdmin(arg || "approvals");
       break;
     case "notifications":
-      out = await views.viewNotifications(new Date(), await notificationRowsPromise);
+      notificationRouteRows = await notificationRowsPromise;
+      out = await views.viewNotifications(new Date(), notificationRouteRows);
       break;
     default:
       out = views.viewNotFound();
@@ -360,6 +362,18 @@ document.addEventListener("click", async (e) => {
   const { action } = el.dataset;
 
   switch (action) {
+    case "notification-filter": {
+      const kind = el.dataset.notificationFilter;
+      const allowedKinds = ["all", "application", "decision", "role", "club", "personal"];
+      if (parseHash()[0] !== "notifications" || !allowedKinds.includes(kind) || !notificationRouteRows) break;
+      views.notificationFilters.kind = kind;
+      viewEl.innerHTML = await views.viewNotifications(new Date(), notificationRouteRows);
+      viewEl.querySelector(
+        `[data-action="notification-filter"][data-notification-filter="${kind}"]`
+      )?.focus();
+      break;
+    }
+
     case "admin-member-filter": {
       const { filterKey, filterValue } = el.dataset;
       const allowedValues = {

@@ -27,6 +27,7 @@ import {
   notificationRelativeTime,
   notificationHktTime,
   notificationDestination,
+  notificationCategory,
 } from "./data.js";
 
 const esc = (s) =>
@@ -1620,17 +1621,54 @@ export function viewNotFound(msg = "Page not found.") {
 
 // --- Notifications (live / Supabase) -----------------------------------------------------------
 
+export const notificationFilters = { kind: "all" };
+
+const ADMIN_NOTIFICATION_FILTERS = [
+  ["all", "All"],
+  ["application", "Applications"],
+  ["decision", "Decisions"],
+  ["role", "Role changes"],
+  ["club", "Club updates"],
+  ["personal", "My account"],
+];
+const MEMBER_NOTIFICATION_FILTERS = ADMIN_NOTIFICATION_FILTERS.filter(([kind]) =>
+  ["all", "club", "personal"].includes(kind)
+);
+const NOTIFICATION_CATEGORY_LABELS = {
+  application: "Application",
+  decision: "Decision",
+  role: "Role change",
+  club: "Club update",
+  personal: "My account",
+};
+
 export async function viewNotifications(now = new Date(), prefetchedRows = null) {
   const user = store.currentUser();
   const rows = prefetchedRows ?? await store.listMyNotifications();
-  const normalizedKind = (notification) =>
-    typeof notification?.kind === "string" ? notification.kind.trim() : "";
-  const operational = rows.filter((notification) => normalizedKind(notification).startsWith("admin_"));
-  const personal = rows.filter((notification) => !normalizedKind(notification).startsWith("admin_"));
+  const admin = isAdminRole(user?.role);
+  const availableFilters = admin ? ADMIN_NOTIFICATION_FILTERS : MEMBER_NOTIFICATION_FILTERS;
+  const availableKinds = new Set(availableFilters.map(([kind]) => kind));
+  const activeKind = availableKinds.has(notificationFilters.kind) ? notificationFilters.kind : "all";
+  notificationFilters.kind = activeKind;
+
+  // Keep the existing member boundary even for unknown future admin kinds:
+  // malformed categories fall back safely without exposing operational rows.
+  const visibleRows = rows.filter((notification) => {
+    const kind = typeof notification?.kind === "string" ? notification.kind.trim() : "";
+    return admin || !kind.startsWith("admin_");
+  }).sort((a, b) => {
+    const aTime = Date.parse(a?.created_at);
+    const bTime = Date.parse(b?.created_at);
+    return (Number.isFinite(bTime) ? bTime : -Infinity) - (Number.isFinite(aTime) ? aTime : -Infinity);
+  });
+  const filteredRows = activeKind === "all"
+    ? visibleRows
+    : visibleRows.filter((notification) => notificationCategory(notification?.kind) === activeKind);
 
   const notificationRow = (notification) => {
     const unread = !notification?.read_at;
-    const kind = normalizedKind(notification);
+    const kind = typeof notification?.kind === "string" ? notification.kind.trim() : "";
+    const category = notificationCategory(kind);
     const relativeTime = notificationRelativeTime(notification?.created_at, now);
     const exactTime = notificationHktTime(notification?.created_at);
     const time = relativeTime && exactTime
@@ -1644,6 +1682,7 @@ export async function viewNotifications(now = new Date(), prefetchedRows = null)
         data-destination="${esc(notificationDestination(kind))}">
         <span class="notification-unread" ${unread ? `aria-label="Unread"` : `aria-hidden="true"`}></span>
         <span class="notification-copy">
+          <span class="notification-kind-badge">${esc(NOTIFICATION_CATEGORY_LABELS[category])}</span>
           <strong>${esc(notification?.title)}</strong>
           <span>${esc(notification?.body)}</span>
         </span>
@@ -1651,30 +1690,29 @@ export async function viewNotifications(now = new Date(), prefetchedRows = null)
       </button>`;
   };
 
-  const notificationSection = (title, sectionRows, emptyCopy) => `
-    <section class="card notification-section" aria-labelledby="notification-${esc(title.toLowerCase().replaceAll(" ", "-"))}">
-      <div class="card-body">
-        <h2 id="notification-${esc(title.toLowerCase().replaceAll(" ", "-"))}">${esc(title)}</h2>
-        ${sectionRows.length
-          ? `<div class="notification-list">${sectionRows.map(notificationRow).join("")}</div>`
-          : `<p class="notification-empty">${esc(emptyCopy)}</p>`}
-      </div>
-    </section>`;
-
-  const wholeInboxEmpty = operational.length === 0 && personal.length === 0;
+  const activeLabel = availableFilters.find(([kind]) => kind === activeKind)?.[1] || "All";
+  const emptyCopy = activeKind === "all" ? "No notifications in All." : `No ${activeLabel} notifications.`;
+  const wholeInboxEmpty = visibleRows.length === 0;
+  const filterButtons = availableFilters.map(([kind, label]) => `
+    <button type="button" data-action="notification-filter" data-notification-filter="${kind}"
+      aria-pressed="${kind === activeKind ? "true" : "false"}">${esc(label)}</button>`).join("");
 
   return `
     <header class="notification-header">
       <p class="kicker">Inbox</p>
       <h1 class="display sm">Notifications</h1>
     </header>
+    <div class="notification-filter-scroll">
+      <div class="notification-filter-chips" role="group" aria-label="Filter notifications">${filterButtons}</div>
+    </div>
     ${wholeInboxEmpty
       ? `<div class="empty notification-inbox-empty"><p>New notifications will appear here.</p></div>`
       : ""}
-    <div class="notification-sections">
-      ${isAdminRole(user?.role)
-        ? notificationSection("Club operations", operational, "No Club operations notifications.")
-        : ""}
-      ${notificationSection("My notifications", personal, "No personal notifications.")}
-    </div>`;
+    <section class="card notification-section" aria-label="${esc(activeLabel)} notifications">
+      <div class="card-body">
+        ${filteredRows.length
+          ? `<div class="notification-list">${filteredRows.map(notificationRow).join("")}</div>`
+          : `<p class="notification-empty">${esc(emptyCopy)}</p>`}
+      </div>
+    </section>`;
 }

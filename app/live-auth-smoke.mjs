@@ -500,22 +500,48 @@ const notificationNow = new RealDate("2026-08-05T06:40:00.000Z");
 profile.role = "admin";
 await store.getCurrentUser();
 const ordinaryAdminNotificationsHtml = await views.viewNotifications(notificationNow);
-assert.match(ordinaryAdminNotificationsHtml, /Club operations|Application &lt;submitted&gt;/,
+assert.match(ordinaryAdminNotificationsHtml, /Application &lt;submitted&gt;/,
   "Ordinary admins must receive operational notifications");
 profile.role = "super_admin";
 await store.getCurrentUser();
 renderedUser = store.currentUser();
+const categoryRows = [
+  ...notificationRows,
+  {
+    id: "notification-decision",
+    kind: "admin_application_approved",
+    title: "Application approved",
+    body: "A membership was approved.",
+    created_at: "2026-08-05T06:34:00.000Z",
+    read_at: null,
+  },
+  {
+    id: "notification-club",
+    kind: "giving_campaign_published",
+    title: "Giving campaign published",
+    body: "A campaign is ready.",
+    created_at: "2026-08-05T06:33:00.000Z",
+    read_at: null,
+  },
+];
+views.notificationFilters.kind = "all";
+const categoryNotificationsHtml = await views.viewNotifications(notificationNow, categoryRows);
+for (const badge of ["Application", "Decision", "Role change", "Club update", "My account"]) {
+  assert.match(categoryNotificationsHtml, new RegExp(`class="notification-kind-badge">${badge}<`));
+}
+assert.match(categoryNotificationsHtml, /Giving campaign published[\s\S]*?data-destination="#\/giving"|data-destination="#\/giving"[\s\S]*?Giving campaign published/);
+views.notificationFilters.kind = "all";
 const adminNotificationsHtml = await views.viewNotifications(notificationNow);
 assert.match(adminNotificationsHtml, /<h1[^>]*>Notifications<\/h1>/);
-assert.match(adminNotificationsHtml, /<h2[^>]*>Club operations<\/h2>/);
-assert.match(adminNotificationsHtml, /<h2[^>]*>My notifications<\/h2>/);
-const operationsHtml = adminNotificationsHtml.split("Club operations</h2>")[1].split("My notifications</h2>")[0];
-const personalHtml = adminNotificationsHtml.split("My notifications</h2>")[1];
-assert.match(operationsHtml, /Application &lt;submitted&gt;/);
-assert.match(operationsHtml, /Role changed/);
-assert.doesNotMatch(operationsHtml, /Welcome to ITC/);
-assert.match(personalHtml, /Welcome to ITC/);
-assert.doesNotMatch(personalHtml, /Application &lt;submitted&gt;|Role changed/);
+for (const label of ["All", "Applications", "Decisions", "Role changes", "Club updates", "My account"]) {
+  assert.match(adminNotificationsHtml, new RegExp(`data-notification-filter="[^"]+"[^>]*>${label}<\\/button>`));
+}
+assert.match(adminNotificationsHtml, /data-notification-filter="all"[^>]*aria-pressed="true"/);
+assert.doesNotMatch(adminNotificationsHtml, /<h2[^>]*>Club operations<\/h2>|<h2[^>]*>My notifications<\/h2>/);
+assert.equal((adminNotificationsHtml.match(/class="notification-list"/g) || []).length, 1,
+  "Notifications must render one chronological list");
+assert.ok(adminNotificationsHtml.indexOf("Application &lt;submitted&gt;") < adminNotificationsHtml.indexOf("Welcome to ITC"));
+assert.ok(adminNotificationsHtml.indexOf("Welcome to ITC") < adminNotificationsHtml.indexOf("Role changed"));
 assert.doesNotMatch(adminNotificationsHtml, /Application <submitted>|Riley & approve/,
   "Notification content must be HTML escaped");
 const notificationButtons = adminNotificationsHtml.match(/<button class="notification-row[\s\S]*?<\/button>/g) || [];
@@ -523,6 +549,8 @@ assert.equal(notificationButtons.length, 4, "Every valid or malformed notificati
 for (const button of notificationButtons) {
   assert.match(button, /<span class="notification-unread"/,
     "Read and unread rows must have the same grid indicator structure");
+  assert.match(button, /class="notification-kind-badge"/,
+    "Every notification row must show its category badge");
 }
 assert.match(adminNotificationsHtml, /class="notification-row unread"[^>]*type="button"/);
 assert.match(adminNotificationsHtml, /class="notification-row"[^>]*[\s\S]*?class="notification-unread" aria-hidden="true"/,
@@ -530,26 +558,33 @@ assert.match(adminNotificationsHtml, /class="notification-row"[^>]*[\s\S]*?class
 assert.match(adminNotificationsHtml, /class="notification-unread" aria-label="Unread"/);
 assert.match(adminNotificationsHtml, /5 minutes ago/);
 assert.match(adminNotificationsHtml, /5 Aug 2026, 2:32 PM HKT/);
-assert.match(personalHtml, /Imported notification[\s\S]*?Time unavailable/,
+assert.match(adminNotificationsHtml, /Imported notification[\s\S]*?Time unavailable/,
   "Malformed metadata must fall back without dropping the row");
 assert.doesNotMatch(adminNotificationsHtml, /Invalid Date|NaN/);
-assert.match(operationsHtml, /data-destination="#\/admin\/approvals"/);
-assert.match(personalHtml, /data-destination="#\/account"/);
+assert.match(adminNotificationsHtml, /data-destination="#\/admin\/approvals"/);
+assert.match(adminNotificationsHtml, /data-destination="#\/account"/);
 renderedUser.role = "member";
+views.notificationFilters.kind = "all";
 const memberNotificationsHtml = await views.viewNotifications(notificationNow);
-assert.doesNotMatch(memberNotificationsHtml, /Club operations|Application &lt;submitted&gt;|Role changed/);
-assert.match(memberNotificationsHtml, /My notifications|Welcome to ITC/);
+for (const label of ["All", "Club updates", "My account"]) assert.match(memberNotificationsHtml, new RegExp(`>${label}<\\/button>`));
+assert.doesNotMatch(memberNotificationsHtml, />Applications<\/button>|>Decisions<\/button>|>Role changes<\/button>/);
+assert.doesNotMatch(memberNotificationsHtml, /Application &lt;submitted&gt;|Role changed/);
+assert.match(memberNotificationsHtml, /Welcome to ITC/);
+views.notificationFilters.kind = "club";
+const memberClubNotificationsHtml = await views.viewNotifications(notificationNow, categoryRows);
+assert.match(memberClubNotificationsHtml, /Giving campaign published/);
+assert.doesNotMatch(memberClubNotificationsHtml, /Application &lt;submitted&gt;|Application approved|Role changed|Welcome to ITC/);
+const emptyClubNotificationsHtml = await views.viewNotifications(notificationNow);
+assert.match(emptyClubNotificationsHtml, /No Club updates notifications\./,
+  "The active filter empty state must name its filter");
 const emptyMemberNotificationsHtml = await views.viewNotifications(notificationNow, []);
 assert.match(emptyMemberNotificationsHtml, /New notifications will appear here\./);
-assert.match(emptyMemberNotificationsHtml, /No personal notifications\./,
-  "Whole-inbox guidance must retain the member section empty state");
-assert.doesNotMatch(emptyMemberNotificationsHtml, /No Club operations notifications\./);
+assert.match(emptyMemberNotificationsHtml, /No Club updates notifications\./);
 renderedUser.role = "super_admin";
+views.notificationFilters.kind = "all";
 const emptyAdminNotificationsHtml = await views.viewNotifications(notificationNow, []);
 assert.match(emptyAdminNotificationsHtml, /New notifications will appear here\./);
-assert.match(emptyAdminNotificationsHtml, /No Club operations notifications\./);
-assert.match(emptyAdminNotificationsHtml, /No personal notifications\./,
-  "Whole-inbox guidance must retain both Admin section empty states");
+assert.match(emptyAdminNotificationsHtml, /No notifications in All\./);
 const liveApplication = await store.getMyApplication();
 if (!liveApplication || liveApplication.waiver_accepted_at !== "2026-08-05T01:00:00.000Z") {
   throw new Error("waiver missing");
@@ -1113,6 +1148,34 @@ assert.equal(notificationQueryCount, queriesBeforeDirectRoute + 1,
 assert.equal(notificationBell.getAttribute("aria-label"), "Notifications, 2 unread");
 assert.doesNotMatch(elements.get("bottom-nav").innerHTML, /aria-current="page"/,
   "Notifications must not activate a bottom navigation item");
+
+// Kind filters are view-local: activating one reuses route rows, rerenders the
+// Notifications HTML, and restores keyboard focus to the equivalent new chip.
+const filterControl = makeElement();
+filterControl.tagName = "BUTTON";
+filterControl.dataset = { action: "notification-filter", notificationFilter: "application" };
+filterControl.closest = () => filterControl;
+const replacementFilterControl = makeElement();
+const filterSelector = '[data-action="notification-filter"][data-notification-filter="application"]';
+viewEl.querySelector = (selector) => selector === filterSelector ? replacementFilterControl : null;
+const queriesBeforeFilter = notificationQueryCount;
+await domListeners.get("click")({ target: filterControl });
+assert.equal(views.notificationFilters.kind, "application");
+assert.equal(notificationQueryCount, queriesBeforeFilter,
+  "a local kind filter must not refetch notifications");
+assert.match(viewEl.innerHTML, /data-notification-filter="application"[^>]*aria-pressed="true"/);
+assert.match(viewEl.innerHTML, /Application &lt;submitted&gt;/);
+assert.doesNotMatch(viewEl.innerHTML, /Welcome to ITC|Role changed/);
+assert.equal(activeElement, replacementFilterControl,
+  "filter rerender must restore focus to the activated chip");
+viewEl.querySelector = () => null;
+views.notificationFilters.kind = "all";
+await domListeners.get("click")({
+  target: {
+    dataset: { action: "notification-filter", notificationFilter: "all" },
+    closest() { return this; },
+  },
+});
 
 // Unread row activation is checked, duplicate-safe, and row-safe. It does not
 // navigate until one unread row is confirmed updated, then advances the render
