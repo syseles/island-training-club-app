@@ -71,6 +71,28 @@ check("activity paid (visitor)", () => views.viewActivity(paid.id));
 check("activity free (visitor)", () => views.viewActivity(free.id));
 check("community", () => views.viewCommunity());
 const commHtml = views.viewCommunity();
+if (!commHtml.includes("Find your place in the crew.")) {
+  failures++;
+  console.error("FAIL visitor Community heading is not personalized");
+} else console.log("ok  visitor Community heading is personalized");
+for (const required of [
+  "Next connection",
+  "Post-training dinner",
+  "Count me in",
+  "Latest from ITC",
+  "Island Training Club turns 2",
+  "Ways to connect",
+  "Explore",
+]) {
+  if (!commHtml.includes(required)) {
+    failures++;
+    console.error(`FAIL Community Pulse missing ${required}`);
+  }
+}
+if (!commHtml.includes('data-action="connect-interest"')) {
+  failures++;
+  console.error("FAIL Community Pulse meal CTA should use the existing interest action");
+}
 let commOk = true;
 for (const link of [
   "#/community/prayers",
@@ -85,11 +107,11 @@ for (const link of [
     console.error(`FAIL Community missing ${link} card`);
   }
 }
-if (commOk) console.log("ok  Community shows the five cards");
-if (!commHtml.includes("Mission, coaches and leadership")) {
+if (commOk) console.log("ok  Community shows the five destination links");
+if (!commHtml.includes('#/community/about')) {
   failures++;
-  console.error("FAIL Community About card missing its subtext");
-} else console.log("ok  About card sits at the bottom of Community");
+  console.error("FAIL Community Explore should still link to About ITC");
+} else console.log("ok  About ITC remains reachable from Community");
 if (commHtml.includes("Arnold Wong") || commHtml.includes("Our foundation")) {
   failures++;
   console.error("FAIL leaders/culture should live behind the About card");
@@ -200,6 +222,11 @@ for (const [input, expect] of [
 }
 console.log("ok  donor ID format validation");
 check("account (pending)", () => views.viewAccount());
+const pendingCommunity = views.viewCommunity();
+if (!pendingCommunity.includes("You’re welcome here.")) {
+  failures++;
+  console.error("FAIL pending Community heading is not personalized");
+} else console.log("ok  pending Community heading is personalized");
 const pendHtml = views.viewActivity(paid.id);
 if (!pendHtml.includes("Booking locked")) {
   failures++;
@@ -221,6 +248,11 @@ console.log("ok  admin approved new applicant");
 const signIn = store.signIn("test@example.com");
 if (!signIn.ok || signIn.user.status !== "approved") throw new Error("approval did not take effect");
 check("account (new member)", () => views.viewAccount());
+const approvedCommunity = views.viewCommunity();
+if (!approvedCommunity.includes("Connect and grow with us.")) {
+  failures++;
+  console.error("FAIL approved Community heading is not personalized");
+} else console.log("ok  approved Community heading is personalized");
 
 // Profile sections are tappable rows that open sub-pages; row faces carry
 // a one-line description, not live details
