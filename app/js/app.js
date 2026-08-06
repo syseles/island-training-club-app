@@ -132,19 +132,28 @@ export async function maybeRedirectToApply() {
   }
 }
 
+let renderGeneration = 0;
+
 async function renderWithFeedback() {
+  const generation = ++renderGeneration;
   viewEl.setAttribute("aria-busy", "true");
-  const timer = setTimeout(() => { routeLoader.hidden = false; }, 300);
+  const timer = setTimeout(() => {
+    if (generation === renderGeneration) routeLoader.hidden = false;
+  }, 300);
   try {
-    await render();
+    await render(generation);
+  } catch (err) {
+    if (generation === renderGeneration) throw err;
   } finally {
     clearTimeout(timer);
-    routeLoader.hidden = true;
-    viewEl.removeAttribute("aria-busy");
+    if (generation === renderGeneration) {
+      routeLoader.hidden = true;
+      viewEl.removeAttribute("aria-busy");
+    }
   }
 }
 
-async function render() {
+async function render(generation = renderGeneration) {
   const parts = parseHash();
   const [page, arg, arg2] = parts.length ? parts : ["home"];
 
@@ -207,6 +216,10 @@ async function render() {
       out = views.viewNotFound();
   }
 
+  // A newer route may finish while this view was awaiting live data. Only
+  // the latest generation may redirect or commit shared page chrome.
+  if (generation !== renderGeneration) return;
+
   if (out && typeof out === "object" && out.redirect) {
     location.hash = out.redirect;
     return;
@@ -220,6 +233,7 @@ async function render() {
   // Best-effort: append unread-count badge to the Notifications nav item.
   if (isLive() && user) {
     views.unreadBadge().then((badge) => {
+      if (generation !== renderGeneration) return;
       const notifLink = navEl.querySelector('a[href="#/notifications"]');
       if (notifLink && badge) notifLink.insertAdjacentHTML("afterbegin", badge);
     }).catch(() => {});
@@ -385,9 +399,9 @@ document.addEventListener("click", async (e) => {
       const id = el.closest("[data-notification-id]").dataset.notificationId;
       try {
         await store.markNotificationRead(id);
-        await renderWithFeedback();
+        render();
       } catch (err) {
-        toast(err.message || "Failed to mark read", true);
+        toast(err.message || "Failed to mark read");
       }
       break;
     }

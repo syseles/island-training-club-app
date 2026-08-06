@@ -29,3 +29,25 @@ Complete.
 ## Concerns
 
 None. Notification and Giving behavior were not changed.
+
+## Fix Round 1
+
+### Status
+
+Complete. Route rendering now uses generations: stale renders cannot commit page DOM, redirect, append notification badges, surface stale errors, or clear the current render's `aria-busy`/delayed loader state. The Notification-specific handler was restored to its pre-Task-2 behavior.
+
+### Regression Coverage
+
+- Added a deterministic three-render overlap test. A stale middle completion must leave the current loader and busy state intact; the current Membership Details route commits; the oldest route then completes without replacing it.
+- Added delegated sign-out rejection coverage beyond Google sign-in. It verifies the exact `Signing out…` label, duplicate suppression, control recovery, alert output, and absence of a success toast.
+- Updated the boot/auth source contract to require the feedback-wrapped render.
+
+### Commands and Results
+
+- `node app/live-auth-smoke.mjs && node app/smoke.mjs` — PASS; focused live-auth regressions passed and the full smoke suite ended with `All smoke tests passed.`
+- `for f in app/js/*.js app/*.mjs; do node --check "$f" || exit; done` — PASS; all JavaScript and MJS syntax checks exited 0.
+- `git diff --check` — PASS; no whitespace errors.
+
+### Concerns
+
+None.

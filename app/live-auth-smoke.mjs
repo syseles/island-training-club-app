@@ -87,6 +87,7 @@ const applicationUpdates = [];
 const profileUpdates = [];
 let applicationReadError = null;
 let applicationReadGate = null;
+const applicationReadGates = [];
 let profileListError = null;
 let applicationListError = null;
 let profileUpdateError = null;
@@ -95,6 +96,8 @@ let authStateChangeHandler = null;
 let authCallbackLocked = false;
 let oauthCalls = 0;
 let releaseOAuth = null;
+let signOutCalls = 0;
+let releaseSignOut = null;
 const deferredAuthTasks = [];
 const fixedIso = "2026-08-05T02:00:00.000Z";
 const RealDate = Date;
@@ -140,6 +143,10 @@ const fakeSupabase = {
     signInWithOAuth() {
       oauthCalls++;
       return new Promise((resolve) => { releaseOAuth = resolve; });
+    },
+    signOut() {
+      signOutCalls++;
+      return new Promise((resolve) => { releaseSignOut = resolve; });
     },
   },
   from(table) {
@@ -212,7 +219,8 @@ const fakeSupabase = {
               }
               return {
                 maybeSingle: async () => {
-                  if (applicationReadGate) await applicationReadGate;
+                  const readGate = applicationReadGates.shift() || applicationReadGate;
+                  if (readGate) await readGate;
                   return {
                     data: structuredClone(applicationRows.get(value) || null),
                     error: applicationReadError,
@@ -748,6 +756,42 @@ applicationReadGate = null;
 assert.equal(viewEl.hasAttribute("aria-busy"), false, "route busy state must clear");
 assert.equal(routeLoader.hidden, true, "route loading feedback must clear");
 
+// Three overlapping routes prove that stale completion cannot clear current
+// feedback and out-of-order completion cannot replace the newest route.
+const deferred = () => {
+  let resolve;
+  const promise = new Promise((done) => { resolve = done; });
+  return { promise, resolve };
+};
+const oldestGate = deferred();
+const middleGate = deferred();
+const currentGate = deferred();
+applicationReadGates.push(oldestGate.promise, middleGate.promise, currentGate.promise);
+location.hash = "#/account/privacy";
+const oldestRender = windowListeners.get("hashchange")();
+location.hash = "#/account/indemnity";
+const middleRender = windowListeners.get("hashchange")();
+location.hash = "#/account/details";
+const currentRender = windowListeners.get("hashchange")();
+advanceTimersBy(300);
+assert.equal(viewEl.getAttribute("aria-busy"), "true");
+assert.equal(routeLoader.hidden, false);
+middleGate.resolve();
+await middleRender;
+assert.equal(viewEl.getAttribute("aria-busy"), "true", "stale completion must not clear current busy state");
+assert.equal(routeLoader.hidden, false, "stale completion must not hide the current loader");
+currentGate.resolve();
+await currentRender;
+const currentRouteHtml = viewEl.innerHTML;
+assert.match(currentRouteHtml, /Membership Details/);
+assert.equal(viewEl.hasAttribute("aria-busy"), false);
+assert.equal(routeLoader.hidden, true);
+oldestGate.resolve();
+await oldestRender;
+assert.equal(viewEl.innerHTML, currentRouteHtml, "an older route must not commit after the current route");
+assert.equal(viewEl.hasAttribute("aria-busy"), false);
+assert.equal(routeLoader.hidden, true);
+
 // Approval queue failures must be truthful and preserve the last good queue.
 applicationReadError = null;
 profile.role = "super_admin";
@@ -798,6 +842,28 @@ assert.equal(googleControl.textContent, "Continue with Google");
 assert.equal(googleControl.hasAttribute("aria-busy"), false);
 assert.deepEqual(toastStack.children.map((item) => item.textContent), ["OAuth unavailable"]);
 assert.equal(toastStack.children[0].getAttribute("role"), "alert");
+
+// Exercise a second delegated path: sign-out must also suppress duplicate
+// clicks, recover its control on rejection, and withhold the success toast.
+const signOutControl = makeElement();
+signOutControl.textContent = "Sign out";
+signOutControl.dataset = { action: "signout" };
+signOutControl.closest = () => signOutControl;
+toastStack.children.length = 0;
+const firstSignOut = click({ target: signOutControl });
+assert.equal(signOutControl.disabled, true);
+assert.equal(signOutControl.textContent, "Signing out…");
+assert.equal(signOutControl.getAttribute("aria-busy"), "true");
+const duplicateSignOut = click({ target: signOutControl });
+assert.equal(signOutCalls, 1, "pending sign-out must prevent a duplicate store action");
+releaseSignOut({ error: new Error("Sign-out unavailable") });
+await Promise.all([firstSignOut, duplicateSignOut]);
+assert.equal(signOutControl.disabled, false);
+assert.equal(signOutControl.textContent, "Sign out");
+assert.equal(signOutControl.hasAttribute("aria-busy"), false);
+assert.deepEqual(toastStack.children.map((item) => item.textContent), ["Sign-out unavailable"]);
+assert.equal(toastStack.children.some((item) => item.textContent === "Signed out"), false);
+await store.getCurrentUser();
 
 const approvalClick = {
   target: {

@@ -1381,11 +1381,11 @@ if (!/window\.addEventListener\("hashchange",[\s\S]*await renderWithFeedback\(\)
 } else {
   console.log("ok  app.js: hashchange awaits render failures and toasts them");
 }
-if (!/await render\(\);[\s\S]*await maybeRedirectToApply\(\);/.test(appSrc)) {
+if (!/await renderWithFeedback\(\);[\s\S]*await maybeRedirectToApply\(\);/.test(appSrc)) {
   failures++;
-  console.error("FAIL app.js: boot/auth flows should await render and maybeRedirectToApply");
+  console.error("FAIL app.js: boot/auth flows should await feedback-wrapped render and maybeRedirectToApply");
 } else {
-  console.log("ok  app.js: boot/auth flows await render and maybeRedirectToApply");
+  console.log("ok  app.js: boot/auth flows await feedback-wrapped render and maybeRedirectToApply");
 }
 if (!appSrc.includes('out = u && u.status === "approved" ? { redirect: "#/account" } : await views.viewApply();')) {
   failures++;
