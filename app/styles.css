@@ -4,6 +4,62 @@
    white athletic type, restrained radii, documentary photography.
    ========================================================================== */
 
+@font-face {
+  font-family: "Barlow";
+  src: url("../assets/fonts/barlow-400-latin.woff2") format("woff2");
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Barlow";
+  src: url("../assets/fonts/barlow-500-latin.woff2") format("woff2");
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Barlow";
+  src: url("../assets/fonts/barlow-600-latin.woff2") format("woff2");
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Barlow";
+  src: url("../assets/fonts/barlow-700-latin.woff2") format("woff2");
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Barlow Condensed";
+  src: url("../assets/fonts/barlow-condensed-700-latin.woff2") format("woff2");
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Barlow Condensed";
+  src: url("../assets/fonts/barlow-condensed-800-latin.woff2") format("woff2");
+  font-style: normal;
+  font-weight: 800;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Barlow Condensed";
+  src: url("../assets/fonts/barlow-condensed-900-latin.woff2") format("woff2");
+  font-style: normal;
+  font-weight: 900;
+  font-display: swap;
+}
+
 :root {
   --bg: #030504;
   --surface: #0b0f0e;
@@ -11,18 +67,18 @@
   --surface-3: #111614;
   --ink: #f6f7f0;
   --muted: #8b918f;
-  --faint: #5c6360;
+  --faint: #79807d;
   --accent: #caff31;
   --accent-ink: #050704;
-  --line: #2a302e;
+  --line: #48504c;
   --line-soft: #232825;
   --danger: #ff6d5a;
   --warn: #ffd166;
   --radius-lg: 20px;
   --radius: 14px;
   --radius-sm: 10px;
-  --font: Arial, Helvetica, sans-serif;
-  --font-display: "Arial Narrow", Arial, Helvetica, sans-serif;
+  --font: "Barlow", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-display: "Barlow Condensed", "Arial Narrow", sans-serif;
   --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   --nav-h: 66px;
   --shell-w: 520px;
@@ -50,6 +106,25 @@ img { display: block; max-width: 100%; }
 a { color: inherit; }
 button { font: inherit; color: inherit; }
 input, select, textarea { font: inherit; }
+
+.skip-link {
+  position: fixed;
+  left: 12px;
+  top: -80px;
+  z-index: 100;
+  padding: 10px 14px;
+  border-radius: var(--radius-sm);
+  background: var(--accent);
+  color: var(--accent-ink);
+  font-weight: 700;
+}
+
+.skip-link:focus { top: 12px; }
+
+:where(a, button, input, select, textarea, [tabindex]):focus-visible {
+  outline: 3px solid var(--accent);
+  outline-offset: 3px;
+}
 
 /* ---- App shell -------------------------------------------------------- */
 
@@ -99,7 +174,7 @@ input, select, textarea { font: inherit; }
 }
 
 .top-wordmark span {
-  font-size: 8px;
+  font-size: 10px;
   font-weight: 800;
   letter-spacing: .16em;
 }
@@ -108,8 +183,8 @@ input, select, textarea { font: inherit; }
   margin-left: auto;
   display: grid;
   place-items: center;
-  width: 36px;
-  height: 36px;
+  width: 44px;
+  height: 44px;
   border-radius: 50%;
   background: var(--accent);
   color: var(--accent-ink);
@@ -157,7 +232,7 @@ input, select, textarea { font: inherit; }
   gap: 5px;
   color: var(--muted);
   text-decoration: none;
-  font-size: 9px;
+  font-size: 10px;
   font-weight: 800;
   letter-spacing: .06em;
   text-transform: uppercase;
@@ -171,7 +246,7 @@ input, select, textarea { font: inherit; }
 /* ---- Type ------------------------------------------------------------- */
 
 .kicker {
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 800;
   letter-spacing: .1em;
   text-transform: uppercase;
@@ -224,7 +299,7 @@ input, select, textarea { font: inherit; }
   gap: 5px;
   padding: 5px 9px;
   border-radius: 999px;
-  font-size: 9.5px;
+  font-size: 11px;
   font-weight: 900;
   letter-spacing: .07em;
   text-transform: uppercase;
@@ -272,7 +347,7 @@ input, select, textarea { font: inherit; }
   cursor: pointer;
 }
 
-.btn:active { transform: translateY(1px); }
+.btn:active { opacity: .82; }
 .btn[disabled] { opacity: .45; cursor: not-allowed; }
 
 .btn.ghost {
@@ -289,7 +364,7 @@ input, select, textarea { font: inherit; }
   border: 1px solid var(--danger);
 }
 
-.btn.sm { min-height: 40px; padding: 9px 14px; font-size: 11px; width: auto; }
+.btn.sm { min-height: 44px; padding: 10px 14px; font-size: 12px; width: auto; }
 
 .btn-row { display: grid; gap: 10px; margin-top: 16px; }
 .btn-row.two { grid-template-columns: 1fr 1fr; }
@@ -400,7 +475,7 @@ a.link-card > .card-body > svg {
 }
 
 .ph-role {
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 800;
   letter-spacing: .22em;
   text-transform: uppercase;
@@ -500,7 +575,7 @@ a.profile-row:hover .pr-text strong { color: var(--accent); }
 }
 
 .session-row time {
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 900;
   line-height: 1.35;
   color: var(--ink);
@@ -510,7 +585,7 @@ a.profile-row:hover .pr-text strong { color: var(--accent); }
   display: block;
   font-weight: 700;
   color: var(--faint);
-  font-size: 9px;
+  font-size: 10px;
   letter-spacing: .06em;
   text-transform: uppercase;
 }
@@ -538,7 +613,7 @@ a.profile-row:hover .pr-text strong { color: var(--accent); }
 }
 
 .session-row .spots {
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 800;
   color: var(--muted);
 }
@@ -584,7 +659,7 @@ a.profile-row:hover .pr-text strong { color: var(--accent); }
   border-radius: var(--radius-sm);
   background: transparent;
   color: var(--muted);
-  font-size: 9px;
+  font-size: 10px;
   font-weight: 800;
   letter-spacing: .05em;
   text-transform: uppercase;
@@ -626,12 +701,13 @@ a.profile-row:hover .pr-text strong { color: var(--accent); }
 
 .chip {
   flex: 0 0 auto;
+  min-height: 44px;
   border: 1px solid var(--line);
   border-radius: 999px;
   background: transparent;
   color: var(--muted);
-  padding: 8px 13px;
-  font-size: 10px;
+  padding: 10px 13px;
+  font-size: 11px;
   font-weight: 800;
   letter-spacing: .05em;
   text-transform: uppercase;
@@ -652,6 +728,7 @@ a.profile-row:hover .pr-text strong { color: var(--accent); }
 }
 
 .week-nav button {
+  min-height: 44px;
   background: none;
   border: 0;
   color: var(--muted);
@@ -660,7 +737,7 @@ a.profile-row:hover .pr-text strong { color: var(--accent); }
   letter-spacing: .06em;
   text-transform: uppercase;
   cursor: pointer;
-  padding: 6px 0;
+  padding: 10px 4px;
 }
 
 .week-nav button:hover { color: var(--accent); }
@@ -691,7 +768,7 @@ a.profile-row:hover .pr-text strong { color: var(--accent); }
 
 .meta-grid small {
   display: block;
-  font-size: 9px;
+  font-size: 10px;
   font-weight: 800;
   letter-spacing: .07em;
   text-transform: uppercase;
@@ -749,7 +826,7 @@ a.profile-row:hover .pr-text strong { color: var(--accent); }
 .field label {
   display: block;
   margin-bottom: 6px;
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 800;
   letter-spacing: .08em;
   text-transform: uppercase;
@@ -770,7 +847,6 @@ a.profile-row:hover .pr-text strong { color: var(--accent); }
 .field input:focus,
 .field select:focus,
 .field textarea:focus {
-  outline: 2px solid rgba(202, 255, 49, .5);
   border-color: var(--accent);
 }
 
@@ -780,6 +856,7 @@ a.profile-row:hover .pr-text strong { color: var(--accent); }
 
 .check {
   display: flex;
+  min-height: 44px;
   gap: 10px;
   align-items: flex-start;
   margin-top: 14px;
@@ -864,12 +941,15 @@ a.profile-row:hover .pr-text strong { color: var(--accent); }
 
 .admin-tabs a {
   flex: 1;
+  display: grid;
+  place-items: center;
+  min-height: 44px;
   text-align: center;
-  padding: 9px 6px;
+  padding: 10px 6px;
   border-radius: 8px;
   color: var(--muted);
   text-decoration: none;
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 800;
   letter-spacing: .06em;
   text-transform: uppercase;
@@ -888,7 +968,7 @@ a.profile-row:hover .pr-text strong { color: var(--accent); }
 .applicant dt { color: var(--faint); font-weight: 700; }
 .applicant dd { margin: 0; color: var(--ink); }
 
-.role-select { width: auto; padding: 8px 10px; font-size: 12px; }
+.role-select { width: auto; min-height: 44px; padding: 10px; font-size: 12px; }
 
 .member-row {
   display: flex;
@@ -996,4 +1076,19 @@ a.profile-row:hover .pr-text strong { color: var(--accent); }
 @keyframes toast-in {
   from { opacity: 0; transform: translateY(8px); }
   to { opacity: 1; transform: translateY(0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    scroll-behavior: auto !important;
+    animation-duration: .01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: .01ms !important;
+  }
+}
+
+@media (max-width: 420px) {
+  .field-row { grid-template-columns: 1fr; gap: 0; }
+  .booking-card .actions { flex-wrap: wrap; }
+  .member-row { align-items: flex-start; flex-wrap: wrap; }
 }

@@ -624,6 +624,7 @@ if (missingPrivacy?.redirect || !missingPrivacy.includes("Application details un
 
 const domListeners = new Map();
 const windowListeners = new Map();
+let activeElement = null;
 const makeElement = () => ({
   children: [],
   className: "",
@@ -631,6 +632,10 @@ const makeElement = () => ({
   textContent: "",
   classList: { toggle() {} },
   appendChild(child) { this.children.push(child); },
+  focus(options) {
+    activeElement = this;
+    this.focusOptions = options;
+  },
   remove() {},
   querySelector() { return null; },
 });
@@ -641,6 +646,7 @@ const elements = new Map([
   ["toast-stack", makeElement()],
 ]);
 globalThis.document = {
+  get activeElement() { return activeElement; },
   getElementById: (id) => elements.get(id),
   createElement: () => makeElement(),
   addEventListener: (event, callback) => domListeners.set(event, callback),
@@ -703,6 +709,8 @@ location.hash = "#/admin";
 toastStack.children.length = 0;
 await windowListeners.get("hashchange")();
 const retainedQueueHtml = elements.get("view").innerHTML;
+assert.equal(document.activeElement, elements.get("view"), "Successful route renders must focus #view");
+assert.deepEqual(elements.get("view").focusOptions, { preventScroll: true });
 assert.match(retainedQueueHtml, /Submitted Runner/);
 assert.match(retainedQueueHtml, /Incomplete Runner/);
 

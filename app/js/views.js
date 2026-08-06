@@ -121,7 +121,6 @@ const NAV_ITEMS = [
   { key: "community", label: "Community", icon: "people", href: "#/community" },
   { key: "notifications", label: "Notifications", icon: "bell", href: "#/notifications", roles: ["signed-in"] },
   { key: "account", label: "Account", icon: "user", href: "#/account" },
-  { key: "admin", label: "Admin", icon: "shield", href: "#/admin", roles: ["admin", "superadmin", "super_admin"] },
 ];
 
 export function navHTML(routeKey, user) {

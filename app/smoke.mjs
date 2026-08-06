@@ -2,6 +2,8 @@
 // Run: node --input-type=module < smoke.mjs  (from the app/ directory)
 
 import { spawnSync } from "node:child_process";
+import { existsSync, readFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const liveAuth = spawnSync(process.execPath, [fileURLToPath(new URL("./live-auth-smoke.mjs", import.meta.url))], {
@@ -111,6 +113,40 @@ if (liveApply.status !== 0) {
   if (liveApply.stderr) process.stderr.write(liveApply.stderr);
   process.exit(liveApply.status || 1);
 }
+
+// --- Shared UI and accessibility foundations ---
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const indexHtml = readFileSync(resolve(__dirname, "index.html"), "utf8");
+const stylesCss = readFileSync(resolve(__dirname, "styles.css"), "utf8");
+const viewsSource = readFileSync(resolve(__dirname, "js/views.js"), "utf8");
+for (const path of [
+  "../assets/fonts/barlow-400-latin.woff2",
+  "../assets/fonts/barlow-500-latin.woff2",
+  "../assets/fonts/barlow-600-latin.woff2",
+  "../assets/fonts/barlow-700-latin.woff2",
+  "../assets/fonts/barlow-condensed-700-latin.woff2",
+  "../assets/fonts/barlow-condensed-800-latin.woff2",
+  "../assets/fonts/barlow-condensed-900-latin.woff2",
+  "../assets/fonts/OFL-Barlow.txt",
+]) {
+  if (!existsSync(new URL(path, import.meta.url))) throw new Error(`missing self-hosted font asset: ${path}`);
+}
+if (!indexHtml.includes('rel="preload"') || !indexHtml.includes("barlow-400-latin.woff2")) {
+  throw new Error("primary Barlow font must be preloaded");
+}
+for (const contract of ["@font-face", "font-display: swap", ":focus-visible", "prefers-reduced-motion", "max-width: 420px"]) {
+  if (!stylesCss.includes(contract)) throw new Error(`missing accessibility CSS contract: ${contract}`);
+}
+if (!indexHtml.includes('class="skip-link"') || !indexHtml.includes('id="view"')) {
+  throw new Error("app shell must provide a skip link and main target");
+}
+if (viewsSource.includes('{ key: "admin", label: "Admin"')) {
+  throw new Error("Admin belongs in Profile, not bottom navigation");
+}
+if (!viewsSource.includes('{ key: "notifications", label: "Notifications"')) {
+  throw new Error("Notifications must remain in bottom navigation");
+}
+console.log("ok  shared UI and accessibility foundation contracts");
 
 // --- localStorage shim ---
 const mem = new Map();
@@ -1028,10 +1064,6 @@ store.resetDemo();
 // verify the live-mode HTML source exists in views.js and that the live
 // config evaluates correctly when imported fresh. The live render path
 // is verified manually against a deployed staging environment.
-import { readFileSync, existsSync } from "node:fs";
-import { dirname, resolve } from "node:path";
-const __dirname = dirname(fileURLToPath(import.meta.url));
-
 const _savedWindow = globalThis.window;
 globalThis.window = {
   SUPABASE_URL: "https://test.supabase.co",
@@ -1197,9 +1229,9 @@ if (!/:\s*await views\.viewAdmin\(arg \|\| "approvals"\)/.test(appSrc)) {
 }
 if (viewsSrc.includes('href: "#/admin/users"')) {
   failures++;
-  console.error("FAIL views.js: Admin nav item should link to #/admin (the tabbed admin page)");
+  console.error("FAIL views.js: bottom navigation must not contain the legacy Admin users link");
 } else {
-  console.log("ok  views.js: Admin nav item links to #/admin");
+  console.log("ok  views.js: bottom navigation has no legacy Admin users link");
 }
 const storeSrc2 = readFileSync(resolve(__dirname, "js/store.js"), "utf8");
 if (!storeSrc2.includes("listApprovalCandidates")) {

@@ -163,6 +163,7 @@ async function render() {
     }).catch(() => {});
   }
   window.scrollTo({ top: 0 });
+  viewEl.focus({ preventScroll: true });
   prevPage = page;
 }
 
