@@ -100,6 +100,14 @@ async function refreshAfterAdminMutation(successMessage) {
   }
 }
 
+function showCampaignError(control, message) {
+  const host = control?.closest?.("form")?.querySelector?.("#campaign-error");
+  if (!host) return;
+  host.textContent = message;
+  host.className = "form-error";
+  host.setAttribute("role", "alert");
+}
+
 function lockAdminMutationControls(control) {
   const group = control?.closest?.(".member-role-actions");
   const controls = group?.querySelectorAll?.("button, select") || [control];
@@ -259,7 +267,7 @@ async function render(generation = renderGeneration) {
       out = views.viewCommunity(arg);
       break;
     case "giving":
-      out = store.currentUser() ? views.viewGiving() : { redirect: "#/account" };
+      out = store.currentUser() ? await views.viewGiving() : { redirect: "#/account" };
       break;
     case "account":
       // Awaited: account sections can fetch live application data and use
@@ -286,9 +294,11 @@ async function render(generation = renderGeneration) {
       out =
         arg === "activity"
           ? views.viewAdminActivity(arg2)
-          : arg === "users"
-            ? { redirect: "#/admin/members" }
-            : await views.viewAdmin(arg || "approvals");
+          : arg === "campaign"
+            ? await views.viewAdminCampaign(arg2)
+            : arg === "users"
+              ? { redirect: "#/admin/members" }
+              : await views.viewAdmin(arg || "approvals");
       break;
     case "notifications":
       nextNotificationRouteRows = await notificationRowsPromise;
@@ -606,7 +616,7 @@ document.addEventListener("click", async (e) => {
 
     case "giving-back":
       views.givingState.step = 1;
-      render();
+      await renderWithFeedback();
       break;
 
     case "giving-confirm": {
@@ -618,17 +628,54 @@ document.addEventListener("click", async (e) => {
         amount: g.amount,
         note: g.note,
         ref: g.ref,
+        campaignId: g.campaignId,
       });
       g.step = 3;
       toast("Gift recorded — awaiting confirmation");
-      render();
+      await renderWithFeedback();
       break;
     }
 
     case "giving-reset":
       views.resetGivingState();
-      render();
+      await renderWithFeedback();
       break;
+
+    case "campaign-publish": {
+      const name = el.dataset.campaignName || "this campaign";
+      if (!window.confirm(`Publish “${name}”? Approved members will be notified.`)) break;
+      let refreshResult = null;
+      try {
+        await withBusyControl(el, "Publishing…", async () => {
+          await store.publishGivingCampaign(el.dataset.campaign);
+          refreshResult = await refreshAfterAdminMutation(`“${name}” published.`);
+        });
+        if (refreshResult && !refreshResult.refreshed) el.disabled = true;
+      } catch (err) {
+        const message = err.message || "Unable to publish campaign";
+        showCampaignError(el, message);
+        toast(message, true);
+      }
+      break;
+    }
+
+    case "campaign-close": {
+      const name = el.dataset.campaignName || "this campaign";
+      if (!window.confirm(`Close “${name}”? Closed campaigns cannot be edited or republished.`)) break;
+      let refreshResult = null;
+      try {
+        await withBusyControl(el, "Closing…", async () => {
+          await store.closeGivingCampaign(el.dataset.campaign);
+          refreshResult = await refreshAfterAdminMutation(`“${name}” closed.`);
+        });
+        if (refreshResult && !refreshResult.refreshed) el.disabled = true;
+      } catch (err) {
+        const message = err.message || "Unable to close campaign";
+        showCampaignError(el, message);
+        toast(message, true);
+      }
+      break;
+    }
   }
 });
 
@@ -875,6 +922,50 @@ document.addEventListener("submit", async (e) => {
       toast("Prayer request sent — leaders will pray with you");
       location.hash = "#/community";
       await renderWithFeedback();
+      break;
+    }
+
+    case "form-campaign": {
+      e.preventDefault();
+      if (!form.reportValidity()) return;
+      const control = form.querySelector('[type="submit"]');
+      const errorHost = form.querySelector("#campaign-error");
+      if (errorHost) {
+        errorHost.textContent = "";
+        errorHost.className = "";
+        errorHost.removeAttribute("role");
+      }
+      const fd = new FormData(form);
+      let refreshFailed = false;
+      await withBusyControl(control, "Saving…", async () => {
+        try {
+          const campaign = await store.saveGivingCampaign({
+            id: form.dataset.campaign || "",
+            title: fd.get("title"),
+            description: fd.get("description"),
+            goalHKD: fd.get("goalHKD"),
+            fpsId: fd.get("fpsId"),
+            fpsPayee: fd.get("fpsPayee"),
+          });
+          toast(form.dataset.campaign ? "Campaign saved." : "Campaign draft created.");
+          location.hash = `#/admin/campaign/${campaign.id}`;
+          try {
+            await renderWithFeedback();
+          } catch (refreshError) {
+            refreshFailed = true;
+            toast(`Change saved, but this Admin view could not refresh. ${refreshError.message || "Refresh failed"}`, true);
+          }
+        } catch (err) {
+          const message = err.message || "Unable to save campaign";
+          if (errorHost) {
+            errorHost.textContent = message;
+            errorHost.className = "form-error";
+            errorHost.setAttribute("role", "alert");
+          }
+          toast(message, true);
+        }
+      });
+      if (refreshFailed) control.disabled = true;
       break;
     }
 

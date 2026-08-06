@@ -135,6 +135,10 @@ applicationRows.set("pending-submitted", {
 });
 const applicationUpdates = [];
 const profileUpdates = [];
+const givingCampaignRows = [];
+const givingCampaignMutations = [];
+let givingCampaignMutationResult = "row";
+let givingCampaignReadError = null;
 let applicationReadError = null;
 let applicationReadGate = null;
 const applicationReadGates = [];
@@ -328,6 +332,62 @@ const fakeSupabase = {
         },
       };
     }
+    if (table === "giving_campaigns") {
+      const selected = (rows) => ({
+        order(column, options) {
+          if (column !== "created_at" || options?.ascending !== false) {
+            throw new Error("Giving campaign list must be newest first");
+          }
+          return Promise.resolve({ data: structuredClone(rows), error: givingCampaignReadError });
+        },
+        eq(column, value) {
+          if (column !== "status" || value !== "published") throw new Error("Unexpected Giving active filter");
+          return {
+            maybeSingle: async () => ({
+              data: structuredClone(rows.find((row) => row.status === "published") || null),
+              error: givingCampaignReadError,
+            }),
+          };
+        },
+      });
+      const mutation = (kind, patch) => {
+        const filters = [];
+        const query = {
+          eq(column, value) { filters.push(["eq", column, value]); return query; },
+          neq(column, value) { filters.push(["neq", column, value]); return query; },
+          select() {
+            return {
+              single: async () => {
+                givingCampaignMutations.push({ kind, patch: structuredClone(patch), filters: structuredClone(filters) });
+                if (givingCampaignMutationResult === "zero") return { data: null, error: null };
+                if (kind === "insert") {
+                  if (givingCampaignRows.some((row) => ["draft", "published"].includes(row.status))) {
+                    return { data: null, error: new Error("giving_campaigns_one_open") };
+                  }
+                  const now = "2026-08-05T02:00:00.000Z";
+                  const row = { id: `campaign-live-${givingCampaignRows.length + 1}`, ...structuredClone(patch), created_at: now, updated_at: now, published_at: null, closed_at: null };
+                  givingCampaignRows.push(row);
+                  return { data: structuredClone(row), error: null };
+                }
+                const row = givingCampaignRows.find((item) => filters.every(([op, column, value]) => op === "eq" ? item[column] === value : item[column] !== value));
+                if (!row) return { data: null, error: null };
+                Object.assign(row, structuredClone(patch));
+                if (patch.status === "published" && !row.published_at) row.published_at = fixedIso;
+                if (patch.status === "closed") row.closed_at = fixedIso;
+                row.updated_at = fixedIso;
+                return { data: structuredClone(row), error: null };
+              },
+            };
+          },
+        };
+        return query;
+      };
+      return {
+        select() { return selected(givingCampaignRows); },
+        insert(row) { return mutation("insert", row); },
+        update(patch) { return mutation("update", patch); },
+      };
+    }
     if (table === "applications") {
       return {
         select() {
@@ -394,6 +454,81 @@ const views = await import("./js/views.js");
 store.load();
 
 await store.getCurrentUser();
+assert.deepEqual(await store.listGivingCampaigns(), []);
+const liveDraft = await store.saveGivingCampaign({
+  title: "Live Winter Relief",
+  description: "Support our partner community through winter.",
+  goalHKD: 30000,
+  fpsId: "1234567",
+  fpsPayee: "Island Evangelical Community Church",
+});
+assert.equal(liveDraft.status, "draft");
+assert.equal(liveDraft.goalHKD, 30000, "DB snake_case must normalize at the store seam");
+assert.equal(givingCampaignMutations.at(-1).patch.goal_hkd, 30000);
+assert.equal(givingCampaignMutations.at(-1).patch.creator_profile_id, authUser.id);
+await assert.rejects(
+  () => store.saveGivingCampaign({ ...liveDraft, goalHKD: 12.5 }),
+  /positive whole-HKD goal/
+);
+const writesAfterValidation = givingCampaignMutations.length;
+assert.equal(writesAfterValidation, 1, "invalid campaigns must fail before live writes");
+await assert.rejects(() => store.saveGivingCampaign({
+  title: "Second open campaign",
+  description: "Must be rejected by the authoritative database.",
+  goalHKD: 5000,
+  fpsId: "9999999",
+  fpsPayee: "Island Evangelical Community Church",
+}), /giving_campaigns_one_open/);
+const liveEdited = await store.saveGivingCampaign({ ...liveDraft, title: "Live Winter Relief 2027" });
+assert.equal(liveEdited.title, "Live Winter Relief 2027");
+assert.deepEqual(givingCampaignMutations.at(-1).filters, [["eq", "id", liveDraft.id], ["neq", "status", "closed"]]);
+const livePublished = await store.publishGivingCampaign(liveDraft.id);
+assert.equal(livePublished.status, "published");
+assert.equal((await store.getActiveGivingCampaign()).id, liveDraft.id);
+profile.role = "member";
+await store.getCurrentUser();
+const liveMemberGivingHtml = await views.viewGiving();
+for (const copy of ["Live Winter Relief 2027", "HK$0 raised", "Give via FPS"]) {
+  assert.ok(liveMemberGivingHtml.includes(copy), `live member Giving HTML missing ${copy}`);
+}
+const liveGift = store.recordDonation({
+  userId: authUser.id,
+  name: "Riley Runner",
+  amount: 400,
+  ref: "GIVE-LIVE",
+  campaignId: liveDraft.id,
+});
+assert.equal(liveGift.campaignTitle, "Live Winter Relief 2027");
+assert.equal(store.campaignRaised(liveDraft.id), 400);
+profile.role = "super_admin";
+await store.getCurrentUser();
+const livePublishedAt = livePublished.publishedAt;
+const livePublishedEdit = await store.saveGivingCampaign({ ...livePublished, description: "Updated while published." });
+assert.equal(livePublishedEdit.status, "published");
+assert.equal(livePublishedEdit.publishedAt, livePublishedAt, "published edits must not transition status again");
+givingCampaignMutationResult = "zero";
+await assert.rejects(() => store.closeGivingCampaign(liveDraft.id), /transition conflict/);
+givingCampaignMutationResult = "row";
+const liveClosed = await store.closeGivingCampaign(liveDraft.id);
+assert.equal(liveClosed.status, "closed");
+assert.equal(await store.getActiveGivingCampaign(), null);
+await assert.rejects(() => store.saveGivingCampaign({ ...liveClosed, title: "Closed forgery" }), /save conflict/);
+const secondLiveDraft = await store.saveGivingCampaign({
+  title: "Next Live Campaign",
+  description: "A new campaign after closure.",
+  goalHKD: 10000,
+  fpsId: "7654321",
+  fpsPayee: "Island Evangelical Community Church",
+});
+assert.equal(secondLiveDraft.status, "draft");
+profile.role = "member";
+await store.getCurrentUser();
+assert.equal(await store.getActiveGivingCampaign(), null, "draft campaigns must be invisible to members");
+await assert.rejects(() => store.listGivingCampaigns(), /Admin access required/);
+profile.role = "super_admin";
+await store.getCurrentUser();
+givingCampaignRows.length = 0;
+console.log("ok  live Giving store mapping, checked mutations, transitions, and role guards");
 const queue = await store.listApprovalCandidates();
 const submitted = queue.find((item) => item.id === "pending-submitted");
 const incomplete = queue.find((item) => item.id === "pending-incomplete");
@@ -491,14 +626,14 @@ if (store.currentUser().status !== "declined") {
   throw new Error("Live declined profiles must hydrate with declined status");
 }
 const liveGivingSensitiveCopy = ["Give via FPS", "Current campaign", "I’ve made the transfer", "Giving history"];
-const declinedGiving = views.viewGiving();
+const declinedGiving = await views.viewGiving();
 if (!declinedGiving.includes("contact an ITC leader") ||
     liveGivingSensitiveCopy.some((copy) => declinedGiving.includes(copy))) {
   throw new Error("Live declined profiles must receive content-safe locked Giving");
 }
 profile.role = "pending";
 await store.getCurrentUser();
-const pendingGiving = views.viewGiving();
+const pendingGiving = await views.viewGiving();
 if (!pendingGiving.includes("approved ITC members") ||
     liveGivingSensitiveCopy.some((copy) => pendingGiving.includes(copy))) {
   throw new Error("Live pending profiles must receive content-safe locked Giving");

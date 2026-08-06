@@ -1,6 +1,7 @@
 // Headless smoke test: render every view for every user state.
 // Run: node --input-type=module < smoke.mjs  (from the app/ directory)
 
+import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
@@ -169,6 +170,26 @@ for (const [source, label, contracts] of [
   }
 }
 console.log("ok  live Giving database source contracts");
+
+for (const [contract, label] of [
+  [/export async function viewGiving\(\)/, "async member Giving view"],
+  [/export async function viewAdminCampaign\(id\)/, "Admin campaign route view"],
+  [/\["approvals", "activities", "giving", "members"\]/, "Admin Giving tab"],
+  [/data-action="campaign-publish"/, "publish control"],
+  [/data-action="campaign-close"/, "close control"],
+]) {
+  if (!contract.test(viewsSource)) throw new Error(`missing Giving UI contract: ${label}`);
+}
+for (const [contract, label] of [
+  [/case "giving":[\s\S]*await views\.viewGiving\(\)/, "awaited Giving route"],
+  [/case "campaign-publish"[\s\S]*withBusyControl\(el, "Publishing…"[\s\S]*refreshAfterAdminMutation/, "truthful publish feedback"],
+  [/case "campaign-close"[\s\S]*withBusyControl\(el, "Closing…"[\s\S]*refreshAfterAdminMutation/, "truthful close feedback"],
+  [/Publish “\$\{name\}”\? Approved members will be notified\./, "publication confirmation"],
+  [/Close “\$\{name\}”\? Closed campaigns cannot be edited or republished\./, "named close confirmation"],
+]) {
+  if (!contract.test(appSource)) throw new Error(`missing Giving action contract: ${label}`);
+}
+console.log("ok  Giving Admin routes, confirmations, and feedback source contracts");
 
 for (const path of [
   "../assets/fonts/archivo-latin-variable.woff2",
@@ -366,6 +387,85 @@ if (/Standard Chartered/i.test(dataSource) || /SCM27/i.test(appSource) ||
   failures++;
   console.error("FAIL Giving source must omit old campaign references and use the GIVE prefix");
 } else console.log("ok  Giving source is campaign-neutral");
+
+// --- Local Giving campaign management contract ---
+store.demoSignIn("admin");
+if ((await store.listGivingCampaigns()).length !== 0) throw new Error("fresh Admin campaign list must be empty");
+const campaignDraft = await store.saveGivingCampaign({
+  title: "Winter Relief",
+  description: "Support our partner community through winter.",
+  goalHKD: 25000,
+  fpsId: "1234567",
+  fpsPayee: "Island Evangelical Community Church",
+});
+if (campaignDraft.status !== "draft" || !campaignDraft.id) throw new Error("campaign draft was not created");
+const editedDraft = await store.saveGivingCampaign({ ...campaignDraft, title: "Winter Relief 2027" });
+if (editedDraft.title !== "Winter Relief 2027" || (await store.listGivingCampaigns()).length !== 1) {
+  throw new Error("campaign draft edit must update one record");
+}
+await assert.rejects(() => store.saveGivingCampaign({ ...campaignDraft, id: "", title: "Second open campaign" }), /Close the current campaign/);
+const mutableDraft = store.campaigns().find((item) => item.id === campaignDraft.id);
+mutableDraft.fpsId = "";
+await assert.rejects(() => store.publishGivingCampaign(campaignDraft.id), /FPS ID/);
+mutableDraft.fpsId = "1234567";
+const publishedCampaign = await store.publishGivingCampaign(campaignDraft.id);
+if (publishedCampaign.status !== "published" || (await store.getActiveGivingCampaign())?.id !== campaignDraft.id) {
+  throw new Error("published campaign must become active");
+}
+const publicationTime = publishedCampaign.publishedAt;
+const publishedEdit = await store.saveGivingCampaign({ ...publishedCampaign, description: "Updated while live." });
+if (publishedEdit.status !== "published" || publishedEdit.publishedAt !== publicationTime) {
+  throw new Error("published edits must not repeat the publication transition");
+}
+views.givingState.step = 2;
+views.givingState.ref = "GIVE-SMOKE";
+const activeGivingHtml = await views.viewGiving();
+for (const copy of ["Winter Relief 2027", "HK$0 raised", "1234567", "Island Evangelical Community Church"]) {
+  if (!activeGivingHtml.includes(copy)) throw new Error(`published Giving HTML missing ${copy}`);
+}
+const closedCampaign = await store.closeGivingCampaign(campaignDraft.id);
+if (closedCampaign.status !== "closed" || await store.getActiveGivingCampaign() !== null) {
+  throw new Error("closed campaign must stop being active");
+}
+await assert.rejects(() => store.saveGivingCampaign({ ...closedCampaign, title: "Mutated closed campaign" }), /immutable/);
+await assert.rejects(() => store.publishGivingCampaign(closedCampaign.id), /draft/);
+const nextDraft = await store.saveGivingCampaign({
+  title: "Next campaign",
+  description: "The next community campaign.",
+  goalHKD: 10000,
+  fpsId: "7654321",
+  fpsPayee: "Island Evangelical Community Church",
+});
+if (nextDraft.status !== "draft" || (await store.listGivingCampaigns()).length !== 2) {
+  throw new Error("a new draft must be allowed after closure");
+}
+const adminGivingHtml = await views.viewAdmin("giving");
+if (!/href="#\/admin\/giving" class="active"[^>]*aria-current="page"/.test(adminGivingHtml) ||
+    !adminGivingHtml.includes("Winter Relief 2027") || !adminGivingHtml.includes("Next campaign") ||
+    adminGivingHtml.includes("+ Create campaign")) {
+  throw new Error("Admin Giving tab must list campaign statuses and hide create while one is open");
+}
+const draftFormHtml = await views.viewAdminCampaign(nextDraft.id);
+for (const label of ["Campaign title", "Description", "Goal (HKD)", "FPS ID", "FPS payee"]) {
+  if (!draftFormHtml.includes(label)) throw new Error(`campaign form missing visible label ${label}`);
+}
+if (!draftFormHtml.includes('id="campaign-error" aria-live="polite"') ||
+    !draftFormHtml.includes('data-action="campaign-publish"')) {
+  throw new Error("draft campaign form must expose accessible errors and publish action");
+}
+const closedHistoryHtml = await views.viewAdminCampaign(closedCampaign.id);
+if (!closedHistoryHtml.includes("Closed") || /form-campaign|campaign-publish|campaign-close/.test(closedHistoryHtml)) {
+  throw new Error("closed campaigns must render read-only history");
+}
+store.demoSignIn("member");
+await assert.rejects(() => store.listGivingCampaigns(), /Admin access required/);
+await assert.rejects(() => store.saveGivingCampaign({ ...nextDraft, title: "Member forgery" }), /Admin access required/);
+if ((await views.viewAdminCampaign(nextDraft.id)).redirect !== "#/account") {
+  throw new Error("members must be denied Admin Giving routes");
+}
+store.resetDemo();
+views.resetGivingState();
+console.log("ok  local Giving campaign lifecycle and role guards");
 
 // --- Visitor state ---
 store.signOut();
@@ -609,7 +709,7 @@ if (!applyRes.user.indemnityAcceptedAt) {
 // is locked until approval, so paid rows would be dead ends
 const pendingUser = store.currentUser();
 const pendingNav = views.navHTML("giving", pendingUser);
-const pendingGiving = views.viewGiving();
+const pendingGiving = await views.viewGiving();
 if (!pendingNav.includes("#/giving")) {
   failures++;
   console.error("FAIL pending navigation must retain Giving");
@@ -698,7 +798,7 @@ if (!/href="#\/admin\/activities" class="active" aria-current="page"/.test(admin
 } else console.log("ok  active Admin tab exposes aria-current page");
 const adminMembersOut = await views.viewAdmin("members");
 await check("admin members", () => adminMembersOut);
-const adminGiving = views.viewGiving();
+const adminGiving = await views.viewGiving();
 if (!views.navHTML("giving", store.currentUser()).includes("#/giving") ||
     !adminGiving.includes("No active campaign right now") ||
     givingSensitiveCopy.some((copy) => adminGiving.includes(copy))) {
@@ -769,7 +869,7 @@ const minorApplicant = store.pendingApplicants().find((u) => u.email === "minor@
 store.declineApplicant(minorApplicant.id);
 store.signIn("minor@example.com");
 const declinedNav = views.navHTML("giving", store.currentUser());
-const declinedGiving = views.viewGiving();
+const declinedGiving = await views.viewGiving();
 if (!declinedNav.includes("#/giving")) {
   failures++;
   console.error("FAIL declined navigation must retain Giving");
@@ -1251,7 +1351,7 @@ if (!views.navHTML("giving", member).includes("#/giving") ||
   console.error("FAIL approved members need a control-free no-campaign Giving state");
 } else console.log("ok  approved members see the control-free no-campaign Giving state");
 store.demoSignIn("superadmin");
-const superGiving = views.viewGiving();
+const superGiving = await views.viewGiving();
 if (!views.navHTML("giving", store.currentUser()).includes("#/giving") ||
     !superGiving.includes("No active campaign right now") ||
     givingSensitiveCopy.some((copy) => superGiving.includes(copy))) {
@@ -1423,7 +1523,7 @@ store.resetDemo();
     console.error(`FAIL v11 migration must remove only seed gifts and initialize campaigns: ${JSON.stringify({ version: persisted.version, campaigns: persisted.campaigns, donationIds })}`);
   } else console.log("ok  v11 migration removes only known Giving seeds");
   store.signIn("member@itc.hk");
-  const migratedHistory = views.viewGiving();
+  const migratedHistory = await views.viewGiving();
   if (!migratedHistory.includes("No active campaign right now") ||
       !migratedHistory.includes("Giving history") || !migratedHistory.includes("REAL-GIFT") ||
       /form-giving|FPS QR|FPS ID|I’ve made the transfer/.test(migratedHistory)) {
@@ -2260,6 +2360,61 @@ if (views.adminMemberFilters.query || views.adminMemberFilters.status !== "all" 
   failures++;
   console.error("FAIL Clear filters must reset all view-local filters and focus search");
 } else console.log("ok  Clear filters resets all filters and focuses search");
+
+// Campaign actions inherit duplicate-safe busy controls, named confirmations,
+// accessible errors, and truthful mutation/refresh feedback.
+const delegatedCampaign = await store.saveGivingCampaign({
+  title: "Delegated Campaign",
+  description: "Campaign action smoke fixture.",
+  goalHKD: 5000,
+  fpsId: "1234567",
+  fpsPayee: "Island Evangelical Community Church",
+});
+const campaignError = makeLocalElement();
+const campaignForm = makeLocalElement();
+campaignForm.querySelector = (selector) => selector === "#campaign-error" ? campaignError : null;
+const campaignAction = (action) => {
+  const control = localControl({ action, campaign: delegatedCampaign.id, campaignName: delegatedCampaign.title });
+  control.textContent = action === "campaign-publish" ? "Publish campaign" : "Close campaign";
+  control.closest = (selector) => selector === "form" ? campaignForm : control;
+  return control;
+};
+let campaignConfirm = "";
+window.confirm = (message) => { campaignConfirm = message; return true; };
+store.campaigns().find((item) => item.id === delegatedCampaign.id).fpsId = "";
+clearLocalToasts();
+const invalidPublish = campaignAction("campaign-publish");
+const pendingInvalidPublish = localClick({ target: invalidPublish });
+if (!invalidPublish.disabled || invalidPublish.textContent !== "Publishing…" ||
+    invalidPublish.getAttribute("aria-busy") !== "true") {
+  failures++;
+  console.error("FAIL campaign publish must expose inherited busy feedback immediately");
+}
+await pendingInvalidPublish;
+if (campaignConfirm !== "Publish “Delegated Campaign”? Approved members will be notified." ||
+    invalidPublish.disabled || invalidPublish.textContent !== "Publish campaign" ||
+    campaignError.getAttribute("role") !== "alert" || !campaignError.textContent.includes("FPS ID") ||
+    localToastText().some((text) => /published\.$/.test(text))) {
+  failures++;
+  console.error("FAIL rejected campaign publish must confirm, recover, and expose an accessible error");
+} else console.log("ok  rejected campaign publish confirms and recovers accessibly");
+store.campaigns().find((item) => item.id === delegatedCampaign.id).fpsId = "1234567";
+clearLocalToasts();
+const validPublish = campaignAction("campaign-publish");
+await localClick({ target: validPublish });
+if (store.campaigns().find((item) => item.id === delegatedCampaign.id)?.status !== "published" ||
+    !localToastText().includes("“Delegated Campaign” published.")) {
+  failures++;
+  console.error("FAIL delegated campaign publication must mutate and report success");
+} else console.log("ok  delegated campaign publication reports confirmed mutation success");
+const closeCampaign = campaignAction("campaign-close");
+window.confirm = (message) => { campaignConfirm = message; return false; };
+await localClick({ target: closeCampaign });
+if (campaignConfirm !== "Close “Delegated Campaign”? Closed campaigns cannot be edited or republished." ||
+    store.campaigns().find((item) => item.id === delegatedCampaign.id)?.status !== "published") {
+  failures++;
+  console.error("FAIL campaign close must name the campaign and respect cancellation");
+} else console.log("ok  campaign close names the campaign and respects cancellation");
 globalThis.setTimeout = realSetTimeout;
 globalThis.clearTimeout = realClearTimeout;
 

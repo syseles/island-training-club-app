@@ -29,6 +29,7 @@ const STATE_VERSION = 11;
 let liveProfile = null;
 let liveUser = null;
 let liveProfileFetchedAt = 0;
+let liveGivingCampaign = null;
 const LIVE_PROFILE_TTL_MS = 30_000;
 
 let state = null;
@@ -247,6 +248,7 @@ export function signOut() {
   liveProfile = null;
   liveUser = null;
   liveProfileFetchedAt = 0;
+  liveGivingCampaign = null;
   state.sessionUserId = null;
   save();
 }
@@ -318,6 +320,7 @@ export async function signOutLive() {
   liveProfile = null;
   liveUser = null;
   liveProfileFetchedAt = 0;
+  liveGivingCampaign = null;
   const { error } = await supabase.auth.signOut();
   if (error) throw error;
 }
@@ -948,6 +951,193 @@ export function activeGivingCampaign() {
   return state.campaigns.find((campaign) => campaign.status === "published") ?? null;
 }
 
+const ADMIN_CAMPAIGN_ROLES = new Set(["admin", "superadmin", "super_admin"]);
+const campaignColumns = "id, title, description, goal_hkd, fps_id, fps_payee, status, creator_profile_id, created_at, updated_at, published_at, closed_at";
+
+function normalizeGivingCampaign(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    title: row.title,
+    description: row.description,
+    goalHKD: Number(row.goal_hkd ?? row.goalHKD),
+    fpsId: row.fps_id ?? row.fpsId,
+    fpsPayee: row.fps_payee ?? row.fpsPayee,
+    status: String(row.status || "").toLowerCase(),
+    creatorProfileId: row.creator_profile_id ?? row.creatorProfileId ?? null,
+    createdAt: row.created_at ?? row.createdAt ?? null,
+    updatedAt: row.updated_at ?? row.updatedAt ?? null,
+    publishedAt: row.published_at ?? row.publishedAt ?? null,
+    closedAt: row.closed_at ?? row.closedAt ?? null,
+  };
+}
+
+function validatedCampaignFields(draft) {
+  const title = String(draft?.title || "").trim();
+  const description = String(draft?.description || "").trim();
+  const rawGoal = draft?.goalHKD ?? draft?.goal_hkd;
+  const goalHKD = Number(rawGoal);
+  const fpsId = String(draft?.fpsId ?? draft?.fps_id ?? "").trim();
+  const fpsPayee = String(draft?.fpsPayee ?? draft?.fps_payee ?? "").trim();
+  if (!title) throw new Error("Enter a campaign title.");
+  if (!description) throw new Error("Enter a campaign description.");
+  if (!Number.isInteger(goalHKD) || goalHKD <= 0) {
+    throw new Error("Enter a positive whole-HKD goal.");
+  }
+  if (!fpsId) throw new Error("Enter the FPS ID.");
+  if (!fpsPayee) throw new Error("Enter the FPS payee.");
+  return { title, description, goalHKD, fpsId, fpsPayee };
+}
+
+async function requireCampaignAdmin() {
+  const user = isLive() ? await getCurrentUser() : currentUser();
+  if (!user || user.status !== "approved" || !ADMIN_CAMPAIGN_ROLES.has(user.role)) {
+    throw new Error("Admin access required.");
+  }
+  return user;
+}
+
+function localCampaignById(id) {
+  return state.campaigns.find((campaign) => campaign.id === id) ?? null;
+}
+
+export async function listGivingCampaigns() {
+  await requireCampaignAdmin();
+  if (!isLive() || !supabase) {
+    return state.campaigns.map(normalizeGivingCampaign).sort((a, b) =>
+      String(b.createdAt || "").localeCompare(String(a.createdAt || ""))
+    );
+  }
+  const { data, error } = await supabase
+    .from("giving_campaigns")
+    .select(campaignColumns)
+    .order("created_at", { ascending: false });
+  if (error) throw error;
+  return (data || []).map(normalizeGivingCampaign);
+}
+
+export async function getActiveGivingCampaign() {
+  const user = isLive() ? await getCurrentUser() : currentUser();
+  if (!user || user.status !== "approved") return null;
+  if (!isLive() || !supabase) return normalizeGivingCampaign(activeGivingCampaign());
+  const { data, error } = await supabase
+    .from("giving_campaigns")
+    .select(campaignColumns)
+    .eq("status", "published")
+    .maybeSingle();
+  if (error) throw error;
+  liveGivingCampaign = normalizeGivingCampaign(data);
+  return liveGivingCampaign;
+}
+
+export async function saveGivingCampaign(draft) {
+  const user = await requireCampaignAdmin();
+  const fields = validatedCampaignFields(draft);
+  const id = String(draft?.id || "").trim();
+  if (!isLive() || !supabase) {
+    const existing = id ? localCampaignById(id) : null;
+    if (id && !existing) throw new Error("Giving campaign not found.");
+    if (existing?.status === "closed") throw new Error("Closed Giving campaigns are immutable.");
+    if (!existing && state.campaigns.some((campaign) => campaign.status !== "closed")) {
+      throw new Error("Close the current campaign before creating another.");
+    }
+    const now = new Date().toISOString();
+    if (existing) {
+      Object.assign(existing, fields, { updatedAt: now });
+      save();
+      return normalizeGivingCampaign(existing);
+    }
+    const campaign = {
+      id: uid("campaign"),
+      ...fields,
+      status: "draft",
+      creatorProfileId: user.id,
+      createdAt: now,
+      updatedAt: now,
+      publishedAt: null,
+      closedAt: null,
+    };
+    state.campaigns.push(campaign);
+    save();
+    return normalizeGivingCampaign(campaign);
+  }
+  const row = {
+    title: fields.title,
+    description: fields.description,
+    goal_hkd: fields.goalHKD,
+    fps_id: fields.fpsId,
+    fps_payee: fields.fpsPayee,
+  };
+  let result;
+  if (id) {
+    result = await supabase
+      .from("giving_campaigns")
+      .update(row)
+      .eq("id", id)
+      .neq("status", "closed")
+      .select(campaignColumns)
+      .single();
+  } else {
+    result = await supabase
+      .from("giving_campaigns")
+      .insert({ ...row, status: "draft", creator_profile_id: user.id })
+      .select(campaignColumns)
+      .single();
+  }
+  if (result.error) throw result.error;
+  const campaign = normalizeGivingCampaign(result.data);
+  if (!campaign?.id || (id && campaign.id !== id) || campaign.status === "closed") {
+    throw new Error("Giving campaign save conflict.");
+  }
+  if (campaign.status === "published") liveGivingCampaign = campaign;
+  return campaign;
+}
+
+async function transitionGivingCampaign(id, fromStatus, toStatus) {
+  await requireCampaignAdmin();
+  const campaignId = String(id || "").trim();
+  if (!campaignId) throw new Error("Giving campaign not found.");
+  if (!isLive() || !supabase) {
+    const campaign = localCampaignById(campaignId);
+    if (!campaign) throw new Error("Giving campaign not found.");
+    if (campaign.status !== fromStatus) throw new Error(`Campaign must be ${fromStatus} before it can be ${toStatus}.`);
+    if (toStatus === "published") validatedCampaignFields(campaign);
+    const now = new Date().toISOString();
+    campaign.status = toStatus;
+    campaign.updatedAt = now;
+    if (toStatus === "published") campaign.publishedAt = campaign.publishedAt || now;
+    if (toStatus === "closed") campaign.closedAt = now;
+    save();
+    return normalizeGivingCampaign(campaign);
+  }
+  const { data, error } = await supabase
+    .from("giving_campaigns")
+    .update({ status: toStatus })
+    .eq("id", campaignId)
+    .eq("status", fromStatus)
+    .select(campaignColumns)
+    .single();
+  if (error) throw error;
+  const campaign = normalizeGivingCampaign(data);
+  if (!campaign?.id || campaign.id !== campaignId || campaign.status !== toStatus) {
+    throw new Error("Giving campaign transition conflict.");
+  }
+  liveGivingCampaign = toStatus === "published" ? campaign : null;
+  return campaign;
+}
+
+export async function publishGivingCampaign(id) {
+  const campaign = (await listGivingCampaigns()).find((item) => item.id === id);
+  if (!campaign) throw new Error("Giving campaign not found.");
+  validatedCampaignFields(campaign);
+  if (campaign.status !== "draft") throw new Error("Campaign must be draft before it can be published.");
+  return transitionGivingCampaign(id, "draft", "published");
+}
+
+export function closeGivingCampaign(id) {
+  return transitionGivingCampaign(id, "published", "closed");
+}
+
 export function campaignRaised(campaign = activeGivingCampaign()) {
   const campaignId = typeof campaign === "string" ? campaign : campaign?.id;
   if (!campaignId) return 0;
@@ -964,8 +1154,9 @@ export function donationsForUser(userId) {
 
 export function recordDonation({ userId, name, amount, note, ref, campaignId }) {
   const campaign = campaignId
-    ? state.campaigns.find((item) => item.id === campaignId && item.status === "published")
-    : activeGivingCampaign();
+    ? state.campaigns.find((item) => item.id === campaignId && item.status === "published") ||
+      (isLive() && liveGivingCampaign?.id === campaignId ? liveGivingCampaign : null)
+    : activeGivingCampaign() || (isLive() ? liveGivingCampaign : null);
   if (!campaign) throw new Error("No active Giving campaign");
   const donation = {
     id: uid("d"),
@@ -974,6 +1165,7 @@ export function recordDonation({ userId, name, amount, note, ref, campaignId }) 
     amount: Math.round(Number(amount)),
     currency: "HKD",
     campaignId: campaign.id,
+    campaignTitle: campaign.title,
     method: "FPS",
     ref,
     note: String(note ?? "").trim(),

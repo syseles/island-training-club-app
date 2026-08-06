@@ -958,6 +958,19 @@ a.profile-row:hover .pr-text strong { color: var(--accent); }
 
 .admin-tabs a.active { background: var(--accent); color: var(--accent-ink); }
 
+.campaign-list { display: grid; gap: 10px; }
+
+.campaign-row { color: inherit; text-decoration: none; }
+
+.campaign-row .card-body {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.campaign-row:hover { border-color: var(--muted); }
+
 .applicant dl {
   display: grid;
   grid-template-columns: auto 1fr;

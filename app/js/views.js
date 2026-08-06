@@ -454,6 +454,7 @@ export const givingState = {
   name: "",
   note: "",
   ref: null,
+  campaignId: null,
 };
 
 export function resetGivingState() {
@@ -462,6 +463,7 @@ export function resetGivingState() {
   givingState.name = "";
   givingState.note = "";
   givingState.ref = null;
+  givingState.campaignId = null;
 }
 
 function givingLocked(user) {
@@ -482,11 +484,11 @@ function givingLocked(user) {
     </div></div>`;
 }
 
-export function viewGiving() {
+export async function viewGiving() {
   const user = store.currentUser();
   if (!user || user.status !== "approved") return givingLocked(user);
 
-  const campaign = store.activeGivingCampaign();
+  const campaign = await store.getActiveGivingCampaign();
   const gifts = store.donationsForUser(user.id);
   if (!campaign) {
     return `
@@ -499,6 +501,7 @@ export function viewGiving() {
       ${gifts.length ? `<div class="section-head"><h2>Giving history</h2></div>${givingHistory(gifts)}` : ""}`;
   }
 
+  givingState.campaignId = campaign.id;
   const raised = store.campaignRaised(campaign);
   const goal = Number(campaign.goalHKD) || 0;
   const pct = goal > 0 ? Math.min(100, Math.round((raised / goal) * 100)) : 0;
@@ -1534,7 +1537,7 @@ export async function viewAdmin(tab = "approvals") {
   }
   const tabs = `
     <nav class="admin-tabs">
-      ${["approvals", "activities", "members"]
+      ${["approvals", "activities", "giving", "members"]
         .map((t) => `<a href="#/admin/${t}" class="${t === tab ? "active" : ""}"${t === tab ? ' aria-current="page"' : ""}>${t}</a>`)
         .join("")}
     </nav>`;
@@ -1558,9 +1561,11 @@ export async function viewAdmin(tab = "approvals") {
   const body =
     tab === "activities"
       ? adminActivities()
-      : tab === "members"
-        ? adminMembers(user, memberUsers)
-        : adminApprovals(await store.listApprovalCandidates());
+      : tab === "giving"
+        ? adminGiving(await store.listGivingCampaigns())
+        : tab === "members"
+          ? adminMembers(user, memberUsers)
+          : adminApprovals(await store.listApprovalCandidates());
 
   return `
     <div class="kicker">Admin</div>
@@ -1630,6 +1635,80 @@ function adminApprovals(pending) {
     section("Ready for review", ready, "No applications ready for review.", readyCard),
     section("Awaiting application", awaiting, "No members awaiting an application.", awaitingCard),
   ].join("");
+}
+
+function campaignStatusBadge(status) {
+  const className = status === "published" ? "free" : status === "draft" ? "warn" : "neutral";
+  return `<span class="badge ${className}">${esc(status)}</span>`;
+}
+
+function adminGiving(campaignList) {
+  const hasOpen = campaignList.some((campaign) => campaign.status !== "closed");
+  return `
+    <div class="section-head"><h2>Giving campaigns</h2></div>
+    ${campaignList.length
+      ? `<div class="campaign-list">${campaignList.map((campaign) => `
+        <a class="card campaign-row" href="#/admin/campaign/${esc(campaign.id)}">
+          <div class="card-body">
+            <div><h3>${esc(campaign.title)}</h3><p class="hero-meta">${fmtMoney(campaign.goalHKD)} goal</p></div>
+            ${campaignStatusBadge(campaign.status)}
+          </div>
+        </a>`).join("")}</div>`
+      : `<div class="empty">No Giving campaigns yet.</div>`}
+    ${hasOpen ? "" : `<a class="btn ghost mt16" href="#/admin/campaign/new">+ Create campaign</a>`}`;
+}
+
+export async function viewAdminCampaign(id) {
+  const user = store.currentUser();
+  if (!user || !isAdminRole(user.role)) return { redirect: "#/account" };
+  const campaignList = await store.listGivingCampaigns();
+  const isNew = id === "new";
+  const campaign = isNew
+    ? { id: "", title: "", description: "", goalHKD: "", fpsId: "", fpsPayee: "", status: "draft" }
+    : campaignList.find((item) => item.id === id);
+  if (!campaign) return viewNotFound("Giving campaign not found.");
+  if (isNew && campaignList.some((item) => item.status !== "closed")) {
+    return viewNotFound("Close the current Giving campaign before creating another.");
+  }
+  const closed = campaign.status === "closed";
+  const field = (id, name, label, value, options = "") => `
+    <div class="field"><label for="${id}">${label} *</label>
+      <input id="${id}" name="${name}" value="${esc(value)}" ${options} required ${closed ? "disabled" : ""}>
+    </div>`;
+  if (closed) {
+    return `
+      <a class="back-link" href="#/admin/giving">← Giving</a>
+      <div class="kicker mt16">Admin · Giving · Closed</div>
+      <h1 class="display sm">${esc(campaign.title)}.</h1>
+      <div class="card mt16"><div class="card-body">
+        ${campaignStatusBadge(campaign.status)}
+        <p class="hero-meta mt16">${esc(campaign.description)}</p>
+        <div class="receipt-lines">
+          <div class="line"><span>Goal</span><strong>${fmtMoney(campaign.goalHKD)}</strong></div>
+          <div class="line"><span>FPS ID</span><strong class="mono">${esc(campaign.fpsId)}</strong></div>
+          <div class="line"><span>FPS payee</span><strong>${esc(campaign.fpsPayee)}</strong></div>
+          <div class="line"><span>Closed</span><strong>${campaign.closedAt ? esc(fmtDay(campaign.closedAt)) : "Closed"}</strong></div>
+        </div>
+      </div></div>`;
+  }
+  return `
+    <a class="back-link" href="#/admin/giving">← Giving</a>
+    <div class="kicker mt16">Admin · Giving</div>
+    <h1 class="display sm">${isNew ? "New campaign." : "Edit campaign."}</h1>
+    ${isNew ? "" : `<div class="mt16">${campaignStatusBadge(campaign.status)}</div>`}
+    <form id="form-campaign" class="mt16" data-campaign="${esc(campaign.id)}" novalidate>
+      ${field("campaign-title", "title", "Campaign title", campaign.title)}
+      <div class="field"><label for="campaign-description">Description *</label>
+        <textarea id="campaign-description" name="description" rows="4" required>${esc(campaign.description)}</textarea>
+      </div>
+      ${field("campaign-goal", "goalHKD", "Goal (HKD)", campaign.goalHKD, 'type="number" min="1" step="1" inputmode="numeric"')}
+      ${field("campaign-fps-id", "fpsId", "FPS ID", campaign.fpsId)}
+      ${field("campaign-fps-payee", "fpsPayee", "FPS payee", campaign.fpsPayee)}
+      <div id="campaign-error" aria-live="polite"></div>
+      <button class="btn mt24" type="submit">${isNew ? "Create draft" : "Save changes"}</button>
+      ${!isNew && campaign.status === "draft" ? `<button class="btn ghost mt16" type="button" data-action="campaign-publish" data-campaign="${esc(campaign.id)}" data-campaign-name="${esc(campaign.title)}">Publish campaign</button>` : ""}
+      ${campaign.status === "published" ? `<button class="btn danger mt16" type="button" data-action="campaign-close" data-campaign="${esc(campaign.id)}" data-campaign-name="${esc(campaign.title)}">Close campaign</button>` : ""}
+    </form>`;
 }
 
 function adminActivities() {
