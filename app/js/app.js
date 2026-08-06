@@ -219,6 +219,10 @@ async function render(generation = renderGeneration) {
   const parts = parseHash();
   const [page, arg, arg2] = parts.length ? parts : ["home"];
 
+  // Route rows are valid only for the Notifications render that committed
+  // them. Invalidate before any replacement can await or fail.
+  notificationRouteRows = null;
+
   // Entering the Schedule tab fresh (bottom nav, Home, Profile…) resets it
   // to this week + today — a week offset left over from earlier browsing
   // must not hide today's sessions. Back links from activity/checkout keep
@@ -230,6 +234,7 @@ async function render(generation = renderGeneration) {
   const notificationsActive = page === "notifications";
   const routeUser = store.currentUser();
   let notificationRowsPromise = null;
+  let nextNotificationRouteRows = null;
 
   // Commit the bell and its active state before the Notifications request can
   // delay route content. This same promise is also consumed by the page.
@@ -282,8 +287,8 @@ async function render(generation = renderGeneration) {
             : await views.viewAdmin(arg || "approvals");
       break;
     case "notifications":
-      notificationRouteRows = await notificationRowsPromise;
-      out = await views.viewNotifications(new Date(), notificationRouteRows);
+      nextNotificationRouteRows = await notificationRowsPromise;
+      out = await views.viewNotifications(new Date(), nextNotificationRouteRows);
       break;
     default:
       out = views.viewNotFound();
@@ -298,6 +303,8 @@ async function render(generation = renderGeneration) {
     return;
   }
 
+  // Keep the local filter cache paired with this generation's HTML commit.
+  if (notificationsActive) notificationRouteRows = nextNotificationRouteRows;
   viewEl.innerHTML = out;
   const user = store.currentUser();
   navEl.innerHTML = views.navHTML(NAV_FOR[page] ?? "home", user);

@@ -1149,6 +1149,42 @@ assert.equal(notificationBell.getAttribute("aria-label"), "Notifications, 2 unre
 assert.doesNotMatch(elements.get("bottom-nav").innerHTML, /aria-current="page"/,
   "Notifications must not activate a bottom navigation item");
 
+// Out-of-order overlapping Notifications renders must leave the route cache
+// paired with the newest committed HTML. Filtering that page remains local.
+const olderNotificationsGate = deferred();
+notificationReadGate = olderNotificationsGate.promise;
+const queriesBeforeOverlap = notificationQueryCount;
+const olderNotificationsRender = windowListeners.get("hashchange")();
+notificationRows.unshift({
+  id: "notification-latest-application",
+  kind: "admin_application_submitted",
+  title: "Latest application",
+  body: "This row belongs only to the newest route request.",
+  created_at: "2026-08-05T06:39:30.000Z",
+  read_at: null,
+});
+const currentNotificationsGate = deferred();
+notificationReadGate = currentNotificationsGate.promise;
+const currentNotificationsRender = windowListeners.get("hashchange")();
+assert.equal(notificationQueryCount, queriesBeforeOverlap + 2,
+  "each overlapping Notifications route should issue exactly one shared query");
+currentNotificationsGate.resolve();
+await currentNotificationsRender;
+olderNotificationsGate.resolve();
+await olderNotificationsRender;
+notificationRows.shift();
+const overlapFilterControl = makeElement();
+overlapFilterControl.tagName = "BUTTON";
+overlapFilterControl.dataset = { action: "notification-filter", notificationFilter: "application" };
+overlapFilterControl.closest = () => overlapFilterControl;
+const queriesBeforeOverlapFilter = notificationQueryCount;
+await domListeners.get("click")({ target: overlapFilterControl });
+assert.equal(notificationQueryCount, queriesBeforeOverlapFilter,
+  "filtering after overlapping routes must not fetch again");
+assert.match(viewEl.innerHTML, /Latest application/,
+  "a stale Notifications completion must not replace the newest route rows");
+views.notificationFilters.kind = "all";
+
 // Kind filters are view-local: activating one reuses route rows, rerenders the
 // Notifications HTML, and restores keyboard focus to the equivalent new chip.
 const filterControl = makeElement();
