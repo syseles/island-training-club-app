@@ -484,14 +484,18 @@ function givingLocked(user) {
     </div></div>`;
 }
 
-export async function viewGiving() {
+export async function viewGiving({
+  ownsGeneration = () => true,
+  activeCampaignLookup = () => store.getActiveGivingCampaign(),
+} = {}) {
   const user = store.currentUser();
   if (!user || user.status !== "approved") return givingLocked(user);
 
-  const campaign = await store.getActiveGivingCampaign();
+  const campaign = await activeCampaignLookup();
+  const generationOwned = ownsGeneration();
   const gifts = store.donationsForUser(user.id);
   if (!campaign) {
-    resetGivingState();
+    if (generationOwned) resetGivingState();
     return `
       <div class="kicker">Giving &amp; Fundraising</div>
       <h1 class="display">Every step can give back.</h1>
@@ -502,7 +506,7 @@ export async function viewGiving() {
       ${gifts.length ? `<div class="section-head"><h2>Giving history</h2></div>${givingHistory(gifts)}` : ""}`;
   }
 
-  if (givingState.campaignId !== campaign.id) {
+  if (generationOwned && givingState.campaignId !== campaign.id) {
     resetGivingState();
     givingState.campaignId = campaign.id;
   }

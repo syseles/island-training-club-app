@@ -287,7 +287,9 @@ async function render(generation = renderGeneration) {
       out = views.viewCommunity(arg);
       break;
     case "giving":
-      out = store.currentUser() ? await views.viewGiving() : { redirect: "#/account" };
+      out = store.currentUser()
+        ? await views.viewGiving({ ownsGeneration: () => generation === renderGeneration })
+        : { redirect: "#/account" };
       break;
     case "account":
       // Awaited: account sections can fetch live application data and use

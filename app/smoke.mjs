@@ -172,7 +172,7 @@ for (const [source, label, contracts] of [
 console.log("ok  live Giving database source contracts");
 
 for (const [contract, label] of [
-  [/export async function viewGiving\(\)/, "async member Giving view"],
+  [/export async function viewGiving\(/, "async member Giving view"],
   [/export async function viewAdminCampaign\(id\)/, "Admin campaign route view"],
   [/\["approvals", "activities", "giving", "members"\]/, "Admin Giving tab"],
   [/data-action="campaign-publish"/, "publish control"],
@@ -181,7 +181,7 @@ for (const [contract, label] of [
   if (!contract.test(viewsSource)) throw new Error(`missing Giving UI contract: ${label}`);
 }
 for (const [contract, label] of [
-  [/case "giving":[\s\S]*await views\.viewGiving\(\)/, "awaited Giving route"],
+  [/case "giving":[\s\S]*await views\.viewGiving\(\{[\s\S]*ownsGeneration/, "generation-owned awaited Giving route"],
   [/case "campaign-publish"[\s\S]*withBusyControl\(el, "Publishing…"[\s\S]*refreshAfterAdminMutation/, "truthful publish feedback"],
   [/case "campaign-close"[\s\S]*withBusyControl\(el, "Closing…"[\s\S]*refreshAfterAdminMutation/, "truthful close feedback"],
   [/Publish “\$\{name\}”\? Approved members will be notified\./, "publication confirmation"],
@@ -2587,6 +2587,43 @@ delete publishRefreshView.innerHTML;
 publishRefreshView.innerHTML = publishRefreshHtml;
 await store.closeGivingCampaign(refreshPublishDraft.id);
 
+// A confirmed close remains a success when only the subsequent Admin refresh
+// fails. The stale close control is locked and the form receives an alert.
+const closeRefreshDraft = await store.saveGivingCampaign({
+  title: "Close Refresh Campaign",
+  description: "Close refresh fixture.",
+  goalHKD: 7750,
+  fpsId: "7750000",
+  fpsPayee: "Close Refresh Payee",
+});
+const closeRefreshPublished = await store.publishGivingCampaign(closeRefreshDraft.id);
+const closeRefreshEditor = makeCampaignForm(closeRefreshPublished);
+const closeRefreshControl = campaignAction("campaign-close", closeRefreshPublished, closeRefreshEditor.form);
+let closeRefreshHtml = publishRefreshView.innerHTML;
+let rejectCloseRefresh = true;
+Object.defineProperty(publishRefreshView, "innerHTML", {
+  configurable: true,
+  get: () => closeRefreshHtml,
+  set(value) {
+    if (rejectCloseRefresh) {
+      rejectCloseRefresh = false;
+      throw new Error("forced close refresh failure");
+    }
+    closeRefreshHtml = value;
+  },
+});
+clearLocalToasts();
+await localClick({ target: closeRefreshControl });
+if (store.campaigns().find((item) => item.id === closeRefreshDraft.id)?.status !== "closed" ||
+    !closeRefreshEditor.error.textContent.includes("Change saved, but this Admin view could not refresh") ||
+    closeRefreshEditor.error.getAttribute("role") !== "alert" || !closeRefreshControl.disabled ||
+    !localToastText().includes("“Close Refresh Campaign” closed.")) {
+  failures++;
+  console.error("FAIL close refresh failure must preserve and truthfully report closure");
+} else console.log("ok  close refresh failure truthfully preserves closure");
+delete publishRefreshView.innerHTML;
+publishRefreshView.innerHTML = closeRefreshHtml;
+
 // Ordinary form Save persists visible data; a committed save whose rerender
 // throws remains reported as saved and locks the stale submit control.
 const saveDraft = await store.saveGivingCampaign({
@@ -2604,6 +2641,21 @@ if (store.campaigns().find((item) => item.id === saveDraft.id)?.title !== "Saved
   failures++;
   console.error("FAIL campaign Save must persist current form data");
 } else console.log("ok  campaign Save persists current form data");
+
+// A rejected delegated Save restores its control, exposes an accessible error,
+// and never emits the success message reserved for a confirmed mutation.
+const rejectedSaveEditor = makeCampaignForm({ ...saveDraft, id: "missing-campaign" }, { title: "Rejected Save" });
+clearLocalToasts();
+await localSubmit({ target: rejectedSaveEditor.form, preventDefault() {} });
+if (!rejectedSaveEditor.error.textContent.includes("not found") ||
+    rejectedSaveEditor.error.getAttribute("role") !== "alert" ||
+    rejectedSaveEditor.submit.disabled || rejectedSaveEditor.submit.hasAttribute("aria-busy") ||
+    rejectedSaveEditor.submit.textContent !== "Save changes" ||
+    localToastText().includes("Campaign saved.")) {
+  failures++;
+  console.error("FAIL rejected campaign Save must recover accessibly without false success");
+} else console.log("ok  rejected campaign Save recovers accessibly without false success");
+
 const refreshEditor = makeCampaignForm(store.campaigns().find((item) => item.id === saveDraft.id), { title: "Saved Before Refresh Failure" });
 const localView = localElements.get("view");
 let currentViewHtml = localView.innerHTML;
@@ -2654,6 +2706,59 @@ if (!localView.innerHTML.includes("My Week") || localView.innerHTML.includes("I�
   failures++;
   console.error("FAIL delayed Giving amount render must not overwrite a newer route generation");
 } else console.log("ok  delayed Giving amount render suppresses its stale generation");
+
+// Resolve controlled campaign A/B lookups out of order. Generation B owns both
+// its DOM commit and Giving flow reconciliation; stale A may do neither.
+views.resetGivingState();
+const controlledCampaignA = {
+  id: "controlled-campaign-a",
+  title: "Controlled Campaign A",
+  description: "Older campaign lookup.",
+  goalHKD: 1000,
+  fpsId: "1111111",
+  fpsPayee: "Campaign A Payee",
+};
+const controlledCampaignB = {
+  id: "controlled-campaign-b",
+  title: "Controlled Campaign B",
+  description: "Newer campaign lookup.",
+  goalHKD: 2000,
+  fpsId: "2222222",
+  fpsPayee: "Campaign B Payee",
+};
+let resolveCampaignA;
+let resolveCampaignB;
+const campaignARequest = new Promise((resolve) => { resolveCampaignA = resolve; });
+const campaignBRequest = new Promise((resolve) => { resolveCampaignB = resolve; });
+let controlledGivingGeneration = 0;
+const controlledGivingDom = { innerHTML: "" };
+const controlledGivingRender = async (activeCampaignLookup) => {
+  const generation = ++controlledGivingGeneration;
+  const html = await views.viewGiving({
+    activeCampaignLookup,
+    ownsGeneration: () => generation === controlledGivingGeneration,
+  });
+  if (generation === controlledGivingGeneration) controlledGivingDom.innerHTML = html;
+};
+const pendingCampaignA = controlledGivingRender(() => campaignARequest);
+const pendingCampaignB = controlledGivingRender(() => campaignBRequest);
+resolveCampaignB(controlledCampaignB);
+await pendingCampaignB;
+views.givingState.step = 2;
+views.givingState.amount = 625;
+views.givingState.name = "Campaign B Donor";
+views.givingState.ref = "GIVE-B-CONTROLLED";
+resolveCampaignA(controlledCampaignA);
+await pendingCampaignA;
+if (!controlledGivingDom.innerHTML.includes("Controlled Campaign B") ||
+    controlledGivingDom.innerHTML.includes("Controlled Campaign A") ||
+    views.givingState.campaignId !== controlledCampaignB.id || views.givingState.step !== 2 ||
+    views.givingState.amount !== 625 || views.givingState.name !== "Campaign B Donor" ||
+    views.givingState.ref !== "GIVE-B-CONTROLLED") {
+  failures++;
+  console.error("FAIL stale campaign A lookup must not replace campaign B DOM or Giving state");
+} else console.log("ok  out-of-order campaign lookup keeps DOM and Giving state owned by B");
+
 location.hash = "#/giving";
 views.resetGivingState();
 views.givingState.campaignId = saveDraft.id;
