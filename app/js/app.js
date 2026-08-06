@@ -173,30 +173,11 @@ document.addEventListener("click", (e) => {
       break;
     }
 
-    case "demo-signin": {
-      const res = store.demoSignIn(el.dataset.role);
-      if (res.ok) {
-        toast(`Signed in as ${res.user.preferredName || res.user.fullName} (demo)`);
-        location.hash = "#/home";
-        render();
-      }
-      break;
-    }
-
     case "signout":
       store.signOut();
       toast("Signed out");
       location.hash = "#/home";
       render();
-      break;
-
-    case "reset-demo":
-      if (confirm("Reset all demo data? Bookings, applications and edits will be cleared.")) {
-        store.resetDemo();
-        toast("Demo data reset");
-        location.hash = "#/home";
-        render();
-      }
       break;
 
     case "approve": {
@@ -240,7 +221,7 @@ document.addEventListener("submit", (e) => {
       const res = store.signIn(email);
       const errEl = form.querySelector("#signin-error");
       if (!res.ok) {
-        errEl.innerHTML = `<div class="form-error">No account found for that email — apply for membership below, or use a demo profile.</div>`;
+        errEl.innerHTML = `<div class="form-error">No account found for that email — apply for membership below.</div>`;
         return;
       }
       toast(`Welcome back, ${res.user.preferredName || res.user.fullName}`);
@@ -375,7 +356,6 @@ document.addEventListener("submit", (e) => {
         photo: "../assets/itc/main.webp",
         price: fd.get("price"),
         capacity: fd.get("capacity"),
-        baseBooked: fd.get("baseBooked"),
         published: fd.get("published") === "on",
       });
       toast(res.created ? "Activity created" : "Activity saved");

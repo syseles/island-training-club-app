@@ -9,7 +9,6 @@ import * as store from "./store.js";
 import {
   LEADERS,
   CULTURE,
-  ANNOUNCEMENTS,
   findSession,
   sessionStarted,
   sessionsInRange,
@@ -511,17 +510,7 @@ function communityAnnouncements() {
     <div class="kicker mt16">Community · Announcements</div>
     <h1 class="display sm">Announcements.</h1>
     <p class="subcopy mt8">News from the church and the community.</p>
-    <div class="stack mt16">
-      ${ANNOUNCEMENTS.map(
-        (a) => `
-        <div class="card"><div class="card-body">
-          <span class="kicker dim">${fmtDay(a.postedAt)}</span>
-          <h3 class="mt8">${esc(a.title)}</h3>
-          <p class="hero-meta">${esc(a.body)}</p>
-        </div></div>`
-      ).join("")}
-    </div>
-    <p class="muted small mt16">Draft announcements — real posts come from ITC leadership and IECC comms.</p>`;
+    <div class="empty mt16">No announcements yet. Updates from ITC leadership will appear here.</div>`;
 }
 
 export function viewAccount(section) {
@@ -564,12 +553,7 @@ function accountVisitor() {
         <div id="signin-error"></div>
         <button class="btn mt16" type="submit">Sign in</button>
       </form>
-      <p class="muted small mt16">Prototype: there is no password — sign in with a seeded email, or use a one-tap demo profile.</p>
-      <div class="btn-row">
-        <button class="btn ghost sm" type="button" data-action="demo-signin" data-role="member">Demo · Continue as member (CM)</button>
-        <button class="btn ghost sm" type="button" data-action="demo-signin" data-role="admin">Demo · Continue as admin (Tina)</button>
-        <button class="btn ghost sm" type="button" data-action="demo-signin" data-role="superadmin">Demo · Continue as super admin (Arnold)</button>
-      </div>
+      <p class="muted small mt16">Prototype: there is no password — sign in with the email used for your local membership application.</p>
     </div></div>
     <div class="card mt16"><div class="card-body">
       <h3>Not a member yet?</h3>
@@ -594,7 +578,6 @@ function accountPending(user) {
         <div class="line"><span>Indemnity</span><strong>${user.indemnityAcceptedAt ? "Accepted" : "—"}</strong></div>
         <div class="line"><span>Photo consent</span><strong>${user.mediaConsent ? "Yes" : "No"}</strong></div>
       </div>
-      <p class="muted small mt16">Want to see the approval side? Sign out, then use the admin demo profile — your application will be waiting in the queue.</p>
     </div></div>
     <div class="btn-row">
       <a class="btn ghost" href="#/schedule">Browse the schedule</a>
@@ -664,7 +647,6 @@ function accountMember(user) {
 
     <div class="btn-row">
       <button class="btn ghost" type="button" data-action="signout">Sign out</button>
-      <button class="btn danger sm" type="button" data-action="reset-demo">Reset demo data</button>
     </div>`;
 }
 
@@ -1152,7 +1134,6 @@ export function viewAdminActivity(id) {
         photo: "../assets/itc/main.webp",
         price: 250,
         capacity: 18,
-        baseBooked: 0,
         published: true,
       }
     : store.getActivity(id);
@@ -1201,8 +1182,6 @@ export function viewAdminActivity(id) {
           <div class="field"><label for="ac-price">Price (HKD, fixed per session)</label><input id="ac-price" name="price" type="number" min="0" value="${a.price ?? 250}"></div>
           <div class="field"><label for="ac-cap">Capacity</label><input id="ac-cap" name="capacity" type="number" min="1" value="${a.capacity ?? 18}"></div>
         </div>
-        <div class="field"><label for="ac-base">Simulated existing bookings</label><input id="ac-base" name="baseBooked" type="number" min="0" value="${a.baseBooked ?? 0}">
-          <div class="hint">Prototype only — stands in for other members’ bookings.</div></div>
       `)}
       <div class="field"><label for="ac-blurb">Description</label><textarea id="ac-blurb" name="blurb" rows="3">${esc(a.blurb)}</textarea></div>
       <div class="field"><label for="ac-note">Leader note (members only)</label><textarea id="ac-note" name="memberNote" rows="2">${esc(a.memberNote || "")}</textarea></div>
