@@ -445,16 +445,6 @@ document.addEventListener("click", async (e) => {
       break;
     }
 
-    case "demo-signin": {
-      const res = store.demoSignIn(el.dataset.role);
-      if (res.ok) {
-        toast(`Signed in as ${res.user.preferredName || res.user.fullName} (demo)`);
-        location.hash = "#/home";
-        await renderWithFeedback();
-      }
-      break;
-    }
-
     case "signout": {
       // signOutLive clears the Supabase session in live mode and falls back
       // to local signOut otherwise — without it the live session survives.
@@ -524,15 +514,6 @@ document.addEventListener("click", async (e) => {
       location.hash = destination;
       break;
     }
-
-    case "reset-demo":
-      if (confirm("Reset all demo data? Bookings, applications and edits will be cleared.")) {
-        store.resetDemo();
-        toast("Demo data reset");
-        location.hash = "#/home";
-        await renderWithFeedback();
-      }
-      break;
 
     case "approve":
     case "decline": {
@@ -668,7 +649,7 @@ document.addEventListener("submit", async (e) => {
           form,
           form.querySelector("#signin-email"),
           errEl,
-          "No account found for that email — apply for membership below, or use a demo profile."
+          "No account found for that email. Apply for membership below first."
         );
         return;
       }

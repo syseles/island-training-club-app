@@ -99,89 +99,6 @@ export const SEED_ACTIVITIES = [
   },
 ];
 
-// --- Seed users --------------------------------------------------------------
-// Roles: pending -> member -> admin -> superadmin.
-// Demo logins surface these in the Account screen.
-
-export const SEED_USERS = [
-  {
-    id: "u-super",
-    role: "superadmin",
-    status: "approved",
-    fullName: "Arnold Wong",
-    preferredName: "Arnold",
-    email: "owner@itc.hk",
-    phone: "+852 9000 0000",
-    ageConfirmed: true,
-    emergencyName: "ITC Ops",
-    emergencyPhone: "+852 9000 9999",
-    heard: "Founder",
-    appliedAt: daysAgo(120),
-    indemnityAcceptedAt: daysAgo(120),
-  },
-  {
-    id: "u-admin",
-    role: "admin",
-    status: "approved",
-    fullName: "Tina",
-    preferredName: "Tina",
-    email: "admin@itc.hk",
-    phone: "+852 9000 0002",
-    ageConfirmed: true,
-    emergencyName: "S. Lee",
-    emergencyPhone: "+852 9000 9002",
-    heard: "Founding member",
-    appliedAt: daysAgo(118),
-    indemnityAcceptedAt: daysAgo(118),
-  },
-  {
-    id: "u-member",
-    role: "member",
-    status: "approved",
-    fullName: "CM Chui",
-    preferredName: "CM",
-    email: "member@itc.hk",
-    phone: "+852 9000 0001",
-    ageConfirmed: true,
-    emergencyName: "K. Cheung",
-    emergencyPhone: "+852 9000 9001",
-    heard: "A friend runs with the club",
-    donorId: "CHUI-08879",
-    appliedAt: daysAgo(34),
-    indemnityAcceptedAt: daysAgo(34),
-  },
-  {
-    id: "u-pend-1",
-    role: "pending",
-    status: "pending",
-    fullName: "Marco Santos",
-    preferredName: "Marco",
-    email: "marco.santos@example.com",
-    phone: "+852 6111 2222",
-    ageConfirmed: true,
-    emergencyName: "L. Santos",
-    emergencyPhone: "+852 6333 4444",
-    heard: "Instagram",
-    appliedAt: daysAgo(2),
-    indemnityAcceptedAt: null,
-  },
-  {
-    id: "u-pend-2",
-    role: "pending",
-    status: "pending",
-    fullName: "Jenny Wu",
-    preferredName: "Jenny",
-    email: "jenny.wu@example.com",
-    phone: "+852 6555 6666",
-    ageConfirmed: true,
-    emergencyName: "P. Wu",
-    emergencyPhone: "+852 6777 8888",
-    heard: "Saw the club at Tamar Park",
-    appliedAt: daysAgo(1),
-    indemnityAcceptedAt: null,
-  },
-];
-
 export const ANNOUNCEMENTS = [
   {
     id: "ann-1",
@@ -194,12 +111,6 @@ export const ANNOUNCEMENTS = [
     title: "New Wednesday venue being scouted",
     body: "Leaders are trialling alternate spots for Wednesday Night Training. Watch the session page — venue updates land there first.",
     postedAt: daysAgo(6),
-  },
-  {
-    id: "ann-3",
-    title: "Marathon fundraiser passes first milestone",
-    body: "Thank you! The Standard Chartered Marathon 2027 milestone was reached for community outreach.",
-    postedAt: daysAgo(9),
   },
 ];
 
