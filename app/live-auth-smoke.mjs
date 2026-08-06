@@ -341,7 +341,7 @@ for (const action of ["approve", "decline"]) {
 const membersHtml = await views.viewAdmin("members");
 assert.doesNotMatch(membersHtml, /member-summary|Member status counts|data-change="member-(?:status|role)-filter"/);
 for (const [key, options] of Object.entries({
-  status: [["all", "All statuses"], ["approved", "Approved"], ["pending", "Pending"], ["declined", "Declined"]],
+  status: [["all", "All"], ["approved", "Approved"], ["pending", "Pending"], ["declined", "Declined"]],
   role: [["all", "All roles"], ["member", "Member"], ["admin", "Admin"], ["superadmin", "Super Admin"]],
 })) {
   for (const [value, label] of options) {

@@ -51,14 +51,16 @@ body {
   color: var(--ink);
   font-family: var(--font);
   font-size: 15px;
+  font-weight: 400;
   line-height: 1.5;
   -webkit-font-smoothing: antialiased;
 }
 
 img { display: block; max-width: 100%; }
 a { color: inherit; }
-button { font: inherit; color: inherit; }
-input, select, textarea { font: inherit; }
+button { font: inherit; color: inherit; font-weight: 600; }
+input, select, textarea { font: inherit; font-weight: 600; }
+strong { font-weight: 700; }
 
 .skip-link {
   position: fixed;
@@ -122,13 +124,13 @@ input, select, textarea { font: inherit; }
 
 .top-wordmark strong {
   font-size: 12px;
-  font-weight: 900;
+  font-weight: 700;
   letter-spacing: .08em;
 }
 
 .top-wordmark span {
   font-size: 10px;
-  font-weight: 800;
+  font-weight: 700;
   letter-spacing: .16em;
 }
 
@@ -142,7 +144,7 @@ input, select, textarea { font: inherit; }
   background: var(--accent);
   color: var(--accent-ink);
   font-size: 12px;
-  font-weight: 800;
+  font-weight: 700;
   text-decoration: none;
   letter-spacing: .02em;
 }
@@ -186,7 +188,7 @@ input, select, textarea { font: inherit; }
   color: var(--muted);
   text-decoration: none;
   font-size: 11px;
-  font-weight: 800;
+  font-weight: 700;
   letter-spacing: .06em;
   text-transform: uppercase;
   border-radius: var(--radius-sm);
@@ -200,7 +202,7 @@ input, select, textarea { font: inherit; }
 
 .kicker {
   font-size: 12px;
-  font-weight: 800;
+  font-weight: 700;
   letter-spacing: .1em;
   text-transform: uppercase;
   color: var(--accent);
@@ -212,7 +214,7 @@ input, select, textarea { font: inherit; }
   margin: 8px 0 0;
   font-family: var(--font-display);
   font-size: 40px;
-  font-weight: 900;
+  font-weight: 800;
   letter-spacing: -.045em;
   line-height: .94;
 }
@@ -237,7 +239,7 @@ input, select, textarea { font: inherit; }
   margin: 0;
   font-family: var(--font-display);
   font-size: 20px;
-  font-weight: 900;
+  font-weight: 800;
   letter-spacing: -.02em;
 }
 
@@ -252,7 +254,7 @@ input, select, textarea { font: inherit; }
   padding: 5px 9px;
   border-radius: 999px;
   font-size: 11px;
-  font-weight: 900;
+  font-weight: 700;
   letter-spacing: .07em;
   text-transform: uppercase;
   white-space: nowrap;
@@ -292,7 +294,7 @@ input, select, textarea { font: inherit; }
   background: var(--accent);
   color: var(--accent-ink);
   font-size: 13px;
-  font-weight: 900;
+  font-weight: 700;
   letter-spacing: .05em;
   text-transform: uppercase;
   text-decoration: none;
@@ -335,7 +337,7 @@ input, select, textarea { font: inherit; }
 .card h3 {
   margin: 0;
   font-size: 17px;
-  font-weight: 900;
+  font-weight: 800;
   letter-spacing: -.02em;
 }
 
@@ -422,13 +424,13 @@ a.link-card > .card-body > svg {
   background: var(--accent-ink);
   color: var(--accent);
   font-size: 22px;
-  font-weight: 900;
+  font-weight: 700;
   letter-spacing: .02em;
 }
 
 .ph-role {
   font-size: 11px;
-  font-weight: 800;
+  font-weight: 700;
   letter-spacing: .22em;
   text-transform: uppercase;
 }
@@ -437,7 +439,7 @@ a.link-card > .card-body > svg {
   margin: 5px 0 3px;
   font-family: var(--font-display);
   font-size: 26px;
-  font-weight: 900;
+  font-weight: 800;
   letter-spacing: -.03em;
   line-height: 1;
   color: var(--accent-ink);
@@ -454,7 +456,7 @@ a.link-card > .card-body > svg {
 
 .ph-stats > div { flex: 1; text-align: center; }
 
-.ph-stats strong { display: block; font-size: 20px; font-weight: 900; }
+.ph-stats strong { display: block; font-size: 20px; font-weight: 700; }
 
 .ph-stats span { font-size: 11px; color: rgba(5, 7, 4, .62); }
 
@@ -493,7 +495,7 @@ a.profile-row .pr-text {
 
 a.profile-row .pr-text strong {
   font-size: 14.5px;
-  font-weight: 800;
+  font-weight: 700;
   letter-spacing: -.01em;
 }
 
@@ -527,7 +529,7 @@ a.profile-row:hover .pr-text strong { color: var(--accent); }
 
 .session-row time {
   font-size: 12px;
-  font-weight: 900;
+  font-weight: 700;
   line-height: 1.35;
   color: var(--ink);
 }
@@ -544,7 +546,7 @@ a.profile-row:hover .pr-text strong { color: var(--accent); }
 .session-row h3 {
   margin: 0;
   font-size: 14px;
-  font-weight: 900;
+  font-weight: 800;
   letter-spacing: -.015em;
   text-transform: uppercase;
 }
@@ -565,7 +567,7 @@ a.profile-row:hover .pr-text strong { color: var(--accent); }
 
 .session-row .spots {
   font-size: 12px;
-  font-weight: 800;
+  font-weight: 700;
   color: var(--muted);
 }
 
@@ -611,14 +613,14 @@ a.profile-row:hover .pr-text strong { color: var(--accent); }
   background: transparent;
   color: var(--muted);
   font-size: 12px;
-  font-weight: 800;
+  font-weight: 700;
   letter-spacing: .05em;
   text-transform: uppercase;
   cursor: pointer;
   padding: 6px 0;
 }
 
-.day-cell strong { font-size: 15px; color: var(--ink); font-weight: 900; }
+.day-cell strong { font-size: 15px; color: var(--ink); font-weight: 700; }
 
 .day-cell .dot {
   width: 5px;
@@ -659,7 +661,7 @@ a.profile-row:hover .pr-text strong { color: var(--accent); }
   color: var(--muted);
   padding: 10px 13px;
   font-size: 11px;
-  font-weight: 800;
+  font-weight: 700;
   letter-spacing: .05em;
   text-transform: uppercase;
   cursor: pointer;
@@ -684,7 +686,7 @@ a.profile-row:hover .pr-text strong { color: var(--accent); }
   border: 0;
   color: var(--muted);
   font-size: 11px;
-  font-weight: 800;
+  font-weight: 700;
   letter-spacing: .06em;
   text-transform: uppercase;
   cursor: pointer;
@@ -720,7 +722,7 @@ a.profile-row:hover .pr-text strong { color: var(--accent); }
 .meta-grid small {
   display: block;
   font-size: 12px;
-  font-weight: 800;
+  font-weight: 700;
   letter-spacing: .07em;
   text-transform: uppercase;
   color: var(--faint);
@@ -778,7 +780,7 @@ a.profile-row:hover .pr-text strong { color: var(--accent); }
   display: block;
   margin-bottom: 6px;
   font-size: 12px;
-  font-weight: 800;
+  font-weight: 700;
   letter-spacing: .08em;
   text-transform: uppercase;
   color: var(--muted);
@@ -882,7 +884,7 @@ a.profile-row:hover .pr-text strong { color: var(--accent); }
 }
 
 .receipt-lines .line span { color: var(--muted); }
-.receipt-lines .line.total { font-weight: 900; font-size: 15px; }
+.receipt-lines .line.total { font-weight: 700; font-size: 15px; }
 .receipt-lines .line.total span { color: var(--ink); }
 
 /* ---- Admin ------------------------------------------------------------ */
@@ -908,7 +910,7 @@ a.profile-row:hover .pr-text strong { color: var(--accent); }
   color: var(--muted);
   text-decoration: none;
   font-size: 11px;
-  font-weight: 800;
+  font-weight: 700;
   letter-spacing: .06em;
   text-transform: uppercase;
 }
@@ -998,7 +1000,7 @@ a.profile-row:hover .pr-text strong { color: var(--accent); }
   background: transparent;
   color: var(--accent);
   font-size: 12px;
-  font-weight: 800;
+  font-weight: 700;
   text-decoration: underline;
   text-underline-offset: 3px;
   cursor: pointer;
@@ -1043,7 +1045,7 @@ a.profile-row:hover .pr-text strong { color: var(--accent); }
 .leader-card img { width: 86px; height: 100%; min-height: 110px; object-fit: cover; }
 .leader-card .card-body { padding: 13px 14px; }
 .leader-card h3 { font-size: 14px; }
-.leader-card .role { margin-top: 3px; font-size: 10.5px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; color: var(--accent); }
+.leader-card .role { margin-top: 3px; font-size: 10.5px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--accent); }
 .leader-card p { margin: 8px 0 0; font-size: 12px; color: var(--muted); }
 
 .stack { display: grid; gap: 12px; margin-top: 12px; }
@@ -1090,7 +1092,7 @@ a.profile-row:hover .pr-text strong { color: var(--accent); }
   border: 0;
   color: var(--muted);
   font-size: 11px;
-  font-weight: 800;
+  font-weight: 700;
   letter-spacing: .08em;
   text-transform: uppercase;
   cursor: pointer;
@@ -1114,7 +1116,7 @@ a.profile-row:hover .pr-text strong { color: var(--accent); }
   background: var(--surface-3);
   color: var(--accent);
   font-size: 12px;
-  font-weight: 800;
+  font-weight: 700;
   box-shadow: 0 8px 24px rgba(0, 0, 0, .4);
 }
 
@@ -1140,7 +1142,7 @@ a.profile-row:hover .pr-text strong { color: var(--accent); }
   background: var(--accent);
   color: var(--accent-ink);
   font-size: 12.5px;
-  font-weight: 800;
+  font-weight: 700;
   letter-spacing: .02em;
   box-shadow: 0 14px 40px rgba(0, 0, 0, .5);
   animation: toast-in .22s ease-out;

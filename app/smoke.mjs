@@ -145,8 +145,28 @@ const archivoStack = '"Archivo", -apple-system, BlinkMacSystemFont, "Segoe UI", 
 if (!stylesCss.includes(`--font: ${archivoStack};`) || !stylesCss.includes(`--font-display: ${archivoStack};`)) {
   throw new Error("normal and display font tokens must resolve to Archivo");
 }
-if (!stylesCss.includes("--font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;")) {
-  throw new Error("technical monospace token must remain system monospace");
+if (!stylesCss.includes("--font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;") ||
+    !stylesCss.includes(".mono { font-family: var(--font-mono); }")) {
+  throw new Error("technical monospace typography must remain unchanged");
+}
+const ordinaryUiCss = stylesCss.replace(fontFaces[0], "");
+if (/font-weight:\s*900\b/.test(ordinaryUiCss) ||
+    !/body\s*{[^}]*font-weight:\s*400\b/s.test(ordinaryUiCss) ||
+    !/button\s*{[^}]*font-weight:\s*600\b/s.test(ordinaryUiCss) ||
+    !/input, select, textarea\s*{[^}]*font-weight:\s*600\b/s.test(ordinaryUiCss)) {
+  throw new Error("ordinary Archivo body and control weights must follow the readable hierarchy");
+}
+for (const selector of [".display", ".section-head h2", ".card h3", ".ph-id h1", ".session-row h3"]) {
+  const escapedSelector = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  if (!new RegExp(`${escapedSelector}\\s*{[^}]*font-weight:\\s*800\\b`, "s").test(ordinaryUiCss)) {
+    throw new Error(`ordinary Archivo heading must use weight 800: ${selector}`);
+  }
+}
+for (const selector of [".kicker", ".badge", ".btn", ".chip", ".admin-tabs a", ".admin-filter-chips button", ".admin-filters-clear"]) {
+  const escapedSelector = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  if (!new RegExp(`${escapedSelector}\\s*{[^}]*font-weight:\\s*700\\b`, "s").test(ordinaryUiCss)) {
+    throw new Error(`ordinary Archivo label/control must use weight 700: ${selector}`);
+  }
 }
 for (const contract of ["@font-face", "font-display: swap", ":focus-visible", "prefers-reduced-motion", "max-width: 420px"]) {
   if (!stylesCss.includes(contract)) throw new Error(`missing accessibility CSS contract: ${contract}`);
@@ -513,7 +533,7 @@ if (!/overflow-x:\s*auto/.test(chipCss) || !/gap:\s*8px/.test(chipCss) ||
   console.error("FAIL Admin member chips need accessible Night Circuit sizing, overflow, and active styles");
 }
 for (const [key, options] of Object.entries({
-  status: [["all", "All statuses"], ["approved", "Approved"], ["pending", "Pending"], ["declined", "Declined"]],
+  status: [["all", "All"], ["approved", "Approved"], ["pending", "Pending"], ["declined", "Declined"]],
   role: [["all", "All roles"], ["member", "Member"], ["admin", "Admin"], ["superadmin", "Super Admin"]],
 })) {
   for (const [value, label] of options) {

@@ -1505,7 +1505,7 @@ function adminMembers(viewer, users) {
       <fieldset class="admin-filter-group">
         <legend>Status</legend>
         <div class="admin-filter-chips">
-          ${filterChip("status", "all", "All statuses")}${filterChip("status", "approved", "Approved")}${filterChip("status", "pending", "Pending")}${filterChip("status", "declined", "Declined")}
+          ${filterChip("status", "all", "All")}${filterChip("status", "approved", "Approved")}${filterChip("status", "pending", "Pending")}${filterChip("status", "declined", "Declined")}
         </div>
       </fieldset>
       <fieldset class="admin-filter-group">
