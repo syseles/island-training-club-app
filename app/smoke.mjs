@@ -455,6 +455,22 @@ if (!pendHtml.includes("Booking locked")) {
 store.demoSignIn("admin");
 const adminApprovalsOut = await views.viewAdmin("approvals");
 await check("admin approvals", () => adminApprovalsOut);
+for (const approvalContract of [
+  /Ready for review \(\d+\)/,
+  /Awaiting application \(\d+\)/,
+  /data-approval-card/,
+  /data-applicant-name/,
+  /class="decision-error" role="alert" hidden/,
+]) {
+  if (!approvalContract.test(adminApprovalsOut)) {
+    failures++;
+    console.error(`FAIL grouped Admin approvals missing ${approvalContract}`);
+  }
+}
+if (!stylesCss.includes(".applicant-awaiting") || !stylesCss.includes("flex-wrap: wrap")) {
+  failures++;
+  console.error("FAIL Admin approval actions must wrap and Awaiting cards need reduced emphasis");
+} else console.log("ok  grouped Admin approvals expose responsive decision UI");
 const adminActivitiesOut = await views.viewAdmin("activities");
 await check("admin activities", () => adminActivitiesOut);
 const adminMembersOut = await views.viewAdmin("members");

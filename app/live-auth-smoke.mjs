@@ -92,6 +92,7 @@ let profileListError = null;
 let applicationListError = null;
 let profileUpdateError = null;
 let profileUpdateResult = "row";
+let profileUpdateGate = null;
 let authStateChangeHandler = null;
 let authCallbackLocked = false;
 let oauthCalls = 0;
@@ -191,6 +192,7 @@ const fakeSupabase = {
               if (columns !== "id, role") throw new Error("Profile update must return id and role");
               return {
                 single: async () => {
+                  if (profileUpdateGate) await profileUpdateGate;
                   const target = targetId === profile.id
                     ? profile
                     : pendingProfiles.find((item) => item.id === targetId);
@@ -285,9 +287,29 @@ if (queue.some((item) => item.id === authUser.id)) {
   throw new Error("Approved/admin profiles must not enter the approval queue");
 }
 const approvalsHtml = await views.viewAdmin("approvals");
+assert.match(approvalsHtml, /Ready for review \(1\)/);
+assert.match(approvalsHtml, /Awaiting application \(1\)/);
+assert.ok(approvalsHtml.indexOf("Submitted Runner") < approvalsHtml.indexOf("Incomplete Runner"),
+  "Submitted applications must render first");
 if (!approvalsHtml.includes("Application not submitted")) {
   throw new Error("Approvals must explain incomplete pending profiles");
 }
+const submittedProfile = pendingProfiles.find((item) => item.id === "pending-submitted");
+const incompleteProfile = pendingProfiles.find((item) => item.id === "pending-incomplete");
+submittedProfile.role = "member";
+const readyEmptyHtml = await views.viewAdmin("approvals");
+assert.match(readyEmptyHtml, /Ready for review \(0\)[\s\S]*No applications ready for review\./);
+assert.match(readyEmptyHtml, /Awaiting application \(1\)/);
+submittedProfile.role = "pending";
+incompleteProfile.role = "member";
+const awaitingEmptyHtml = await views.viewAdmin("approvals");
+assert.match(awaitingEmptyHtml, /Ready for review \(1\)/);
+assert.match(awaitingEmptyHtml, /Awaiting application \(0\)[\s\S]*No members awaiting an application\./);
+submittedProfile.role = "member";
+const allEmptyHtml = await views.viewAdmin("approvals");
+assert.match(allEmptyHtml, /No pending members/);
+submittedProfile.role = "pending";
+incompleteProfile.role = "pending";
 const decisionButton = (profileId, action) => approvalsHtml.match(
   new RegExp(`<button[^>]*data-action="${action}"[^>]*data-user="${profileId}"[^>]*>`)
 )?.[0] || "";
@@ -865,19 +887,67 @@ assert.deepEqual(toastStack.children.map((item) => item.textContent), ["Sign-out
 assert.equal(toastStack.children.some((item) => item.textContent === "Signed out"), false);
 await store.getCurrentUser();
 
-const approvalClick = {
-  target: {
-    closest: () => ({ dataset: { action: "approve", user: "pending-submitted" } }),
-  },
+const makeDecisionCard = (action) => {
+  const approve = makeElement();
+  approve.textContent = "Approve";
+  approve.dataset = { action: "approve", user: "pending-submitted", applicantName: "Submitted Runner" };
+  const decline = makeElement();
+  decline.textContent = "Decline";
+  decline.dataset = { action: "decline", user: "pending-submitted", applicantName: "Submitted Runner" };
+  const error = makeElement();
+  error.hidden = true;
+  const card = makeElement();
+  card.querySelectorAll = () => [approve, decline];
+  card.querySelector = (selector) => selector === ".decision-error" ? error : null;
+  for (const control of [approve, decline]) {
+    control.closest = (selector) => selector === "[data-action]" ? control : card;
+  }
+  return { card, approve, decline, error, target: action === "approve" ? approve : decline };
 };
+let confirmMessage = null;
+window.confirm = (message) => { confirmMessage = message; return false; };
+const cancelledDecline = makeDecisionCard("decline");
+const updatesBeforeCancel = profileUpdates.length;
+await click({ target: cancelledDecline.target });
+assert.equal(confirmMessage, "Decline Submitted Runner’s membership application?");
+assert.equal(profileUpdates.length, updatesBeforeCancel, "Cancelled decline must not update the profile");
+
+window.confirm = (message) => { confirmMessage = message; return true; };
+const declineAttempt = makeDecisionCard("decline");
+const decisionGate = deferred();
+profileUpdateGate = decisionGate.promise;
+profileUpdateError = new Error("Profile update failed");
+toastStack.children.length = 0;
+const pendingDecline = click({ target: declineAttempt.target });
+assert.equal(confirmMessage, "Decline Submitted Runner’s membership application?");
+assert.equal(declineAttempt.approve.disabled, true);
+assert.equal(declineAttempt.decline.disabled, true);
+assert.equal(declineAttempt.decline.textContent, "Declining…");
+decisionGate.resolve();
+await pendingDecline;
+profileUpdateGate = null;
+assert.equal(elements.get("view").innerHTML, retainedQueueHtml, "Failed decline must retain prior queue UI");
+assert.equal(declineAttempt.approve.disabled, false);
+assert.equal(declineAttempt.decline.disabled, false);
+assert.equal(declineAttempt.decline.textContent, "Decline");
+assert.equal(declineAttempt.error.hidden, false);
+assert.equal(declineAttempt.error.textContent, "Profile update failed");
+assert.equal(declineAttempt.error.getAttribute("role"), "alert");
+assert.deepEqual(toastStack.children.map((item) => item.textContent), ["Profile update failed"]);
+assert.equal(toastStack.children.some((item) => /Approved\.|Declined\./.test(item.textContent)), false);
+profileUpdateError = null;
+
 for (const [expectedError, configure] of [
   ["Profile update failed", () => { profileUpdateError = new Error("Profile update failed"); }],
   ["Application decision conflict.", () => { profileUpdateResult = "zero"; }],
 ]) {
+  const approvalAttempt = makeDecisionCard("approve");
   toastStack.children.length = 0;
   configure();
-  await click(approvalClick);
+  await click({ target: approvalAttempt.target });
   assert.equal(elements.get("view").innerHTML, retainedQueueHtml, `${expectedError} must retain prior queue UI`);
+  assert.equal(approvalAttempt.error.textContent, expectedError);
+  assert.equal(approvalAttempt.error.hidden, false);
   assert.deepEqual(toastStack.children.map((item) => item.textContent), [expectedError]);
   assert.equal(toastStack.children.some((item) => item.textContent === "Approved."), false,
     `${expectedError} must not produce a success toast`);

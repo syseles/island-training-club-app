@@ -417,13 +417,35 @@ document.addEventListener("click", async (e) => {
 
     case "approve":
     case "decline": {
+      if (el.disabled) break;
+      const name = el.dataset.applicantName || "this member";
+      if (action === "decline" && !window.confirm(`Decline ${name}’s membership application?`)) break;
+
       const decision = action === "approve" ? "member" : "declined";
+      const card = el.closest("[data-approval-card]");
+      const controls = [...(card?.querySelectorAll('[data-action="approve"], [data-action="decline"]') || [el])];
+      const decisionError = card?.querySelector(".decision-error");
+      if (decisionError) {
+        decisionError.textContent = "";
+        decisionError.hidden = true;
+      }
+      controls.forEach((control) => { control.disabled = true; });
       try {
-        await store.decideApplication(el.dataset.user, decision);
-        toast(action === "approve" ? "Approved." : "Declined.");
-        await renderWithFeedback();
+        await withBusyControl(el, action === "approve" ? "Approving…" : "Declining…", async () => {
+          await store.decideApplication(el.dataset.user, decision);
+          await renderWithFeedback();
+          toast(action === "approve" ? "Approved." : "Declined.");
+        });
       } catch (err) {
-        toast(err.message || "Decision failed", true);
+        const message = err.message || "Decision failed";
+        if (decisionError) {
+          decisionError.textContent = message;
+          decisionError.setAttribute("role", "alert");
+          decisionError.hidden = false;
+        }
+        toast(message, true);
+      } finally {
+        controls.forEach((control) => { control.disabled = false; });
       }
       break;
     }

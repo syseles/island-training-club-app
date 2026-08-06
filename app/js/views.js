@@ -1362,57 +1362,65 @@ export async function viewAdmin(tab = "approvals") {
 
 function adminApprovals(pending) {
   if (!pending.length) {
-    return `<div class="empty">No pending applications. New signups will land here.</div>`;
+    return `<div class="empty">No pending members. New signups will land here.</div>`;
   }
-  return pending
-    .map((u) => {
-      const joined = new Date(u.appliedAt).toLocaleDateString("en-HK", { day: "numeric", month: "short" });
-      if (!u.applicationSubmitted) {
-        return `
-      <div class="card booking-card applicant"><div class="card-body">
-        <header>
-          <div>
-            <div class="kicker dim" style="margin-top:0">Joined ${joined}</div>
-            <h3 class="mt8">${esc(u.fullName)}</h3>
-          </div>
-          <span class="badge warn">Pending</span>
-        </header>
-        <dl>
-          <dt>Email</dt><dd>${esc(u.email)}</dd>
-        </dl>
-        <p class="hero-meta mt8"><strong>Application not submitted</strong></p>
-        <p class="muted small">This pending profile has not finished the membership application yet, so approval stays locked until they submit it.</p>
-        <div class="actions">
-          <button class="btn sm" type="button" data-action="approve" data-user="${u.id}" disabled>Approve</button>
-          <button class="btn danger sm" type="button" data-action="decline" data-user="${u.id}" disabled>Decline</button>
+
+  const ready = pending.filter((item) => item.applicationSubmitted);
+  const awaiting = pending.filter((item) => !item.applicationSubmitted);
+  const section = (title, items, emptyCopy, renderCard) => `
+    <section class="approval-group">
+      <div class="section-head"><h2>${title} (${items.length})</h2></div>
+      ${items.length ? items.map(renderCard).join("") : `<div class="empty">${emptyCopy}</div>`}
+    </section>`;
+  const decisionButton = (u, action, extraClass = "") => `
+    <button class="btn ${extraClass}sm" type="button" data-action="${action}" data-user="${esc(u.id)}" data-applicant-name="${esc(u.fullName)}">${action === "approve" ? "Approve" : "Decline"}</button>`;
+  const joinedDate = (u) => new Date(u.appliedAt).toLocaleDateString("en-HK", { day: "numeric", month: "short" });
+  const readyCard = (u) => `
+    <div class="card booking-card applicant" id="approval-${esc(u.id)}" data-approval-card data-applicant-name="${esc(u.fullName)}"><div class="card-body">
+      <header>
+        <div>
+          <div class="kicker dim" style="margin-top:0">Applied ${joinedDate(u)}</div>
+          <h3 class="mt8">${esc(u.fullName)}</h3>
         </div>
-      </div></div>`;
-      }
-      return `
-      <div class="card booking-card applicant"><div class="card-body">
-        <header>
-          <div>
-            <div class="kicker dim" style="margin-top:0">Applied ${joined}</div>
-            <h3 class="mt8">${esc(u.fullName)}</h3>
-          </div>
-          <span class="badge warn">Pending</span>
-        </header>
-        <dl>
-          <dt>Email</dt><dd>${esc(u.email)}</dd>
-          <dt>Phone</dt><dd>${esc(u.phone)}</dd>
-          <dt>Emergency</dt><dd>${esc(u.emergencyName)} · ${esc(u.emergencyPhone)}</dd>
-          <dt>Heard via</dt><dd>${esc(u.heard)}</dd>
-          <dt>Age 18+ / guardian</dt><dd>${u.isMinor ? "Under 18 · guardian required" : "18 or over"}</dd>
-          <dt>Indemnity</dt><dd>${u.indemnityAcceptedAt ? "Accepted" : "—"}</dd>
-          <dt>Photo consent</dt><dd>${u.mediaConsent ? "Yes" : "No"}</dd>
-        </dl>
-        <div class="actions">
-          <button class="btn sm" type="button" data-action="approve" data-user="${u.id}">Approve</button>
-          <button class="btn danger sm" type="button" data-action="decline" data-user="${u.id}">Decline</button>
+        <span class="badge warn">Pending</span>
+      </header>
+      <dl>
+        <dt>Email</dt><dd>${esc(u.email)}</dd>
+        <dt>Phone</dt><dd>${esc(u.phone)}</dd>
+        <dt>Emergency</dt><dd>${esc(u.emergencyName)} · ${esc(u.emergencyPhone)}</dd>
+        <dt>Heard via</dt><dd>${esc(u.heard)}</dd>
+        <dt>Age 18+ / guardian</dt><dd>${u.isMinor ? "Under 18 · guardian required" : "18 or over"}</dd>
+        <dt>Indemnity</dt><dd>${u.indemnityAcceptedAt ? "Accepted" : "—"}</dd>
+        <dt>Photo consent</dt><dd>${u.mediaConsent ? "Yes" : "No"}</dd>
+      </dl>
+      <div class="actions">
+        ${decisionButton(u, "approve")}
+        ${decisionButton(u, "decline", "danger ")}
+      </div>
+      <div class="decision-error" role="alert" hidden></div>
+    </div></div>`;
+  const awaitingCard = (u) => `
+    <div class="card booking-card applicant applicant-awaiting" id="approval-${esc(u.id)}" data-approval-card data-applicant-name="${esc(u.fullName)}"><div class="card-body">
+      <header>
+        <div>
+          <div class="kicker dim" style="margin-top:0">Joined ${joinedDate(u)}</div>
+          <h3 class="mt8">${esc(u.fullName)}</h3>
         </div>
-      </div></div>`;
-    })
-    .join("");
+        <span class="badge neutral">Awaiting</span>
+      </header>
+      <dl><dt>Email</dt><dd>${esc(u.email)}</dd></dl>
+      <p class="hero-meta mt8"><strong>Application not submitted</strong></p>
+      <p class="muted small">This pending profile has not finished the membership application yet, so approval stays locked until they submit it.</p>
+      <div class="actions">
+        <button class="btn sm" type="button" data-action="approve" data-user="${esc(u.id)}" data-applicant-name="${esc(u.fullName)}" disabled>Approve</button>
+        <button class="btn danger sm" type="button" data-action="decline" data-user="${esc(u.id)}" data-applicant-name="${esc(u.fullName)}" disabled>Decline</button>
+      </div>
+    </div></div>`;
+
+  return [
+    section("Ready for review", ready, "No applications ready for review.", readyCard),
+    section("Awaiting application", awaiting, "No members awaiting an application.", awaitingCard),
+  ].join("");
 }
 
 function adminActivities() {
