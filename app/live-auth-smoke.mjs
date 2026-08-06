@@ -53,6 +53,22 @@ const applicationRows = new Map([
     },
   ],
 ]);
+const approvedProfiles = [
+  {
+    id: "approved-admin",
+    email: "tina.admin@example.com",
+    full_name: "Tina Admin",
+    role: "admin",
+    created_at: "2026-08-05T01:00:00.000Z",
+  },
+  {
+    id: "approved-member",
+    email: "micah.member@example.com",
+    full_name: "Micah Member",
+    role: "member",
+    created_at: "2026-08-05T02:00:00.000Z",
+  },
+];
 const pendingProfiles = [
   {
     id: "pending-submitted",
@@ -86,12 +102,20 @@ applicationRows.set("pending-submitted", {
 const applicationUpdates = [];
 const profileUpdates = [];
 let applicationReadError = null;
+let applicationReadGate = null;
+const applicationReadGates = [];
 let profileListError = null;
+let profileListErrorAfterUpdate = null;
 let applicationListError = null;
 let profileUpdateError = null;
 let profileUpdateResult = "row";
+let profileUpdateGate = null;
 let authStateChangeHandler = null;
 let authCallbackLocked = false;
+let oauthCalls = 0;
+let releaseOAuth = null;
+let signOutCalls = 0;
+let releaseSignOut = null;
 const deferredAuthTasks = [];
 const fixedIso = "2026-08-05T02:00:00.000Z";
 const RealDate = Date;
@@ -134,6 +158,14 @@ const fakeSupabase = {
       authStateChangeHandler = callback;
       return { data: { subscription: { unsubscribe() {} } } };
     },
+    signInWithOAuth() {
+      oauthCalls++;
+      return new Promise((resolve) => { releaseOAuth = resolve; });
+    },
+    signOut() {
+      signOutCalls++;
+      return new Promise((resolve) => { releaseSignOut = resolve; });
+    },
   },
   from(table) {
     if (table === "profiles") {
@@ -155,6 +187,7 @@ const fakeSupabase = {
               return Promise.resolve({
                 data: [
                   structuredClone(profile),
+                  ...structuredClone(approvedProfiles),
                   ...structuredClone(pendingProfiles),
                   ...structuredClone(declinedProfiles),
                 ],
@@ -177,15 +210,17 @@ const fakeSupabase = {
               if (columns !== "id, role") throw new Error("Profile update must return id and role");
               return {
                 single: async () => {
+                  if (profileUpdateGate) await profileUpdateGate;
                   const target = targetId === profile.id
                     ? profile
-                    : pendingProfiles.find((item) => item.id === targetId);
+                    : [...approvedProfiles, ...pendingProfiles].find((item) => item.id === targetId);
                   profileUpdates.push({ id: targetId, expectedRole, ...structuredClone(patch) });
                   if (profileUpdateError) return { data: null, error: profileUpdateError };
                   if (profileUpdateResult === "zero" || !target || (expectedRole && target.role !== expectedRole)) {
                     return { data: null, error: null };
                   }
                   Object.assign(target, patch);
+                  if (profileListErrorAfterUpdate) profileListError = profileListErrorAfterUpdate;
                   return { data: { id: targetId, role: target.role }, error: null };
                 },
               };
@@ -204,10 +239,14 @@ const fakeSupabase = {
                 throw new Error("Application query did not target the signed-in user");
               }
               return {
-                maybeSingle: async () => ({
-                  data: structuredClone(applicationRows.get(value) || null),
-                  error: applicationReadError,
-                }),
+                maybeSingle: async () => {
+                  const readGate = applicationReadGates.shift() || applicationReadGate;
+                  if (readGate) await readGate;
+                  return {
+                    data: structuredClone(applicationRows.get(value) || null),
+                    error: applicationReadError,
+                  };
+                },
               };
             },
             then(resolve, reject) {
@@ -267,9 +306,29 @@ if (queue.some((item) => item.id === authUser.id)) {
   throw new Error("Approved/admin profiles must not enter the approval queue");
 }
 const approvalsHtml = await views.viewAdmin("approvals");
+assert.match(approvalsHtml, /Ready for review \(1\)/);
+assert.match(approvalsHtml, /Awaiting application \(1\)/);
+assert.ok(approvalsHtml.indexOf("Submitted Runner") < approvalsHtml.indexOf("Incomplete Runner"),
+  "Submitted applications must render first");
 if (!approvalsHtml.includes("Application not submitted")) {
   throw new Error("Approvals must explain incomplete pending profiles");
 }
+const submittedProfile = pendingProfiles.find((item) => item.id === "pending-submitted");
+const incompleteProfile = pendingProfiles.find((item) => item.id === "pending-incomplete");
+submittedProfile.role = "member";
+const readyEmptyHtml = await views.viewAdmin("approvals");
+assert.match(readyEmptyHtml, /Ready for review \(0\)[\s\S]*No applications ready for review\./);
+assert.match(readyEmptyHtml, /Awaiting application \(1\)/);
+submittedProfile.role = "pending";
+incompleteProfile.role = "member";
+const awaitingEmptyHtml = await views.viewAdmin("approvals");
+assert.match(awaitingEmptyHtml, /Ready for review \(1\)/);
+assert.match(awaitingEmptyHtml, /Awaiting application \(0\)[\s\S]*No members awaiting an application\./);
+submittedProfile.role = "member";
+const allEmptyHtml = await views.viewAdmin("approvals");
+assert.match(allEmptyHtml, /No pending members/);
+submittedProfile.role = "pending";
+incompleteProfile.role = "pending";
 const decisionButton = (profileId, action) => approvalsHtml.match(
   new RegExp(`<button[^>]*data-action="${action}"[^>]*data-user="${profileId}"[^>]*>`)
 )?.[0] || "";
@@ -280,9 +339,36 @@ for (const action of ["approve", "decline"]) {
     `Submitted ${action} must be enabled`);
 }
 const membersHtml = await views.viewAdmin("members");
+assert.match(membersHtml, /Approved[^\d]*3/);
+assert.match(membersHtml, /Pending[^\d]*2/);
+assert.match(membersHtml, /Declined[^\d]*1/);
 if (!/Declined Runner[\s\S]*badge danger">Declined</.test(membersHtml)) {
   throw new Error("Members must badge declined profiles as Declined");
 }
+assert.match(membersHtml, />Super Admin</);
+assert.match(membersHtml, />Admin</);
+assert.match(membersHtml, />Member</);
+assert.doesNotMatch(membersHtml, />super_?admin</i, "Raw role spellings must not appear as labels");
+assert.match(membersHtml, /Search members/);
+assert.match(membersHtml, /Status/);
+assert.match(membersHtml, /Role/);
+views.adminMemberFilters.query = "tina";
+views.adminMemberFilters.status = "approved";
+views.adminMemberFilters.role = "admin";
+const filteredMembersHtml = await views.viewAdmin("members");
+assert.match(filteredMembersHtml, /Tina Admin/);
+for (const excluded of ["Riley Runner", "Micah Member", "Submitted Runner", "Declined Runner"]) {
+  assert.doesNotMatch(filteredMembersHtml, new RegExp(excluded));
+}
+views.adminMemberFilters.query = "nobody";
+const noMembersHtml = await views.viewAdmin("members");
+assert.match(noMembersHtml, /No members match/i);
+assert.match(noMembersHtml, /nobody/i);
+assert.match(noMembersHtml, /Approved/);
+assert.match(noMembersHtml, /Admin/);
+views.adminMemberFilters.query = "";
+views.adminMemberFilters.status = "all";
+views.adminMemberFilters.role = "all";
 await store.decideApplication(submitted.id, "declined");
 if (!profileUpdates.some((update) =>
   update.id === submitted.id && update.role === "declined" && update.expectedRole === "pending"
@@ -624,23 +710,38 @@ if (missingPrivacy?.redirect || !missingPrivacy.includes("Application details un
 
 const domListeners = new Map();
 const windowListeners = new Map();
+let activeElement = null;
 const makeElement = () => ({
   children: [],
   className: "",
   innerHTML: "",
   textContent: "",
+  hidden: false,
+  attributes: new Map(),
   classList: { toggle() {} },
   appendChild(child) { this.children.push(child); },
+  setAttribute(name, value) { this.attributes.set(name, String(value)); },
+  getAttribute(name) { return this.attributes.get(name) ?? null; },
+  hasAttribute(name) { return this.attributes.has(name); },
+  removeAttribute(name) { this.attributes.delete(name); },
+  focus(options) {
+    activeElement = this;
+    this.focusOptions = options;
+  },
   remove() {},
   querySelector() { return null; },
 });
+const routeLoader = makeElement();
+routeLoader.hidden = true;
 const elements = new Map([
   ["view", makeElement()],
   ["bottom-nav", makeElement()],
   ["top-avatar", makeElement()],
   ["toast-stack", makeElement()],
+  ["route-loader", routeLoader],
 ]);
 globalThis.document = {
+  get activeElement() { return activeElement; },
   getElementById: (id) => elements.get(id),
   createElement: () => makeElement(),
   addEventListener: (event, callback) => domListeners.set(event, callback),
@@ -650,9 +751,20 @@ globalThis.location = { hash: "#/account" };
 window.location = globalThis.location;
 window.addEventListener = (event, callback) => windowListeners.set(event, callback);
 window.scrollTo = () => {};
+let nextTimerId = 1;
+const delayedTimers = new Map();
 globalThis.setTimeout = (callback, delay) => {
   if (delay === 0) deferredAuthTasks.push(callback);
-  return 0;
+  else delayedTimers.set(nextTimerId, { callback, delay });
+  return nextTimerId++;
+};
+globalThis.clearTimeout = (id) => delayedTimers.delete(id);
+const advanceTimersBy = (delay) => {
+  for (const [id, timer] of [...delayedTimers]) {
+    if (timer.delay !== delay) continue;
+    delayedTimers.delete(id);
+    timer.callback();
+  }
 };
 
 async function dispatchAuthStateChange(event) {
@@ -695,6 +807,59 @@ if (hashRejected || escapedRejections.length || toastStack.children.length !== 1
   throw new Error("Hash changes should catch failed application reads and show one error toast");
 }
 
+// Route feedback announces work immediately, only exposes visible copy after
+// the delay, and always clears once the awaited view is complete.
+applicationReadError = null;
+let releaseApplicationRead;
+applicationReadGate = new Promise((resolve) => { releaseApplicationRead = resolve; });
+const slowRender = windowListeners.get("hashchange")();
+const viewEl = elements.get("view");
+assert.equal(viewEl.getAttribute("aria-busy"), "true", "async route must announce busy immediately");
+assert.equal(routeLoader.hidden, true, "fast routes must not flash loading feedback");
+advanceTimersBy(300);
+assert.equal(routeLoader.hidden, false, "slow route must expose delayed loading feedback");
+releaseApplicationRead();
+await slowRender;
+applicationReadGate = null;
+assert.equal(viewEl.hasAttribute("aria-busy"), false, "route busy state must clear");
+assert.equal(routeLoader.hidden, true, "route loading feedback must clear");
+
+// Three overlapping routes prove that stale completion cannot clear current
+// feedback and out-of-order completion cannot replace the newest route.
+const deferred = () => {
+  let resolve;
+  const promise = new Promise((done) => { resolve = done; });
+  return { promise, resolve };
+};
+const oldestGate = deferred();
+const middleGate = deferred();
+const currentGate = deferred();
+applicationReadGates.push(oldestGate.promise, middleGate.promise, currentGate.promise);
+location.hash = "#/account/privacy";
+const oldestRender = windowListeners.get("hashchange")();
+location.hash = "#/account/indemnity";
+const middleRender = windowListeners.get("hashchange")();
+location.hash = "#/account/details";
+const currentRender = windowListeners.get("hashchange")();
+advanceTimersBy(300);
+assert.equal(viewEl.getAttribute("aria-busy"), "true");
+assert.equal(routeLoader.hidden, false);
+middleGate.resolve();
+await middleRender;
+assert.equal(viewEl.getAttribute("aria-busy"), "true", "stale completion must not clear current busy state");
+assert.equal(routeLoader.hidden, false, "stale completion must not hide the current loader");
+currentGate.resolve();
+await currentRender;
+const currentRouteHtml = viewEl.innerHTML;
+assert.match(currentRouteHtml, /Membership Details/);
+assert.equal(viewEl.hasAttribute("aria-busy"), false);
+assert.equal(routeLoader.hidden, true);
+oldestGate.resolve();
+await oldestRender;
+assert.equal(viewEl.innerHTML, currentRouteHtml, "an older route must not commit after the current route");
+assert.equal(viewEl.hasAttribute("aria-busy"), false);
+assert.equal(routeLoader.hidden, true);
+
 // Approval queue failures must be truthful and preserve the last good queue.
 applicationReadError = null;
 profile.role = "super_admin";
@@ -703,6 +868,8 @@ location.hash = "#/admin";
 toastStack.children.length = 0;
 await windowListeners.get("hashchange")();
 const retainedQueueHtml = elements.get("view").innerHTML;
+assert.equal(document.activeElement, elements.get("view"), "Successful route renders must focus #view");
+assert.deepEqual(elements.get("view").focusOptions, { preventScroll: true });
 assert.match(retainedQueueHtml, /Submitted Runner/);
 assert.match(retainedQueueHtml, /Incomplete Runner/);
 
@@ -722,25 +889,261 @@ for (const [errorType, setError] of [
 }
 
 const click = domListeners.get("click");
-const approvalClick = {
-  target: {
-    closest: () => ({ dataset: { action: "approve", user: "pending-submitted" } }),
-  },
+const change = domListeners.get("change");
+
+// Legacy member-management URLs canonicalize instead of rendering the removed
+// row/avatar implementation.
+location.hash = "#/admin/users";
+await windowListeners.get("hashchange")();
+assert.equal(location.hash, "#/admin/members");
+assert.doesNotMatch(elements.get("view").innerHTML, /class="(?:row|avatar)"/);
+
+// Every role/access change names the member and target state before touching
+// the store. Cancelling leaves the profile untouched.
+const roleSelect = makeElement();
+roleSelect.dataset = { change: "set-role", user: "approved-member", memberName: "Micah Member" };
+roleSelect.value = "admin";
+roleSelect.closest = () => roleSelect;
+let confirmMessage = null;
+window.confirm = (message) => { confirmMessage = message; return false; };
+const updatesBeforeRoleCancel = profileUpdates.length;
+await change({ target: roleSelect });
+assert.equal(confirmMessage, "Change Micah Member’s role to Admin?");
+assert.equal(profileUpdates.length, updatesBeforeRoleCancel, "Cancelled promotion must not call the store");
+
+const demoteSelect = makeElement();
+demoteSelect.dataset = { change: "set-role", user: "approved-admin", memberName: "Tina Admin", currentRole: "admin" };
+demoteSelect.value = "member";
+demoteSelect.closest = () => demoteSelect;
+await change({ target: demoteSelect });
+assert.equal(confirmMessage, "Change Tina Admin’s role to Member?");
+assert.equal(profileUpdates.length, updatesBeforeRoleCancel, "Cancelled demotion must not call the store");
+
+const revokeControl = makeElement();
+revokeControl.textContent = "Revoke access";
+revokeControl.dataset = { action: "revoke-member", user: "approved-admin", memberName: "Tina Admin" };
+revokeControl.closest = () => revokeControl;
+await click({ target: revokeControl });
+assert.equal(confirmMessage, "Revoke Tina Admin’s access and move them to Pending?");
+assert.equal(profileUpdates.length, updatesBeforeRoleCancel, "Cancelled revoke must not call the store");
+
+window.confirm = () => true;
+const successfulRoleSelect = makeElement();
+successfulRoleSelect.tagName = "SELECT";
+successfulRoleSelect.dataset = { change: "set-role", user: "approved-member", memberName: "Micah Member", currentRole: "member" };
+successfulRoleSelect.value = "admin";
+successfulRoleSelect.closest = () => successfulRoleSelect;
+const roleGate = deferred();
+profileUpdateGate = roleGate.promise;
+const pendingRoleChange = change({ target: successfulRoleSelect });
+assert.equal(successfulRoleSelect.disabled, true);
+assert.equal(successfulRoleSelect.getAttribute("aria-busy"), "true");
+roleGate.resolve();
+await pendingRoleChange;
+profileUpdateGate = null;
+assert.equal(successfulRoleSelect.disabled, false);
+assert.equal(successfulRoleSelect.hasAttribute("aria-busy"), false);
+assert.ok(profileUpdates.some((update) => update.id === "approved-member" && update.role === "admin"));
+assert.ok(toastStack.children.some((item) => item.textContent === "Micah Member is now Admin."));
+
+// Successful delegated demotion and revocation both dispatch through the live
+// role API and only announce success after the returned row confirms mutation.
+toastStack.children.length = 0;
+const successfulDemotion = makeElement();
+successfulDemotion.tagName = "SELECT";
+successfulDemotion.dataset = { change: "set-role", user: "approved-admin", memberName: "Tina Admin", currentRole: "admin" };
+successfulDemotion.value = "member";
+successfulDemotion.closest = () => successfulDemotion;
+await change({ target: successfulDemotion });
+assert.ok(profileUpdates.some((update) => update.id === "approved-admin" && update.role === "member"));
+assert.deepEqual(toastStack.children.map((item) => item.textContent), ["Tina Admin is now Member."]);
+
+toastStack.children.length = 0;
+const successfulRevoke = makeElement();
+successfulRevoke.textContent = "Revoke access";
+successfulRevoke.dataset = { action: "revoke-member", user: "approved-member", memberName: "Micah Member" };
+successfulRevoke.closest = () => successfulRevoke;
+await click({ target: successfulRevoke });
+assert.ok(profileUpdates.some((update) => update.id === "approved-member" && update.role === "pending"));
+assert.deepEqual(toastStack.children.map((item) => item.textContent), ["Micah Member moved to Pending."]);
+
+// A stale delegated target restores its select and never emits false success.
+toastStack.children.length = 0;
+profileUpdateResult = "zero";
+const staleRoleSelect = makeElement();
+staleRoleSelect.tagName = "SELECT";
+staleRoleSelect.dataset = { change: "set-role", user: "removed-member", memberName: "Removed Member", currentRole: "member" };
+staleRoleSelect.value = "admin";
+staleRoleSelect.closest = () => staleRoleSelect;
+await change({ target: staleRoleSelect });
+profileUpdateResult = "row";
+assert.equal(staleRoleSelect.value, "member");
+assert.equal(staleRoleSelect.disabled, false);
+assert.equal(staleRoleSelect.hasAttribute("aria-busy"), false);
+assert.deepEqual(toastStack.children.map((item) => item.textContent), ["Application decision conflict."]);
+assert.equal(toastStack.children.some((item) => /is now Admin/.test(item.textContent)), false);
+
+// Once the authoritative role mutation succeeds, a failed Members refresh is
+// a stale-view problem: success remains truthful and the old control is locked
+// so the mutation cannot be retried against already-changed data.
+toastStack.children.length = 0;
+const refreshFailedRole = makeElement();
+refreshFailedRole.tagName = "SELECT";
+refreshFailedRole.dataset = { change: "set-role", user: "approved-admin", memberName: "Tina Admin", currentRole: "member" };
+refreshFailedRole.value = "admin";
+refreshFailedRole.closest = () => refreshFailedRole;
+profileListError = new Error("Members refresh failed");
+await change({ target: refreshFailedRole });
+profileListError = null;
+assert.equal(approvedProfiles.find((item) => item.id === "approved-admin").role, "admin");
+assert.equal(refreshFailedRole.disabled, true, "refresh failure must lock the stale role control");
+assert.deepEqual(toastStack.children.map((item) => item.textContent), [
+  "Tina Admin is now Admin.",
+  "Change saved, but this Admin view could not refresh. Members refresh failed",
+]);
+assert.equal(toastStack.children.some((item) => /Unable to change role/.test(item.textContent)), false);
+
+// Restore fixture roles so later approval-queue regressions retain their
+// original baseline independently of these member-action tests.
+approvedProfiles.find((item) => item.id === "approved-admin").role = "admin";
+approvedProfiles.find((item) => item.id === "approved-member").role = "member";
+location.hash = "#/admin";
+await windowListeners.get("hashchange")();
+
+// Delegated async controls expose exact progress copy, suppress a duplicate
+// action, and recover without a success toast when the store rejects.
+const googleControl = makeElement();
+googleControl.textContent = "Continue with Google";
+googleControl.dataset = { action: "sign-in-google" };
+googleControl.closest = () => googleControl;
+toastStack.children.length = 0;
+const firstGoogleClick = click({ target: googleControl });
+assert.equal(googleControl.disabled, true);
+assert.equal(googleControl.textContent, "Connecting…");
+assert.equal(googleControl.getAttribute("aria-busy"), "true");
+const duplicateGoogleClick = click({ target: googleControl });
+assert.equal(oauthCalls, 1, "pending control must prevent a duplicate store action");
+releaseOAuth({ error: new Error("OAuth unavailable") });
+await Promise.all([firstGoogleClick, duplicateGoogleClick]);
+assert.equal(googleControl.disabled, false);
+assert.equal(googleControl.textContent, "Continue with Google");
+assert.equal(googleControl.hasAttribute("aria-busy"), false);
+assert.deepEqual(toastStack.children.map((item) => item.textContent), ["OAuth unavailable"]);
+assert.equal(toastStack.children[0].getAttribute("role"), "alert");
+
+// Exercise a second delegated path: sign-out must also suppress duplicate
+// clicks, recover its control on rejection, and withhold the success toast.
+const signOutControl = makeElement();
+signOutControl.textContent = "Sign out";
+signOutControl.dataset = { action: "signout" };
+signOutControl.closest = () => signOutControl;
+toastStack.children.length = 0;
+const firstSignOut = click({ target: signOutControl });
+assert.equal(signOutControl.disabled, true);
+assert.equal(signOutControl.textContent, "Signing out…");
+assert.equal(signOutControl.getAttribute("aria-busy"), "true");
+const duplicateSignOut = click({ target: signOutControl });
+assert.equal(signOutCalls, 1, "pending sign-out must prevent a duplicate store action");
+releaseSignOut({ error: new Error("Sign-out unavailable") });
+await Promise.all([firstSignOut, duplicateSignOut]);
+assert.equal(signOutControl.disabled, false);
+assert.equal(signOutControl.textContent, "Sign out");
+assert.equal(signOutControl.hasAttribute("aria-busy"), false);
+assert.deepEqual(toastStack.children.map((item) => item.textContent), ["Sign-out unavailable"]);
+assert.equal(toastStack.children.some((item) => item.textContent === "Signed out"), false);
+await store.getCurrentUser();
+
+const makeDecisionCard = (action) => {
+  const approve = makeElement();
+  approve.textContent = "Approve";
+  approve.dataset = { action: "approve", user: "pending-submitted", applicantName: "Submitted Runner" };
+  const decline = makeElement();
+  decline.textContent = "Decline";
+  decline.dataset = { action: "decline", user: "pending-submitted", applicantName: "Submitted Runner" };
+  const error = makeElement();
+  error.hidden = true;
+  const card = makeElement();
+  card.querySelectorAll = () => [approve, decline];
+  card.querySelector = (selector) => selector === ".decision-error" ? error : null;
+  for (const control of [approve, decline]) {
+    control.closest = (selector) => selector === "[data-action]" ? control : card;
+  }
+  return { card, approve, decline, error, target: action === "approve" ? approve : decline };
 };
+confirmMessage = null;
+window.confirm = (message) => { confirmMessage = message; return false; };
+const cancelledDecline = makeDecisionCard("decline");
+const updatesBeforeCancel = profileUpdates.length;
+await click({ target: cancelledDecline.target });
+assert.equal(confirmMessage, "Decline Submitted Runner’s membership application?");
+assert.equal(profileUpdates.length, updatesBeforeCancel, "Cancelled decline must not update the profile");
+
+window.confirm = (message) => { confirmMessage = message; return true; };
+const declineAttempt = makeDecisionCard("decline");
+const decisionGate = deferred();
+profileUpdateGate = decisionGate.promise;
+profileUpdateError = new Error("Profile update failed");
+toastStack.children.length = 0;
+const pendingDecline = click({ target: declineAttempt.target });
+assert.equal(confirmMessage, "Decline Submitted Runner’s membership application?");
+assert.equal(declineAttempt.approve.disabled, true);
+assert.equal(declineAttempt.decline.disabled, true);
+assert.equal(declineAttempt.decline.textContent, "Declining…");
+decisionGate.resolve();
+await pendingDecline;
+profileUpdateGate = null;
+assert.equal(elements.get("view").innerHTML, retainedQueueHtml, "Failed decline must retain prior queue UI");
+assert.equal(declineAttempt.approve.disabled, false);
+assert.equal(declineAttempt.decline.disabled, false);
+assert.equal(declineAttempt.decline.textContent, "Decline");
+assert.equal(declineAttempt.error.hidden, false);
+assert.equal(declineAttempt.error.textContent, "Profile update failed");
+assert.equal(declineAttempt.error.getAttribute("role"), "alert");
+assert.deepEqual(toastStack.children.map((item) => item.textContent), ["Profile update failed"]);
+assert.equal(toastStack.children.some((item) => /Approved\.|Declined\./.test(item.textContent)), false);
+profileUpdateError = null;
+
 for (const [expectedError, configure] of [
   ["Profile update failed", () => { profileUpdateError = new Error("Profile update failed"); }],
   ["Application decision conflict.", () => { profileUpdateResult = "zero"; }],
 ]) {
+  const approvalAttempt = makeDecisionCard("approve");
   toastStack.children.length = 0;
   configure();
-  await click(approvalClick);
+  await click({ target: approvalAttempt.target });
   assert.equal(elements.get("view").innerHTML, retainedQueueHtml, `${expectedError} must retain prior queue UI`);
+  assert.equal(approvalAttempt.error.textContent, expectedError);
+  assert.equal(approvalAttempt.error.hidden, false);
   assert.deepEqual(toastStack.children.map((item) => item.textContent), [expectedError]);
   assert.equal(toastStack.children.some((item) => item.textContent === "Approved."), false,
     `${expectedError} must not produce a success toast`);
   profileUpdateError = null;
   profileUpdateResult = "row";
 }
+
+// A confirmed decision must not become a false action failure when the
+// post-decision queue read rejects. Keep the retained card non-actionable and
+// announce the successful mutation separately from the stale Admin view.
+const refreshFailedDecision = makeDecisionCard("approve");
+toastStack.children.length = 0;
+profileListErrorAfterUpdate = new Error("Queue refresh failed");
+await click({ target: refreshFailedDecision.target });
+profileListErrorAfterUpdate = null;
+profileListError = null;
+assert.equal(pendingProfiles.find((item) => item.id === "pending-submitted").role, "member");
+assert.equal(refreshFailedDecision.approve.disabled, true);
+assert.equal(refreshFailedDecision.decline.disabled, true);
+assert.equal(refreshFailedDecision.error.hidden, false);
+assert.equal(
+  refreshFailedDecision.error.textContent,
+  "Change saved, but this Admin view could not refresh. Queue refresh failed"
+);
+assert.deepEqual(toastStack.children.map((item) => item.textContent), [
+  "Approved.",
+  "Change saved, but this Admin view could not refresh. Queue refresh failed",
+]);
+assert.equal(toastStack.children.some((item) => item.textContent === "Decision failed"), false);
+pendingProfiles.find((item) => item.id === "pending-submitted").role = "pending";
 
 escapedRejections.length = 0;
 toastStack.children.length = 0;

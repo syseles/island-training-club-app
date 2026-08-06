@@ -2,6 +2,8 @@
 // Run: node --input-type=module < smoke.mjs  (from the app/ directory)
 
 import { spawnSync } from "node:child_process";
+import { existsSync, readFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const liveAuth = spawnSync(process.execPath, [fileURLToPath(new URL("./live-auth-smoke.mjs", import.meta.url))], {
@@ -111,6 +113,40 @@ if (liveApply.status !== 0) {
   if (liveApply.stderr) process.stderr.write(liveApply.stderr);
   process.exit(liveApply.status || 1);
 }
+
+// --- Shared UI and accessibility foundations ---
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const indexHtml = readFileSync(resolve(__dirname, "index.html"), "utf8");
+const stylesCss = readFileSync(resolve(__dirname, "styles.css"), "utf8");
+const viewsSource = readFileSync(resolve(__dirname, "js/views.js"), "utf8");
+for (const path of [
+  "../assets/fonts/barlow-400-latin.woff2",
+  "../assets/fonts/barlow-500-latin.woff2",
+  "../assets/fonts/barlow-600-latin.woff2",
+  "../assets/fonts/barlow-700-latin.woff2",
+  "../assets/fonts/barlow-condensed-700-latin.woff2",
+  "../assets/fonts/barlow-condensed-800-latin.woff2",
+  "../assets/fonts/barlow-condensed-900-latin.woff2",
+  "../assets/fonts/OFL-Barlow.txt",
+]) {
+  if (!existsSync(new URL(path, import.meta.url))) throw new Error(`missing self-hosted font asset: ${path}`);
+}
+if (!indexHtml.includes('rel="preload"') || !indexHtml.includes("barlow-400-latin.woff2")) {
+  throw new Error("primary Barlow font must be preloaded");
+}
+for (const contract of ["@font-face", "font-display: swap", ":focus-visible", "prefers-reduced-motion", "max-width: 420px"]) {
+  if (!stylesCss.includes(contract)) throw new Error(`missing accessibility CSS contract: ${contract}`);
+}
+if (!indexHtml.includes('class="skip-link"') || !indexHtml.includes('id="view"')) {
+  throw new Error("app shell must provide a skip link and main target");
+}
+if (viewsSource.includes('{ key: "admin", label: "Admin"')) {
+  throw new Error("Admin belongs in Profile, not bottom navigation");
+}
+if (!viewsSource.includes('{ key: "notifications", label: "Notifications"')) {
+  throw new Error("Notifications must remain in bottom navigation");
+}
+console.log("ok  shared UI and accessibility foundation contracts");
 
 // --- localStorage shim ---
 const mem = new Map();
@@ -419,10 +455,66 @@ if (!pendHtml.includes("Booking locked")) {
 store.demoSignIn("admin");
 const adminApprovalsOut = await views.viewAdmin("approvals");
 await check("admin approvals", () => adminApprovalsOut);
+for (const approvalContract of [
+  /Ready for review \(\d+\)/,
+  /Awaiting application \(\d+\)/,
+  /data-approval-card/,
+  /data-applicant-name/,
+  /class="decision-error" role="alert" hidden/,
+]) {
+  if (!approvalContract.test(adminApprovalsOut)) {
+    failures++;
+    console.error(`FAIL grouped Admin approvals missing ${approvalContract}`);
+  }
+}
+if (!stylesCss.includes(".applicant-awaiting") || !stylesCss.includes("flex-wrap: wrap")) {
+  failures++;
+  console.error("FAIL Admin approval actions must wrap and Awaiting cards need reduced emphasis");
+} else console.log("ok  grouped Admin approvals expose responsive decision UI");
 const adminActivitiesOut = await views.viewAdmin("activities");
 await check("admin activities", () => adminActivitiesOut);
+if (!/href="#\/admin\/activities" class="active" aria-current="page"/.test(adminActivitiesOut) ||
+    (adminActivitiesOut.match(/aria-current="page"/g) || []).length !== 1) {
+  failures++;
+  console.error("FAIL active Admin tab must expose one aria-current page");
+} else console.log("ok  active Admin tab exposes aria-current page");
 const adminMembersOut = await views.viewAdmin("members");
 await check("admin members", () => adminMembersOut);
+const adminStatusCounts = Object.fromEntries(["approved", "pending", "declined"].map((status) => [
+  status,
+  store.allUsers().filter((user) => user.status === status).length,
+]));
+for (const contract of [
+  new RegExp(`Approved[^\\d]*${adminStatusCounts.approved}`),
+  new RegExp(`Pending[^\\d]*${adminStatusCounts.pending}`),
+  new RegExp(`Declined[^\\d]*${adminStatusCounts.declined}`),
+  /Search members/,
+  />Super Admin</,
+  />Admin</,
+  />Member</,
+]) {
+  if (!contract.test(adminMembersOut)) {
+    failures++;
+    console.error(`FAIL Admin members missing ${contract}`);
+  }
+}
+views.adminMemberFilters.query = "tina";
+views.adminMemberFilters.status = "approved";
+views.adminMemberFilters.role = "admin";
+const filteredAdminMembers = await views.viewAdmin("members");
+if (!filteredAdminMembers.includes("Tina") || filteredAdminMembers.includes("CM Chui") || filteredAdminMembers.includes("Marco Santos")) {
+  failures++;
+  console.error("FAIL Admin member search/status/role filters must combine truthfully");
+} else console.log("ok  Admin member filters combine truthfully");
+views.adminMemberFilters.query = "nobody";
+const emptyAdminMembers = await views.viewAdmin("members");
+if (!/No members match[\s\S]*nobody[\s\S]*Approved[\s\S]*Admin/i.test(emptyAdminMembers)) {
+  failures++;
+  console.error("FAIL Admin member empty state must name active filters");
+} else console.log("ok  Admin member empty state names active filters");
+views.adminMemberFilters.query = "";
+views.adminMemberFilters.status = "all";
+views.adminMemberFilters.role = "all";
 await check("admin activity edit", () => views.viewAdminActivity("hyrox"));
 await check("admin activity new", () => views.viewAdminActivity("new"));
 const newApplicant = store.pendingApplicants().find((u) => u.email === "test@example.com");
@@ -1028,10 +1120,6 @@ store.resetDemo();
 // verify the live-mode HTML source exists in views.js and that the live
 // config evaluates correctly when imported fresh. The live render path
 // is verified manually against a deployed staging environment.
-import { readFileSync, existsSync } from "node:fs";
-import { dirname, resolve } from "node:path";
-const __dirname = dirname(fileURLToPath(import.meta.url));
-
 const _savedWindow = globalThis.window;
 globalThis.window = {
   SUPABASE_URL: "https://test.supabase.co",
@@ -1080,6 +1168,61 @@ if (!viewsSrc.includes("Signed in as")) {
 }
 
 const appSrc = readFileSync(resolve(__dirname, "js/app.js"), "utf8");
+const indexSrc = readFileSync(resolve(__dirname, "index.html"), "utf8");
+const stylesSrc = readFileSync(resolve(__dirname, "styles.css"), "utf8");
+const feedbackChecks = [
+  [indexSrc.includes('id="route-loader"') && indexSrc.includes('role="status"'), "semantic delayed route loader"],
+  [appSrc.includes("renderWithFeedback") && appSrc.includes('setAttribute("aria-busy", "true")'), "route busy wrapper"],
+  [appSrc.includes("withBusyControl") && appSrc.includes("const controlBusy = new WeakSet()"), "duplicate-safe busy control helper"],
+  [appSrc.includes("showFieldError") && appSrc.includes('alert.setAttribute("role", "alert")'), "alerting field-error helper"],
+  [appSrc.includes('field.setAttribute("aria-invalid", "true")') && appSrc.includes("field.focus()"), "invalid field semantics and focus"],
+  [appSrc.includes('document.addEventListener("input"'), "stale field-error clearing"],
+  [appSrc.includes('el.setAttribute("role", isErr ? "alert" : "status")'), "toast urgency semantics"],
+  [stylesSrc.includes(".route-loader"), "route loader styling"],
+];
+for (const [passed, label] of feedbackChecks) {
+  if (!passed) {
+    failures++;
+    console.error(`FAIL shared feedback missing ${label}`);
+  } else console.log(`ok  shared feedback has ${label}`);
+}
+const compactTypeContracts = [
+  [/\.bottom-nav a\s*\{[^}]*font-size:\s*([\d.]+)px/s, 11, "bottom navigation labels"],
+  [/\.field label\s*\{[^}]*font-size:\s*([\d.]+)px/s, 12, "form labels"],
+  [/\.session-row time small\s*\{[^}]*font-size:\s*([\d.]+)px/s, 12, "session time metadata"],
+  [/\.session-row \.spots\s*\{[^}]*font-size:\s*([\d.]+)px/s, 12, "session capacity metadata"],
+  [/\.day-cell\s*\{[^}]*font-size:\s*([\d.]+)px/s, 11, "schedule day labels"],
+  [/\.meta-grid small\s*\{[^}]*font-size:\s*([\d.]+)px/s, 12, "activity metadata labels"],
+  [/\.member-row \.who span\s*\{[^}]*font-size:\s*([\d.]+)px/s, 12, "member identity metadata"],
+];
+for (const [pattern, minimum, label] of compactTypeContracts) {
+  const size = Number(stylesSrc.match(pattern)?.[1]);
+  if (!size || size < minimum) {
+    failures++;
+    console.error(`FAIL ${label} must be at least ${minimum}px`);
+  } else console.log(`ok  ${label} meets the ${minimum}px minimum`);
+}
+if (!/\.route-loader\s*\{[^}]*top:\s*70px;[^}]*background:\s*var\(--surface-3\);/s.test(stylesSrc) ||
+    /\.route-loader\s*\{[^}]*(?:--top-h|--panel)/s.test(stylesSrc)) {
+  failures++;
+  console.error("FAIL route loader must use defined, visible position and background values");
+} else console.log("ok  route loader uses visible, defined position and background values");
+for (const label of ["Connecting…", "Signing out…", "Submitting…", "Saving…", "Confirming…", "Processing…"]) {
+  if (!appSrc.includes(label)) {
+    failures++;
+    console.error(`FAIL app.js missing exact busy label ${label}`);
+  }
+}
+for (const [html, fieldId, errorId] of [
+  [await views.viewAccount(), "signin-email", "signin-error"],
+  [localApplyHtml, "ap-donor", "apply-error"],
+  [views.viewCommunity("prayers"), "pr-text", "prayer-error"],
+]) {
+  if (!html.includes(`id="${fieldId}"`) || !html.includes(`id="${errorId}"`)) {
+    failures++;
+    console.error(`FAIL rendered form must pair #${fieldId} with #${errorId}`);
+  }
+}
 const signoutBlock = appSrc.match(/case "signout":([\s\S]*?)break;/);
 if (!signoutBlock || !signoutBlock[1].includes('location.hash = "#/account"')) {
   failures++;
@@ -1181,11 +1324,15 @@ if (!/NAV_FOR = \{[\s\S]*?notifications: "notifications"/.test(appSrc)) {
 } else {
   console.log("ok  app.js: NAV_FOR maps notifications to its own tab");
 }
-if (!/arg === "users"\s*\?\s*await views\.viewAdminUsers\(\)/.test(appSrc)) {
+if (!/arg === "users"\s*\?\s*\{ redirect: "#\/admin\/members" \}/.test(appSrc)) {
   failures++;
-  console.error("FAIL app.js: #/admin/users should route to viewAdminUsers");
+  console.error("FAIL app.js: #/admin/users should redirect to canonical #/admin/members");
 } else {
-  console.log("ok  app.js: #/admin/users routes to viewAdminUsers");
+  console.log("ok  app.js: #/admin/users redirects to canonical Members tab");
+}
+if (viewsSrc.includes("viewAdminUsers") || /class="(?:row|avatar)"/.test(adminMembersOut)) {
+  failures++;
+  console.error("FAIL legacy Admin users row/avatar UI should be removed");
 }
 
 // --- Admin entry consistency, live profile editing, weekly encouragement ---
@@ -1197,9 +1344,9 @@ if (!/:\s*await views\.viewAdmin\(arg \|\| "approvals"\)/.test(appSrc)) {
 }
 if (viewsSrc.includes('href: "#/admin/users"')) {
   failures++;
-  console.error("FAIL views.js: Admin nav item should link to #/admin (the tabbed admin page)");
+  console.error("FAIL views.js: bottom navigation must not contain the legacy Admin users link");
 } else {
-  console.log("ok  views.js: Admin nav item links to #/admin");
+  console.log("ok  views.js: bottom navigation has no legacy Admin users link");
 }
 const storeSrc2 = readFileSync(resolve(__dirname, "js/store.js"), "utf8");
 if (!storeSrc2.includes("listApprovalCandidates")) {
@@ -1309,17 +1456,17 @@ if (!viewsSrc.includes("Application details unavailable")) {
 } else {
   console.log("ok  views.js: missing live applications render unavailable cards");
 }
-if (!/window\.addEventListener\("hashchange",[\s\S]*await render\(\)[\s\S]*toast\(/.test(appSrc)) {
+if (!/window\.addEventListener\("hashchange",[\s\S]*await renderWithFeedback\(\)[\s\S]*toast\(/.test(appSrc)) {
   failures++;
   console.error("FAIL app.js: hashchange should await render failures and toast them");
 } else {
   console.log("ok  app.js: hashchange awaits render failures and toasts them");
 }
-if (!/await render\(\);[\s\S]*await maybeRedirectToApply\(\);/.test(appSrc)) {
+if (!/await renderWithFeedback\(\);[\s\S]*await maybeRedirectToApply\(\);/.test(appSrc)) {
   failures++;
-  console.error("FAIL app.js: boot/auth flows should await render and maybeRedirectToApply");
+  console.error("FAIL app.js: boot/auth flows should await feedback-wrapped render and maybeRedirectToApply");
 } else {
-  console.log("ok  app.js: boot/auth flows await render and maybeRedirectToApply");
+  console.log("ok  app.js: boot/auth flows await feedback-wrapped render and maybeRedirectToApply");
 }
 if (!appSrc.includes('out = u && u.status === "approved" ? { redirect: "#/account" } : await views.viewApply();')) {
   failures++;
@@ -1407,19 +1554,9 @@ if (cfg.config.url !== null || cfg.config.anonKey !== null) {
   console.log("ok  config: url/anonKey are null when window env vars unset");
 }
 
-// --- viewAdminUsers smoke (source-only) ---
-// viewAdminUsers depends on store.getCurrentUser / listProfiles /
-// listRoleChanges, which talk to Supabase in live mode. ES module exports
-// are read-only and cannot be stubbed. We verify the function exists in
-// views.js and that the helper functions are exported from store.js; the
-// actual render path is verified manually on a deployed staging
-// environment.
-if (!viewsSrc.includes("export async function viewAdminUsers")) {
-  failures++;
-  console.error("FAIL views.js: should export viewAdminUsers");
-} else {
-  console.log("ok  views.js: exports viewAdminUsers");
-}
+// --- Supabase admin store seams (source-only) ---
+// The canonical Members tab exercises listProfiles and updateProfileRole in
+// the live smoke; retain the role-audit seam for database compatibility.
 const storeSrc = readFileSync(resolve(__dirname, "js/store.js"), "utf8");
 for (const fn of ["listProfiles", "listRoleChanges", "updateProfileRole"]) {
   if (!storeSrc.includes(`export async function ${fn}`)) {
@@ -1488,6 +1625,177 @@ if (!viewsSrc.includes('#/notifications')) {
 } else {
   console.log("ok  views.js: references #/notifications");
 }
+
+// --- Delegated local member-role behavior ---
+// Exercise app.js in local mode so stale events cannot produce false success,
+// successful changes use setRole(), and filter-only UI state stays in memory.
+store.resetDemo();
+store.demoSignIn("superadmin");
+const localDomListeners = new Map();
+const localWindowListeners = new Map();
+let localActiveElement = null;
+const makeLocalElement = () => ({
+  children: [],
+  className: "",
+  innerHTML: "",
+  textContent: "",
+  hidden: false,
+  disabled: false,
+  attributes: new Map(),
+  classList: { toggle() {} },
+  appendChild(child) { this.children.push(child); },
+  setAttribute(name, value) { this.attributes.set(name, String(value)); },
+  getAttribute(name) { return this.attributes.get(name) ?? null; },
+  hasAttribute(name) { return this.attributes.has(name); },
+  removeAttribute(name) { this.attributes.delete(name); },
+  focus() { localActiveElement = this; },
+  remove() {},
+  querySelector() { return null; },
+});
+const localElements = new Map([
+  ["view", makeLocalElement()],
+  ["bottom-nav", makeLocalElement()],
+  ["top-avatar", makeLocalElement()],
+  ["toast-stack", makeLocalElement()],
+  ["route-loader", makeLocalElement()],
+]);
+localElements.get("route-loader").hidden = true;
+globalThis.document = {
+  get activeElement() { return localActiveElement; },
+  getElementById: (id) => localElements.get(id),
+  createElement: () => makeLocalElement(),
+  addEventListener: (event, callback) => localDomListeners.set(event, callback),
+};
+globalThis.HTMLInputElement = class {};
+globalThis.location = { hash: "#/admin/members" };
+globalThis.window = {
+  location: globalThis.location,
+  confirm: () => true,
+  addEventListener: (event, callback) => localWindowListeners.set(event, callback),
+  scrollTo() {},
+};
+const realSetTimeout = globalThis.setTimeout;
+const realClearTimeout = globalThis.clearTimeout;
+globalThis.setTimeout = () => 1;
+globalThis.clearTimeout = () => {};
+const localApp = await import("./js/app.js?local-admin-delegation");
+await localApp.bootPromise;
+const localClick = localDomListeners.get("click");
+const localChange = localDomListeners.get("change");
+const localInput = localDomListeners.get("input");
+const localToasts = localElements.get("toast-stack");
+const localToastText = () => localToasts.children.map((item) => item.textContent);
+const clearLocalToasts = () => { localToasts.children.length = 0; };
+const localControl = (dataset, value = "") => {
+  const control = makeLocalElement();
+  control.tagName = dataset.change === "set-role" ? "SELECT" : "BUTTON";
+  control.dataset = dataset;
+  control.value = value;
+  control.closest = () => control;
+  return control;
+};
+
+const staleLocalRole = localControl({
+  change: "set-role",
+  user: "removed-member",
+  memberName: "Removed Member",
+  currentRole: "member",
+}, "admin");
+await localChange({ target: staleLocalRole });
+if (staleLocalRole.value !== "member" || staleLocalRole.disabled || staleLocalRole.hasAttribute("aria-busy") ||
+    localToastText().join("|") !== "Member not found." || localToastText().some((text) => /is now/.test(text))) {
+  failures++;
+  console.error("FAIL stale local role event must restore its select without a success toast");
+} else console.log("ok  stale local role event restores without false success");
+
+clearLocalToasts();
+const rejectedLocalRevoke = localControl({
+  action: "revoke-member",
+  user: "u-pend-1",
+  memberName: "Marco Santos",
+});
+rejectedLocalRevoke.textContent = "Revoke access";
+await localClick({ target: rejectedLocalRevoke });
+if (rejectedLocalRevoke.textContent !== "Revoke access" || rejectedLocalRevoke.disabled ||
+    rejectedLocalRevoke.hasAttribute("aria-busy") ||
+    localToastText().join("|") !== "Only approved members can change roles." ||
+    localToastText().some((text) => /moved to Pending/.test(text))) {
+  failures++;
+  console.error("FAIL rejected local revoke must restore its button without a success toast");
+} else console.log("ok  rejected local revoke restores without false success");
+
+clearLocalToasts();
+const localDemotion = localControl({
+  change: "set-role",
+  user: "u-admin",
+  memberName: "Tina",
+  currentRole: "admin",
+}, "member");
+await localChange({ target: localDemotion });
+if (store.allUsers().find((user) => user.id === "u-admin")?.role !== "member" ||
+    localToastText().join("|") !== "Tina is now Member.") {
+  failures++;
+  console.error("FAIL delegated local demotion must mutate through setRole and toast success");
+} else console.log("ok  delegated local demotion confirms setRole success");
+
+clearLocalToasts();
+const localRevoke = localControl({ action: "revoke-member", user: "u-member", memberName: "CM Chui" });
+localRevoke.textContent = "Revoke access";
+await localClick({ target: localRevoke });
+const revokedLocalUser = store.allUsers().find((user) => user.id === "u-member");
+if (revokedLocalUser?.role !== "pending" || revokedLocalUser?.status !== "pending" ||
+    localToastText().join("|") !== "CM Chui moved to Pending.") {
+  failures++;
+  console.error("FAIL delegated local revoke must confirm role and status mutation");
+} else console.log("ok  delegated local revoke confirms setRole success");
+
+const persistedBeforeFilters = mem.get("itc.prototype.v1");
+const searchFilter = localControl({ input: "member-search" }, "tina");
+searchFilter.getAttribute = () => null;
+searchFilter.selectionStart = 4;
+await localInput({ target: searchFilter });
+const statusFilter = localControl({ change: "member-status-filter" }, "approved");
+localElements.set("member-status", statusFilter);
+await localChange({ target: statusFilter });
+const statusFocusRestored = localActiveElement === statusFilter;
+const roleFilter = localControl({ change: "member-role-filter" }, "admin");
+localElements.set("member-role", roleFilter);
+await localChange({ target: roleFilter });
+if (mem.get("itc.prototype.v1") !== persistedBeforeFilters ||
+    views.adminMemberFilters.query !== "tina" || views.adminMemberFilters.status !== "approved" ||
+    views.adminMemberFilters.role !== "admin") {
+  failures++;
+  console.error("FAIL delegated member filters must remain in memory and avoid localStorage writes");
+} else console.log("ok  delegated member filters do not persist");
+if (!statusFocusRestored || localActiveElement !== roleFilter) {
+  failures++;
+  console.error("FAIL status and role filters must restore corresponding focus after rerender");
+} else console.log("ok  status and role filters restore corresponding focus after rerender");
+views.adminMemberFilters.query = "";
+views.adminMemberFilters.status = "all";
+views.adminMemberFilters.role = "all";
+globalThis.setTimeout = realSetTimeout;
+globalThis.clearTimeout = realClearTimeout;
+
+// Direct callers receive checked failures for every rejected local transition.
+for (const [userId, role, message] of [
+  ["missing-user", "admin", "Member not found."],
+  ["u-pend-1", "admin", "Only approved members can change roles."],
+  ["u-admin", "owner", "Invalid role transition."],
+  ["u-admin", "member", "Member already has that role."],
+]) {
+  try {
+    store.setRole(userId, role);
+    failures++;
+    console.error(`FAIL setRole(${userId}, ${role}) should reject`);
+  } catch (err) {
+    if (err.message !== message) {
+      failures++;
+      console.error(`FAIL setRole(${userId}, ${role}) returned ${err.message}`);
+    }
+  }
+}
+console.log("ok  local setRole rejects missing, non-approved, and invalid transitions");
 
 // --- Reset ---
 store.resetDemo();

@@ -28,15 +28,17 @@ This work refines rather than rebrands the application.
 
 Self-host official Latin-subset WOFF2 fonts in `assets/fonts/`:
 
-- Barlow variable font for body and UI
-- Barlow Condensed variable font for headings
+- Barlow 400, 500, 600, and 700 for body and UI
+- Barlow Condensed 700, 800, and 900 for headings
 - Official SIL Open Font License text
+
+The seven weight-specific Latin files are intentionally small and avoid downloading unused scripts or italic styles.
 
 Implementation requirements:
 
-- Define local `@font-face` declarations.
+- Define local `@font-face` declarations for each included weight.
 - Use `font-display: swap`.
-- Preload only the primary body font from `app/index.html`.
+- Preload only Barlow 400 from `app/index.html`.
 - Retain a native system stack as fallback.
 - Do not depend on Google Fonts at runtime.
 - Preserve readable content when fonts fail or are still loading.
