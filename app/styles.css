@@ -980,7 +980,7 @@ a.profile-row:hover .pr-text strong { color: var(--accent); }
 .stack { display: grid; gap: 12px; margin-top: 12px; }
 
 .anniversary-story { margin-top: 18px; }
-.anniversary-hero {
+.anniversary-story .anniversary-hero {
   display: flex;
   align-items: center;
   gap: 16px;
@@ -990,7 +990,7 @@ a.profile-row:hover .pr-text strong { color: var(--accent); }
   border-radius: var(--radius-lg);
   background: linear-gradient(135deg, #17240f, var(--surface) 70%);
 }
-.anniversary-hero > strong {
+.anniversary-story .anniversary-hero > strong {
   display: grid;
   place-items: center;
   flex: 0 0 58px;
@@ -1001,22 +1001,22 @@ a.profile-row:hover .pr-text strong { color: var(--accent); }
   color: var(--accent-ink);
   font-size: 25px;
 }
-.anniversary-hero > strong span { margin-left: 2px; font-size: 10px; }
-.anniversary-hero h2 { margin: 0; font-size: 19px; }
-.anniversary-hero p { margin: 4px 0 0; color: var(--muted); font-size: 11px; }
-.milestone-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 12px; }
-.milestone {
+.anniversary-story .anniversary-hero > strong span { margin-left: 2px; font-size: 10px; }
+.anniversary-story .anniversary-hero h2 { margin: 0; font-size: 19px; }
+.anniversary-story .anniversary-hero p { margin: 4px 0 0; color: var(--muted); font-size: 11px; }
+.anniversary-story .milestone-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 12px; }
+.anniversary-story .milestone {
   min-width: 0;
   padding: 16px;
   border: 1px solid var(--line);
   border-radius: var(--radius);
   background: var(--surface);
 }
-.milestone:first-child { grid-column: 1 / -1; }
-.milestone strong { display: block; color: var(--accent); font-size: 27px; line-height: 1; }
-.milestone span { display: block; margin-top: 6px; font-size: 11px; font-weight: 800; }
-.anniversary-message { margin: 22px 2px 0; color: var(--muted); line-height: 1.7; }
-.anniversary-commitment {
+.anniversary-story .milestone:first-child { grid-column: 1 / -1; }
+.anniversary-story .milestone strong { display: block; color: var(--accent); font-size: 27px; line-height: 1; }
+.anniversary-story .milestone span { display: block; margin-top: 6px; font-size: 11px; font-weight: 800; }
+.anniversary-story .anniversary-message { margin: 22px 2px 0; color: var(--muted); line-height: 1.7; }
+.anniversary-story .anniversary-commitment {
   margin: 18px 0 0;
   padding: 17px;
   border: 0;
@@ -1027,9 +1027,9 @@ a.profile-row:hover .pr-text strong { color: var(--accent); }
   line-height: 1.65;
 }
 @media (max-width: 380px) {
-  .milestone-grid { grid-template-columns: 1fr; }
-  .milestone:first-child { grid-column: auto; }
-  .anniversary-hero { align-items: flex-start; }
+  .anniversary-story .milestone-grid { grid-template-columns: 1fr; }
+  .anniversary-story .milestone:first-child { grid-column: auto; }
+  .anniversary-story .anniversary-hero { align-items: flex-start; }
 }
 
 /* ---- Confirmation ----------------------------------------------------- */

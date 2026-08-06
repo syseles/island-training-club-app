@@ -45,6 +45,16 @@ if (
   console.error("FAIL announcement seeds should contain only the structured ITC anniversary");
 } else console.log("ok  announcement seeds contain only the ITC anniversary");
 
+if (
+  anniversary?.postedAt == null ||
+  new Date(anniversary.postedAt).getFullYear() !== 2026 ||
+  new Date(anniversary.postedAt).getMonth() !== 7 ||
+  new Date(anniversary.postedAt).getDate() !== 6
+) {
+  failures++;
+  console.error("FAIL announcement postedAt should resolve to 2026-08-06 local date");
+} else console.log("ok  announcement postedAt resolves to 2026-08-06 local date");
+
 for (const oldTitle of [
   "Sunday service at IECC",
   "New Wednesday venue being scouted",
@@ -151,9 +161,14 @@ for (const removed of [
 
 const savedAnnouncements = [...data.ANNOUNCEMENTS];
 data.ANNOUNCEMENTS.splice(0);
-const emptyCommunity = views.viewCommunity();
-const emptyAnnouncements = views.viewCommunity("announcements");
-data.ANNOUNCEMENTS.push(...savedAnnouncements);
+let emptyCommunity = "";
+let emptyAnnouncements = "";
+try {
+  emptyCommunity = views.viewCommunity();
+  emptyAnnouncements = views.viewCommunity("announcements");
+} finally {
+  data.ANNOUNCEMENTS.splice(0, data.ANNOUNCEMENTS.length, ...savedAnnouncements);
+}
 if (!emptyCommunity.includes("No announcements yet") || !emptyAnnouncements.includes("No announcements yet")) {
   failures++;
   console.error("FAIL Community announcement empty states should render safely");
