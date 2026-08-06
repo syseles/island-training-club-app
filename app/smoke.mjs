@@ -122,6 +122,45 @@ const viewsSource = readFileSync(resolve(__dirname, "js/views.js"), "utf8");
 const appSource = readFileSync(resolve(__dirname, "js/app.js"), "utf8");
 const dataSource = readFileSync(resolve(__dirname, "js/data.js"), "utf8");
 const storeSource = readFileSync(resolve(__dirname, "js/store.js"), "utf8");
+
+// --- Live Giving database source contracts ---
+const givingMigrationPath = resolve(__dirname, "../supabase/migrations/20260805000011_giving_campaigns.sql");
+const givingIntegrationPath = resolve(__dirname, "../supabase/tests/giving_campaigns_integration.sql");
+const givingVerifierPath = resolve(__dirname, "../supabase/tests/verify_giving_campaigns.sh");
+const givingMigrationSource = existsSync(givingMigrationPath) ? readFileSync(givingMigrationPath, "utf8") : "";
+const givingIntegrationSource = existsSync(givingIntegrationPath) ? readFileSync(givingIntegrationPath, "utf8") : "";
+const givingVerifierSource = existsSync(givingVerifierPath) ? readFileSync(givingVerifierPath, "utf8") : "";
+const givingSourceContracts = [
+  [/create table public\.giving_campaigns/i, "campaign table"],
+  [/goal_hkd\s+(?:integer|bigint)[\s\S]*?check\s*\(goal_hkd\s*>\s*0\)/i, "positive whole-HKD goal"],
+  [/check\s*\(status\s+in\s*\('draft',\s*'published',\s*'closed'\)\)/i, "campaign status constraint"],
+  [/create unique index giving_campaigns_one_published[\s\S]*?where\s*\(status\s*=\s*'published'\)/i, "one-published partial unique index"],
+  [/create unique index giving_campaigns_one_open[\s\S]*?where\s*\(status\s+in\s*\('draft',\s*'published'\)\)/i, "one-open invariant"],
+  [/old\.status\s*=\s*'draft'[\s\S]*?new\.status\s+in\s*\('draft',\s*'published'\)[\s\S]*?old\.status\s*=\s*'published'[\s\S]*?new\.status\s+in\s*\('published',\s*'closed'\)[\s\S]*?old\.status\s*=\s*'closed'[\s\S]*?new\.status\s*=\s*'closed'/i, "allowed transition matrix"],
+  [/security definer[\s\S]*?set search_path\s*=\s*public/i, "hardened publication trigger function"],
+  [/tg_op\s*=\s*'insert'[\s\S]*?new\.status\s*=\s*'published'[\s\S]*?old\.status\s*=\s*'draft'[\s\S]*?new\.status\s*=\s*'published'/i, "first-publication guard"],
+  [/'giving_campaign_published'[\s\S]*?'New Giving campaign'[\s\S]*?'ITC published “'\s*\|\|\s*new\.title\s*\|\|\s*'”\.'/i, "exact publication notification copy"],
+  [/role\s+in\s*\('member',\s*'admin',\s*'super_admin'\)/i, "approved publication audience"],
+  [/create policy "approved member read published"[\s\S]*?status\s*=\s*'published'/i, "member published-only RLS"],
+  [/create policy "admin insert giving campaigns"[\s\S]*?for insert[\s\S]*?create policy "admin update giving campaigns"[\s\S]*?for update[\s\S]*?current_user_role\(\)[\s\S]*?'admin'[\s\S]*?'super_admin'/i, "Admin/Super Admin mutation RLS"],
+  [/revoke all on table public\.giving_campaigns from anon[\s\S]*?grant select, insert, update on table public\.giving_campaigns to authenticated/i, "browser grants without delete"],
+];
+for (const [contract, label] of givingSourceContracts) {
+  if (!contract.test(givingMigrationSource)) throw new Error(`missing Giving migration contract: ${label}`);
+}
+if (/grant\s+delete|for\s+delete/i.test(givingMigrationSource)) {
+  throw new Error("Giving campaigns must expose no browser DELETE grant or policy");
+}
+for (const [source, label, contracts] of [
+  [givingIntegrationSource, "integration SQL", ["audience fan-out", "duplicate suppression", "one-open invariant", "closed immutability", "member RLS", "pending RLS"]],
+  [givingVerifierSource, "safe verifier", ["ITC_GIVING_TEST_DATABASE_URL", "ITC_ALLOW_DATABASE_RESET", "giving_campaigns_integration.sql"]],
+]) {
+  if (!source || contracts.some((contract) => !source.includes(contract))) {
+    throw new Error(`missing executable Giving ${label} contracts`);
+  }
+}
+console.log("ok  live Giving database source contracts");
+
 for (const path of [
   "../assets/fonts/archivo-latin-variable.woff2",
   "../assets/fonts/OFL-Archivo.txt",
