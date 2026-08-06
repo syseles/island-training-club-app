@@ -52,6 +52,13 @@ export function load() {
 // seed-data revision. Each step runs once per version so admin edits made
 // afterwards are not reverted on the next load.
 function migrate() {
+  // Persisted prototypes may predate individual collections or contain null
+  // values. Normalize them before any legacy step (or current-version return)
+  // so each migration can safely iterate while preserving valid records.
+  for (const key of ["users", "activities", "bookings", "receipts"]) {
+    if (!Array.isArray(state[key])) state[key] = [];
+  }
+
   const v = state.version || 0;
   if (v >= STATE_VERSION) return;
   if (v < 2) {

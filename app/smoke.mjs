@@ -33,6 +33,26 @@ function check(label, fn) {
   }
 }
 
+const bannedAccountContent = [
+  "owner@itc.hk",
+  "admin@itc.hk",
+  "member@itc.hk",
+  'data-action="demo-signin"',
+  "one-tap demo",
+  'data-action="reset-demo"',
+];
+function assertCleanAccount(label, html) {
+  let clean = true;
+  for (const banned of bannedAccountContent) {
+    if (html.toLowerCase().includes(banned.toLowerCase())) {
+      failures++;
+      clean = false;
+      console.error(`FAIL ${label} Account contains removed demo content: ${banned}`);
+    }
+  }
+  if (clean) console.log(`ok  ${label} Account has no demo identities or controls`);
+}
+
 store.load();
 
 // --- Clean fresh state ---
@@ -45,21 +65,7 @@ if (!fresh.activities.length || fresh.activities.some((a) => "baseBooked" in a))
   failures++;
   console.error("FAIL fresh activities should remain without baseBooked");
 } else console.log("ok  fresh activities remain without simulated demand");
-const visitorAccount = views.viewAccount();
-for (const banned of [
-  "owner@itc.hk",
-  "admin@itc.hk",
-  "member@itc.hk",
-  'data-action="demo-signin"',
-  "one-tap demo",
-  "reset-demo",
-]) {
-  if (visitorAccount.toLowerCase().includes(banned.toLowerCase())) {
-    failures++;
-    console.error(`FAIL visitor Account contains removed demo content: ${banned}`);
-  }
-}
-console.log("ok  visitor Account has no demo identities or controls");
+assertCleanAccount("visitor", views.viewAccount());
 const announcements = views.viewCommunity("announcements");
 for (const fake of [
   "Sunday service at IECC",
@@ -258,6 +264,7 @@ for (const [input, expect] of [
 }
 console.log("ok  donor ID format validation");
 check("account (pending)", () => views.viewAccount());
+assertCleanAccount("pending", views.viewAccount());
 const pendHtml = views.viewActivity(paid.id);
 if (!pendHtml.includes("Booking locked")) {
   failures++;
@@ -279,6 +286,7 @@ console.log("ok  admin approved new applicant");
 const signIn = store.signIn("new-member@example.test");
 if (!signIn.ok || signIn.user.status !== "approved") throw new Error("approval did not take effect");
 check("account (new member)", () => views.viewAccount());
+assertCleanAccount("approved", views.viewAccount());
 
 // Profile sections are tappable rows that open sub-pages; row faces carry
 // a one-line description, not live details
@@ -517,6 +525,39 @@ store.resetLocalData();
     failures++;
     console.error(`FAIL v7 migration should clear unrecognizable donor ID, got ${cleared}`);
   } else console.log("ok  v7 migration clears unrecognizable donor ID");
+}
+
+// --- Legacy migrations normalize absent collections before accessing them ---
+for (const [version, absentKey] of [
+  [0, "activities"],
+  [3, "bookings"],
+  [6, "users"],
+  [8, "receipts"],
+]) {
+  store.resetLocalData();
+  const raw = JSON.parse(mem.get("itc.prototype.v1"));
+  raw.version = version;
+  raw.users = null;
+  raw.activities = null;
+  raw.bookings = null;
+  raw.receipts = null;
+  delete raw[absentKey];
+  mem.set("itc.prototype.v1", JSON.stringify(raw));
+  try {
+    store.load();
+    const migrated = JSON.parse(mem.get("itc.prototype.v1"));
+    if (migrated.version !== 9
+      || !Array.isArray(migrated.users)
+      || !Array.isArray(migrated.activities)
+      || !Array.isArray(migrated.bookings)
+      || !Array.isArray(migrated.receipts)) {
+      throw new Error("collections were not normalized to arrays");
+    }
+    console.log(`ok  v${version} migration normalizes missing/null collections`);
+  } catch (err) {
+    failures++;
+    console.error(`FAIL v${version} migration should normalize missing/null collections: ${err.message}`);
+  }
 }
 
 // --- v9 migration: exact legacy demo sentinels are removed, local records survive ---
