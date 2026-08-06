@@ -1334,7 +1334,7 @@ export async function viewAdmin(tab = "approvals") {
   const tabs = `
     <nav class="admin-tabs">
       ${["approvals", "activities", "members"]
-        .map((t) => `<a href="#/admin/${t}" class="${t === tab ? "active" : ""}">${t}</a>`)
+        .map((t) => `<a href="#/admin/${t}" class="${t === tab ? "active" : ""}"${t === tab ? ' aria-current="page"' : ""}>${t}</a>`)
         .join("")}
     </nav>`;
 

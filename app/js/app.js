@@ -73,6 +73,25 @@ async function withBusyControl(control, busyLabel, work) {
   }
 }
 
+async function refreshAfterAdminMutation(successMessage) {
+  toast(successMessage);
+  try {
+    await renderWithFeedback();
+    return { refreshed: true, message: "" };
+  } catch (err) {
+    const detail = err.message || "Refresh failed";
+    const message = `Change saved, but this Admin view could not refresh. ${detail}`;
+    toast(message, true);
+    return { refreshed: false, message };
+  }
+}
+
+function lockAdminMutationControls(control) {
+  const group = control?.closest?.(".member-role-actions");
+  const controls = group?.querySelectorAll?.("button, select") || [control];
+  [...controls].forEach((item) => { item.disabled = true; });
+}
+
 function clearFieldError(field) {
   if (!field?.id) return;
   const errorId = `${field.id}-error`;
@@ -378,6 +397,7 @@ document.addEventListener("click", async (e) => {
       if (!viewer || !["superadmin", "super_admin"].includes(viewer.role) || viewer.id === el.dataset.user) break;
       const name = el.dataset.memberName || "this member";
       if (!window.confirm(`Revoke ${name}’s access and move them to Pending?`)) break;
+      let refreshResult = null;
       try {
         await withBusyControl(el, "Revoking…", async () => {
           if (isLive()) {
@@ -385,9 +405,9 @@ document.addEventListener("click", async (e) => {
           } else if (!store.setRole(el.dataset.user, "pending")) {
             throw new Error("Unable to confirm revoked access.");
           }
-          await renderWithFeedback();
-          toast(`${name} moved to Pending.`);
+          refreshResult = await refreshAfterAdminMutation(`${name} moved to Pending.`);
         });
+        if (refreshResult && !refreshResult.refreshed) lockAdminMutationControls(el);
       } catch (err) {
         toast(err.message || "Unable to revoke access", true);
       }
@@ -429,12 +449,19 @@ document.addEventListener("click", async (e) => {
         decisionError.hidden = true;
       }
       controls.forEach((control) => { control.disabled = true; });
+      let mutationSucceeded = false;
+      let refreshResult = null;
       try {
         await withBusyControl(el, action === "approve" ? "Approving…" : "Declining…", async () => {
           await store.decideApplication(el.dataset.user, decision);
-          await renderWithFeedback();
-          toast(action === "approve" ? "Approved." : "Declined.");
+          mutationSucceeded = true;
+          refreshResult = await refreshAfterAdminMutation(action === "approve" ? "Approved." : "Declined.");
         });
+        if (refreshResult && !refreshResult.refreshed && decisionError) {
+          decisionError.textContent = refreshResult.message;
+          decisionError.setAttribute("role", "alert");
+          decisionError.hidden = false;
+        }
       } catch (err) {
         const message = err.message || "Decision failed";
         if (decisionError) {
@@ -444,7 +471,7 @@ document.addEventListener("click", async (e) => {
         }
         toast(message, true);
       } finally {
-        controls.forEach((control) => { control.disabled = false; });
+        controls.forEach((control) => { control.disabled = mutationSucceeded && !refreshResult?.refreshed; });
       }
       break;
     }
@@ -726,11 +753,13 @@ document.addEventListener("change", async (e) => {
     case "member-status-filter":
       views.adminMemberFilters.status = el.value;
       await renderWithFeedback();
+      document.getElementById("member-status")?.focus();
       break;
 
     case "member-role-filter":
       views.adminMemberFilters.role = el.value;
       await renderWithFeedback();
+      document.getElementById("member-role")?.focus();
       break;
 
     case "set-role": {
@@ -743,6 +772,7 @@ document.addEventListener("change", async (e) => {
         el.value = el.dataset.currentRole;
         break;
       }
+      let refreshResult = null;
       try {
         await withBusyControl(el, "Updating…", async () => {
           if (isLive()) {
@@ -751,9 +781,9 @@ document.addEventListener("change", async (e) => {
           } else if (!store.setRole(el.dataset.user, el.value)) {
             throw new Error("Unable to confirm the role change.");
           }
-          await renderWithFeedback();
-          toast(`${name} is now ${targetLabel}.`);
+          refreshResult = await refreshAfterAdminMutation(`${name} is now ${targetLabel}.`);
         });
+        if (refreshResult && !refreshResult.refreshed) lockAdminMutationControls(el);
       } catch (err) {
         el.value = el.dataset.currentRole;
         toast(err.message || "Unable to change role", true);

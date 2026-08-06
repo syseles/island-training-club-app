@@ -473,6 +473,11 @@ if (!stylesCss.includes(".applicant-awaiting") || !stylesCss.includes("flex-wrap
 } else console.log("ok  grouped Admin approvals expose responsive decision UI");
 const adminActivitiesOut = await views.viewAdmin("activities");
 await check("admin activities", () => adminActivitiesOut);
+if (!/href="#\/admin\/activities" class="active" aria-current="page"/.test(adminActivitiesOut) ||
+    (adminActivitiesOut.match(/aria-current="page"/g) || []).length !== 1) {
+  failures++;
+  console.error("FAIL active Admin tab must expose one aria-current page");
+} else console.log("ok  active Admin tab exposes aria-current page");
 const adminMembersOut = await views.viewAdmin("members");
 await check("admin members", () => adminMembersOut);
 const adminStatusCounts = Object.fromEntries(["approved", "pending", "declined"].map((status) => [
@@ -1181,6 +1186,27 @@ for (const [passed, label] of feedbackChecks) {
     console.error(`FAIL shared feedback missing ${label}`);
   } else console.log(`ok  shared feedback has ${label}`);
 }
+const compactTypeContracts = [
+  [/\.bottom-nav a\s*\{[^}]*font-size:\s*([\d.]+)px/s, 11, "bottom navigation labels"],
+  [/\.field label\s*\{[^}]*font-size:\s*([\d.]+)px/s, 12, "form labels"],
+  [/\.session-row time small\s*\{[^}]*font-size:\s*([\d.]+)px/s, 12, "session time metadata"],
+  [/\.session-row \.spots\s*\{[^}]*font-size:\s*([\d.]+)px/s, 12, "session capacity metadata"],
+  [/\.day-cell\s*\{[^}]*font-size:\s*([\d.]+)px/s, 11, "schedule day labels"],
+  [/\.meta-grid small\s*\{[^}]*font-size:\s*([\d.]+)px/s, 12, "activity metadata labels"],
+  [/\.member-row \.who span\s*\{[^}]*font-size:\s*([\d.]+)px/s, 12, "member identity metadata"],
+];
+for (const [pattern, minimum, label] of compactTypeContracts) {
+  const size = Number(stylesSrc.match(pattern)?.[1]);
+  if (!size || size < minimum) {
+    failures++;
+    console.error(`FAIL ${label} must be at least ${minimum}px`);
+  } else console.log(`ok  ${label} meets the ${minimum}px minimum`);
+}
+if (!/\.route-loader\s*\{[^}]*top:\s*70px;[^}]*background:\s*var\(--surface-3\);/s.test(stylesSrc) ||
+    /\.route-loader\s*\{[^}]*(?:--top-h|--panel)/s.test(stylesSrc)) {
+  failures++;
+  console.error("FAIL route loader must use defined, visible position and background values");
+} else console.log("ok  route loader uses visible, defined position and background values");
 for (const label of ["Connecting…", "Signing out…", "Submitting…", "Saving…", "Confirming…", "Processing…"]) {
   if (!appSrc.includes(label)) {
     failures++;
@@ -1729,8 +1755,11 @@ searchFilter.getAttribute = () => null;
 searchFilter.selectionStart = 4;
 await localInput({ target: searchFilter });
 const statusFilter = localControl({ change: "member-status-filter" }, "approved");
+localElements.set("member-status", statusFilter);
 await localChange({ target: statusFilter });
+const statusFocusRestored = localActiveElement === statusFilter;
 const roleFilter = localControl({ change: "member-role-filter" }, "admin");
+localElements.set("member-role", roleFilter);
 await localChange({ target: roleFilter });
 if (mem.get("itc.prototype.v1") !== persistedBeforeFilters ||
     views.adminMemberFilters.query !== "tina" || views.adminMemberFilters.status !== "approved" ||
@@ -1738,6 +1767,10 @@ if (mem.get("itc.prototype.v1") !== persistedBeforeFilters ||
   failures++;
   console.error("FAIL delegated member filters must remain in memory and avoid localStorage writes");
 } else console.log("ok  delegated member filters do not persist");
+if (!statusFocusRestored || localActiveElement !== roleFilter) {
+  failures++;
+  console.error("FAIL status and role filters must restore corresponding focus after rerender");
+} else console.log("ok  status and role filters restore corresponding focus after rerender");
 views.adminMemberFilters.query = "";
 views.adminMemberFilters.status = "all";
 views.adminMemberFilters.role = "all";

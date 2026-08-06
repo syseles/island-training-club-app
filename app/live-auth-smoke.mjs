@@ -105,6 +105,7 @@ let applicationReadError = null;
 let applicationReadGate = null;
 const applicationReadGates = [];
 let profileListError = null;
+let profileListErrorAfterUpdate = null;
 let applicationListError = null;
 let profileUpdateError = null;
 let profileUpdateResult = "row";
@@ -219,6 +220,7 @@ const fakeSupabase = {
                     return { data: null, error: null };
                   }
                   Object.assign(target, patch);
+                  if (profileListErrorAfterUpdate) profileListError = profileListErrorAfterUpdate;
                   return { data: { id: targetId, role: target.role }, error: null };
                 },
               };
@@ -981,6 +983,26 @@ assert.equal(staleRoleSelect.hasAttribute("aria-busy"), false);
 assert.deepEqual(toastStack.children.map((item) => item.textContent), ["Application decision conflict."]);
 assert.equal(toastStack.children.some((item) => /is now Admin/.test(item.textContent)), false);
 
+// Once the authoritative role mutation succeeds, a failed Members refresh is
+// a stale-view problem: success remains truthful and the old control is locked
+// so the mutation cannot be retried against already-changed data.
+toastStack.children.length = 0;
+const refreshFailedRole = makeElement();
+refreshFailedRole.tagName = "SELECT";
+refreshFailedRole.dataset = { change: "set-role", user: "approved-admin", memberName: "Tina Admin", currentRole: "member" };
+refreshFailedRole.value = "admin";
+refreshFailedRole.closest = () => refreshFailedRole;
+profileListError = new Error("Members refresh failed");
+await change({ target: refreshFailedRole });
+profileListError = null;
+assert.equal(approvedProfiles.find((item) => item.id === "approved-admin").role, "admin");
+assert.equal(refreshFailedRole.disabled, true, "refresh failure must lock the stale role control");
+assert.deepEqual(toastStack.children.map((item) => item.textContent), [
+  "Tina Admin is now Admin.",
+  "Change saved, but this Admin view could not refresh. Members refresh failed",
+]);
+assert.equal(toastStack.children.some((item) => /Unable to change role/.test(item.textContent)), false);
+
 // Restore fixture roles so later approval-queue regressions retain their
 // original baseline independently of these member-action tests.
 approvedProfiles.find((item) => item.id === "approved-admin").role = "admin";
@@ -1098,6 +1120,30 @@ for (const [expectedError, configure] of [
   profileUpdateError = null;
   profileUpdateResult = "row";
 }
+
+// A confirmed decision must not become a false action failure when the
+// post-decision queue read rejects. Keep the retained card non-actionable and
+// announce the successful mutation separately from the stale Admin view.
+const refreshFailedDecision = makeDecisionCard("approve");
+toastStack.children.length = 0;
+profileListErrorAfterUpdate = new Error("Queue refresh failed");
+await click({ target: refreshFailedDecision.target });
+profileListErrorAfterUpdate = null;
+profileListError = null;
+assert.equal(pendingProfiles.find((item) => item.id === "pending-submitted").role, "member");
+assert.equal(refreshFailedDecision.approve.disabled, true);
+assert.equal(refreshFailedDecision.decline.disabled, true);
+assert.equal(refreshFailedDecision.error.hidden, false);
+assert.equal(
+  refreshFailedDecision.error.textContent,
+  "Change saved, but this Admin view could not refresh. Queue refresh failed"
+);
+assert.deepEqual(toastStack.children.map((item) => item.textContent), [
+  "Approved.",
+  "Change saved, but this Admin view could not refresh. Queue refresh failed",
+]);
+assert.equal(toastStack.children.some((item) => item.textContent === "Decision failed"), false);
+pendingProfiles.find((item) => item.id === "pending-submitted").role = "pending";
 
 escapedRejections.length = 0;
 toastStack.children.length = 0;
