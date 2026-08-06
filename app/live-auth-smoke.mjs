@@ -138,6 +138,8 @@ const profileUpdates = [];
 let applicationReadError = null;
 let applicationReadGate = null;
 const applicationReadGates = [];
+let notificationReadError = null;
+let notificationReadGate = null;
 let profileListError = null;
 let profileListErrorAfterUpdate = null;
 let applicationListError = null;
@@ -269,11 +271,17 @@ const fakeSupabase = {
         select(columns) {
           if (columns !== "*") throw new Error("Notification query should select all row fields");
           return {
-            order(column, options) {
+            async order(column, options) {
               if (column !== "created_at" || options?.ascending !== false) {
                 throw new Error("Notifications should be newest first");
               }
-              return Promise.resolve({ data: structuredClone(notificationRows), error: null });
+              const rows = structuredClone(notificationRows);
+              const error = notificationReadError;
+              const gate = notificationReadGate;
+              notificationReadError = null;
+              notificationReadGate = null;
+              if (gate) await gate;
+              return { data: rows, error };
             },
           };
         },
@@ -829,6 +837,7 @@ routeLoader.hidden = true;
 const elements = new Map([
   ["view", makeElement()],
   ["bottom-nav", makeElement()],
+  ["top-notifications", makeElement()],
   ["top-avatar", makeElement()],
   ["toast-stack", makeElement()],
   ["route-loader", routeLoader],
@@ -952,6 +961,75 @@ await oldestRender;
 assert.equal(viewEl.innerHTML, currentRouteHtml, "an older route must not commit after the current route");
 assert.equal(viewEl.hasAttribute("aria-busy"), false);
 assert.equal(routeLoader.hidden, true);
+
+// Signed-in notification chrome appears before its best-effort count query,
+// fails silently, and ignores stale generations.
+const notificationBell = elements.get("top-notifications");
+const countGate = deferred();
+notificationReadGate = countGate.promise;
+location.hash = "#/home";
+const immediateBellRender = windowListeners.get("hashchange")();
+await immediateBellRender;
+assert.equal(notificationBell.hidden, false, "signed-in bell must be visible without waiting for its count");
+assert.equal(notificationBell.getAttribute("aria-label"), "Notifications");
+assert.doesNotMatch(notificationBell.innerHTML, /notification-badge/);
+countGate.resolve();
+await new Promise(setImmediate);
+assert.match(notificationBell.innerHTML, /notification-badge[^>]*[\s\S]*>2<\/span>/);
+assert.equal(notificationBell.getAttribute("aria-label"), "Notifications, 2 unread");
+
+const cappedRows = Array.from({ length: 118 }, (_, index) => ({
+  id: `notification-cap-${index}`,
+  kind: "welcome",
+  title: "Unread update",
+  body: "Unread count cap fixture.",
+  created_at: "2026-08-05T06:39:00.000Z",
+  read_at: null,
+}));
+notificationRows.push(...cappedRows);
+await windowListeners.get("hashchange")();
+await new Promise(setImmediate);
+assert.equal(notificationBell.getAttribute("aria-label"), "Notifications, 120 unread",
+  "the accessible label must retain the full unread count");
+assert.match(notificationBell.innerHTML, />99\+<\/span>/, "only the visual badge should cap at 99+");
+notificationRows.splice(-cappedRows.length);
+
+const toastsBeforeCountFailure = toastStack.children.length;
+notificationReadError = new Error("Notification count unavailable");
+await windowListeners.get("hashchange")();
+await new Promise(setImmediate);
+assert.equal(notificationBell.hidden, false);
+assert.equal(notificationBell.getAttribute("aria-label"), "Notifications");
+assert.doesNotMatch(notificationBell.innerHTML, /notification-badge/);
+assert.equal(toastStack.children.length, toastsBeforeCountFailure, "count failures must not toast");
+
+const staleCountGate = deferred();
+notificationReadGate = staleCountGate.promise;
+const staleCountRender = windowListeners.get("hashchange")();
+await staleCountRender;
+notificationRows.push({
+  id: "notification-new-unread",
+  kind: "welcome",
+  title: "New update",
+  body: "A newer generation sees this unread row.",
+  created_at: "2026-08-05T06:39:00.000Z",
+  read_at: null,
+});
+await windowListeners.get("hashchange")();
+await new Promise(setImmediate);
+assert.equal(notificationBell.getAttribute("aria-label"), "Notifications, 3 unread");
+staleCountGate.resolve();
+await new Promise(setImmediate);
+assert.equal(notificationBell.getAttribute("aria-label"), "Notifications, 3 unread",
+  "a stale unread query must not overwrite newer chrome");
+notificationRows.pop();
+
+location.hash = "#/notifications";
+await windowListeners.get("hashchange")();
+await new Promise(setImmediate);
+assert.equal(notificationBell.getAttribute("aria-current"), "page");
+assert.doesNotMatch(elements.get("bottom-nav").innerHTML, /aria-current="page"/,
+  "Notifications must not activate a bottom navigation item");
 
 // Approval queue failures must be truthful and preserve the last good queue.
 applicationReadError = null;
@@ -1259,9 +1337,23 @@ process.off("unhandledRejection", captureRejection);
 applicationReadError = null;
 profile.role = "super_admin";
 
+// A signed-out visitor keeps the original four-item navigation and no bell.
+const visitorSignOut = makeElement();
+visitorSignOut.textContent = "Sign out";
+visitorSignOut.dataset = { action: "signout" };
+visitorSignOut.closest = () => visitorSignOut;
+const successfulSignOut = click({ target: visitorSignOut });
+releaseSignOut({ error: null });
+await successfulSignOut;
+assert.equal(notificationBell.hidden, true, "visitor notification bell must stay hidden");
+assert.equal(notificationBell.innerHTML, "", "visitor bell content must be cleared");
+assert.equal(notificationBell.hasAttribute("aria-label"), false);
+assert.equal((elements.get("bottom-nav").innerHTML.match(/<a /g) || []).length, 4,
+  "visitor bottom navigation must remain unchanged");
+
 console.log("ok  live SIGNED_IN callback returns synchronously and defers hydration until after the auth lock");
 console.log("ok  live application read failures are caught and shown once across async render flows");
-console.log("ok  live OAuth session renders the signed-in home page");
+console.log("ok  live OAuth session renders signed and visitor notification chrome safely");
 console.log("ok  live profile renders valid account metadata");
 console.log("ok  live indemnity renders from the application waiver state");
 console.log("ok  live approved/admin missing-application Profile sections render unavailable cards");

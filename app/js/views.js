@@ -130,7 +130,6 @@ const NAV_ITEMS = [
   { key: "home", label: "Home", icon: "home", href: "#/home" },
   { key: "schedule", label: "Schedule", icon: "calendar", href: "#/schedule" },
   { key: "community", label: "Community", icon: "people", href: "#/community" },
-  { key: "notifications", label: "Notifications", icon: "bell", href: "#/notifications", roles: ["signed-in"] },
   { key: "account", label: "Account", icon: "user", href: "#/account" },
 ];
 
@@ -153,6 +152,11 @@ export function navHTML(routeKey, user) {
 
 export function avatarHTML(user) {
   return user ? initials(user.fullName) : ICONS.user;
+}
+
+export function notificationBellHTML(unreadCount = 0, active = false) {
+  const visibleCount = unreadCount > 99 ? "99+" : String(unreadCount);
+  return `${ICONS.bell}${unreadCount ? `<span class="notification-badge" aria-hidden="true">${visibleCount}</span>` : ""}`;
 }
 
 // ============================================================================
@@ -1667,10 +1671,4 @@ export async function viewNotifications(now = new Date()) {
         : ""}
       ${notificationSection("My notifications", personal, "No personal notifications.")}
     </div>`;
-}
-
-export async function unreadBadge() {
-  const rows = await store.listMyNotifications();
-  const n = rows.filter((r) => !r.read_at).length;
-  return n > 0 ? `<span class="badge">${n}</span>` : "";
 }

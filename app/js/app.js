@@ -9,6 +9,7 @@ import { supabase, isLive } from "./config.js";
 
 const viewEl = document.getElementById("view");
 const navEl = document.getElementById("bottom-nav");
+const notificationEl = document.getElementById("top-notifications");
 const avatarEl = document.getElementById("top-avatar");
 const toastStack = document.getElementById("toast-stack");
 const routeLoader = document.getElementById("route-loader");
@@ -49,7 +50,7 @@ const NAV_FOR = {
   booking: "account",
   receipt: "account",
   admin: "admin",
-  notifications: "notifications",
+  notifications: "",
 };
 
 let prevPage = null;
@@ -249,13 +250,29 @@ async function render(generation = renderGeneration) {
   navEl.innerHTML = views.navHTML(NAV_FOR[page] ?? "home", user);
   avatarEl.classList.toggle("is-empty", !user);
   avatarEl.innerHTML = views.avatarHTML(user);
-  // Best-effort: append unread-count badge to the Notifications nav item.
-  if (isLive() && user) {
-    views.unreadBadge().then((badge) => {
+
+  const notificationsActive = page === "notifications";
+  notificationEl.hidden = !user;
+  notificationEl.innerHTML = user ? views.notificationBellHTML(0, notificationsActive) : "";
+  if (user) {
+    notificationEl.setAttribute("aria-label", "Notifications");
+    if (notificationsActive) notificationEl.setAttribute("aria-current", "page");
+    else notificationEl.removeAttribute("aria-current");
+
+    // Best-effort and deliberately detached from the route render: the bell
+    // is usable immediately even if the count query is slow or unavailable.
+    store.listMyNotifications().then((rows) => {
       if (generation !== renderGeneration) return;
-      const notifLink = navEl.querySelector('a[href="#/notifications"]');
-      if (notifLink && badge) notifLink.insertAdjacentHTML("afterbegin", badge);
+      const unreadCount = rows.filter((row) => !row.read_at).length;
+      notificationEl.innerHTML = views.notificationBellHTML(unreadCount, notificationsActive);
+      notificationEl.setAttribute(
+        "aria-label",
+        unreadCount ? `Notifications, ${unreadCount} unread` : "Notifications"
+      );
     }).catch(() => {});
+  } else {
+    notificationEl.removeAttribute("aria-label");
+    notificationEl.removeAttribute("aria-current");
   }
   window.scrollTo({ top: 0 });
   viewEl.focus({ preventScroll: true });

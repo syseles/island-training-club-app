@@ -143,8 +143,15 @@ if (!indexHtml.includes('class="skip-link"') || !indexHtml.includes('id="view"')
 if (viewsSource.includes('{ key: "admin", label: "Admin"')) {
   throw new Error("Admin belongs in Profile, not bottom navigation");
 }
-if (!viewsSource.includes('{ key: "notifications", label: "Notifications"')) {
-  throw new Error("Notifications must remain in bottom navigation");
+if (viewsSource.includes('{ key: "notifications", label: "Notifications"')) {
+  throw new Error("Notifications belong in the top bar, not bottom navigation");
+}
+const notificationHost = '<a id="top-notifications" class="top-icon-button" href="#/notifications" hidden></a>';
+if (!indexHtml.includes(notificationHost) || indexHtml.indexOf(notificationHost) > indexHtml.indexOf('id="top-avatar"')) {
+  throw new Error("app shell must provide a visitor-hidden semantic notification link before the avatar");
+}
+for (const contract of [".top-icon-button", "width: 44px", "height: 44px", ".notification-badge"]) {
+  if (!stylesCss.includes(contract)) throw new Error(`missing notification bell CSS contract: ${contract}`);
 }
 console.log("ok  shared UI and accessibility foundation contracts");
 
@@ -159,6 +166,24 @@ globalThis.localStorage = {
 const store = await import("./js/store.js");
 const views = await import("./js/views.js");
 const data = await import("./js/data.js");
+
+const bellThree = views.notificationBellHTML?.(3, false) || "";
+const bellCapped = views.notificationBellHTML?.(120, true) || "";
+if (!bellThree.includes("<svg") || !bellThree.includes('class="notification-badge"') || !bellThree.includes(">3</span>")) {
+  throw new Error("notificationBellHTML must render the bell and unread badge");
+}
+if (!bellCapped.includes(">99+</span>") || /120/.test(bellCapped)) {
+  throw new Error("notificationBellHTML must visually cap unread counts at 99+");
+}
+if (views.notificationBellHTML?.(0, false).includes("notification-badge")) {
+  throw new Error("notificationBellHTML must omit the badge for zero unread notifications");
+}
+const visitorNav = views.navHTML("home", null);
+const signedNav = views.navHTML("home", { role: "member" });
+if (visitorNav.includes("#/notifications") || signedNav.includes("#/notifications") ||
+    (visitorNav.match(/<a /g) || []).length !== 4 || (signedNav.match(/<a /g) || []).length !== 4) {
+  throw new Error("bottom navigation must remain the four core items for visitors and signed-in members");
+}
 
 const notificationNow = new Date("2026-08-05T06:40:00.000Z");
 const notificationHelperCases = [
@@ -1345,11 +1370,11 @@ if (viewsSrc.includes('["admin", "superadmin"]')) {
 } else {
   console.log("ok  views.js: admin role checks include super_admin");
 }
-if (!/NAV_FOR = \{[\s\S]*?notifications: "notifications"/.test(appSrc)) {
+if (!/NAV_FOR = \{[\s\S]*?notifications: ""/.test(appSrc)) {
   failures++;
-  console.error("FAIL app.js: NAV_FOR should map notifications -> notifications");
+  console.error("FAIL app.js: Notifications must not activate a bottom tab");
 } else {
-  console.log("ok  app.js: NAV_FOR maps notifications to its own tab");
+  console.log("ok  app.js: Notifications route leaves bottom tabs inactive");
 }
 if (!/arg === "users"\s*\?\s*\{ redirect: "#\/admin\/members" \}/.test(appSrc)) {
   failures++;
@@ -1744,17 +1769,11 @@ if (!viewsSrc.includes("export async function viewNotifications")) {
 } else {
   console.log("ok  views.js: exports viewNotifications");
 }
-if (!viewsSrc.includes("export async function unreadBadge")) {
+if (!viewsSrc.includes("export function notificationBellHTML")) {
   failures++;
-  console.error("FAIL views.js: should export unreadBadge");
+  console.error("FAIL views.js: should export notificationBellHTML");
 } else {
-  console.log("ok  views.js: exports unreadBadge");
-}
-if (!viewsSrc.includes('#/notifications')) {
-  failures++;
-  console.error("FAIL views.js: should reference #/notifications");
-} else {
-  console.log("ok  views.js: references #/notifications");
+  console.log("ok  views.js: exports notificationBellHTML");
 }
 
 // --- Delegated local member-role behavior ---
@@ -1786,6 +1805,7 @@ const makeLocalElement = () => ({
 const localElements = new Map([
   ["view", makeLocalElement()],
   ["bottom-nav", makeLocalElement()],
+  ["top-notifications", makeLocalElement()],
   ["top-avatar", makeLocalElement()],
   ["toast-stack", makeLocalElement()],
   ["route-loader", makeLocalElement()],

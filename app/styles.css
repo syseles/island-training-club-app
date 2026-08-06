@@ -161,6 +161,8 @@ input, select, textarea { font: inherit; }
 .top-wordmark {
   display: flex;
   flex-direction: column;
+  min-width: 0;
+  margin-right: auto;
   gap: 2px;
   line-height: 1.15;
   text-transform: uppercase;
@@ -179,8 +181,47 @@ input, select, textarea { font: inherit; }
   letter-spacing: .16em;
 }
 
+.top-icon-button {
+  position: relative;
+  flex: 0 0 44px;
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  border: 1px solid transparent;
+  border-radius: 50%;
+  color: var(--muted);
+  text-decoration: none;
+}
+
+.top-icon-button[hidden] { display: none; }
+.top-icon-button svg { width: 22px; height: 22px; }
+.top-icon-button:hover { color: var(--ink); background: var(--surface-3); }
+.top-icon-button[aria-current="page"] {
+  color: var(--accent);
+  border-color: var(--line);
+  background: var(--surface-3);
+}
+
+.notification-badge {
+  position: absolute;
+  top: 2px;
+  right: 0;
+  display: grid;
+  place-items: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 4px;
+  border: 2px solid var(--bg);
+  border-radius: 9px;
+  background: var(--accent);
+  color: var(--accent-ink);
+  font-size: 9px;
+  font-weight: 900;
+  line-height: 1;
+}
+
 .top-avatar {
-  margin-left: auto;
   display: grid;
   place-items: center;
   width: 44px;
