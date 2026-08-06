@@ -1112,6 +1112,40 @@ if (!viewsSrc.includes("Signed in as")) {
 }
 
 const appSrc = readFileSync(resolve(__dirname, "js/app.js"), "utf8");
+const indexSrc = readFileSync(resolve(__dirname, "index.html"), "utf8");
+const stylesSrc = readFileSync(resolve(__dirname, "styles.css"), "utf8");
+const feedbackChecks = [
+  [indexSrc.includes('id="route-loader"') && indexSrc.includes('role="status"'), "semantic delayed route loader"],
+  [appSrc.includes("renderWithFeedback") && appSrc.includes('setAttribute("aria-busy", "true")'), "route busy wrapper"],
+  [appSrc.includes("withBusyControl") && appSrc.includes("const controlBusy = new WeakSet()"), "duplicate-safe busy control helper"],
+  [appSrc.includes("showFieldError") && appSrc.includes('alert.setAttribute("role", "alert")'), "alerting field-error helper"],
+  [appSrc.includes('field.setAttribute("aria-invalid", "true")') && appSrc.includes("field.focus()"), "invalid field semantics and focus"],
+  [appSrc.includes('document.addEventListener("input"'), "stale field-error clearing"],
+  [appSrc.includes('el.setAttribute("role", isErr ? "alert" : "status")'), "toast urgency semantics"],
+  [stylesSrc.includes(".route-loader"), "route loader styling"],
+];
+for (const [passed, label] of feedbackChecks) {
+  if (!passed) {
+    failures++;
+    console.error(`FAIL shared feedback missing ${label}`);
+  } else console.log(`ok  shared feedback has ${label}`);
+}
+for (const label of ["Connecting…", "Signing out…", "Submitting…", "Saving…", "Confirming…", "Processing…"]) {
+  if (!appSrc.includes(label)) {
+    failures++;
+    console.error(`FAIL app.js missing exact busy label ${label}`);
+  }
+}
+for (const [html, fieldId, errorId] of [
+  [await views.viewAccount(), "signin-email", "signin-error"],
+  [localApplyHtml, "ap-donor", "apply-error"],
+  [views.viewCommunity("prayers"), "pr-text", "prayer-error"],
+]) {
+  if (!html.includes(`id="${fieldId}"`) || !html.includes(`id="${errorId}"`)) {
+    failures++;
+    console.error(`FAIL rendered form must pair #${fieldId} with #${errorId}`);
+  }
+}
 const signoutBlock = appSrc.match(/case "signout":([\s\S]*?)break;/);
 if (!signoutBlock || !signoutBlock[1].includes('location.hash = "#/account"')) {
   failures++;
@@ -1341,7 +1375,7 @@ if (!viewsSrc.includes("Application details unavailable")) {
 } else {
   console.log("ok  views.js: missing live applications render unavailable cards");
 }
-if (!/window\.addEventListener\("hashchange",[\s\S]*await render\(\)[\s\S]*toast\(/.test(appSrc)) {
+if (!/window\.addEventListener\("hashchange",[\s\S]*await renderWithFeedback\(\)[\s\S]*toast\(/.test(appSrc)) {
   failures++;
   console.error("FAIL app.js: hashchange should await render failures and toast them");
 } else {

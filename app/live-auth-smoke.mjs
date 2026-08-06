@@ -86,12 +86,15 @@ applicationRows.set("pending-submitted", {
 const applicationUpdates = [];
 const profileUpdates = [];
 let applicationReadError = null;
+let applicationReadGate = null;
 let profileListError = null;
 let applicationListError = null;
 let profileUpdateError = null;
 let profileUpdateResult = "row";
 let authStateChangeHandler = null;
 let authCallbackLocked = false;
+let oauthCalls = 0;
+let releaseOAuth = null;
 const deferredAuthTasks = [];
 const fixedIso = "2026-08-05T02:00:00.000Z";
 const RealDate = Date;
@@ -133,6 +136,10 @@ const fakeSupabase = {
     onAuthStateChange(callback) {
       authStateChangeHandler = callback;
       return { data: { subscription: { unsubscribe() {} } } };
+    },
+    signInWithOAuth() {
+      oauthCalls++;
+      return new Promise((resolve) => { releaseOAuth = resolve; });
     },
   },
   from(table) {
@@ -204,10 +211,13 @@ const fakeSupabase = {
                 throw new Error("Application query did not target the signed-in user");
               }
               return {
-                maybeSingle: async () => ({
-                  data: structuredClone(applicationRows.get(value) || null),
-                  error: applicationReadError,
-                }),
+                maybeSingle: async () => {
+                  if (applicationReadGate) await applicationReadGate;
+                  return {
+                    data: structuredClone(applicationRows.get(value) || null),
+                    error: applicationReadError,
+                  };
+                },
               };
             },
             then(resolve, reject) {
@@ -630,8 +640,14 @@ const makeElement = () => ({
   className: "",
   innerHTML: "",
   textContent: "",
+  hidden: false,
+  attributes: new Map(),
   classList: { toggle() {} },
   appendChild(child) { this.children.push(child); },
+  setAttribute(name, value) { this.attributes.set(name, String(value)); },
+  getAttribute(name) { return this.attributes.get(name) ?? null; },
+  hasAttribute(name) { return this.attributes.has(name); },
+  removeAttribute(name) { this.attributes.delete(name); },
   focus(options) {
     activeElement = this;
     this.focusOptions = options;
@@ -639,11 +655,14 @@ const makeElement = () => ({
   remove() {},
   querySelector() { return null; },
 });
+const routeLoader = makeElement();
+routeLoader.hidden = true;
 const elements = new Map([
   ["view", makeElement()],
   ["bottom-nav", makeElement()],
   ["top-avatar", makeElement()],
   ["toast-stack", makeElement()],
+  ["route-loader", routeLoader],
 ]);
 globalThis.document = {
   get activeElement() { return activeElement; },
@@ -656,9 +675,20 @@ globalThis.location = { hash: "#/account" };
 window.location = globalThis.location;
 window.addEventListener = (event, callback) => windowListeners.set(event, callback);
 window.scrollTo = () => {};
+let nextTimerId = 1;
+const delayedTimers = new Map();
 globalThis.setTimeout = (callback, delay) => {
   if (delay === 0) deferredAuthTasks.push(callback);
-  return 0;
+  else delayedTimers.set(nextTimerId, { callback, delay });
+  return nextTimerId++;
+};
+globalThis.clearTimeout = (id) => delayedTimers.delete(id);
+const advanceTimersBy = (delay) => {
+  for (const [id, timer] of [...delayedTimers]) {
+    if (timer.delay !== delay) continue;
+    delayedTimers.delete(id);
+    timer.callback();
+  }
 };
 
 async function dispatchAuthStateChange(event) {
@@ -701,6 +731,23 @@ if (hashRejected || escapedRejections.length || toastStack.children.length !== 1
   throw new Error("Hash changes should catch failed application reads and show one error toast");
 }
 
+// Route feedback announces work immediately, only exposes visible copy after
+// the delay, and always clears once the awaited view is complete.
+applicationReadError = null;
+let releaseApplicationRead;
+applicationReadGate = new Promise((resolve) => { releaseApplicationRead = resolve; });
+const slowRender = windowListeners.get("hashchange")();
+const viewEl = elements.get("view");
+assert.equal(viewEl.getAttribute("aria-busy"), "true", "async route must announce busy immediately");
+assert.equal(routeLoader.hidden, true, "fast routes must not flash loading feedback");
+advanceTimersBy(300);
+assert.equal(routeLoader.hidden, false, "slow route must expose delayed loading feedback");
+releaseApplicationRead();
+await slowRender;
+applicationReadGate = null;
+assert.equal(viewEl.hasAttribute("aria-busy"), false, "route busy state must clear");
+assert.equal(routeLoader.hidden, true, "route loading feedback must clear");
+
 // Approval queue failures must be truthful and preserve the last good queue.
 applicationReadError = null;
 profile.role = "super_admin";
@@ -730,6 +777,28 @@ for (const [errorType, setError] of [
 }
 
 const click = domListeners.get("click");
+
+// Delegated async controls expose exact progress copy, suppress a duplicate
+// action, and recover without a success toast when the store rejects.
+const googleControl = makeElement();
+googleControl.textContent = "Continue with Google";
+googleControl.dataset = { action: "sign-in-google" };
+googleControl.closest = () => googleControl;
+toastStack.children.length = 0;
+const firstGoogleClick = click({ target: googleControl });
+assert.equal(googleControl.disabled, true);
+assert.equal(googleControl.textContent, "Connecting…");
+assert.equal(googleControl.getAttribute("aria-busy"), "true");
+const duplicateGoogleClick = click({ target: googleControl });
+assert.equal(oauthCalls, 1, "pending control must prevent a duplicate store action");
+releaseOAuth({ error: new Error("OAuth unavailable") });
+await Promise.all([firstGoogleClick, duplicateGoogleClick]);
+assert.equal(googleControl.disabled, false);
+assert.equal(googleControl.textContent, "Continue with Google");
+assert.equal(googleControl.hasAttribute("aria-busy"), false);
+assert.deepEqual(toastStack.children.map((item) => item.textContent), ["OAuth unavailable"]);
+assert.equal(toastStack.children[0].getAttribute("role"), "alert");
+
 const approvalClick = {
   target: {
     closest: () => ({ dataset: { action: "approve", user: "pending-submitted" } }),

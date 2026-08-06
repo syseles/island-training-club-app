@@ -11,12 +11,14 @@ const viewEl = document.getElementById("view");
 const navEl = document.getElementById("bottom-nav");
 const avatarEl = document.getElementById("top-avatar");
 const toastStack = document.getElementById("toast-stack");
+const routeLoader = document.getElementById("route-loader");
 
 // --- Toasts --------------------------------------------------------------------
 
 export function toast(msg, isErr = false) {
   const el = document.createElement("div");
   el.className = `toast${isErr ? " err" : ""}`;
+  el.setAttribute("role", isErr ? "alert" : "status");
   el.textContent = msg;
   toastStack.appendChild(el);
   setTimeout(() => el.remove(), 2800);
@@ -51,6 +53,54 @@ const NAV_FOR = {
 };
 
 let prevPage = null;
+const controlBusy = new WeakSet();
+
+async function withBusyControl(control, busyLabel, work) {
+  if (!control || controlBusy.has(control)) return;
+  controlBusy.add(control);
+  const label = control.textContent;
+  control.disabled = true;
+  control.setAttribute("aria-busy", "true");
+  control.textContent = busyLabel;
+  try {
+    return await work();
+  } finally {
+    controlBusy.delete(control);
+    control.disabled = false;
+    control.removeAttribute("aria-busy");
+    control.textContent = label;
+  }
+}
+
+function clearFieldError(field) {
+  if (!field?.id) return;
+  const errorId = `${field.id}-error`;
+  document.getElementById(errorId)?.remove();
+  const describedBy = (field.getAttribute("aria-describedby") || "")
+    .split(/\s+/)
+    .filter((id) => id && id !== errorId);
+  if (describedBy.length) field.setAttribute("aria-describedby", describedBy.join(" "));
+  else field.removeAttribute("aria-describedby");
+  field.removeAttribute("aria-invalid");
+}
+
+function showFieldError(form, field, errorHost, message) {
+  if (!form || !field || !errorHost) return;
+  clearFieldError(field);
+  errorHost.innerHTML = "";
+  const alert = document.createElement("div");
+  alert.className = "form-error";
+  alert.id = `${field.id}-error`;
+  alert.setAttribute("role", "alert");
+  alert.textContent = message;
+  errorHost.appendChild(alert);
+  field.setAttribute("aria-invalid", "true");
+  field.setAttribute(
+    "aria-describedby",
+    [field.getAttribute("aria-describedby"), alert.id].filter(Boolean).join(" ")
+  );
+  field.focus();
+}
 
 // Live-mode auth listener: when Supabase completes sign-in, route the
 // pending user to /apply (if they have not yet submitted an application).
@@ -63,7 +113,7 @@ if (isLive() && supabase) {
         // this handoff, OAuth succeeds but Home still renders as a visitor.
         await store.getCurrentUser();
         location.hash = "#/home";
-        await render();
+        await renderWithFeedback();
         await maybeRedirectToApply();
       } catch (err) {
         toast(err.message || "Sign-in failed", true);
@@ -79,6 +129,18 @@ export async function maybeRedirectToApply() {
   const app = await store.getMyApplication();
   if (!app && window.location.hash !== "#/apply") {
     window.location.hash = "#/apply";
+  }
+}
+
+async function renderWithFeedback() {
+  viewEl.setAttribute("aria-busy", "true");
+  const timer = setTimeout(() => { routeLoader.hidden = false; }, 300);
+  try {
+    await render();
+  } finally {
+    clearTimeout(timer);
+    routeLoader.hidden = true;
+    viewEl.removeAttribute("aria-busy");
   }
 }
 
@@ -184,6 +246,12 @@ document.addEventListener("change", (e) => {
   });
 });
 
+// Custom errors become stale as soon as the member edits that field.
+document.addEventListener("input", (e) => {
+  const field = e.target;
+  if (field?.getAttribute?.("aria-invalid") === "true") clearFieldError(field);
+});
+
 // --- ICS download -------------------------------------------------------------------
 
 function downloadICS(session) {
@@ -207,7 +275,7 @@ document.addEventListener("click", async (e) => {
   switch (action) {
     case "sched-day":
       views.scheduleState.selected = el.dataset.date;
-      render();
+      await renderWithFeedback();
       break;
 
     case "sched-week": {
@@ -217,13 +285,13 @@ document.addEventListener("click", async (e) => {
         st.weekOffset === 0
           ? isoDate(todayLocal())
           : isoDate(addDays(mondayOf(todayLocal()), st.weekOffset * 7));
-      render();
+      await renderWithFeedback();
       break;
     }
 
     case "sched-filter":
       views.scheduleState.filter = el.dataset.filter;
-      render();
+      await renderWithFeedback();
       break;
 
     case "ics": {
@@ -253,7 +321,7 @@ document.addEventListener("click", async (e) => {
       if (res.ok) {
         toast(`Signed in as ${res.user.preferredName || res.user.fullName} (demo)`);
         location.hash = "#/home";
-        render();
+        await renderWithFeedback();
       }
       break;
     }
@@ -261,16 +329,26 @@ document.addEventListener("click", async (e) => {
     case "signout": {
       // signOutLive clears the Supabase session in live mode and falls back
       // to local signOut otherwise — without it the live session survives.
-      await store.signOutLive();
-      toast("Signed out");
-      // Back to the sign-in page — the account page IS the visitor front door.
-      location.hash = "#/account";
-      render();
+      try {
+        await withBusyControl(el, "Signing out…", async () => {
+          await store.signOutLive();
+          toast("Signed out");
+          // Back to the sign-in page — the account page IS the visitor front door.
+          location.hash = "#/account";
+          await renderWithFeedback();
+        });
+      } catch (err) {
+        toast(err.message || "Sign-out failed", true);
+      }
       break;
     }
 
     case "sign-in-google":
-      store.signInWithGoogle().catch((err) => toast(err.message || "Sign-in failed"));
+      try {
+        await withBusyControl(el, "Connecting…", () => store.signInWithGoogle());
+      } catch (err) {
+        toast(err.message || "Sign-in failed", true);
+      }
       break;
 
     case "promote":
@@ -281,9 +359,9 @@ document.addEventListener("click", async (e) => {
       try {
         await store.updateProfileRole(id, roleMap[action]);
         toast(msgMap[action]);
-        await render();
+        await renderWithFeedback();
       } catch (err) {
-        toast(err.message || "Action failed");
+        toast(err.message || "Action failed", true);
       }
       break;
     }
@@ -296,9 +374,9 @@ document.addEventListener("click", async (e) => {
       try {
         await store.updateProfileRole(id, "pending");
         toast("Revoked.");
-        render();
+        await renderWithFeedback();
       } catch (err) {
-        toast(err.message || "Revoke failed");
+        toast(err.message || "Revoke failed", true);
       }
       break;
     }
@@ -307,9 +385,9 @@ document.addEventListener("click", async (e) => {
       const id = el.closest("[data-notification-id]").dataset.notificationId;
       try {
         await store.markNotificationRead(id);
-        render();
+        await renderWithFeedback();
       } catch (err) {
-        toast(err.message || "Failed to mark read");
+        toast(err.message || "Failed to mark read", true);
       }
       break;
     }
@@ -319,7 +397,7 @@ document.addEventListener("click", async (e) => {
         store.resetDemo();
         toast("Demo data reset");
         location.hash = "#/home";
-        render();
+        await renderWithFeedback();
       }
       break;
 
@@ -329,7 +407,7 @@ document.addEventListener("click", async (e) => {
       try {
         await store.decideApplication(el.dataset.user, decision);
         toast(action === "approve" ? "Approved." : "Declined.");
-        await render();
+        await renderWithFeedback();
       } catch (err) {
         toast(err.message || "Decision failed", true);
       }
@@ -340,7 +418,7 @@ document.addEventListener("click", async (e) => {
       if (confirm("Cancel this booking? A full refund will be issued (prototype rule).")) {
         store.cancelBooking(el.dataset.booking);
         toast("Booking cancelled — refund issued");
-        render();
+        await renderWithFeedback();
       }
       break;
 
@@ -361,50 +439,59 @@ document.addEventListener("submit", async (e) => {
   // is handled below by id "form-apply".
   if (form.dataset.form === "apply") {
     e.preventDefault();
-    const fd = new FormData(form);
-    const payload = Object.fromEntries(fd.entries());
-    payload.photo_consent = !!fd.get("photo_consent");
-    try {
-      await store.saveMyApplication(payload);
-      toast(form.dataset.toast || "Application submitted.");
-      location.hash = "#/home";
-      await render();
-    } catch (err) {
-      toast(err.message || "Submit failed");
-    }
+    const control = form.querySelector('[type="submit"]');
+    await withBusyControl(control, "Submitting…", async () => {
+      const fd = new FormData(form);
+      const payload = Object.fromEntries(fd.entries());
+      payload.photo_consent = !!fd.get("photo_consent");
+      try {
+        await store.saveMyApplication(payload);
+        toast(form.dataset.toast || "Application submitted.");
+        location.hash = "#/home";
+        await renderWithFeedback();
+      } catch (err) {
+        toast(err.message || "Submit failed", true);
+      }
+    });
     return;
   }
 
   if (form.dataset.form === "membership-details") {
     e.preventDefault();
     if (!form.reportValidity()) return;
-    const fd = new FormData(form);
-    try {
-      await store.updateMyMembershipDetails(Object.fromEntries(fd.entries()));
-      toast("Membership details saved");
-      location.hash = "#/account/details";
-    } catch (err) {
-      toast(err.message || "Unable to save membership details", true);
-    }
+    const control = form.querySelector('[type="submit"]');
+    await withBusyControl(control, "Saving…", async () => {
+      const fd = new FormData(form);
+      try {
+        await store.updateMyMembershipDetails(Object.fromEntries(fd.entries()));
+        toast("Membership details saved");
+        location.hash = "#/account/details";
+      } catch (err) {
+        toast(err.message || "Unable to save membership details", true);
+      }
+    });
     return;
   }
 
   if (form.dataset.form === "privacy-preferences") {
     e.preventDefault();
-    const fd = new FormData(form);
-    try {
-      await store.updateMyPrivacyPreferences({
-        photo_consent: fd.has("photo_consent"),
-        whatsapp_reminders: fd.has("whatsapp_reminders"),
-        email_receipts: fd.has("email_receipts"),
-        community_news: fd.has("community_news"),
-      });
-      toast("Privacy preferences saved");
-      location.hash = "#/account/privacy";
-    } catch (err) {
-      console.error(err);
-      toast("Unable to save privacy preferences", true);
-    }
+    const control = form.querySelector('[type="submit"]');
+    await withBusyControl(control, "Saving…", async () => {
+      const fd = new FormData(form);
+      try {
+        await store.updateMyPrivacyPreferences({
+          photo_consent: fd.has("photo_consent"),
+          whatsapp_reminders: fd.has("whatsapp_reminders"),
+          email_receipts: fd.has("email_receipts"),
+          community_news: fd.has("community_news"),
+        });
+        toast("Privacy preferences saved");
+        location.hash = "#/account/privacy";
+      } catch (err) {
+        console.error(err);
+        toast("Unable to save privacy preferences", true);
+      }
+    });
     return;
   }
 
@@ -415,12 +502,17 @@ document.addEventListener("submit", async (e) => {
       const res = store.signIn(email);
       const errEl = form.querySelector("#signin-error");
       if (!res.ok) {
-        errEl.innerHTML = `<div class="form-error">No account found for that email — apply for membership below, or use a demo profile.</div>`;
+        showFieldError(
+          form,
+          form.querySelector("#signin-email"),
+          errEl,
+          "No account found for that email — apply for membership below, or use a demo profile."
+        );
         return;
       }
       toast(`Welcome back, ${res.user.preferredName || res.user.fullName}`);
       location.hash = "#/home";
-      render();
+      await renderWithFeedback();
       break;
     }
 
@@ -430,7 +522,12 @@ document.addEventListener("submit", async (e) => {
       const fd = new FormData(form);
       const errEl = form.querySelector("#apply-error");
       if (donorIdProblem(fd.get("donorId"))) {
-        errEl.innerHTML = `<div class="form-error">That Donor ID doesn’t look right — it needs a hyphen between your last name and the 4- or 5-digit number (e.g. CHUI-08879 or CHUI-8879). Please enter it again, or leave it blank if you don’t have one.</div>`;
+        showFieldError(
+          form,
+          form.querySelector("#ap-donor"),
+          errEl,
+          "That Donor ID doesn’t look right — it needs a hyphen between your last name and the 4- or 5-digit number (e.g. CHUI-08879 or CHUI-8879). Please enter it again, or leave it blank if you don’t have one."
+        );
         return;
       }
       try {
@@ -450,16 +547,16 @@ document.addEventListener("submit", async (e) => {
           indemnity: fd.get("indemnity") === "on",
         });
         if (!res.ok) {
-          errEl.innerHTML = `<div class="form-error">An application already exists for that email — try signing in instead.</div>`;
+          showFieldError(form, form.querySelector("#ap-email"), errEl, "An application already exists for that email — try signing in instead.");
           return;
         }
       } catch (err) {
-        errEl.innerHTML = `<div class="form-error">${err.message || "Application failed."}</div>`;
+        showFieldError(form, form.querySelector("#ap-email"), errEl, err.message || "Application failed.");
         return;
       }
       toast("Application submitted — a leader will review it");
       location.hash = "#/account";
-      render();
+      await renderWithFeedback();
       break;
     }
 
@@ -471,20 +568,20 @@ document.addEventListener("submit", async (e) => {
       const user = store.currentUser();
       if (!session || !user) return;
       const btn = form.querySelector("#pay-btn");
-      btn.disabled = true;
-      btn.textContent = "Processing payment…";
       const last4 = String(new FormData(form).get("cardNumber") || "").replace(/\D/g, "").slice(-4);
-      setTimeout(() => {
-        try {
-          const { booking } = store.payForSession(user.id, session, last4);
-          toast("Payment confirmed — you’re booked");
-          location.hash = `#/booking/${booking.id}`;
-        } catch (err) {
-          toast(err.message || "Payment failed", true);
-          btn.disabled = false;
-          btn.textContent = "Pay";
-        }
-      }, 900);
+      await withBusyControl(btn, "Processing…", () => new Promise((resolve) => {
+        setTimeout(() => {
+          try {
+            const { booking } = store.payForSession(user.id, session, last4);
+            toast("Payment confirmed — you’re booked");
+            location.hash = `#/booking/${booking.id}`;
+          } catch (err) {
+            toast(err.message || "Payment failed", true);
+          } finally {
+            resolve();
+          }
+        }, 900);
+      }));
       break;
     }
 
@@ -494,18 +591,23 @@ document.addEventListener("submit", async (e) => {
       if (!user) return;
       const errEl = form.querySelector("#donor-error");
       const raw = String(new FormData(form).get("donorId") || "").trim();
+      const donorField = form.querySelector("#donor-id");
       if (donorIdProblem(raw)) {
-        errEl.innerHTML =
-          `<div class="form-error">That Donor ID doesn’t look right — it needs a hyphen between your last name and the 4- or 5-digit number (e.g. CHUI-08879 or CHUI-8879). Please enter it again.</div>`;
+        showFieldError(
+          form,
+          donorField,
+          errEl,
+          "That Donor ID doesn’t look right — it needs a hyphen between your last name and the 4- or 5-digit number (e.g. CHUI-08879 or CHUI-8879). Please enter it again."
+        );
         return;
       }
       const saved = store.updateDonorId(user.id, raw);
       if (!saved) {
-        errEl.innerHTML = `<div class="form-error">Enter your Donor ID to save it.</div>`;
+        showFieldError(form, donorField, errEl, "Enter your Donor ID to save it.");
         return;
       }
       toast("Donor ID saved");
-      render();
+      await renderWithFeedback();
       break;
     }
 
@@ -514,13 +616,16 @@ document.addEventListener("submit", async (e) => {
       if (!form.reportValidity()) return;
       const user = store.currentUser();
       if (!user) return;
-      try {
-        await store.acceptMyIndemnity();
-        toast("Indemnity accepted and confirmed");
-        await render();
-      } catch (err) {
-        toast(err.message || "Unable to confirm indemnity", true);
-      }
+      const control = form.querySelector('[type="submit"]');
+      await withBusyControl(control, "Confirming…", async () => {
+        try {
+          await store.acceptMyIndemnity();
+          toast("Indemnity accepted and confirmed");
+          await renderWithFeedback();
+        } catch (err) {
+          toast(err.message || "Unable to confirm indemnity", true);
+        }
+      });
       break;
     }
 
@@ -530,15 +635,19 @@ document.addEventListener("submit", async (e) => {
       const fd = new FormData(form);
       const request = String(fd.get("request") || "").trim();
       if (!request) {
-        form.querySelector("#prayer-error").innerHTML =
-          `<div class="form-error">Write your prayer request first.</div>`;
+        showFieldError(
+          form,
+          form.querySelector("#pr-text"),
+          form.querySelector("#prayer-error"),
+          "Write your prayer request first."
+        );
         return;
       }
       const user = store.currentUser();
       store.recordPrayer({ userId: user ? user.id : null, name: fd.get("name"), request });
       toast("Prayer request sent — leaders will pray with you");
       location.hash = "#/community";
-      render();
+      await renderWithFeedback();
       break;
     }
 
@@ -566,7 +675,7 @@ document.addEventListener("submit", async (e) => {
       });
       toast(res.created ? "Activity created" : "Activity saved");
       location.hash = "#/admin/activities";
-      render();
+      await renderWithFeedback();
       break;
     }
   }
@@ -574,7 +683,7 @@ document.addEventListener("submit", async (e) => {
 
 // --- Change delegation (selects) ------------------------------------------------------------
 
-document.addEventListener("change", (e) => {
+document.addEventListener("change", async (e) => {
   const el = e.target.closest("[data-change]");
   if (!el) return;
 
@@ -582,7 +691,7 @@ document.addEventListener("change", (e) => {
     case "set-role":
       store.setRole(el.dataset.user, el.value);
       toast(`Role updated to ${el.value}`);
-      render();
+      await renderWithFeedback();
       break;
 
     case "kind-toggle":
@@ -606,12 +715,12 @@ async function boot() {
   if (!location.hash) location.hash = "#/home";
   window.addEventListener("hashchange", async () => {
     try {
-      await render();
+      await renderWithFeedback();
     } catch (err) {
       toast(err.message || "Unable to load your account", true);
     }
   });
-  await render();
+  await renderWithFeedback();
   await maybeRedirectToApply();
 }
 
