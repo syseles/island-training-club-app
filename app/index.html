@@ -7,6 +7,7 @@
   <title>Island Training Club</title>
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="icon" href="../assets/itc/logo.webp">
+  <link rel="preload" href="../assets/fonts/archivo-latin-variable.woff2" as="font" type="font/woff2" crossorigin>
   <link rel="stylesheet" href="styles.css">
   <script>
     // Live deployment values (hardcoded — Vercel does NOT inject env vars
@@ -26,6 +27,7 @@
   </script>
 </head>
 <body>
+  <a class="skip-link" href="#view">Skip to main content</a>
   <div class="app-shell">
     <header class="top-bar">
       <a href="#/home" class="top-logo" aria-label="Island Training Club home">
@@ -35,10 +37,12 @@
         <strong>Island Training Club</strong>
         <span>Fitness · Faith · Community</span>
       </div>
+      <a id="top-notifications" class="top-icon-button" href="#/notifications" hidden></a>
       <a href="#/account" class="top-avatar" id="top-avatar" aria-label="Account">·</a>
     </header>
 
     <main id="view" class="view" tabindex="-1"></main>
+    <div id="route-loader" class="route-loader" role="status" aria-live="polite" hidden>Loading…</div>
 
     <nav class="bottom-nav" id="bottom-nav" aria-label="Primary"></nav>
   </div>

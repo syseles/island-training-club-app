@@ -53,6 +53,56 @@ const applicationRows = new Map([
     },
   ],
 ]);
+const notificationRows = [
+  {
+    id: 'notification-admin-application',
+    kind: 'admin_application_submitted',
+    title: 'Application <submitted>',
+    body: 'Review Riley & approve.',
+    created_at: '2026-08-05T06:35:00.000Z',
+    read_at: null,
+  },
+  {
+    id: 'notification-admin-role',
+    kind: 'admin_role_changed',
+    title: 'Role changed',
+    body: 'A member role changed.',
+    created_at: '2026-08-05T04:40:00.000Z',
+    read_at: '2026-08-05T05:00:00.000Z',
+  },
+  {
+    id: 'notification-welcome',
+    kind: 'welcome',
+    title: 'Welcome to ITC',
+    body: 'Your membership is ready.',
+    created_at: '2026-08-05T06:32:00.000Z',
+    read_at: null,
+  },
+  {
+    id: 'notification-malformed',
+    kind: null,
+    title: 'Imported notification',
+    body: 'This row has incomplete metadata.',
+    created_at: 'not-a-date',
+    read_at: '2026-08-05T06:39:00.000Z',
+  },
+];
+const approvedProfiles = [
+  {
+    id: "approved-admin",
+    email: "tina.admin@example.com",
+    full_name: "Tina Admin",
+    role: "admin",
+    created_at: "2026-08-05T01:00:00.000Z",
+  },
+  {
+    id: "approved-member",
+    email: "micah.member@example.com",
+    full_name: "Micah Member",
+    role: "member",
+    created_at: "2026-08-05T02:00:00.000Z",
+  },
+];
 const pendingProfiles = [
   {
     id: "pending-submitted",
@@ -86,12 +136,27 @@ applicationRows.set("pending-submitted", {
 const applicationUpdates = [];
 const profileUpdates = [];
 let applicationReadError = null;
+let applicationReadGate = null;
+const applicationReadGates = [];
+let notificationReadError = null;
+let notificationReadGate = null;
+let notificationQueryCount = 0;
+const notificationUpdates = [];
+let notificationUpdateError = null;
+let notificationUpdateResult = "row";
+let notificationUpdateGate = null;
 let profileListError = null;
+let profileListErrorAfterUpdate = null;
 let applicationListError = null;
 let profileUpdateError = null;
 let profileUpdateResult = "row";
+let profileUpdateGate = null;
 let authStateChangeHandler = null;
 let authCallbackLocked = false;
+let oauthCalls = 0;
+let releaseOAuth = null;
+let signOutCalls = 0;
+let releaseSignOut = null;
 const deferredAuthTasks = [];
 const fixedIso = "2026-08-05T02:00:00.000Z";
 const RealDate = Date;
@@ -134,6 +199,14 @@ const fakeSupabase = {
       authStateChangeHandler = callback;
       return { data: { subscription: { unsubscribe() {} } } };
     },
+    signInWithOAuth() {
+      oauthCalls++;
+      return new Promise((resolve) => { releaseOAuth = resolve; });
+    },
+    signOut() {
+      signOutCalls++;
+      return new Promise((resolve) => { releaseSignOut = resolve; });
+    },
   },
   from(table) {
     if (table === "profiles") {
@@ -155,6 +228,7 @@ const fakeSupabase = {
               return Promise.resolve({
                 data: [
                   structuredClone(profile),
+                  ...structuredClone(approvedProfiles),
                   ...structuredClone(pendingProfiles),
                   ...structuredClone(declinedProfiles),
                 ],
@@ -177,16 +251,75 @@ const fakeSupabase = {
               if (columns !== "id, role") throw new Error("Profile update must return id and role");
               return {
                 single: async () => {
+                  if (profileUpdateGate) await profileUpdateGate;
                   const target = targetId === profile.id
                     ? profile
-                    : pendingProfiles.find((item) => item.id === targetId);
+                    : [...approvedProfiles, ...pendingProfiles].find((item) => item.id === targetId);
                   profileUpdates.push({ id: targetId, expectedRole, ...structuredClone(patch) });
                   if (profileUpdateError) return { data: null, error: profileUpdateError };
                   if (profileUpdateResult === "zero" || !target || (expectedRole && target.role !== expectedRole)) {
                     return { data: null, error: null };
                   }
                   Object.assign(target, patch);
+                  if (profileListErrorAfterUpdate) profileListError = profileListErrorAfterUpdate;
                   return { data: { id: targetId, role: target.role }, error: null };
+                },
+              };
+            },
+          };
+          return result;
+        },
+      };
+    }
+    if (table === "notifications") {
+      return {
+        select(columns) {
+          if (columns !== "*") throw new Error("Notification query should select all row fields");
+          return {
+            async order(column, options) {
+              if (column !== "created_at" || options?.ascending !== false) {
+                throw new Error("Notifications should be newest first");
+              }
+              notificationQueryCount++;
+              const rows = structuredClone(notificationRows);
+              const error = notificationReadError;
+              const gate = notificationReadGate;
+              notificationReadError = null;
+              notificationReadGate = null;
+              if (gate) await gate;
+              return { data: rows, error };
+            },
+          };
+        },
+        update(patch) {
+          let targetId = null;
+          const result = {
+            eq(column, value) {
+              if (column !== "id") throw new Error("Notification update should target its id");
+              targetId = value;
+              return result;
+            },
+            is(column, value) {
+              if (column !== "read_at" || value !== null) {
+                throw new Error("Notification update should require an unread row");
+              }
+              return result;
+            },
+            select(columns) {
+              if (columns !== "id, read_at") {
+                throw new Error("Notification update must return id and read_at");
+              }
+              return {
+                single: async () => {
+                  notificationUpdates.push({ id: targetId, ...structuredClone(patch) });
+                  if (notificationUpdateGate) await notificationUpdateGate;
+                  if (notificationUpdateError) return { data: null, error: notificationUpdateError };
+                  const row = notificationRows.find((item) => item.id === targetId);
+                  if (notificationUpdateResult === "zero" || !row || row.read_at) {
+                    return { data: null, error: null };
+                  }
+                  Object.assign(row, structuredClone(patch));
+                  return { data: { id: row.id, read_at: row.read_at }, error: null };
                 },
               };
             },
@@ -204,10 +337,14 @@ const fakeSupabase = {
                 throw new Error("Application query did not target the signed-in user");
               }
               return {
-                maybeSingle: async () => ({
-                  data: structuredClone(applicationRows.get(value) || null),
-                  error: applicationReadError,
-                }),
+                maybeSingle: async () => {
+                  const readGate = applicationReadGates.shift() || applicationReadGate;
+                  if (readGate) await readGate;
+                  return {
+                    data: structuredClone(applicationRows.get(value) || null),
+                    error: applicationReadError,
+                  };
+                },
               };
             },
             then(resolve, reject) {
@@ -267,9 +404,29 @@ if (queue.some((item) => item.id === authUser.id)) {
   throw new Error("Approved/admin profiles must not enter the approval queue");
 }
 const approvalsHtml = await views.viewAdmin("approvals");
+assert.match(approvalsHtml, /Ready for review \(1\)/);
+assert.match(approvalsHtml, /Awaiting application \(1\)/);
+assert.ok(approvalsHtml.indexOf("Submitted Runner") < approvalsHtml.indexOf("Incomplete Runner"),
+  "Submitted applications must render first");
 if (!approvalsHtml.includes("Application not submitted")) {
   throw new Error("Approvals must explain incomplete pending profiles");
 }
+const submittedProfile = pendingProfiles.find((item) => item.id === "pending-submitted");
+const incompleteProfile = pendingProfiles.find((item) => item.id === "pending-incomplete");
+submittedProfile.role = "member";
+const readyEmptyHtml = await views.viewAdmin("approvals");
+assert.match(readyEmptyHtml, /Ready for review \(0\)[\s\S]*No applications ready for review\./);
+assert.match(readyEmptyHtml, /Awaiting application \(1\)/);
+submittedProfile.role = "pending";
+incompleteProfile.role = "member";
+const awaitingEmptyHtml = await views.viewAdmin("approvals");
+assert.match(awaitingEmptyHtml, /Ready for review \(1\)/);
+assert.match(awaitingEmptyHtml, /Awaiting application \(0\)[\s\S]*No members awaiting an application\./);
+submittedProfile.role = "member";
+const allEmptyHtml = await views.viewAdmin("approvals");
+assert.match(allEmptyHtml, /No pending members/);
+submittedProfile.role = "pending";
+incompleteProfile.role = "pending";
 const decisionButton = (profileId, action) => approvalsHtml.match(
   new RegExp(`<button[^>]*data-action="${action}"[^>]*data-user="${profileId}"[^>]*>`)
 )?.[0] || "";
@@ -280,9 +437,44 @@ for (const action of ["approve", "decline"]) {
     `Submitted ${action} must be enabled`);
 }
 const membersHtml = await views.viewAdmin("members");
+assert.doesNotMatch(membersHtml, /member-summary|Member status counts|data-change="member-(?:status|role)-filter"/);
+for (const [key, options] of Object.entries({
+  status: [["all", "All"], ["approved", "Approved"], ["pending", "Pending"], ["declined", "Declined"]],
+  role: [["all", "All roles"], ["member", "Member"], ["admin", "Admin"], ["superadmin", "Super Admin"]],
+})) {
+  for (const [value, label] of options) {
+    assert.match(membersHtml, new RegExp(`<button[^>]*data-action="admin-member-filter"[^>]*data-filter-key="${key}"[^>]*data-filter-value="${value}"[^>]*aria-pressed="${value === "all"}"[^>]*>${label}</button>`));
+  }
+}
+assert.doesNotMatch(membersHtml, /Clear filters/);
 if (!/Declined Runner[\s\S]*badge danger">Declined</.test(membersHtml)) {
   throw new Error("Members must badge declined profiles as Declined");
 }
+assert.match(membersHtml, />Super Admin</);
+assert.match(membersHtml, />Admin</);
+assert.match(membersHtml, />Member</);
+assert.doesNotMatch(membersHtml, />super_?admin</i, "Raw role spellings must not appear as labels");
+assert.match(membersHtml, /Search members/);
+assert.match(membersHtml, /Status/);
+assert.match(membersHtml, /Role/);
+views.adminMemberFilters.query = "tina";
+views.adminMemberFilters.status = "approved";
+views.adminMemberFilters.role = "admin";
+const filteredMembersHtml = await views.viewAdmin("members");
+assert.match(filteredMembersHtml, /data-action="admin-member-filters-clear"[^>]*>Clear filters</);
+assert.match(filteredMembersHtml, /Tina Admin/);
+for (const excluded of ["Riley Runner", "Micah Member", "Submitted Runner", "Declined Runner"]) {
+  assert.doesNotMatch(filteredMembersHtml, new RegExp(excluded));
+}
+views.adminMemberFilters.query = "nobody";
+const noMembersHtml = await views.viewAdmin("members");
+assert.match(noMembersHtml, /No members match/i);
+assert.match(noMembersHtml, /nobody/i);
+assert.match(noMembersHtml, /Approved/);
+assert.match(noMembersHtml, /Admin/);
+views.adminMemberFilters.query = "";
+views.adminMemberFilters.status = "all";
+views.adminMemberFilters.role = "all";
 await store.decideApplication(submitted.id, "declined");
 if (!profileUpdates.some((update) =>
   update.id === submitted.id && update.role === "declined" && update.expectedRole === "pending"
@@ -313,10 +505,99 @@ if (!pendingGiving.includes("approved ITC members") ||
 }
 profile.role = "super_admin";
 await store.getCurrentUser();
-const renderedUser = store.currentUser();
+let renderedUser = store.currentUser();
 if (!renderedUser || renderedUser.id !== authUser.id) {
   throw new Error("A fetched Supabase session was not available to synchronous views");
 }
+const notificationNow = new RealDate("2026-08-05T06:40:00.000Z");
+profile.role = "admin";
+await store.getCurrentUser();
+const ordinaryAdminNotificationsHtml = await views.viewNotifications(notificationNow);
+assert.match(ordinaryAdminNotificationsHtml, /Application &lt;submitted&gt;/,
+  "Ordinary admins must receive operational notifications");
+profile.role = "super_admin";
+await store.getCurrentUser();
+renderedUser = store.currentUser();
+const categoryRows = [
+  ...notificationRows,
+  {
+    id: "notification-decision",
+    kind: "admin_application_approved",
+    title: "Application approved",
+    body: "A membership was approved.",
+    created_at: "2026-08-05T06:34:00.000Z",
+    read_at: null,
+  },
+  {
+    id: "notification-club",
+    kind: "giving_campaign_published",
+    title: "Giving campaign published",
+    body: "A campaign is ready.",
+    created_at: "2026-08-05T06:33:00.000Z",
+    read_at: null,
+  },
+];
+views.notificationFilters.kind = "all";
+const categoryNotificationsHtml = await views.viewNotifications(notificationNow, categoryRows);
+for (const badge of ["Application", "Decision", "Role change", "Club update", "My account"]) {
+  assert.match(categoryNotificationsHtml, new RegExp(`class="notification-kind-badge">${badge}<`));
+}
+assert.match(categoryNotificationsHtml, /Giving campaign published[\s\S]*?data-destination="#\/giving"|data-destination="#\/giving"[\s\S]*?Giving campaign published/);
+views.notificationFilters.kind = "all";
+const adminNotificationsHtml = await views.viewNotifications(notificationNow);
+assert.match(adminNotificationsHtml, /<h1[^>]*>Notifications<\/h1>/);
+for (const label of ["All", "Applications", "Decisions", "Role changes", "Club updates", "My account"]) {
+  assert.match(adminNotificationsHtml, new RegExp(`data-notification-filter="[^"]+"[^>]*>${label}<\\/button>`));
+}
+assert.match(adminNotificationsHtml, /data-notification-filter="all"[^>]*aria-pressed="true"/);
+assert.doesNotMatch(adminNotificationsHtml, /<h2[^>]*>Club operations<\/h2>|<h2[^>]*>My notifications<\/h2>/);
+assert.equal((adminNotificationsHtml.match(/class="notification-list"/g) || []).length, 1,
+  "Notifications must render one chronological list");
+assert.ok(adminNotificationsHtml.indexOf("Application &lt;submitted&gt;") < adminNotificationsHtml.indexOf("Welcome to ITC"));
+assert.ok(adminNotificationsHtml.indexOf("Welcome to ITC") < adminNotificationsHtml.indexOf("Role changed"));
+assert.doesNotMatch(adminNotificationsHtml, /Application <submitted>|Riley & approve/,
+  "Notification content must be HTML escaped");
+const notificationButtons = adminNotificationsHtml.match(/<button class="notification-row[\s\S]*?<\/button>/g) || [];
+assert.equal(notificationButtons.length, 4, "Every valid or malformed notification row must remain visible");
+for (const button of notificationButtons) {
+  assert.match(button, /<span class="notification-unread"/,
+    "Read and unread rows must have the same grid indicator structure");
+  assert.match(button, /class="notification-kind-badge"/,
+    "Every notification row must show its category badge");
+}
+assert.match(adminNotificationsHtml, /class="notification-row unread"[^>]*type="button"/);
+assert.match(adminNotificationsHtml, /class="notification-row"[^>]*[\s\S]*?class="notification-unread" aria-hidden="true"/,
+  "Read rows must retain a hidden indicator placeholder");
+assert.match(adminNotificationsHtml, /class="notification-unread" aria-label="Unread"/);
+assert.match(adminNotificationsHtml, /5 minutes ago/);
+assert.match(adminNotificationsHtml, /5 Aug 2026, 2:32 PM HKT/);
+assert.match(adminNotificationsHtml, /Imported notification[\s\S]*?Time unavailable/,
+  "Malformed metadata must fall back without dropping the row");
+assert.doesNotMatch(adminNotificationsHtml, /Invalid Date|NaN/);
+assert.match(adminNotificationsHtml, /data-destination="#\/admin\/approvals"/);
+assert.match(adminNotificationsHtml, /data-destination="#\/account"/);
+renderedUser.role = "member";
+views.notificationFilters.kind = "all";
+const memberNotificationsHtml = await views.viewNotifications(notificationNow);
+for (const label of ["All", "Club updates", "My account"]) assert.match(memberNotificationsHtml, new RegExp(`>${label}<\\/button>`));
+assert.doesNotMatch(memberNotificationsHtml, />Applications<\/button>|>Decisions<\/button>|>Role changes<\/button>/);
+assert.doesNotMatch(memberNotificationsHtml, /Application &lt;submitted&gt;|Role changed/);
+assert.match(memberNotificationsHtml, /Welcome to ITC/);
+views.notificationFilters.kind = "club";
+const memberClubNotificationsHtml = await views.viewNotifications(notificationNow, categoryRows);
+assert.match(memberClubNotificationsHtml, /Giving campaign published/);
+assert.doesNotMatch(memberClubNotificationsHtml, /Application &lt;submitted&gt;|Application approved|Role changed|Welcome to ITC/);
+const emptyClubNotificationsHtml = await views.viewNotifications(notificationNow);
+assert.match(emptyClubNotificationsHtml, /No Club updates notifications\./,
+  "The active filter empty state must name its filter");
+const emptyMemberNotificationsHtml = await views.viewNotifications(notificationNow, []);
+assert.match(emptyMemberNotificationsHtml, /New notifications will appear here\./);
+assert.match(emptyMemberNotificationsHtml, /No Club updates notifications\./);
+renderedUser.role = "super_admin";
+views.notificationFilters.kind = "all";
+const emptyAdminNotificationsHtml = await views.viewNotifications(notificationNow, []);
+assert.match(emptyAdminNotificationsHtml, /New notifications will appear here\./);
+assert.match(emptyAdminNotificationsHtml, /No notifications in All\./);
 const liveApplication = await store.getMyApplication();
 if (!liveApplication || liveApplication.waiver_accepted_at !== "2026-08-05T01:00:00.000Z") {
   throw new Error("waiver missing");
@@ -637,23 +918,50 @@ if (missingPrivacy?.redirect || !missingPrivacy.includes("Application details un
 
 const domListeners = new Map();
 const windowListeners = new Map();
-const makeElement = () => ({
+let activeElement = null;
+const makeElement = () => {
+  const classes = new Set();
+  return {
   children: [],
   className: "",
   innerHTML: "",
   textContent: "",
-  classList: { toggle() {} },
+  hidden: false,
+  attributes: new Map(),
+  classList: {
+    toggle(name, force) {
+      const enabled = force === undefined ? !classes.has(name) : force;
+      if (enabled) classes.add(name);
+      else classes.delete(name);
+      return enabled;
+    },
+    contains: (name) => classes.has(name),
+  },
   appendChild(child) { this.children.push(child); },
+  setAttribute(name, value) { this.attributes.set(name, String(value)); },
+  getAttribute(name) { return this.attributes.get(name) ?? null; },
+  hasAttribute(name) { return this.attributes.has(name); },
+  removeAttribute(name) { this.attributes.delete(name); },
+  focus(options) {
+    activeElement = this;
+    this.focusOptions = options;
+  },
   remove() {},
   querySelector() { return null; },
-});
+  };
+};
+const routeLoader = makeElement();
+routeLoader.hidden = true;
 const elements = new Map([
   ["view", makeElement()],
   ["bottom-nav", makeElement()],
+  ["top-notifications", makeElement()],
   ["top-avatar", makeElement()],
   ["toast-stack", makeElement()],
+  ["route-loader", routeLoader],
 ]);
 globalThis.document = {
+  get activeElement() { return activeElement; },
   getElementById: (id) => elements.get(id),
   createElement: () => makeElement(),
   addEventListener: (event, callback) => domListeners.set(event, callback),
@@ -663,9 +971,20 @@ globalThis.location = { hash: "#/account" };
 window.location = globalThis.location;
 window.addEventListener = (event, callback) => windowListeners.set(event, callback);
 window.scrollTo = () => {};
+let nextTimerId = 1;
+const delayedTimers = new Map();
 globalThis.setTimeout = (callback, delay) => {
   if (delay === 0) deferredAuthTasks.push(callback);
-  return 0;
+  else delayedTimers.set(nextTimerId, { callback, delay });
+  return nextTimerId++;
+};
+globalThis.clearTimeout = (id) => delayedTimers.delete(id);
+const advanceTimersBy = (delay) => {
+  for (const [id, timer] of [...delayedTimers]) {
+    if (timer.delay !== delay) continue;
+    delayedTimers.delete(id);
+    timer.callback();
+  }
 };
 
 async function dispatchAuthStateChange(event) {
@@ -719,6 +1038,364 @@ if (hashRejected || escapedRejections.length || toastStack.children.length !== 1
   throw new Error("Hash changes should catch failed application reads and show one error toast");
 }
 
+// Route feedback announces work immediately, only exposes visible copy after
+// the delay, and always clears once the awaited view is complete.
+applicationReadError = null;
+let releaseApplicationRead;
+applicationReadGate = new Promise((resolve) => { releaseApplicationRead = resolve; });
+const slowRender = windowListeners.get("hashchange")();
+const viewEl = elements.get("view");
+assert.equal(viewEl.getAttribute("aria-busy"), "true", "async route must announce busy immediately");
+assert.equal(routeLoader.hidden, true, "fast routes must not flash loading feedback");
+advanceTimersBy(300);
+assert.equal(routeLoader.hidden, false, "slow route must expose delayed loading feedback");
+releaseApplicationRead();
+await slowRender;
+applicationReadGate = null;
+assert.equal(viewEl.hasAttribute("aria-busy"), false, "route busy state must clear");
+assert.equal(routeLoader.hidden, true, "route loading feedback must clear");
+
+// Three overlapping routes prove that stale completion cannot clear current
+// feedback and out-of-order completion cannot replace the newest route.
+const deferred = () => {
+  let resolve;
+  const promise = new Promise((done) => { resolve = done; });
+  return { promise, resolve };
+};
+const oldestGate = deferred();
+const middleGate = deferred();
+const currentGate = deferred();
+applicationReadGates.push(oldestGate.promise, middleGate.promise, currentGate.promise);
+location.hash = "#/account/privacy";
+const oldestRender = windowListeners.get("hashchange")();
+location.hash = "#/account/indemnity";
+const middleRender = windowListeners.get("hashchange")();
+location.hash = "#/account/details";
+const currentRender = windowListeners.get("hashchange")();
+advanceTimersBy(300);
+assert.equal(viewEl.getAttribute("aria-busy"), "true");
+assert.equal(routeLoader.hidden, false);
+middleGate.resolve();
+await middleRender;
+assert.equal(viewEl.getAttribute("aria-busy"), "true", "stale completion must not clear current busy state");
+assert.equal(routeLoader.hidden, false, "stale completion must not hide the current loader");
+currentGate.resolve();
+await currentRender;
+const currentRouteHtml = viewEl.innerHTML;
+assert.match(currentRouteHtml, /Membership Details/);
+assert.equal(viewEl.hasAttribute("aria-busy"), false);
+assert.equal(routeLoader.hidden, true);
+oldestGate.resolve();
+await oldestRender;
+assert.equal(viewEl.innerHTML, currentRouteHtml, "an older route must not commit after the current route");
+assert.equal(viewEl.hasAttribute("aria-busy"), false);
+assert.equal(routeLoader.hidden, true);
+
+// Signed-in notification chrome appears before its best-effort count query,
+// fails silently, and ignores stale generations.
+const notificationBell = elements.get("top-notifications");
+const countGate = deferred();
+notificationReadGate = countGate.promise;
+location.hash = "#/home";
+const immediateBellRender = windowListeners.get("hashchange")();
+await immediateBellRender;
+assert.equal(notificationBell.hidden, false, "signed-in bell must be visible without waiting for its count");
+assert.equal(notificationBell.getAttribute("aria-label"), "Notifications");
+assert.doesNotMatch(notificationBell.innerHTML, /notification-badge/);
+countGate.resolve();
+await new Promise(setImmediate);
+assert.match(notificationBell.innerHTML, /notification-badge[^>]*[\s\S]*>2<\/span>/);
+assert.equal(notificationBell.getAttribute("aria-label"), "Notifications, 2 unread");
+
+const cappedRows = Array.from({ length: 118 }, (_, index) => ({
+  id: `notification-cap-${index}`,
+  kind: "welcome",
+  title: "Unread update",
+  body: "Unread count cap fixture.",
+  created_at: "2026-08-05T06:39:00.000Z",
+  read_at: null,
+}));
+notificationRows.push(...cappedRows);
+await windowListeners.get("hashchange")();
+await new Promise(setImmediate);
+assert.equal(notificationBell.getAttribute("aria-label"), "Notifications, 120 unread",
+  "the accessible label must retain the full unread count");
+assert.match(notificationBell.innerHTML, />99\+<\/span>/, "only the visual badge should cap at 99+");
+notificationRows.splice(-cappedRows.length);
+
+const toastsBeforeCountFailure = toastStack.children.length;
+notificationReadError = new Error("Notification count unavailable");
+await windowListeners.get("hashchange")();
+await new Promise(setImmediate);
+assert.equal(notificationBell.hidden, false);
+assert.equal(notificationBell.getAttribute("aria-label"), "Notifications");
+assert.doesNotMatch(notificationBell.innerHTML, /notification-badge/);
+assert.equal(toastStack.children.length, toastsBeforeCountFailure, "count failures must not toast");
+
+const staleCountGate = deferred();
+notificationReadGate = staleCountGate.promise;
+const staleCountRender = windowListeners.get("hashchange")();
+await staleCountRender;
+notificationRows.push({
+  id: "notification-new-unread",
+  kind: "welcome",
+  title: "New update",
+  body: "A newer generation sees this unread row.",
+  created_at: "2026-08-05T06:39:00.000Z",
+  read_at: null,
+});
+await windowListeners.get("hashchange")();
+await new Promise(setImmediate);
+assert.equal(notificationBell.getAttribute("aria-label"), "Notifications, 3 unread");
+staleCountGate.resolve();
+await new Promise(setImmediate);
+assert.equal(notificationBell.getAttribute("aria-label"), "Notifications, 3 unread",
+  "a stale unread query must not overwrite newer chrome");
+notificationRows.pop();
+
+const directRouteGate = deferred();
+notificationReadGate = directRouteGate.promise;
+const queriesBeforeDirectRoute = notificationQueryCount;
+location.hash = "#/notifications";
+const directRouteRender = windowListeners.get("hashchange")();
+assert.equal(notificationBell.hidden, false,
+  "a direct Notifications route must commit signed-in chrome before its query resolves");
+assert.equal(notificationBell.getAttribute("aria-label"), "Notifications");
+assert.equal(notificationBell.getAttribute("aria-current"), "page");
+assert.equal(notificationQueryCount, queriesBeforeDirectRoute + 1,
+  "the Notifications page and unread badge must share one query");
+directRouteGate.resolve();
+await directRouteRender;
+await new Promise(setImmediate);
+assert.equal(notificationQueryCount, queriesBeforeDirectRoute + 1,
+  "resolving the direct route must not start a second unread query");
+assert.equal(notificationBell.getAttribute("aria-label"), "Notifications, 2 unread");
+assert.doesNotMatch(elements.get("bottom-nav").innerHTML, /aria-current="page"/,
+  "Notifications must not activate a bottom navigation item");
+
+// Out-of-order overlapping Notifications renders must leave the route cache
+// paired with the newest committed HTML. Filtering that page remains local.
+const olderNotificationsGate = deferred();
+notificationReadGate = olderNotificationsGate.promise;
+const queriesBeforeOverlap = notificationQueryCount;
+const olderNotificationsRender = windowListeners.get("hashchange")();
+notificationRows.unshift({
+  id: "notification-latest-application",
+  kind: "admin_application_submitted",
+  title: "Latest application",
+  body: "This row belongs only to the newest route request.",
+  created_at: "2026-08-05T06:39:30.000Z",
+  read_at: null,
+});
+const currentNotificationsGate = deferred();
+notificationReadGate = currentNotificationsGate.promise;
+const currentNotificationsRender = windowListeners.get("hashchange")();
+assert.equal(notificationQueryCount, queriesBeforeOverlap + 2,
+  "each overlapping Notifications route should issue exactly one shared query");
+currentNotificationsGate.resolve();
+await currentNotificationsRender;
+olderNotificationsGate.resolve();
+await olderNotificationsRender;
+notificationRows.shift();
+const overlapFilterControl = makeElement();
+overlapFilterControl.tagName = "BUTTON";
+overlapFilterControl.dataset = { action: "notification-filter", notificationFilter: "application" };
+overlapFilterControl.closest = () => overlapFilterControl;
+const queriesBeforeOverlapFilter = notificationQueryCount;
+await domListeners.get("click")({ target: overlapFilterControl });
+assert.equal(notificationQueryCount, queriesBeforeOverlapFilter,
+  "filtering after overlapping routes must not fetch again");
+assert.match(viewEl.innerHTML, /Latest application/,
+  "a stale Notifications completion must not replace the newest route rows");
+views.notificationFilters.kind = "all";
+
+// Kind filters are view-local: activating one reuses route rows, rerenders the
+// Notifications HTML, and restores keyboard focus to the equivalent new chip.
+const filterControl = makeElement();
+filterControl.tagName = "BUTTON";
+filterControl.dataset = { action: "notification-filter", notificationFilter: "application" };
+filterControl.closest = () => filterControl;
+const replacementFilterControl = makeElement();
+const filterSelector = '[data-action="notification-filter"][data-notification-filter="application"]';
+viewEl.querySelector = (selector) => selector === filterSelector ? replacementFilterControl : null;
+const queriesBeforeFilter = notificationQueryCount;
+await domListeners.get("click")({ target: filterControl });
+assert.equal(views.notificationFilters.kind, "application");
+assert.equal(notificationQueryCount, queriesBeforeFilter,
+  "a local kind filter must not refetch notifications");
+assert.match(viewEl.innerHTML, /data-notification-filter="application"[^>]*aria-pressed="true"/);
+assert.match(viewEl.innerHTML, /Application &lt;submitted&gt;/);
+assert.doesNotMatch(viewEl.innerHTML, /Welcome to ITC|Role changed/);
+assert.equal(activeElement, replacementFilterControl,
+  "filter rerender must restore focus to the activated chip");
+viewEl.querySelector = () => null;
+views.notificationFilters.kind = "all";
+await domListeners.get("click")({
+  target: {
+    dataset: { action: "notification-filter", notificationFilter: "all" },
+    closest() { return this; },
+  },
+});
+
+// Unread row activation is checked, duplicate-safe, and row-safe. It does not
+// navigate until one unread row is confirmed updated, then advances the render
+// generation so an older same-route count cannot overwrite the new badge.
+const sameRouteStaleGate = deferred();
+notificationReadGate = sameRouteStaleGate.promise;
+const sameRouteStaleRender = windowListeners.get("hashchange")();
+const updateGate = deferred();
+notificationUpdateGate = updateGate.promise;
+const notificationControl = makeElement();
+notificationControl.tagName = "BUTTON";
+notificationControl.textContent = "Application submitted Review Riley";
+notificationControl.dataset = {
+  action: "notification-open",
+  notificationId: "notification-admin-application",
+  notificationRead: "false",
+  destination: "#/admin/approvals",
+};
+notificationControl.closest = () => notificationControl;
+const updatesBeforeOpen = notificationUpdates.length;
+const notificationHtmlBeforeOpen = viewEl.innerHTML;
+const markReadRender = domListeners.get("click")({ target: notificationControl });
+const duplicateOpen = domListeners.get("click")({ target: notificationControl });
+assert.equal(notificationUpdates.length, updatesBeforeOpen + 1, "double activation must send one update");
+assert.equal(location.hash, "#/notifications", "an unread row must wait for update success before navigating");
+assert.equal(notificationControl.disabled, true);
+assert.equal(notificationControl.getAttribute("aria-busy"), "true");
+assert.equal(notificationControl.getAttribute("aria-label"), "Opening…");
+assert.equal(notificationControl.classList.contains("is-busy"), true);
+assert.equal(notificationControl.textContent, "Application submitted Review Riley",
+  "structured notification content must not be replaced by a busy label");
+await duplicateOpen;
+updateGate.resolve();
+await markReadRender;
+notificationUpdateGate = null;
+assert.equal(location.hash, "#/admin/approvals");
+assert.equal(viewEl.innerHTML, notificationHtmlBeforeOpen,
+  "notification activation must not explicitly render in addition to hashchange");
+await windowListeners.get("hashchange")();
+assert.match(viewEl.innerHTML, /Ready for review/);
+assert.equal(notificationBell.getAttribute("aria-label"), "Notifications, 1 unread");
+assert.equal(notificationControl.disabled, false);
+assert.equal(notificationControl.hasAttribute("aria-busy"), false);
+assert.equal(notificationControl.hasAttribute("aria-label"), false);
+assert.equal(notificationControl.classList.contains("is-busy"), false);
+sameRouteStaleGate.resolve();
+await sameRouteStaleRender;
+await new Promise(setImmediate);
+assert.equal(notificationBell.getAttribute("aria-label"), "Notifications, 1 unread",
+  "a stale same-route count must not overwrite the post-mark-read generation");
+
+// Already-read rows skip the write and route immediately to their semantic destination.
+location.hash = "#/notifications";
+await windowListeners.get("hashchange")();
+const alreadyReadControl = makeElement();
+alreadyReadControl.tagName = "BUTTON";
+alreadyReadControl.textContent = "Role changed";
+alreadyReadControl.dataset = {
+  action: "notification-open",
+  notificationId: "notification-admin-role",
+  notificationRead: "true",
+  destination: "#/admin/members",
+};
+alreadyReadControl.closest = () => alreadyReadControl;
+const updatesBeforeReadOpen = notificationUpdates.length;
+const readOpen = domListeners.get("click")({ target: alreadyReadControl });
+assert.equal(location.hash, "#/admin/members", "read rows should navigate without waiting for a write");
+await readOpen;
+assert.equal(notificationUpdates.length, updatesBeforeReadOpen, "read rows must not update again");
+await windowListeners.get("hashchange")();
+assert.match(viewEl.innerHTML, /href="#\/admin\/members" class="active"/);
+
+// Destination failures use shared route feedback after mutation handling has
+// finished. They must never be misreported as mark-read failures, whether the
+// activated row started unread or read.
+for (const initiallyRead of [false, true]) {
+  location.hash = "#/notifications";
+  await windowListeners.get("hashchange")();
+  const retainedDestinationHtml = viewEl.innerHTML;
+  toastStack.children.length = 0;
+  const destinationFailure = new Error(initiallyRead
+    ? "Read notification destination unavailable"
+    : "Unread notification destination unavailable");
+  profileListError = destinationFailure;
+  const destinationControl = makeElement();
+  destinationControl.tagName = "BUTTON";
+  destinationControl.textContent = "Open operational notification";
+  destinationControl.dataset = {
+    action: "notification-open",
+    notificationId: initiallyRead ? "notification-admin-role" : "notification-destination-unread",
+    notificationRead: initiallyRead ? "true" : "false",
+    destination: "#/admin/members",
+  };
+  destinationControl.closest = () => destinationControl;
+  if (!initiallyRead) {
+    notificationRows.push({
+      id: "notification-destination-unread",
+      kind: "admin_role_promoted",
+      title: "Destination test",
+      body: "Destination failure fixture.",
+      created_at: "2026-08-05T06:39:30.000Z",
+      read_at: null,
+    });
+  }
+  const updatesBeforeDestinationFailure = notificationUpdates.length;
+  await domListeners.get("click")({ target: destinationControl });
+  assert.equal(location.hash, "#/admin/members");
+  assert.equal(notificationUpdates.length, updatesBeforeDestinationFailure + (initiallyRead ? 0 : 1));
+  await windowListeners.get("hashchange")();
+  assert.equal(viewEl.innerHTML, retainedDestinationHtml,
+    "A failed destination render must retain the last successful Notifications page");
+  assert.deepEqual(toastStack.children.map((item) => item.textContent), [destinationFailure.message]);
+  assert.equal(toastStack.children.some((item) => item.textContent === "Failed to mark notification read"), false);
+  if (!initiallyRead) {
+    assert.ok(notificationRows.find((row) => row.id === "notification-destination-unread")?.read_at,
+      "Unread destination failure must not roll back or misreport a successful mark-read");
+    notificationRows.splice(notificationRows.findIndex((row) => row.id === "notification-destination-unread"), 1);
+  }
+  profileListError = null;
+}
+
+// Update errors and zero-row conflicts retain the Notifications page, hash,
+// and unread count, recover the row, and expose one accessible generic error.
+for (const failureMode of ["error", "zero"]) {
+  location.hash = "#/notifications";
+  await windowListeners.get("hashchange")();
+  const retainedNotificationHtml = viewEl.innerHTML;
+  const retainedNotificationLabel = notificationBell.getAttribute("aria-label");
+  const queriesBeforeFailure = notificationQueryCount;
+  toastStack.children.length = 0;
+  notificationUpdateError = failureMode === "error" ? new Error("Notification update unavailable") : null;
+  notificationUpdateResult = failureMode === "zero" ? "zero" : "row";
+  const failedControl = makeElement();
+  failedControl.tagName = "BUTTON";
+  failedControl.textContent = "Welcome to ITC";
+  failedControl.setAttribute("aria-label", "Open welcome notification");
+  failedControl.dataset = {
+    action: "notification-open",
+    notificationId: "notification-welcome",
+    notificationRead: "false",
+    destination: "#/account",
+  };
+  failedControl.closest = () => failedControl;
+  await domListeners.get("click")({ target: failedControl });
+  assert.equal(location.hash, "#/notifications", `${failureMode} must retain the current hash`);
+  assert.equal(viewEl.innerHTML, retainedNotificationHtml, `${failureMode} must retain the current page`);
+  assert.equal(notificationBell.getAttribute("aria-label"), retainedNotificationLabel,
+    `${failureMode} must retain the unread count`);
+  assert.equal(notificationQueryCount, queriesBeforeFailure, `${failureMode} must not render a destination`);
+  assert.equal(failedControl.disabled, false);
+  assert.equal(failedControl.hasAttribute("aria-busy"), false);
+  assert.equal(failedControl.getAttribute("aria-label"), "Open welcome notification");
+  assert.equal(failedControl.classList.contains("is-busy"), false);
+  assert.deepEqual(toastStack.children.map((item) => [item.textContent, item.getAttribute("role")]),
+    [["Failed to mark notification read", "alert"]]);
+  assert.match(toastStack.children[0].className, /err/);
+}
+notificationUpdateError = null;
+notificationUpdateResult = "row";
+
 // Approval queue failures must be truthful and preserve the last good queue.
 applicationReadError = null;
 profile.role = "super_admin";
@@ -727,6 +1404,8 @@ location.hash = "#/admin";
 toastStack.children.length = 0;
 await windowListeners.get("hashchange")();
 const retainedQueueHtml = elements.get("view").innerHTML;
+assert.equal(document.activeElement, elements.get("view"), "Successful route renders must focus #view");
+assert.deepEqual(elements.get("view").focusOptions, { preventScroll: true });
 assert.match(retainedQueueHtml, /Submitted Runner/);
 assert.match(retainedQueueHtml, /Incomplete Runner/);
 
@@ -746,25 +1425,261 @@ for (const [errorType, setError] of [
 }
 
 const click = domListeners.get("click");
-const approvalClick = {
-  target: {
-    closest: () => ({ dataset: { action: "approve", user: "pending-submitted" } }),
-  },
+const change = domListeners.get("change");
+
+// Legacy member-management URLs canonicalize instead of rendering the removed
+// row/avatar implementation.
+location.hash = "#/admin/users";
+await windowListeners.get("hashchange")();
+assert.equal(location.hash, "#/admin/members");
+assert.doesNotMatch(elements.get("view").innerHTML, /class="(?:row|avatar)"/);
+
+// Every role/access change names the member and target state before touching
+// the store. Cancelling leaves the profile untouched.
+const roleSelect = makeElement();
+roleSelect.dataset = { change: "set-role", user: "approved-member", memberName: "Micah Member" };
+roleSelect.value = "admin";
+roleSelect.closest = () => roleSelect;
+let confirmMessage = null;
+window.confirm = (message) => { confirmMessage = message; return false; };
+const updatesBeforeRoleCancel = profileUpdates.length;
+await change({ target: roleSelect });
+assert.equal(confirmMessage, "Change Micah Member’s role to Admin?");
+assert.equal(profileUpdates.length, updatesBeforeRoleCancel, "Cancelled promotion must not call the store");
+
+const demoteSelect = makeElement();
+demoteSelect.dataset = { change: "set-role", user: "approved-admin", memberName: "Tina Admin", currentRole: "admin" };
+demoteSelect.value = "member";
+demoteSelect.closest = () => demoteSelect;
+await change({ target: demoteSelect });
+assert.equal(confirmMessage, "Change Tina Admin’s role to Member?");
+assert.equal(profileUpdates.length, updatesBeforeRoleCancel, "Cancelled demotion must not call the store");
+
+const revokeControl = makeElement();
+revokeControl.textContent = "Revoke access";
+revokeControl.dataset = { action: "revoke-member", user: "approved-admin", memberName: "Tina Admin" };
+revokeControl.closest = () => revokeControl;
+await click({ target: revokeControl });
+assert.equal(confirmMessage, "Revoke Tina Admin’s access and move them to Pending?");
+assert.equal(profileUpdates.length, updatesBeforeRoleCancel, "Cancelled revoke must not call the store");
+
+window.confirm = () => true;
+const successfulRoleSelect = makeElement();
+successfulRoleSelect.tagName = "SELECT";
+successfulRoleSelect.dataset = { change: "set-role", user: "approved-member", memberName: "Micah Member", currentRole: "member" };
+successfulRoleSelect.value = "admin";
+successfulRoleSelect.closest = () => successfulRoleSelect;
+const roleGate = deferred();
+profileUpdateGate = roleGate.promise;
+const pendingRoleChange = change({ target: successfulRoleSelect });
+assert.equal(successfulRoleSelect.disabled, true);
+assert.equal(successfulRoleSelect.getAttribute("aria-busy"), "true");
+roleGate.resolve();
+await pendingRoleChange;
+profileUpdateGate = null;
+assert.equal(successfulRoleSelect.disabled, false);
+assert.equal(successfulRoleSelect.hasAttribute("aria-busy"), false);
+assert.ok(profileUpdates.some((update) => update.id === "approved-member" && update.role === "admin"));
+assert.ok(toastStack.children.some((item) => item.textContent === "Micah Member is now Admin."));
+
+// Successful delegated demotion and revocation both dispatch through the live
+// role API and only announce success after the returned row confirms mutation.
+toastStack.children.length = 0;
+const successfulDemotion = makeElement();
+successfulDemotion.tagName = "SELECT";
+successfulDemotion.dataset = { change: "set-role", user: "approved-admin", memberName: "Tina Admin", currentRole: "admin" };
+successfulDemotion.value = "member";
+successfulDemotion.closest = () => successfulDemotion;
+await change({ target: successfulDemotion });
+assert.ok(profileUpdates.some((update) => update.id === "approved-admin" && update.role === "member"));
+assert.deepEqual(toastStack.children.map((item) => item.textContent), ["Tina Admin is now Member."]);
+
+toastStack.children.length = 0;
+const successfulRevoke = makeElement();
+successfulRevoke.textContent = "Revoke access";
+successfulRevoke.dataset = { action: "revoke-member", user: "approved-member", memberName: "Micah Member" };
+successfulRevoke.closest = () => successfulRevoke;
+await click({ target: successfulRevoke });
+assert.ok(profileUpdates.some((update) => update.id === "approved-member" && update.role === "pending"));
+assert.deepEqual(toastStack.children.map((item) => item.textContent), ["Micah Member moved to Pending."]);
+
+// A stale delegated target restores its select and never emits false success.
+toastStack.children.length = 0;
+profileUpdateResult = "zero";
+const staleRoleSelect = makeElement();
+staleRoleSelect.tagName = "SELECT";
+staleRoleSelect.dataset = { change: "set-role", user: "removed-member", memberName: "Removed Member", currentRole: "member" };
+staleRoleSelect.value = "admin";
+staleRoleSelect.closest = () => staleRoleSelect;
+await change({ target: staleRoleSelect });
+profileUpdateResult = "row";
+assert.equal(staleRoleSelect.value, "member");
+assert.equal(staleRoleSelect.disabled, false);
+assert.equal(staleRoleSelect.hasAttribute("aria-busy"), false);
+assert.deepEqual(toastStack.children.map((item) => item.textContent), ["Application decision conflict."]);
+assert.equal(toastStack.children.some((item) => /is now Admin/.test(item.textContent)), false);
+
+// Once the authoritative role mutation succeeds, a failed Members refresh is
+// a stale-view problem: success remains truthful and the old control is locked
+// so the mutation cannot be retried against already-changed data.
+toastStack.children.length = 0;
+const refreshFailedRole = makeElement();
+refreshFailedRole.tagName = "SELECT";
+refreshFailedRole.dataset = { change: "set-role", user: "approved-admin", memberName: "Tina Admin", currentRole: "member" };
+refreshFailedRole.value = "admin";
+refreshFailedRole.closest = () => refreshFailedRole;
+profileListError = new Error("Members refresh failed");
+await change({ target: refreshFailedRole });
+profileListError = null;
+assert.equal(approvedProfiles.find((item) => item.id === "approved-admin").role, "admin");
+assert.equal(refreshFailedRole.disabled, true, "refresh failure must lock the stale role control");
+assert.deepEqual(toastStack.children.map((item) => item.textContent), [
+  "Tina Admin is now Admin.",
+  "Change saved, but this Admin view could not refresh. Members refresh failed",
+]);
+assert.equal(toastStack.children.some((item) => /Unable to change role/.test(item.textContent)), false);
+
+// Restore fixture roles so later approval-queue regressions retain their
+// original baseline independently of these member-action tests.
+approvedProfiles.find((item) => item.id === "approved-admin").role = "admin";
+approvedProfiles.find((item) => item.id === "approved-member").role = "member";
+location.hash = "#/admin";
+await windowListeners.get("hashchange")();
+
+// Delegated async controls expose exact progress copy, suppress a duplicate
+// action, and recover without a success toast when the store rejects.
+const googleControl = makeElement();
+googleControl.textContent = "Continue with Google";
+googleControl.dataset = { action: "sign-in-google" };
+googleControl.closest = () => googleControl;
+toastStack.children.length = 0;
+const firstGoogleClick = click({ target: googleControl });
+assert.equal(googleControl.disabled, true);
+assert.equal(googleControl.textContent, "Connecting…");
+assert.equal(googleControl.getAttribute("aria-busy"), "true");
+const duplicateGoogleClick = click({ target: googleControl });
+assert.equal(oauthCalls, 1, "pending control must prevent a duplicate store action");
+releaseOAuth({ error: new Error("OAuth unavailable") });
+await Promise.all([firstGoogleClick, duplicateGoogleClick]);
+assert.equal(googleControl.disabled, false);
+assert.equal(googleControl.textContent, "Continue with Google");
+assert.equal(googleControl.hasAttribute("aria-busy"), false);
+assert.deepEqual(toastStack.children.map((item) => item.textContent), ["OAuth unavailable"]);
+assert.equal(toastStack.children[0].getAttribute("role"), "alert");
+
+// Exercise a second delegated path: sign-out must also suppress duplicate
+// clicks, recover its control on rejection, and withhold the success toast.
+const signOutControl = makeElement();
+signOutControl.textContent = "Sign out";
+signOutControl.dataset = { action: "signout" };
+signOutControl.closest = () => signOutControl;
+toastStack.children.length = 0;
+const firstSignOut = click({ target: signOutControl });
+assert.equal(signOutControl.disabled, true);
+assert.equal(signOutControl.textContent, "Signing out…");
+assert.equal(signOutControl.getAttribute("aria-busy"), "true");
+const duplicateSignOut = click({ target: signOutControl });
+assert.equal(signOutCalls, 1, "pending sign-out must prevent a duplicate store action");
+releaseSignOut({ error: new Error("Sign-out unavailable") });
+await Promise.all([firstSignOut, duplicateSignOut]);
+assert.equal(signOutControl.disabled, false);
+assert.equal(signOutControl.textContent, "Sign out");
+assert.equal(signOutControl.hasAttribute("aria-busy"), false);
+assert.deepEqual(toastStack.children.map((item) => item.textContent), ["Sign-out unavailable"]);
+assert.equal(toastStack.children.some((item) => item.textContent === "Signed out"), false);
+await store.getCurrentUser();
+
+const makeDecisionCard = (action) => {
+  const approve = makeElement();
+  approve.textContent = "Approve";
+  approve.dataset = { action: "approve", user: "pending-submitted", applicantName: "Submitted Runner" };
+  const decline = makeElement();
+  decline.textContent = "Decline";
+  decline.dataset = { action: "decline", user: "pending-submitted", applicantName: "Submitted Runner" };
+  const error = makeElement();
+  error.hidden = true;
+  const card = makeElement();
+  card.querySelectorAll = () => [approve, decline];
+  card.querySelector = (selector) => selector === ".decision-error" ? error : null;
+  for (const control of [approve, decline]) {
+    control.closest = (selector) => selector === "[data-action]" ? control : card;
+  }
+  return { card, approve, decline, error, target: action === "approve" ? approve : decline };
 };
+confirmMessage = null;
+window.confirm = (message) => { confirmMessage = message; return false; };
+const cancelledDecline = makeDecisionCard("decline");
+const updatesBeforeCancel = profileUpdates.length;
+await click({ target: cancelledDecline.target });
+assert.equal(confirmMessage, "Decline Submitted Runner’s membership application?");
+assert.equal(profileUpdates.length, updatesBeforeCancel, "Cancelled decline must not update the profile");
+
+window.confirm = (message) => { confirmMessage = message; return true; };
+const declineAttempt = makeDecisionCard("decline");
+const decisionGate = deferred();
+profileUpdateGate = decisionGate.promise;
+profileUpdateError = new Error("Profile update failed");
+toastStack.children.length = 0;
+const pendingDecline = click({ target: declineAttempt.target });
+assert.equal(confirmMessage, "Decline Submitted Runner’s membership application?");
+assert.equal(declineAttempt.approve.disabled, true);
+assert.equal(declineAttempt.decline.disabled, true);
+assert.equal(declineAttempt.decline.textContent, "Declining…");
+decisionGate.resolve();
+await pendingDecline;
+profileUpdateGate = null;
+assert.equal(elements.get("view").innerHTML, retainedQueueHtml, "Failed decline must retain prior queue UI");
+assert.equal(declineAttempt.approve.disabled, false);
+assert.equal(declineAttempt.decline.disabled, false);
+assert.equal(declineAttempt.decline.textContent, "Decline");
+assert.equal(declineAttempt.error.hidden, false);
+assert.equal(declineAttempt.error.textContent, "Profile update failed");
+assert.equal(declineAttempt.error.getAttribute("role"), "alert");
+assert.deepEqual(toastStack.children.map((item) => item.textContent), ["Profile update failed"]);
+assert.equal(toastStack.children.some((item) => /Approved\.|Declined\./.test(item.textContent)), false);
+profileUpdateError = null;
+
 for (const [expectedError, configure] of [
   ["Profile update failed", () => { profileUpdateError = new Error("Profile update failed"); }],
   ["Application decision conflict.", () => { profileUpdateResult = "zero"; }],
 ]) {
+  const approvalAttempt = makeDecisionCard("approve");
   toastStack.children.length = 0;
   configure();
-  await click(approvalClick);
+  await click({ target: approvalAttempt.target });
   assert.equal(elements.get("view").innerHTML, retainedQueueHtml, `${expectedError} must retain prior queue UI`);
+  assert.equal(approvalAttempt.error.textContent, expectedError);
+  assert.equal(approvalAttempt.error.hidden, false);
   assert.deepEqual(toastStack.children.map((item) => item.textContent), [expectedError]);
   assert.equal(toastStack.children.some((item) => item.textContent === "Approved."), false,
     `${expectedError} must not produce a success toast`);
   profileUpdateError = null;
   profileUpdateResult = "row";
 }
+
+// A confirmed decision must not become a false action failure when the
+// post-decision queue read rejects. Keep the retained card non-actionable and
+// announce the successful mutation separately from the stale Admin view.
+const refreshFailedDecision = makeDecisionCard("approve");
+toastStack.children.length = 0;
+profileListErrorAfterUpdate = new Error("Queue refresh failed");
+await click({ target: refreshFailedDecision.target });
+profileListErrorAfterUpdate = null;
+profileListError = null;
+assert.equal(pendingProfiles.find((item) => item.id === "pending-submitted").role, "member");
+assert.equal(refreshFailedDecision.approve.disabled, true);
+assert.equal(refreshFailedDecision.decline.disabled, true);
+assert.equal(refreshFailedDecision.error.hidden, false);
+assert.equal(
+  refreshFailedDecision.error.textContent,
+  "Change saved, but this Admin view could not refresh. Queue refresh failed"
+);
+assert.deepEqual(toastStack.children.map((item) => item.textContent), [
+  "Approved.",
+  "Change saved, but this Admin view could not refresh. Queue refresh failed",
+]);
+assert.equal(toastStack.children.some((item) => item.textContent === "Decision failed"), false);
+pendingProfiles.find((item) => item.id === "pending-submitted").role = "pending";
 
 escapedRejections.length = 0;
 toastStack.children.length = 0;
@@ -787,9 +1702,23 @@ process.off("unhandledRejection", captureRejection);
 applicationReadError = null;
 profile.role = "super_admin";
 
+// A signed-out visitor keeps the original four-item navigation and no bell.
+const visitorSignOut = makeElement();
+visitorSignOut.textContent = "Sign out";
+visitorSignOut.dataset = { action: "signout" };
+visitorSignOut.closest = () => visitorSignOut;
+const successfulSignOut = click({ target: visitorSignOut });
+releaseSignOut({ error: null });
+await successfulSignOut;
+assert.equal(notificationBell.hidden, true, "visitor notification bell must stay hidden");
+assert.equal(notificationBell.innerHTML, "", "visitor bell content must be cleared");
+assert.equal(notificationBell.hasAttribute("aria-label"), false);
+assert.equal((elements.get("bottom-nav").innerHTML.match(/<a /g) || []).length, 4,
+  "visitor bottom navigation must remain unchanged");
+
 console.log("ok  live SIGNED_IN callback returns synchronously and defers hydration until after the auth lock");
 console.log("ok  live application read failures are caught and shown once across async render flows");
-console.log("ok  live OAuth session renders the signed-in home page");
+console.log("ok  live OAuth session renders signed and visitor notification chrome safely");
 console.log("ok  live profile renders valid account metadata");
 console.log("ok  live indemnity renders from the application waiver state");
 console.log("ok  live approved/admin missing-application Profile sections render unavailable cards");

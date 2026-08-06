@@ -337,10 +337,7 @@ export async function listRoleChanges() {
 }
 
 export async function updateProfileRole(profileId, newRole, reason, expectedRole = null) {
-  if (!isLive() || !supabase) {
-    setRole(profileId, newRole);
-    return;
-  }
+  if (!isLive() || !supabase) return setRole(profileId, newRole);
   let query = supabase
     .from("profiles")
     .update({ role: newRole })
@@ -379,6 +376,7 @@ function localApplication(user) {
     whatsapp_reminders: !!user.whatsappReminders,
     email_receipts: !!user.emailReceipts,
     community_news: !!user.communityNews,
+    donor_id: user.donorId || null,
   };
 }
 
@@ -512,6 +510,30 @@ export async function updateMyPrivacyPreferences(form) {
   return data;
 }
 
+export async function updateMyDonorId(raw) {
+  const donorId = normalizeDonorId(raw);
+  if (!donorId || donorIdProblem(donorId)) throw new Error("Enter a valid Donor ID");
+
+  if (!isLive() || !supabase) {
+    const user = currentUser();
+    if (!user) throw new Error("Not signed in");
+    user.donorId = donorId;
+    save();
+    return donorId;
+  }
+
+  const cu = await getCurrentUser();
+  if (!cu) throw new Error("Not signed in");
+  const { data, error } = await supabase
+    .from("applications")
+    .update({ donor_id: donorId })
+    .eq("profile_id", cu.id)
+    .select("donor_id")
+    .single();
+  if (error) throw error;
+  return data.donor_id;
+}
+
 export async function acceptMyIndemnity() {
   if (!isLive() || !supabase) {
     const user = currentUser();
@@ -568,11 +590,16 @@ export async function listMyNotifications() {
 
 export async function markNotificationRead(id) {
   if (!isLive() || !supabase) return;
-  const { error } = await supabase
+  const { data, error } = await supabase
     .from("notifications")
     .update({ read_at: new Date().toISOString() })
-    .eq("id", id);
+    .eq("id", id)
+    .is("read_at", null)
+    .select("id, read_at")
+    .single();
   if (error) throw error;
+  if (!data?.id) throw new Error("Notification update conflict.");
+  return data;
 }
 
 // --- Signup / approval ---------------------------------------------------------
@@ -710,9 +737,22 @@ export function declineApplicant(userId) {
 
 export function setRole(userId, role) {
   const user = state.users.find((u) => u.id === userId);
-  if (!user || user.status !== "approved") return;
-  user.role = role;
+  if (!user) throw new Error("Member not found.");
+  if (user.status !== "approved") throw new Error("Only approved members can change roles.");
+
+  const nextRole = role === "super_admin" ? "superadmin" : role;
+  if (!["member", "admin", "superadmin", "pending"].includes(nextRole)) {
+    throw new Error("Invalid role transition.");
+  }
+  if (user.role === nextRole) throw new Error("Member already has that role.");
+
+  user.role = nextRole;
+  // Revocation returns an approved local demo account to the same pending
+  // access state used by live profiles. Re-approval still goes through the
+  // existing application decision flow.
+  if (nextRole === "pending") user.status = "pending";
   save();
+  return user;
 }
 
 // Donor ID is optional at sign-up; members who skipped it (or answered

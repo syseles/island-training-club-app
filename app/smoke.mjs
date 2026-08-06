@@ -2,6 +2,8 @@
 // Run: node --input-type=module < smoke.mjs  (from the app/ directory)
 
 import { spawnSync } from "node:child_process";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const liveAuth = spawnSync(process.execPath, [fileURLToPath(new URL("./live-auth-smoke.mjs", import.meta.url))], {
@@ -112,6 +114,215 @@ if (liveApply.status !== 0) {
   process.exit(liveApply.status || 1);
 }
 
+const liveDonorId = spawnSync(process.execPath, [
+  "--input-type=module",
+  "-e",
+  `
+const mem = new Map();
+globalThis.localStorage = {
+  getItem: (key) => (mem.has(key) ? mem.get(key) : null),
+  setItem: (key, value) => mem.set(key, String(value)),
+  removeItem: (key) => mem.delete(key),
+};
+const authUser = {
+  id: "live-member-user",
+  email: "member@example.com",
+  user_metadata: { full_name: "Member Person" },
+};
+const profile = {
+  id: authUser.id,
+  email: authUser.email,
+  full_name: "Member Person",
+  avatar_url: null,
+  role: "member",
+  created_at: "2026-08-05T00:00:00.000Z",
+  updated_at: "2026-08-05T00:00:00.000Z",
+};
+const application = {
+  profile_id: authUser.id,
+  mobile: "91234567",
+  date_of_birth: null,
+  is_minor: false,
+  guardian_name: null,
+  guardian_phone: null,
+  emergency_name: "Emergency Person",
+  emergency_phone: "98765432",
+  heard_source: "friend",
+  heard_detail: null,
+  preferred_name: "Member",
+  photo_consent: false,
+  waiver_accepted_at: "2026-08-05T00:00:00.000Z",
+  privacy_accepted_at: "2026-08-05T00:00:00.000Z",
+  guidelines_accepted_at: "2026-08-05T00:00:00.000Z",
+  submitted_at: "2026-08-05T00:00:00.000Z",
+  updated_at: "2026-08-05T00:00:00.000Z",
+  whatsapp_reminders: false,
+  email_receipts: false,
+  community_news: false,
+  donor_id: null,
+};
+const fakeSupabase = {
+  auth: {
+    getSession: async () => ({
+      data: {
+        session: {
+          access_token: "test-access-token",
+          token_type: "bearer",
+          expires_in: 3600,
+          expires_at: 9999999999,
+          refresh_token: "test-refresh-token",
+          user: authUser,
+        },
+      },
+      error: null,
+    }),
+  },
+  from(table) {
+    if (table === "profiles") {
+      return {
+        select() {
+          return {
+            eq(column, value) {
+              if (column !== "id" || value !== authUser.id) throw new Error("Profile query mismatch");
+              return { maybeSingle: async () => ({ data: profile, error: null }) };
+            },
+          };
+        },
+      };
+    }
+    if (table === "applications") {
+      return {
+        select() {
+          return {
+            eq(column, value) {
+              if (column !== "profile_id" || value !== authUser.id) throw new Error("Application query mismatch");
+              return { maybeSingle: async () => ({ data: { ...application }, error: null }) };
+            },
+          };
+        },
+        update(patch) {
+          if (Object.keys(patch).join(",") !== "donor_id") throw new Error("Donor update changed unrelated fields");
+          Object.assign(application, patch);
+          return {
+            eq(column, value) {
+              if (column !== "profile_id" || value !== authUser.id) throw new Error("Donor update mismatch");
+              return {
+                select() {
+                  return { single: async () => ({ data: { ...application }, error: null }) };
+                },
+              };
+            },
+          };
+        },
+      };
+    }
+    throw new Error("Unexpected table: " + table);
+  },
+};
+globalThis.window = {
+  SUPABASE_URL: "https://example.supabase.co",
+  SUPABASE_ANON_KEY: "test-anon-key",
+  supabase: { createClient: () => fakeSupabase },
+};
+const store = await import("./js/store.js");
+const views = await import("./js/views.js");
+store.load();
+await store.getCurrentUser();
+const saved = await store.updateMyDonorId("chui 8879");
+if (saved !== "CHUI-8879" || application.donor_id !== "CHUI-8879") {
+  throw new Error("Live donor ID was not normalized and persisted");
+}
+const donorHtml = await views.viewAccount("donor");
+if (!donorHtml.includes("CHUI-8879") || donorHtml.includes("Not provided")) {
+  throw new Error("Live Donor Profile did not render the persisted donor ID");
+}
+console.log("ok  live donor ID saves and renders from the member application");
+  `,
+], {
+  encoding: "utf8",
+  cwd: fileURLToPath(new URL(".", import.meta.url)),
+});
+if (liveDonorId.stdout) process.stdout.write(liveDonorId.stdout);
+if (liveDonorId.status !== 0) {
+  if (liveDonorId.stderr) process.stderr.write(liveDonorId.stderr);
+  process.exit(liveDonorId.status || 1);
+}
+
+// --- Shared UI and accessibility foundations ---
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const indexHtml = readFileSync(resolve(__dirname, "index.html"), "utf8");
+const stylesCss = readFileSync(resolve(__dirname, "styles.css"), "utf8");
+const viewsSource = readFileSync(resolve(__dirname, "js/views.js"), "utf8");
+for (const path of [
+  "../assets/fonts/archivo-latin-variable.woff2",
+  "../assets/fonts/OFL-Archivo.txt",
+]) {
+  if (!existsSync(new URL(path, import.meta.url))) throw new Error(`missing self-hosted font asset: ${path}`);
+}
+const fontFiles = readdirSync(new URL("../assets/fonts/", import.meta.url));
+if (fontFiles.some((name) => /barlow/i.test(name)) || /barlow/i.test(indexHtml) || /barlow/i.test(stylesCss)) {
+  throw new Error("Barlow assets, declarations, and preloads must be removed");
+}
+const archivoFont = readFileSync(new URL("../assets/fonts/archivo-latin-variable.woff2", import.meta.url));
+const archivoLicense = readFileSync(new URL("../assets/fonts/OFL-Archivo.txt", import.meta.url), "utf8");
+if (archivoFont.subarray(0, 4).toString("ascii") !== "wOF2" || !archivoLicense.includes("SIL Open Font License, Version 1.1")) {
+  throw new Error("Archivo must include a valid WOFF2 asset and OFL 1.1 license");
+}
+if (!indexHtml.includes('rel="preload" href="../assets/fonts/archivo-latin-variable.woff2" as="font" type="font/woff2" crossorigin')) {
+  throw new Error("primary Archivo variable font must be preloaded");
+}
+const fontFaces = stylesCss.match(/@font-face\s*{[^}]*}/gs) || [];
+if (fontFaces.length !== 1 || !/font-family:\s*"Archivo";[^}]*archivo-latin-variable\.woff2[^}]*font-style:\s*normal;[^}]*font-weight:\s*100 900;[^}]*font-stretch:\s*100%;[^}]*font-display:\s*swap;/s.test(fontFaces[0])) {
+  throw new Error("Archivo must have one normal-width variable font face");
+}
+const archivoStack = '"Archivo", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+if (!stylesCss.includes(`--font: ${archivoStack};`) || !stylesCss.includes(`--font-display: ${archivoStack};`)) {
+  throw new Error("normal and display font tokens must resolve to Archivo");
+}
+if (!stylesCss.includes("--font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;") ||
+    !stylesCss.includes(".mono { font-family: var(--font-mono); }")) {
+  throw new Error("technical monospace typography must remain unchanged");
+}
+const ordinaryUiCss = stylesCss.replace(fontFaces[0], "");
+if (/font-weight:\s*900\b/.test(ordinaryUiCss) ||
+    !/body\s*{[^}]*font-weight:\s*400\b/s.test(ordinaryUiCss) ||
+    !/button\s*{[^}]*font-weight:\s*600\b/s.test(ordinaryUiCss) ||
+    !/input, select, textarea\s*{[^}]*font-weight:\s*600\b/s.test(ordinaryUiCss)) {
+  throw new Error("ordinary Archivo body and control weights must follow the readable hierarchy");
+}
+for (const selector of [".display", ".section-head h2", ".card h3", ".ph-id h1", ".session-row h3"]) {
+  const escapedSelector = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  if (!new RegExp(`${escapedSelector}\\s*{[^}]*font-weight:\\s*800\\b`, "s").test(ordinaryUiCss)) {
+    throw new Error(`ordinary Archivo heading must use weight 800: ${selector}`);
+  }
+}
+for (const selector of [".kicker", ".badge", ".btn", ".chip", ".admin-tabs a", ".admin-filter-chips button", ".admin-filters-clear"]) {
+  const escapedSelector = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  if (!new RegExp(`${escapedSelector}\\s*{[^}]*font-weight:\\s*700\\b`, "s").test(ordinaryUiCss)) {
+    throw new Error(`ordinary Archivo label/control must use weight 700: ${selector}`);
+  }
+}
+for (const contract of ["@font-face", "font-display: swap", ":focus-visible", "prefers-reduced-motion", "max-width: 420px"]) {
+  if (!stylesCss.includes(contract)) throw new Error(`missing accessibility CSS contract: ${contract}`);
+}
+if (!indexHtml.includes('class="skip-link"') || !indexHtml.includes('id="view"')) {
+  throw new Error("app shell must provide a skip link and main target");
+}
+if (viewsSource.includes('{ key: "admin", label: "Admin"')) {
+  throw new Error("Admin belongs in Profile, not bottom navigation");
+}
+if (viewsSource.includes('{ key: "notifications", label: "Notifications"')) {
+  throw new Error("Notifications belong in the top bar, not bottom navigation");
+}
+const notificationHost = '<a id="top-notifications" class="top-icon-button" href="#/notifications" hidden></a>';
+if (!indexHtml.includes(notificationHost) || indexHtml.indexOf(notificationHost) > indexHtml.indexOf('id="top-avatar"')) {
+  throw new Error("app shell must provide a visitor-hidden semantic notification link before the avatar");
+}
+for (const contract of [".top-icon-button", "width: 44px", "height: 44px", ".notification-badge", "env(safe-area-inset-top)"]) {
+  if (!stylesCss.includes(contract)) throw new Error(`missing notification bell CSS contract: ${contract}`);
+}
+console.log("ok  shared UI and accessibility foundation contracts");
+
 // --- localStorage shim ---
 const mem = new Map();
 globalThis.localStorage = {
@@ -123,6 +334,69 @@ globalThis.localStorage = {
 const store = await import("./js/store.js");
 const views = await import("./js/views.js");
 const data = await import("./js/data.js");
+
+const bellThree = views.notificationBellHTML?.(3, false) || "";
+const bellCapped = views.notificationBellHTML?.(120, true) || "";
+if (!bellThree.includes("<svg") || !bellThree.includes('class="notification-badge"') || !bellThree.includes(">3</span>")) {
+  throw new Error("notificationBellHTML must render the bell and unread badge");
+}
+if (!bellCapped.includes(">99+</span>") || /120/.test(bellCapped)) {
+  throw new Error("notificationBellHTML must visually cap unread counts at 99+");
+}
+if (views.notificationBellHTML?.(0, false).includes("notification-badge")) {
+  throw new Error("notificationBellHTML must omit the badge for zero unread notifications");
+}
+const visitorNav = views.navHTML("home", null);
+const signedNav = views.navHTML("home", { role: "member" });
+if (visitorNav.includes("#/notifications") || signedNav.includes("#/notifications") ||
+    visitorNav.includes("#/giving") || !signedNav.includes("#/giving") ||
+    (visitorNav.match(/<a /g) || []).length !== 4 || (signedNav.match(/<a /g) || []).length !== 5) {
+  throw new Error("bottom navigation must hide Giving from visitors and keep five signed-in product items");
+}
+
+const notificationNow = new Date("2026-08-05T06:40:00.000Z");
+const notificationHelperCases = [
+  [data.notificationRelativeTime?.("2026-08-05T06:39:45.000Z", notificationNow), "Just now"],
+  [data.notificationRelativeTime?.("2026-08-05T06:35:00.000Z", notificationNow), "5 minutes ago"],
+  [data.notificationRelativeTime?.("2026-08-05T04:40:00.000Z", notificationNow), "2 hours ago"],
+  [data.notificationRelativeTime?.("2026-08-04T06:40:00.000Z", notificationNow), "Yesterday"],
+];
+for (const [actual, expected] of notificationHelperCases) {
+  if (actual !== expected) throw new Error(`notificationRelativeTime: expected ${expected}, got ${actual}`);
+}
+if (!/5 Aug 2026, 2:32 PM HKT/.test(data.notificationHktTime?.("2026-08-05T06:32:00.000Z") || "")) {
+  throw new Error("notificationHktTime must format exact Asia/Hong_Kong time independently of host timezone");
+}
+for (const invalidTime of [undefined, "", "not-a-date"]) {
+  if (data.notificationRelativeTime?.(invalidTime, notificationNow) !== "" ||
+      data.notificationHktTime?.(invalidTime) !== "") {
+    throw new Error("Malformed notification timestamps must use a stable empty helper fallback");
+  }
+}
+const notificationCategoryCases = [
+  ["admin_application_submitted", "application"],
+  ["admin_application_approved", "decision"],
+  ["admin_application_declined", "decision"],
+  ["admin_role_promoted", "role"],
+  ["admin_role_demoted", "role"],
+  ["admin_membership_revoked", "role"],
+  ["giving_campaign_published", "club"],
+  ["welcome", "personal"],
+  [null, "personal"],
+  [{ malformed: true }, "personal"],
+];
+for (const [kind, expected] of notificationCategoryCases) {
+  const actual = data.notificationCategory?.(kind);
+  if (actual !== expected) throw new Error(`notificationCategory: expected ${expected}, got ${actual}`);
+}
+if (data.notificationDestination?.("admin_application_submitted") !== "#/admin/approvals" ||
+    data.notificationDestination?.(" admin_role_changed ") !== "#/admin/members" ||
+    data.notificationDestination?.("giving_campaign_published") !== "#/giving" ||
+    data.notificationDestination?.("welcome") !== "#/account" ||
+    data.notificationDestination?.(null) !== "#/account") {
+  throw new Error("notificationDestination must normalize kinds and preserve route semantics");
+}
+console.log("ok  deterministic notification helper contracts");
 
 let failures = 0;
 async function check(label, fn) {
@@ -257,8 +531,8 @@ const givingSensitiveCopy = [
   "Giving history",
   "Donation history",
 ];
-const visitorNav = views.navHTML("home", null);
-if (visitorNav.includes("#/giving")) {
+const givingVisitorNav = views.navHTML("home", null);
+if (givingVisitorNav.includes("#/giving")) {
   failures++;
   console.error("FAIL visitor navigation must hide Giving");
 } else console.log("ok  visitor navigation hides Giving");
@@ -447,8 +721,29 @@ if (!pendHtml.includes("Booking locked")) {
 store.demoSignIn("admin");
 const adminApprovalsOut = await views.viewAdmin("approvals");
 await check("admin approvals", () => adminApprovalsOut);
+for (const approvalContract of [
+  /Ready for review \(\d+\)/,
+  /Awaiting application \(\d+\)/,
+  /data-approval-card/,
+  /data-applicant-name/,
+  /class="decision-error" role="alert" hidden/,
+]) {
+  if (!approvalContract.test(adminApprovalsOut)) {
+    failures++;
+    console.error(`FAIL grouped Admin approvals missing ${approvalContract}`);
+  }
+}
+if (!stylesCss.includes(".applicant-awaiting") || !stylesCss.includes("flex-wrap: wrap")) {
+  failures++;
+  console.error("FAIL Admin approval actions must wrap and Awaiting cards need reduced emphasis");
+} else console.log("ok  grouped Admin approvals expose responsive decision UI");
 const adminActivitiesOut = await views.viewAdmin("activities");
 await check("admin activities", () => adminActivitiesOut);
+if (!/href="#\/admin\/activities" class="active" aria-current="page"/.test(adminActivitiesOut) ||
+    (adminActivitiesOut.match(/aria-current="page"/g) || []).length !== 1) {
+  failures++;
+  console.error("FAIL active Admin tab must expose one aria-current page");
+} else console.log("ok  active Admin tab exposes aria-current page");
 const adminMembersOut = await views.viewAdmin("members");
 await check("admin members", () => adminMembersOut);
 const adminGiving = views.viewGiving();
@@ -458,6 +753,62 @@ if (!views.navHTML("giving", store.currentUser()).includes("#/giving") ||
   failures++;
   console.error("FAIL Admin must retain the full Giving flow");
 } else console.log("ok  Admin retains the full Giving flow");
+if (/member-summary|Member status counts|data-change="member-(?:status|role)-filter"/.test(adminMembersOut)) {
+  failures++;
+  console.error("FAIL Admin members must omit redundant counts and native filter selects");
+}
+if ((adminMembersOut.match(/class="admin-filter-chips"/g) || []).length !== 2 ||
+    !/<fieldset class="admin-filter-group">[\s\S]*?<legend>Status<\/legend>/.test(adminMembersOut) ||
+    !/<fieldset class="admin-filter-group">[\s\S]*?<legend>Role<\/legend>/.test(adminMembersOut)) {
+  failures++;
+  console.error("FAIL Admin member chips must render as labeled semantic groups");
+}
+const chipCss = stylesCss.match(/\.admin-filter-chips \{[\s\S]*?\n\}/)?.[0] || "";
+const chipButtonCss = stylesCss.match(/\.admin-filter-chips button \{[\s\S]*?\n\}/)?.[0] || "";
+if (!/overflow-x:\s*auto/.test(chipCss) || !/gap:\s*8px/.test(chipCss) ||
+    !/min-height:\s*44px/.test(chipButtonCss) || !/white-space:\s*nowrap/.test(chipButtonCss) ||
+    !/button\[aria-pressed="true"\]/.test(stylesCss)) {
+  failures++;
+  console.error("FAIL Admin member chips need accessible Night Circuit sizing, overflow, and active styles");
+}
+for (const [key, options] of Object.entries({
+  status: [["all", "All"], ["approved", "Approved"], ["pending", "Pending"], ["declined", "Declined"]],
+  role: [["all", "All roles"], ["member", "Member"], ["admin", "Admin"], ["superadmin", "Super Admin"]],
+})) {
+  for (const [value, label] of options) {
+    const chip = new RegExp(`<button[^>]*data-action="admin-member-filter"[^>]*data-filter-key="${key}"[^>]*data-filter-value="${value}"[^>]*aria-pressed="${value === "all"}"[^>]*>${label}</button>`);
+    if (!chip.test(adminMembersOut)) {
+      failures++;
+      console.error(`FAIL Admin members missing ${key} chip ${label}`);
+    }
+  }
+}
+if (!/Search members/.test(adminMembersOut) || !/(?:Role changes are Super Admin only|Only a Super Admin can change roles)/.test(adminMembersOut) || /Clear filters/.test(adminMembersOut)) {
+  failures++;
+  console.error("FAIL default Admin member filters must preserve guidance/search and hide Clear filters");
+}
+views.adminMemberFilters.query = "tina";
+views.adminMemberFilters.status = "approved";
+views.adminMemberFilters.role = "admin";
+const filteredAdminMembers = await views.viewAdmin("members");
+if (!/data-action="admin-member-filters-clear"[^>]*>Clear filters</.test(filteredAdminMembers)) {
+  failures++;
+  console.error("FAIL active Admin member filters must show Clear filters");
+}
+if (!filteredAdminMembers.includes("Tina") || filteredAdminMembers.includes("CM Chui") || filteredAdminMembers.includes("Marco Santos")) {
+  failures++;
+  console.error("FAIL Admin member search/status/role filters must combine truthfully");
+} else console.log("ok  Admin member filters combine truthfully");
+views.adminMemberFilters.query = "nobody";
+const emptyAdminMembers = await views.viewAdmin("members");
+if (!/No members match[\s\S]*nobody[\s\S]*Approved[\s\S]*Admin/i.test(emptyAdminMembers)) {
+  failures++;
+  console.error("FAIL Admin member empty state must name active filters");
+} else console.log("ok  Admin member empty state names active filters");
+views.adminMemberFilters.query = "";
+views.adminMemberFilters.status = "all";
+views.adminMemberFilters.role = "all";
+
 await check("admin activity edit", () => views.viewAdminActivity("hyrox"));
 await check("admin activity new", () => views.viewAdminActivity("new"));
 const newApplicant = store.pendingApplicants().find((u) => u.email === "test@example.com");
@@ -1110,10 +1461,6 @@ store.resetDemo();
 // verify the live-mode HTML source exists in views.js and that the live
 // config evaluates correctly when imported fresh. The live render path
 // is verified manually against a deployed staging environment.
-import { readFileSync, existsSync } from "node:fs";
-import { dirname, resolve } from "node:path";
-const __dirname = dirname(fileURLToPath(import.meta.url));
-
 const _savedWindow = globalThis.window;
 globalThis.window = {
   SUPABASE_URL: "https://test.supabase.co",
@@ -1162,6 +1509,61 @@ if (!viewsSrc.includes("Signed in as")) {
 }
 
 const appSrc = readFileSync(resolve(__dirname, "js/app.js"), "utf8");
+const indexSrc = readFileSync(resolve(__dirname, "index.html"), "utf8");
+const stylesSrc = readFileSync(resolve(__dirname, "styles.css"), "utf8");
+const feedbackChecks = [
+  [indexSrc.includes('id="route-loader"') && indexSrc.includes('role="status"'), "semantic delayed route loader"],
+  [appSrc.includes("renderWithFeedback") && appSrc.includes('setAttribute("aria-busy", "true")'), "route busy wrapper"],
+  [appSrc.includes("withBusyControl") && appSrc.includes("const controlBusy = new WeakSet()"), "duplicate-safe busy control helper"],
+  [appSrc.includes("showFieldError") && appSrc.includes('alert.setAttribute("role", "alert")'), "alerting field-error helper"],
+  [appSrc.includes('field.setAttribute("aria-invalid", "true")') && appSrc.includes("field.focus()"), "invalid field semantics and focus"],
+  [appSrc.includes('document.addEventListener("input"'), "stale field-error clearing"],
+  [appSrc.includes('el.setAttribute("role", isErr ? "alert" : "status")'), "toast urgency semantics"],
+  [stylesSrc.includes(".route-loader"), "route loader styling"],
+];
+for (const [passed, label] of feedbackChecks) {
+  if (!passed) {
+    failures++;
+    console.error(`FAIL shared feedback missing ${label}`);
+  } else console.log(`ok  shared feedback has ${label}`);
+}
+const compactTypeContracts = [
+  [/\.bottom-nav a\s*\{[^}]*font-size:\s*([\d.]+)px/s, 11, "bottom navigation labels"],
+  [/\.field label\s*\{[^}]*font-size:\s*([\d.]+)px/s, 12, "form labels"],
+  [/\.session-row time small\s*\{[^}]*font-size:\s*([\d.]+)px/s, 12, "session time metadata"],
+  [/\.session-row \.spots\s*\{[^}]*font-size:\s*([\d.]+)px/s, 12, "session capacity metadata"],
+  [/\.day-cell\s*\{[^}]*font-size:\s*([\d.]+)px/s, 11, "schedule day labels"],
+  [/\.meta-grid small\s*\{[^}]*font-size:\s*([\d.]+)px/s, 12, "activity metadata labels"],
+  [/\.member-row \.who span\s*\{[^}]*font-size:\s*([\d.]+)px/s, 12, "member identity metadata"],
+];
+for (const [pattern, minimum, label] of compactTypeContracts) {
+  const size = Number(stylesSrc.match(pattern)?.[1]);
+  if (!size || size < minimum) {
+    failures++;
+    console.error(`FAIL ${label} must be at least ${minimum}px`);
+  } else console.log(`ok  ${label} meets the ${minimum}px minimum`);
+}
+if (!/\.route-loader\s*\{[^}]*top:\s*70px;[^}]*background:\s*var\(--surface-3\);/s.test(stylesSrc) ||
+    /\.route-loader\s*\{[^}]*(?:--top-h|--panel)/s.test(stylesSrc)) {
+  failures++;
+  console.error("FAIL route loader must use defined, visible position and background values");
+} else console.log("ok  route loader uses visible, defined position and background values");
+for (const label of ["Connecting…", "Signing out…", "Submitting…", "Saving…", "Confirming…", "Processing…"]) {
+  if (!appSrc.includes(label)) {
+    failures++;
+    console.error(`FAIL app.js missing exact busy label ${label}`);
+  }
+}
+for (const [html, fieldId, errorId] of [
+  [await views.viewAccount(), "signin-email", "signin-error"],
+  [localApplyHtml, "ap-donor", "apply-error"],
+  [views.viewCommunity("prayers"), "pr-text", "prayer-error"],
+]) {
+  if (!html.includes(`id="${fieldId}"`) || !html.includes(`id="${errorId}"`)) {
+    failures++;
+    console.error(`FAIL rendered form must pair #${fieldId} with #${errorId}`);
+  }
+}
 const signoutBlock = appSrc.match(/case "signout":([\s\S]*?)break;/);
 if (!signoutBlock || !signoutBlock[1].includes('location.hash = "#/account"')) {
   failures++;
@@ -1257,17 +1659,21 @@ if (viewsSrc.includes('["admin", "superadmin"]')) {
 } else {
   console.log("ok  views.js: admin role checks include super_admin");
 }
-if (!/NAV_FOR = \{[\s\S]*?notifications: "notifications"/.test(appSrc)) {
+if (!/NAV_FOR = \{[\s\S]*?notifications: ""/.test(appSrc)) {
   failures++;
-  console.error("FAIL app.js: NAV_FOR should map notifications -> notifications");
+  console.error("FAIL app.js: Notifications must not activate a bottom tab");
 } else {
-  console.log("ok  app.js: NAV_FOR maps notifications to its own tab");
+  console.log("ok  app.js: Notifications route leaves bottom tabs inactive");
 }
-if (!/arg === "users"\s*\?\s*await views\.viewAdminUsers\(\)/.test(appSrc)) {
+if (!/arg === "users"\s*\?\s*\{ redirect: "#\/admin\/members" \}/.test(appSrc)) {
   failures++;
-  console.error("FAIL app.js: #/admin/users should route to viewAdminUsers");
+  console.error("FAIL app.js: #/admin/users should redirect to canonical #/admin/members");
 } else {
-  console.log("ok  app.js: #/admin/users routes to viewAdminUsers");
+  console.log("ok  app.js: #/admin/users redirects to canonical Members tab");
+}
+if (viewsSrc.includes("viewAdminUsers") || /class="(?:row|avatar)"/.test(adminMembersOut)) {
+  failures++;
+  console.error("FAIL legacy Admin users row/avatar UI should be removed");
 }
 
 // --- Admin entry consistency, live profile editing, weekly encouragement ---
@@ -1279,9 +1685,9 @@ if (!/:\s*await views\.viewAdmin\(arg \|\| "approvals"\)/.test(appSrc)) {
 }
 if (viewsSrc.includes('href: "#/admin/users"')) {
   failures++;
-  console.error("FAIL views.js: Admin nav item should link to #/admin (the tabbed admin page)");
+  console.error("FAIL views.js: bottom navigation must not contain the legacy Admin users link");
 } else {
-  console.log("ok  views.js: Admin nav item links to #/admin");
+  console.log("ok  views.js: bottom navigation has no legacy Admin users link");
 }
 const storeSrc2 = readFileSync(resolve(__dirname, "js/store.js"), "utf8");
 if (!storeSrc2.includes("listApprovalCandidates")) {
@@ -1391,17 +1797,17 @@ if (!viewsSrc.includes("Application details unavailable")) {
 } else {
   console.log("ok  views.js: missing live applications render unavailable cards");
 }
-if (!/window\.addEventListener\("hashchange",[\s\S]*await render\(\)[\s\S]*toast\(/.test(appSrc)) {
+if (!/window\.addEventListener\("hashchange",[\s\S]*await renderWithFeedback\(\)[\s\S]*toast\(/.test(appSrc)) {
   failures++;
   console.error("FAIL app.js: hashchange should await render failures and toast them");
 } else {
   console.log("ok  app.js: hashchange awaits render failures and toasts them");
 }
-if (!/await render\(\);[\s\S]*await maybeRedirectToApply\(\);/.test(appSrc)) {
+if (!/await renderWithFeedback\(\);[\s\S]*await maybeRedirectToApply\(\);/.test(appSrc)) {
   failures++;
-  console.error("FAIL app.js: boot/auth flows should await render and maybeRedirectToApply");
+  console.error("FAIL app.js: boot/auth flows should await feedback-wrapped render and maybeRedirectToApply");
 } else {
-  console.log("ok  app.js: boot/auth flows await render and maybeRedirectToApply");
+  console.log("ok  app.js: boot/auth flows await feedback-wrapped render and maybeRedirectToApply");
 }
 if (!appSrc.includes('out = u && u.status === "approved" ? { redirect: "#/account" } : await views.viewApply();')) {
   failures++;
@@ -1441,6 +1847,138 @@ if (!adminDecisionSql.includes("'declined'") || !adminDecisionSql.includes("prof
   console.error("FAIL migrations: admin decisions must require a submitted application for the target profile");
 } else {
   console.log("ok  migration limits approve and decline decisions to submitted applications");
+}
+
+const adminNotificationsPath = resolve(
+  __dirname,
+  "../supabase/migrations/20260805000008_admin_operational_notifications.sql"
+);
+const adminNotificationsSql = existsSync(adminNotificationsPath)
+  ? readFileSync(adminNotificationsPath, "utf8")
+  : "";
+let adminNotificationsOk = true;
+const failAdminNotifications = message => {
+  failures++;
+  adminNotificationsOk = false;
+  console.error(`FAIL ${message}`);
+};
+const submissionFunction = adminNotificationsSql.match(
+  /create or replace function public\.notify_admins_application_submitted\(\)[\s\S]*?\n\$\$;/
+)?.[0] || "";
+const roleChangeFunction = adminNotificationsSql.match(
+  /create or replace function public\.record_role_change\(\)[\s\S]*?\n\$\$;/
+)?.[0] || "";
+
+if (!submissionFunction || !roleChangeFunction) {
+  failAdminNotifications("Admin notification SQL must contain both complete trigger function bodies");
+}
+for (const [functionName, functionSql] of [
+  ["application submission", submissionFunction],
+  ["role change", roleChangeFunction],
+]) {
+  if (!functionSql.includes("security definer") || !functionSql.includes("set search_path = public")) {
+    failAdminNotifications(`${functionName} notification function must own trusted writes with a fixed search path`);
+  }
+  if (!functionSql.includes("role in ('admin', 'super_admin')")) {
+    failAdminNotifications(`${functionName} notification function must fan out to current Admins and Super Admins`);
+  }
+}
+
+if (
+  !submissionFunction.includes("if TG_OP = 'INSERT' then") ||
+  !submissionFunction.includes("should_notify := NEW.submitted_at is not null;") ||
+  !submissionFunction.includes("elsif TG_OP = 'UPDATE' then") ||
+  !submissionFunction.includes("should_notify := OLD.submitted_at is null and NEW.submitted_at is not null;") ||
+  !submissionFunction.includes("'admin_application_submitted'") ||
+  !submissionFunction.includes("'Membership application submitted'") ||
+  !submissionFunction.includes("applicant_name || ' submitted a membership application.'")
+) {
+  failAdminNotifications("application notifications must use the exact first-submission event and copy");
+}
+if (
+  !adminNotificationsSql.includes("drop trigger if exists applications_notify_admins_submitted on public.applications;") ||
+  !adminNotificationsSql.includes("after insert or update of submitted_at on public.applications") ||
+  /create\s+trigger[^;]*\bon\s+public\.profiles\b/i.test(adminNotificationsSql) ||
+  submissionFunction.includes("TG_TABLE_NAME")
+) {
+  failAdminNotifications("Admin submission notifications must come only from the rerunnable applications trigger, not profile bootstrap");
+}
+
+const roleClassification = roleChangeFunction.match(/event_kind := case[\s\S]*?\n    end;/)?.[0]
+  .replace(/\s+/g, " ")
+  .trim() || "";
+const exactRoleClassification = [
+  "event_kind := case",
+  "when OLD.role = 'pending' and NEW.role = 'member' then 'admin_application_approved'",
+  "when OLD.role = 'pending' and NEW.role = 'declined' then 'admin_application_declined'",
+  "when OLD.role = 'member' and NEW.role = 'admin' then 'admin_role_promoted'",
+  "when OLD.role = 'admin' and NEW.role = 'member' then 'admin_role_demoted'",
+  "when OLD.role in ('member', 'admin') and NEW.role = 'pending' then 'admin_membership_revoked'",
+  "else null end;",
+].join(" ");
+if (roleClassification !== exactRoleClassification) {
+  failAdminNotifications("role notification function must classify exactly the five supported transitions");
+}
+for (const eventContract of [
+  "event_title := 'Application approved';\n          event_body := target_name || ' was approved by ' || actor_name || '.';",
+  "event_title := 'Application declined';\n          event_body := target_name || ' was declined by ' || actor_name || '.';",
+  "event_title := 'Member promoted';\n          event_body := actor_name || ' promoted ' || target_name || ' from Member to Admin.';",
+  "event_title := 'Admin demoted';\n          event_body := actor_name || ' changed ' || target_name || ' from Admin to Member.';",
+  "event_title := 'Membership revoked';\n          event_body := actor_name || ' revoked ' || target_name || '’s member access.';",
+]) {
+  if (!roleChangeFunction.includes(eventContract)) {
+    failAdminNotifications(`role notification function is missing exact event copy: ${eventContract.split(";")[0]}`);
+  }
+}
+
+const actorLookup = "select id, coalesce(nullif(full_name, ''), email, 'An administrator')\n      into actor_profile_id, actor_name\n      from public.profiles\n     where id = auth.uid();";
+if (
+  !roleChangeFunction.includes("actor_profile_id uuid;") ||
+  !roleChangeFunction.includes(actorLookup) ||
+  !roleChangeFunction.includes("actor_name := coalesce(actor_name, 'An administrator');") ||
+  !roleChangeFunction.includes("values (NEW.id, actor_profile_id, OLD.role, NEW.role);") ||
+  roleChangeFunction.includes("values (NEW.id, auth.uid(), OLD.role, NEW.role)") ||
+  roleChangeFunction.indexOf(actorLookup) > roleChangeFunction.indexOf("insert into public.role_changes")
+) {
+  failAdminNotifications("role audit must resolve one nullable actor profile ID before insert and derive actor copy from that lookup");
+}
+if (
+  !roleChangeFunction.includes("insert into public.role_changes (profile_id, changed_by, old_role, new_role)") ||
+  !roleChangeFunction.includes("if NEW.role = 'member' then") ||
+  !roleChangeFunction.includes("'welcome'")
+) {
+  failAdminNotifications("role notification function must preserve audit and member welcome writes inside its body");
+}
+if (adminNotificationsOk) {
+  console.log("ok  migration creates trusted, transition-specific Admin notifications with nullable matched actors");
+}
+
+const notificationPrivilegesPath = resolve(
+  __dirname,
+  "../supabase/migrations/20260805000009_notification_read_at_privileges.sql"
+);
+const notificationPrivilegesSql = existsSync(notificationPrivilegesPath)
+  ? readFileSync(notificationPrivilegesPath, "utf8")
+  : "";
+for (const [contract, label] of [
+  [/revoke update on table public\.notifications from anon, authenticated;/i,
+    "revokes broad browser UPDATE privileges"],
+  [/grant update \(read_at\) on table public\.notifications to authenticated;/i,
+    "grants authenticated clients only the read marker column"],
+]) {
+  if (!contract.test(notificationPrivilegesSql)) {
+    failures++;
+    console.error(`FAIL notification privileges migration ${label}`);
+  } else console.log(`ok  notification privileges migration ${label}`);
+}
+if (
+  /grant update(?:\s*\([^)]*\))? on table public\.notifications to anon/i.test(notificationPrivilegesSql) ||
+  /grant update on table public\.notifications to authenticated/i.test(notificationPrivilegesSql)
+) {
+  failures++;
+  console.error("FAIL notification privileges migration must not restore broad browser UPDATE");
+} else {
+  console.log("ok  notification privileges migration retains self-row RLS without broad UPDATE grants");
 }
 
 // --- store.getCurrentUser fallback (local mode) ---
@@ -1489,19 +2027,9 @@ if (cfg.config.url !== null || cfg.config.anonKey !== null) {
   console.log("ok  config: url/anonKey are null when window env vars unset");
 }
 
-// --- viewAdminUsers smoke (source-only) ---
-// viewAdminUsers depends on store.getCurrentUser / listProfiles /
-// listRoleChanges, which talk to Supabase in live mode. ES module exports
-// are read-only and cannot be stubbed. We verify the function exists in
-// views.js and that the helper functions are exported from store.js; the
-// actual render path is verified manually on a deployed staging
-// environment.
-if (!viewsSrc.includes("export async function viewAdminUsers")) {
-  failures++;
-  console.error("FAIL views.js: should export viewAdminUsers");
-} else {
-  console.log("ok  views.js: exports viewAdminUsers");
-}
+// --- Supabase admin store seams (source-only) ---
+// The canonical Members tab exercises listProfiles and updateProfileRole in
+// the live smoke; retain the role-audit seam for database compatibility.
 const storeSrc = readFileSync(resolve(__dirname, "js/store.js"), "utf8");
 for (const fn of ["listProfiles", "listRoleChanges", "updateProfileRole"]) {
   if (!storeSrc.includes(`export async function ${fn}`)) {
@@ -1533,6 +2061,33 @@ for (const fn of ["listMyNotifications", "markNotificationRead"]) {
     console.log(`ok  store.js: exports ${fn}`);
   }
 }
+const markReadStoreBlock = storeSrc.match(
+  /export async function markNotificationRead\(id\) \{([\s\S]*?)\n\}/
+)?.[1] || "";
+for (const [contract, label] of [
+  [/\.eq\("id", id\)[\s\S]*?\.is\("read_at", null\)/, "targets one unread notification"],
+  [/\.select\("id, read_at"\)[\s\S]*?\.single\(\)/, "requires one returned update row"],
+  [/if \(!data\?\.id\) throw new Error\("Notification update conflict\."\)/, "rejects zero-row conflicts"],
+  [/return data;/, "returns the confirmed update"],
+]) {
+  if (!contract.test(markReadStoreBlock)) {
+    failures++;
+    console.error(`FAIL markNotificationRead ${label}`);
+  } else console.log(`ok  markNotificationRead ${label}`);
+}
+const notificationOpenBlock = appSrc.match(/case "notification-open": \{([\s\S]*?)\n    \}/)?.[1] || "";
+for (const [contract, label] of [
+  [/dataset\.notificationRead !== "true"/, "skips writes for already-read rows"],
+  [/await withBusyControl[\s\S]*?location\.hash = destination/, "waits for update before navigation"],
+  [/withBusyControl[\s\S]*?replaceLabel: false[\s\S]*?announceWithoutReplacing: true/, "uses row-safe duplicate protection"],
+  [/toast\("Failed to mark notification read", true\)/, "reports an accessible generic error"],
+  [/location\.hash = destination;[\s\S]*?break;/, "delegates destination rendering to hashchange"],
+]) {
+  if (!contract.test(notificationOpenBlock)) {
+    failures++;
+    console.error(`FAIL notification-open ${label}`);
+  } else console.log(`ok  notification-open ${label}`);
+}
 
 if (!viewsSrc.includes("export async function viewApplyLive")) {
   failures++;
@@ -1558,18 +2113,196 @@ if (!viewsSrc.includes("export async function viewNotifications")) {
 } else {
   console.log("ok  views.js: exports viewNotifications");
 }
-if (!viewsSrc.includes("export async function unreadBadge")) {
+if (!viewsSrc.includes("export function notificationBellHTML")) {
   failures++;
-  console.error("FAIL views.js: should export unreadBadge");
+  console.error("FAIL views.js: should export notificationBellHTML");
 } else {
-  console.log("ok  views.js: exports unreadBadge");
+  console.log("ok  views.js: exports notificationBellHTML");
 }
-if (!viewsSrc.includes('#/notifications')) {
+if (!viewsSrc.includes("New notifications will appear here.")) {
   failures++;
-  console.error("FAIL views.js: should reference #/notifications");
+  console.error("FAIL views.js: an entirely empty inbox must explain where future notifications appear");
 } else {
-  console.log("ok  views.js: references #/notifications");
+  console.log("ok  views.js: entirely empty inbox has approved explanatory copy");
 }
+
+// --- Delegated local member-role behavior ---
+// Exercise app.js in local mode so stale events cannot produce false success,
+// successful changes use setRole(), and filter-only UI state stays in memory.
+store.resetDemo();
+store.demoSignIn("superadmin");
+const localDomListeners = new Map();
+const localWindowListeners = new Map();
+let localActiveElement = null;
+const makeLocalElement = () => ({
+  children: [],
+  className: "",
+  innerHTML: "",
+  textContent: "",
+  hidden: false,
+  disabled: false,
+  attributes: new Map(),
+  classList: { toggle() {} },
+  appendChild(child) { this.children.push(child); },
+  setAttribute(name, value) { this.attributes.set(name, String(value)); },
+  getAttribute(name) { return this.attributes.get(name) ?? null; },
+  hasAttribute(name) { return this.attributes.has(name); },
+  removeAttribute(name) { this.attributes.delete(name); },
+  focus() { localActiveElement = this; },
+  remove() {},
+  querySelector() { return null; },
+});
+const localElements = new Map([
+  ["view", makeLocalElement()],
+  ["bottom-nav", makeLocalElement()],
+  ["top-notifications", makeLocalElement()],
+  ["top-avatar", makeLocalElement()],
+  ["toast-stack", makeLocalElement()],
+  ["route-loader", makeLocalElement()],
+]);
+localElements.get("route-loader").hidden = true;
+globalThis.document = {
+  get activeElement() { return localActiveElement; },
+  getElementById: (id) => localElements.get(id),
+  createElement: () => makeLocalElement(),
+  addEventListener: (event, callback) => localDomListeners.set(event, callback),
+};
+globalThis.HTMLInputElement = class {};
+globalThis.location = { hash: "#/admin/members" };
+globalThis.window = {
+  location: globalThis.location,
+  confirm: () => true,
+  addEventListener: (event, callback) => localWindowListeners.set(event, callback),
+  scrollTo() {},
+};
+const realSetTimeout = globalThis.setTimeout;
+const realClearTimeout = globalThis.clearTimeout;
+globalThis.setTimeout = () => 1;
+globalThis.clearTimeout = () => {};
+const localApp = await import("./js/app.js?local-admin-delegation");
+await localApp.bootPromise;
+const localClick = localDomListeners.get("click");
+const localChange = localDomListeners.get("change");
+const localInput = localDomListeners.get("input");
+const localToasts = localElements.get("toast-stack");
+const localToastText = () => localToasts.children.map((item) => item.textContent);
+const clearLocalToasts = () => { localToasts.children.length = 0; };
+const localControl = (dataset, value = "") => {
+  const control = makeLocalElement();
+  control.tagName = dataset.change === "set-role" ? "SELECT" : "BUTTON";
+  control.dataset = dataset;
+  control.value = value;
+  control.closest = () => control;
+  return control;
+};
+
+const staleLocalRole = localControl({
+  change: "set-role",
+  user: "removed-member",
+  memberName: "Removed Member",
+  currentRole: "member",
+}, "admin");
+await localChange({ target: staleLocalRole });
+if (staleLocalRole.value !== "member" || staleLocalRole.disabled || staleLocalRole.hasAttribute("aria-busy") ||
+    localToastText().join("|") !== "Member not found." || localToastText().some((text) => /is now/.test(text))) {
+  failures++;
+  console.error("FAIL stale local role event must restore its select without a success toast");
+} else console.log("ok  stale local role event restores without false success");
+
+clearLocalToasts();
+const rejectedLocalRevoke = localControl({
+  action: "revoke-member",
+  user: "u-pend-1",
+  memberName: "Marco Santos",
+});
+rejectedLocalRevoke.textContent = "Revoke access";
+await localClick({ target: rejectedLocalRevoke });
+if (rejectedLocalRevoke.textContent !== "Revoke access" || rejectedLocalRevoke.disabled ||
+    rejectedLocalRevoke.hasAttribute("aria-busy") ||
+    localToastText().join("|") !== "Only approved members can change roles." ||
+    localToastText().some((text) => /moved to Pending/.test(text))) {
+  failures++;
+  console.error("FAIL rejected local revoke must restore its button without a success toast");
+} else console.log("ok  rejected local revoke restores without false success");
+
+clearLocalToasts();
+const localDemotion = localControl({
+  change: "set-role",
+  user: "u-admin",
+  memberName: "Tina",
+  currentRole: "admin",
+}, "member");
+await localChange({ target: localDemotion });
+if (store.allUsers().find((user) => user.id === "u-admin")?.role !== "member" ||
+    localToastText().join("|") !== "Tina is now Member.") {
+  failures++;
+  console.error("FAIL delegated local demotion must mutate through setRole and toast success");
+} else console.log("ok  delegated local demotion confirms setRole success");
+
+clearLocalToasts();
+const localRevoke = localControl({ action: "revoke-member", user: "u-member", memberName: "CM Chui" });
+localRevoke.textContent = "Revoke access";
+await localClick({ target: localRevoke });
+const revokedLocalUser = store.allUsers().find((user) => user.id === "u-member");
+if (revokedLocalUser?.role !== "pending" || revokedLocalUser?.status !== "pending" ||
+    localToastText().join("|") !== "CM Chui moved to Pending.") {
+  failures++;
+  console.error("FAIL delegated local revoke must confirm role and status mutation");
+} else console.log("ok  delegated local revoke confirms setRole success");
+
+const persistedBeforeFilters = mem.get("itc.prototype.v1");
+const searchFilter = localControl({ input: "member-search" }, "tina");
+searchFilter.getAttribute = () => null;
+searchFilter.selectionStart = 4;
+await localInput({ target: searchFilter });
+const statusFilter = localControl({ action: "admin-member-filter", filterKey: "status", filterValue: "approved" });
+localElements.set("member-filter-status-approved", statusFilter);
+await localClick({ target: statusFilter });
+const statusFocusRestored = localActiveElement === statusFilter;
+const roleFilter = localControl({ action: "admin-member-filter", filterKey: "role", filterValue: "admin" });
+localElements.set("member-filter-role-admin", roleFilter);
+await localClick({ target: roleFilter });
+if (mem.get("itc.prototype.v1") !== persistedBeforeFilters ||
+    views.adminMemberFilters.query !== "tina" || views.adminMemberFilters.status !== "approved" ||
+    views.adminMemberFilters.role !== "admin") {
+  failures++;
+  console.error("FAIL delegated member filters must remain in memory and avoid localStorage writes");
+} else console.log("ok  delegated member filters do not persist");
+if (!statusFocusRestored || localActiveElement !== roleFilter) {
+  failures++;
+  console.error("FAIL status and role chips must restore corresponding focus after rerender");
+} else console.log("ok  status and role chips restore corresponding focus after rerender");
+const resetSearch = localControl({ input: "member-search" });
+localElements.set("member-search", resetSearch);
+const clearFilters = localControl({ action: "admin-member-filters-clear" });
+await localClick({ target: clearFilters });
+if (views.adminMemberFilters.query || views.adminMemberFilters.status !== "all" ||
+    views.adminMemberFilters.role !== "all" || localActiveElement !== resetSearch) {
+  failures++;
+  console.error("FAIL Clear filters must reset all view-local filters and focus search");
+} else console.log("ok  Clear filters resets all filters and focuses search");
+globalThis.setTimeout = realSetTimeout;
+globalThis.clearTimeout = realClearTimeout;
+
+// Direct callers receive checked failures for every rejected local transition.
+for (const [userId, role, message] of [
+  ["missing-user", "admin", "Member not found."],
+  ["u-pend-1", "admin", "Only approved members can change roles."],
+  ["u-admin", "owner", "Invalid role transition."],
+  ["u-admin", "member", "Member already has that role."],
+]) {
+  try {
+    store.setRole(userId, role);
+    failures++;
+    console.error(`FAIL setRole(${userId}, ${role}) should reject`);
+  } catch (err) {
+    if (err.message !== message) {
+      failures++;
+      console.error(`FAIL setRole(${userId}, ${role}) returned ${err.message}`);
+    }
+  }
+}
+console.log("ok  local setRole rejects missing, non-approved, and invalid transitions");
 
 // --- Reset ---
 store.resetDemo();
