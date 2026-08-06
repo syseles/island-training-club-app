@@ -807,7 +807,7 @@ document.addEventListener("submit", async (e) => {
       g.amount = amount;
       g.name = name;
       g.note = String(fd.get("note") || "").trim();
-      g.ref = `SCM27-${Math.random().toString(36).slice(2, 8).toUpperCase()}`;
+      g.ref = `GIVE-${Math.random().toString(36).slice(2, 8).toUpperCase()}`;
       render();
       break;
     }

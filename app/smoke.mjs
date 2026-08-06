@@ -119,6 +119,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const indexHtml = readFileSync(resolve(__dirname, "index.html"), "utf8");
 const stylesCss = readFileSync(resolve(__dirname, "styles.css"), "utf8");
 const viewsSource = readFileSync(resolve(__dirname, "js/views.js"), "utf8");
+const appSource = readFileSync(resolve(__dirname, "js/app.js"), "utf8");
 const dataSource = readFileSync(resolve(__dirname, "js/data.js"), "utf8");
 const storeSource = readFileSync(resolve(__dirname, "js/store.js"), "utf8");
 for (const path of [
@@ -312,6 +313,11 @@ if (/export\s+(?:const|function)\s+(?:GIVING_CAMPAIGN|seedDonations)\b/.test(dat
   failures++;
   console.error("FAIL Giving campaign constants and seed helpers must be removed");
 } else console.log("ok  Giving campaign constants and seed helpers are removed");
+if (/Standard Chartered/i.test(dataSource) || /SCM27/i.test(appSource) ||
+    !/g\.ref\s*=\s*`GIVE-/.test(appSource)) {
+  failures++;
+  console.error("FAIL Giving source must omit old campaign references and use the GIVE prefix");
+} else console.log("ok  Giving source is campaign-neutral");
 
 // --- Visitor state ---
 store.signOut();
@@ -406,6 +412,11 @@ await check("community > prayers", () => views.viewCommunity("prayers"));
 await check("community > fellowship", () => views.viewCommunity("fellowship"));
 await check("community > meals", () => views.viewCommunity("meals"));
 await check("community > announcements", () => views.viewCommunity("announcements"));
+const announcementsHtml = views.viewCommunity("announcements");
+if (/Standard Chartered|SCM27/i.test(announcementsHtml)) {
+  failures++;
+  console.error("FAIL fresh announcements must not render old Giving campaign references");
+} else console.log("ok  fresh announcements omit old Giving campaign references");
 await check("community > about", () => views.viewCommunity("about"));
 const commAbout = views.viewCommunity("about");
 if (!commAbout.includes("Arnold Wong") || !commAbout.includes("Our foundation")) {
