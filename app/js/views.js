@@ -553,22 +553,34 @@ function communityMeals() {
 }
 
 function communityAnnouncements() {
+  const announcement = ANNOUNCEMENTS[0];
+  if (!announcement) {
+    return `
+      <a class="back-link" href="#/community">← Community</a>
+      <div class="kicker mt16">Community · Announcements</div>
+      <h1 class="display sm">Announcements.</h1>
+      <div class="empty mt16">No announcements yet.</div>`;
+  }
   return `
     <a class="back-link" href="#/community">← Community</a>
-    <div class="kicker mt16">Community · Announcements</div>
-    <h1 class="display sm">Announcements.</h1>
-    <p class="subcopy mt8">News from the church and the community.</p>
-    <div class="stack mt16">
-      ${ANNOUNCEMENTS.map(
-        (a) => `
-        <div class="card"><div class="card-body">
-          <span class="kicker dim">${fmtDay(a.postedAt)}</span>
-          <h3 class="mt8">${esc(a.title)}</h3>
-          <p class="hero-meta">${esc(a.body)}</p>
-        </div></div>`
-      ).join("")}
-    </div>
-    <p class="muted small mt16">Draft announcements — real posts come from ITC leadership and IECC comms.</p>`;
+    <article class="anniversary-story">
+      <div class="kicker">${esc(fmtDay(announcement.postedAt))} · ITC Anniversary</div>
+      <h1 class="display sm">${esc(announcement.title)}.</h1>
+      <p class="subcopy mt8">${esc(announcement.lead)}</p>
+      <div class="anniversary-hero">
+        <strong aria-label="2 years">2<span>yrs</span></strong>
+        <div><h2>Look what God has built.</h2><p>One community, growing stronger together.</p></div>
+      </div>
+      <div class="milestone-grid">
+        ${announcement.milestones.map((item) => `
+          <div class="milestone">
+            <strong>${esc(item.value)}</strong>
+            <span>${esc(item.label)}</span>
+          </div>`).join("")}
+      </div>
+      <p class="anniversary-message">${esc(announcement.body)}</p>
+      <blockquote class="anniversary-commitment">${esc(announcement.commitment)}</blockquote>
+    </article>`;
 }
 
 export function viewAccount(section) {

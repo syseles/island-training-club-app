@@ -120,6 +120,44 @@ check("community > prayers", () => views.viewCommunity("prayers"));
 check("community > fellowship", () => views.viewCommunity("fellowship"));
 check("community > meals", () => views.viewCommunity("meals"));
 check("community > announcements", () => views.viewCommunity("announcements"));
+const announcementHtml = views.viewCommunity("announcements");
+for (const required of [
+  "Island Training Club turns 2",
+  "620",
+  "members strong",
+  "14",
+  "committed leaders",
+  "unwavering vision",
+  "clear mission",
+  "God who made this all possible",
+  "ITC Leadership and Coaching Team",
+  "fitness, friendship, community and faith",
+]) {
+  if (!announcementHtml.includes(required)) {
+    failures++;
+    console.error(`FAIL anniversary story missing ${required}`);
+  }
+}
+for (const removed of [
+  "Sunday service at IECC",
+  "New Wednesday venue being scouted",
+  "Marathon fundraiser passes first milestone",
+]) {
+  if (announcementHtml.includes(removed)) {
+    failures++;
+    console.error(`FAIL announcements page still renders ${removed}`);
+  }
+}
+
+const savedAnnouncements = [...data.ANNOUNCEMENTS];
+data.ANNOUNCEMENTS.splice(0);
+const emptyCommunity = views.viewCommunity();
+const emptyAnnouncements = views.viewCommunity("announcements");
+data.ANNOUNCEMENTS.push(...savedAnnouncements);
+if (!emptyCommunity.includes("No announcements yet") || !emptyAnnouncements.includes("No announcements yet")) {
+  failures++;
+  console.error("FAIL Community announcement empty states should render safely");
+} else console.log("ok  Community announcement empty states render safely");
 check("community > about", () => views.viewCommunity("about"));
 const commAbout = views.viewCommunity("about");
 if (!commAbout.includes("Arnold Wong") || !commAbout.includes("Our foundation")) {
@@ -134,7 +172,7 @@ for (const [section, title] of [
   ["prayers", "Prayers."],
   ["fellowship", "Fellowship."],
   ["meals", "Ad-Hoc Meals."],
-  ["announcements", "Announcements."],
+  ["announcements", "Island Training Club turns 2."],
   ["about", "More than a workout."],
 ]) {
   if (!views.viewCommunity(section).includes(title)) {
