@@ -531,7 +531,17 @@ renderedUser.role = "member";
 const memberNotificationsHtml = await views.viewNotifications(notificationNow);
 assert.doesNotMatch(memberNotificationsHtml, /Club operations|Application &lt;submitted&gt;|Role changed/);
 assert.match(memberNotificationsHtml, /My notifications|Welcome to ITC/);
+const emptyMemberNotificationsHtml = await views.viewNotifications(notificationNow, []);
+assert.match(emptyMemberNotificationsHtml, /New notifications will appear here\./);
+assert.match(emptyMemberNotificationsHtml, /No personal notifications\./,
+  "Whole-inbox guidance must retain the member section empty state");
+assert.doesNotMatch(emptyMemberNotificationsHtml, /No Club operations notifications\./);
 renderedUser.role = "super_admin";
+const emptyAdminNotificationsHtml = await views.viewNotifications(notificationNow, []);
+assert.match(emptyAdminNotificationsHtml, /New notifications will appear here\./);
+assert.match(emptyAdminNotificationsHtml, /No Club operations notifications\./);
+assert.match(emptyAdminNotificationsHtml, /No personal notifications\./,
+  "Whole-inbox guidance must retain both Admin section empty states");
 const liveApplication = await store.getMyApplication();
 if (!liveApplication || liveApplication.waiver_accepted_at !== "2026-08-05T01:00:00.000Z") {
   throw new Error("waiver missing");
@@ -1115,6 +1125,7 @@ notificationControl.dataset = {
 };
 notificationControl.closest = () => notificationControl;
 const updatesBeforeOpen = notificationUpdates.length;
+const notificationHtmlBeforeOpen = viewEl.innerHTML;
 const markReadRender = domListeners.get("click")({ target: notificationControl });
 const duplicateOpen = domListeners.get("click")({ target: notificationControl });
 assert.equal(notificationUpdates.length, updatesBeforeOpen + 1, "double activation must send one update");
@@ -1130,6 +1141,9 @@ updateGate.resolve();
 await markReadRender;
 notificationUpdateGate = null;
 assert.equal(location.hash, "#/admin/approvals");
+assert.equal(viewEl.innerHTML, notificationHtmlBeforeOpen,
+  "notification activation must not explicitly render in addition to hashchange");
+await windowListeners.get("hashchange")();
 assert.match(viewEl.innerHTML, /Ready for review/);
 assert.equal(notificationBell.getAttribute("aria-label"), "Notifications, 1 unread");
 assert.equal(notificationControl.disabled, false);
@@ -1160,7 +1174,57 @@ const readOpen = domListeners.get("click")({ target: alreadyReadControl });
 assert.equal(location.hash, "#/admin/members", "read rows should navigate without waiting for a write");
 await readOpen;
 assert.equal(notificationUpdates.length, updatesBeforeReadOpen, "read rows must not update again");
+await windowListeners.get("hashchange")();
 assert.match(viewEl.innerHTML, /href="#\/admin\/members" class="active"/);
+
+// Destination failures use shared route feedback after mutation handling has
+// finished. They must never be misreported as mark-read failures, whether the
+// activated row started unread or read.
+for (const initiallyRead of [false, true]) {
+  location.hash = "#/notifications";
+  await windowListeners.get("hashchange")();
+  const retainedDestinationHtml = viewEl.innerHTML;
+  toastStack.children.length = 0;
+  const destinationFailure = new Error(initiallyRead
+    ? "Read notification destination unavailable"
+    : "Unread notification destination unavailable");
+  profileListError = destinationFailure;
+  const destinationControl = makeElement();
+  destinationControl.tagName = "BUTTON";
+  destinationControl.textContent = "Open operational notification";
+  destinationControl.dataset = {
+    action: "notification-open",
+    notificationId: initiallyRead ? "notification-admin-role" : "notification-destination-unread",
+    notificationRead: initiallyRead ? "true" : "false",
+    destination: "#/admin/members",
+  };
+  destinationControl.closest = () => destinationControl;
+  if (!initiallyRead) {
+    notificationRows.push({
+      id: "notification-destination-unread",
+      kind: "admin_role_promoted",
+      title: "Destination test",
+      body: "Destination failure fixture.",
+      created_at: "2026-08-05T06:39:30.000Z",
+      read_at: null,
+    });
+  }
+  const updatesBeforeDestinationFailure = notificationUpdates.length;
+  await domListeners.get("click")({ target: destinationControl });
+  assert.equal(location.hash, "#/admin/members");
+  assert.equal(notificationUpdates.length, updatesBeforeDestinationFailure + (initiallyRead ? 0 : 1));
+  await windowListeners.get("hashchange")();
+  assert.equal(viewEl.innerHTML, retainedDestinationHtml,
+    "A failed destination render must retain the last successful Notifications page");
+  assert.deepEqual(toastStack.children.map((item) => item.textContent), [destinationFailure.message]);
+  assert.equal(toastStack.children.some((item) => item.textContent === "Failed to mark notification read"), false);
+  if (!initiallyRead) {
+    assert.ok(notificationRows.find((row) => row.id === "notification-destination-unread")?.read_at,
+      "Unread destination failure must not roll back or misreport a successful mark-read");
+    notificationRows.splice(notificationRows.findIndex((row) => row.id === "notification-destination-unread"), 1);
+  }
+  profileListError = null;
+}
 
 // Update errors and zero-row conflicts retain the Notifications page, hash,
 // and unread count, recover the row, and expose one accessible generic error.

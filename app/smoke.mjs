@@ -1664,6 +1664,34 @@ if (adminNotificationsOk) {
   console.log("ok  migration creates trusted, transition-specific Admin notifications with nullable matched actors");
 }
 
+const notificationPrivilegesPath = resolve(
+  __dirname,
+  "../supabase/migrations/20260805000009_notification_read_at_privileges.sql"
+);
+const notificationPrivilegesSql = existsSync(notificationPrivilegesPath)
+  ? readFileSync(notificationPrivilegesPath, "utf8")
+  : "";
+for (const [contract, label] of [
+  [/revoke update on table public\.notifications from anon, authenticated;/i,
+    "revokes broad browser UPDATE privileges"],
+  [/grant update \(read_at\) on table public\.notifications to authenticated;/i,
+    "grants authenticated clients only the read marker column"],
+]) {
+  if (!contract.test(notificationPrivilegesSql)) {
+    failures++;
+    console.error(`FAIL notification privileges migration ${label}`);
+  } else console.log(`ok  notification privileges migration ${label}`);
+}
+if (
+  /grant update(?:\s*\([^)]*\))? on table public\.notifications to anon/i.test(notificationPrivilegesSql) ||
+  /grant update on table public\.notifications to authenticated/i.test(notificationPrivilegesSql)
+) {
+  failures++;
+  console.error("FAIL notification privileges migration must not restore broad browser UPDATE");
+} else {
+  console.log("ok  notification privileges migration retains self-row RLS without broad UPDATE grants");
+}
+
 // --- store.getCurrentUser fallback (local mode) ---
 store.signOut();
 const localUser = await store.getCurrentUser();
@@ -1761,9 +1789,10 @@ for (const [contract, label] of [
 const notificationOpenBlock = appSrc.match(/case "notification-open": \{([\s\S]*?)\n    \}/)?.[1] || "";
 for (const [contract, label] of [
   [/dataset\.notificationRead !== "true"/, "skips writes for already-read rows"],
-  [/await store\.markNotificationRead[\s\S]*?location\.hash = destination/, "waits for update before navigation"],
+  [/await withBusyControl[\s\S]*?location\.hash = destination/, "waits for update before navigation"],
   [/withBusyControl[\s\S]*?replaceLabel: false[\s\S]*?announceWithoutReplacing: true/, "uses row-safe duplicate protection"],
   [/toast\("Failed to mark notification read", true\)/, "reports an accessible generic error"],
+  [/location\.hash = destination;[\s\S]*?break;/, "delegates destination rendering to hashchange"],
 ]) {
   if (!contract.test(notificationOpenBlock)) {
     failures++;
@@ -1800,6 +1829,12 @@ if (!viewsSrc.includes("export function notificationBellHTML")) {
   console.error("FAIL views.js: should export notificationBellHTML");
 } else {
   console.log("ok  views.js: exports notificationBellHTML");
+}
+if (!viewsSrc.includes("New notifications will appear here.")) {
+  failures++;
+  console.error("FAIL views.js: an entirely empty inbox must explain where future notifications appear");
+} else {
+  console.log("ok  views.js: entirely empty inbox has approved explanatory copy");
 }
 
 // --- Delegated local member-role behavior ---

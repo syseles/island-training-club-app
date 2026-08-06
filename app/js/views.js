@@ -1660,11 +1660,16 @@ export async function viewNotifications(now = new Date(), prefetchedRows = null)
       </div>
     </section>`;
 
+  const wholeInboxEmpty = operational.length === 0 && personal.length === 0;
+
   return `
     <header class="notification-header">
       <p class="kicker">Inbox</p>
       <h1 class="display sm">Notifications</h1>
     </header>
+    ${wholeInboxEmpty
+      ? `<div class="empty notification-inbox-empty"><p>New notifications will appear here.</p></div>`
+      : ""}
     <div class="notification-sections">
       ${isAdminRole(user?.role)
         ? notificationSection("Club operations", operational, "No Club operations notifications.")

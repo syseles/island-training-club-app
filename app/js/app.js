@@ -462,17 +462,24 @@ document.addEventListener("click", async (e) => {
 
     case "notification-open": {
       const destination = el.dataset.destination || "#/account";
-      try {
-        await withBusyControl(el, "Opening…", async () => {
-          if (el.dataset.notificationRead !== "true") {
-            await store.markNotificationRead(el.dataset.notificationId);
-          }
-          location.hash = destination;
-          await renderWithFeedback();
-        }, { replaceLabel: false, announceWithoutReplacing: true });
-      } catch {
-        toast("Failed to mark notification read", true);
+      if (el.dataset.notificationRead !== "true") {
+        try {
+          await withBusyControl(
+            el,
+            "Opening…",
+            () => store.markNotificationRead(el.dataset.notificationId),
+            { replaceLabel: false, announceWithoutReplacing: true }
+          );
+        } catch {
+          toast("Failed to mark notification read", true);
+          break;
+        }
       }
+
+      // Let the single hashchange route path render and report destination
+      // failures. A successful mark-read must never be relabelled as failed
+      // because the destination itself could not load.
+      location.hash = destination;
       break;
     }
 
