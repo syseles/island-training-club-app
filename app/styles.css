@@ -1103,6 +1103,11 @@ a.profile-row:hover .pr-text strong { color: var(--accent); }
   box-shadow: 0 0 0 3px rgba(202, 255, 49, .12);
 }
 
+.notification-row:not(.unread) .notification-unread {
+  visibility: hidden;
+  box-shadow: none;
+}
+
 .notification-copy,
 .notification-time {
   min-width: 0;

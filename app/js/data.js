@@ -440,8 +440,19 @@ export function mapsUrl(session) {
 // Notifications — deterministic display helpers
 // ============================================================================
 
+const notificationDate = (value) => {
+  if (value == null || (typeof value === "string" && !value.trim())) return null;
+  const date = value instanceof Date ? value : new Date(value);
+  return Number.isFinite(date.getTime()) ? date : null;
+};
+
+const notificationKind = (kind) => typeof kind === "string" ? kind.trim() : "";
+
 export function notificationRelativeTime(value, now = new Date()) {
-  const seconds = Math.max(0, Math.floor((now - new Date(value)) / 1000));
+  const createdAt = notificationDate(value);
+  const currentTime = notificationDate(now);
+  if (!createdAt || !currentTime) return "";
+  const seconds = Math.max(0, Math.floor((currentTime - createdAt) / 1000));
   if (seconds < 60) return "Just now";
   const minutes = Math.floor(seconds / 60);
   if (minutes < 60) return `${minutes} minute${minutes === 1 ? "" : "s"} ago`;
@@ -453,6 +464,8 @@ export function notificationRelativeTime(value, now = new Date()) {
 }
 
 export function notificationHktTime(value) {
+  const date = notificationDate(value);
+  if (!date) return "";
   const formatted = new Intl.DateTimeFormat("en-HK", {
     timeZone: "Asia/Hong_Kong",
     day: "numeric",
@@ -461,13 +474,14 @@ export function notificationHktTime(value) {
     hour: "numeric",
     minute: "2-digit",
     hour12: true,
-  }).format(new Date(value));
+  }).format(date);
   return `${formatted.replace(/\b(am|pm)\b/i, (period) => period.toUpperCase())} HKT`;
 }
 
 export function notificationDestination(kind) {
-  if (kind === "admin_application_submitted") return "#/admin/approvals";
-  if (kind.startsWith("admin_")) return "#/admin/members";
+  const normalizedKind = notificationKind(kind);
+  if (normalizedKind === "admin_application_submitted") return "#/admin/approvals";
+  if (normalizedKind.startsWith("admin_")) return "#/admin/members";
   return "#/account";
 }
 

@@ -1618,26 +1618,31 @@ export function viewNotFound(msg = "Page not found.") {
 export async function viewNotifications(now = new Date()) {
   const user = store.currentUser();
   const rows = await store.listMyNotifications();
-  const operational = rows.filter((notification) => notification.kind.startsWith("admin_"));
-  const personal = rows.filter((notification) => !notification.kind.startsWith("admin_"));
+  const normalizedKind = (notification) =>
+    typeof notification?.kind === "string" ? notification.kind.trim() : "";
+  const operational = rows.filter((notification) => normalizedKind(notification).startsWith("admin_"));
+  const personal = rows.filter((notification) => !normalizedKind(notification).startsWith("admin_"));
 
   const notificationRow = (notification) => {
-    const unread = !notification.read_at;
+    const unread = !notification?.read_at;
+    const kind = normalizedKind(notification);
+    const relativeTime = notificationRelativeTime(notification?.created_at, now);
+    const exactTime = notificationHktTime(notification?.created_at);
+    const time = relativeTime && exactTime
+      ? `<span>${esc(relativeTime)}</span><span>${esc(exactTime)}</span>`
+      : `<span>Time unavailable</span>`;
     return `
       <button class="notification-row${unread ? " unread" : ""}" type="button"
         data-action="notification-open"
-        data-notification-id="${esc(notification.id)}"
+        data-notification-id="${esc(notification?.id)}"
         data-notification-read="${unread ? "false" : "true"}"
-        data-destination="${esc(notificationDestination(notification.kind))}">
-        ${unread ? `<span class="notification-unread" aria-label="Unread"></span>` : ""}
+        data-destination="${esc(notificationDestination(kind))}">
+        <span class="notification-unread" ${unread ? `aria-label="Unread"` : `aria-hidden="true"`}></span>
         <span class="notification-copy">
-          <strong>${esc(notification.title)}</strong>
-          <span>${esc(notification.body)}</span>
+          <strong>${esc(notification?.title)}</strong>
+          <span>${esc(notification?.body)}</span>
         </span>
-        <span class="notification-time">
-          <span>${esc(notificationRelativeTime(notification.created_at, now))}</span>
-          <span>${esc(notificationHktTime(notification.created_at))}</span>
-        </span>
+        <span class="notification-time">${time}</span>
       </button>`;
   };
 

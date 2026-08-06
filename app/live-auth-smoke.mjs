@@ -78,6 +78,14 @@ const notificationRows = [
     created_at: '2026-08-05T06:32:00.000Z',
     read_at: null,
   },
+  {
+    id: 'notification-malformed',
+    kind: null,
+    title: 'Imported notification',
+    body: 'This row has incomplete metadata.',
+    created_at: 'not-a-date',
+    read_at: '2026-08-05T06:39:00.000Z',
+  },
 ];
 const approvedProfiles = [
   {
@@ -427,11 +435,19 @@ if (store.currentUser().status !== "declined") {
 }
 profile.role = "super_admin";
 await store.getCurrentUser();
-const renderedUser = store.currentUser();
+let renderedUser = store.currentUser();
 if (!renderedUser || renderedUser.id !== authUser.id) {
   throw new Error("A fetched Supabase session was not available to synchronous views");
 }
 const notificationNow = new RealDate("2026-08-05T06:40:00.000Z");
+profile.role = "admin";
+await store.getCurrentUser();
+const ordinaryAdminNotificationsHtml = await views.viewNotifications(notificationNow);
+assert.match(ordinaryAdminNotificationsHtml, /Club operations|Application &lt;submitted&gt;/,
+  "Ordinary admins must receive operational notifications");
+profile.role = "super_admin";
+await store.getCurrentUser();
+renderedUser = store.currentUser();
 const adminNotificationsHtml = await views.viewNotifications(notificationNow);
 assert.match(adminNotificationsHtml, /<h1[^>]*>Notifications<\/h1>/);
 assert.match(adminNotificationsHtml, /<h2[^>]*>Club operations<\/h2>/);
@@ -445,12 +461,21 @@ assert.match(personalHtml, /Welcome to ITC/);
 assert.doesNotMatch(personalHtml, /Application &lt;submitted&gt;|Role changed/);
 assert.doesNotMatch(adminNotificationsHtml, /Application <submitted>|Riley & approve/,
   "Notification content must be HTML escaped");
-assert.equal((adminNotificationsHtml.match(/<button class="notification-row/g) || []).length, 3,
-  "Every notification row must be a semantic button");
+const notificationButtons = adminNotificationsHtml.match(/<button class="notification-row[\s\S]*?<\/button>/g) || [];
+assert.equal(notificationButtons.length, 4, "Every valid or malformed notification row must remain visible");
+for (const button of notificationButtons) {
+  assert.match(button, /<span class="notification-unread"/,
+    "Read and unread rows must have the same grid indicator structure");
+}
 assert.match(adminNotificationsHtml, /class="notification-row unread"[^>]*type="button"/);
-assert.match(adminNotificationsHtml, /class="notification-unread"[^>]*aria-label="Unread"/);
+assert.match(adminNotificationsHtml, /class="notification-row"[^>]*[\s\S]*?class="notification-unread" aria-hidden="true"/,
+  "Read rows must retain a hidden indicator placeholder");
+assert.match(adminNotificationsHtml, /class="notification-unread" aria-label="Unread"/);
 assert.match(adminNotificationsHtml, /5 minutes ago/);
 assert.match(adminNotificationsHtml, /5 Aug 2026, 2:32 PM HKT/);
+assert.match(personalHtml, /Imported notification[\s\S]*?Time unavailable/,
+  "Malformed metadata must fall back without dropping the row");
+assert.doesNotMatch(adminNotificationsHtml, /Invalid Date|NaN/);
 assert.match(operationsHtml, /data-destination="#\/admin\/approvals"/);
 assert.match(personalHtml, /data-destination="#\/account"/);
 renderedUser.role = "member";

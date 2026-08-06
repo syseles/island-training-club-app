@@ -173,10 +173,17 @@ for (const [actual, expected] of notificationHelperCases) {
 if (!/5 Aug 2026, 2:32 PM HKT/.test(data.notificationHktTime?.("2026-08-05T06:32:00.000Z") || "")) {
   throw new Error("notificationHktTime must format exact Asia/Hong_Kong time independently of host timezone");
 }
+for (const invalidTime of [undefined, "", "not-a-date"]) {
+  if (data.notificationRelativeTime?.(invalidTime, notificationNow) !== "" ||
+      data.notificationHktTime?.(invalidTime) !== "") {
+    throw new Error("Malformed notification timestamps must use a stable empty helper fallback");
+  }
+}
 if (data.notificationDestination?.("admin_application_submitted") !== "#/admin/approvals" ||
-    data.notificationDestination?.("admin_role_changed") !== "#/admin/members" ||
-    data.notificationDestination?.("welcome") !== "#/account") {
-  throw new Error("notificationDestination must preserve operational and member route semantics");
+    data.notificationDestination?.(" admin_role_changed ") !== "#/admin/members" ||
+    data.notificationDestination?.("welcome") !== "#/account" ||
+    data.notificationDestination?.(null) !== "#/account") {
+  throw new Error("notificationDestination must normalize kinds and preserve route semantics");
 }
 console.log("ok  deterministic notification helper contracts");
 
