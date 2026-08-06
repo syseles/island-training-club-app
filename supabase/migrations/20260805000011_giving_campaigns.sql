@@ -59,11 +59,13 @@ begin
   end if;
 
   if OLD.status = 'closed' then
-    if (NEW.title, NEW.description, NEW.goal_hkd, NEW.fps_id, NEW.fps_payee,
-        NEW.status, NEW.creator_profile_id, NEW.published_at, NEW.closed_at)
+    -- Every stored field except touch-managed updated_at is immutable. Keep
+    -- identity and creation/publication/closure timestamps covered explicitly.
+    if (NEW.id, NEW.title, NEW.description, NEW.goal_hkd, NEW.fps_id, NEW.fps_payee,
+        NEW.status, NEW.creator_profile_id, NEW.created_at, NEW.published_at, NEW.closed_at)
        is distinct from
-       (OLD.title, OLD.description, OLD.goal_hkd, OLD.fps_id, OLD.fps_payee,
-        OLD.status, OLD.creator_profile_id, OLD.published_at, OLD.closed_at) then
+       (OLD.id, OLD.title, OLD.description, OLD.goal_hkd, OLD.fps_id, OLD.fps_payee,
+        OLD.status, OLD.creator_profile_id, OLD.created_at, OLD.published_at, OLD.closed_at) then
       raise exception 'Closed Giving campaigns are immutable.' using errcode = '23514';
     end if;
     -- The touch trigger runs first by trigger-name order. Preserve the closed

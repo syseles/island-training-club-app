@@ -168,7 +168,8 @@ end;
 $$;
 
 -- Close is timestamped. Closed immutability and no republish reject every
--- meaningful Closed -> Closed edit and Closed -> Published transition.
+-- Closed -> Closed business/identity/timestamp edit and Closed -> Published
+-- transition; only trigger-managed updated_at behavior is exempt.
 set local role authenticated;
 select set_config('request.jwt.claim.sub', '41000000-0000-0000-0000-000000000002', true);
 update public.giving_campaigns set status = 'closed'
@@ -179,12 +180,28 @@ select pg_temp.assert_true(
      from public.giving_campaigns where id = '42000000-0000-0000-0000-000000000001'),
   'close timestamps are inconsistent'
 );
+set local role authenticated;
+select set_config('request.jwt.claim.sub', '41000000-0000-0000-0000-000000000002', true);
 do $$
 begin
   begin
     update public.giving_campaigns set title = 'Changed after close'
      where id = '42000000-0000-0000-0000-000000000001';
     raise exception 'closed immutability unexpectedly allowed an edit';
+  exception when check_violation then
+    null;
+  end;
+  begin
+    update public.giving_campaigns set created_at = created_at - interval '1 day'
+     where id = '42000000-0000-0000-0000-000000000001';
+    raise exception 'closed immutability unexpectedly allowed created_at mutation';
+  exception when check_violation then
+    null;
+  end;
+  begin
+    update public.giving_campaigns set id = '42000000-0000-0000-0000-000000000099'
+     where id = '42000000-0000-0000-0000-000000000001';
+    raise exception 'closed immutability unexpectedly allowed id mutation';
   exception when check_violation then
     null;
   end;
@@ -197,6 +214,7 @@ begin
   end;
 end;
 $$;
+reset role;
 
 -- The INSERT-Published first-publish guard also fans out once. Once that row
 -- closes, the one-open invariant permits a new Draft.

@@ -137,6 +137,7 @@ const givingSourceContracts = [
   [/create unique index giving_campaigns_one_published[\s\S]*?where\s*\(status\s*=\s*'published'\)/i, "one-published partial unique index"],
   [/create unique index giving_campaigns_one_open[\s\S]*?where\s*\(status\s+in\s*\('draft',\s*'published'\)\)/i, "one-open invariant"],
   [/old\.status\s*=\s*'draft'[\s\S]*?new\.status\s+in\s*\('draft',\s*'published'\)[\s\S]*?old\.status\s*=\s*'published'[\s\S]*?new\.status\s+in\s*\('published',\s*'closed'\)[\s\S]*?old\.status\s*=\s*'closed'[\s\S]*?new\.status\s*=\s*'closed'/i, "allowed transition matrix"],
+  [/\(new\.id,\s*new\.title,[\s\S]*?new\.created_at,\s*new\.published_at,\s*new\.closed_at\)[\s\S]*?is distinct from[\s\S]*?\(old\.id,\s*old\.title,[\s\S]*?old\.created_at,\s*old\.published_at,\s*old\.closed_at\)/i, "closed identity/business/timestamp immutability"],
   [/security definer[\s\S]*?set search_path\s*=\s*public/i, "hardened publication trigger function"],
   [/tg_op\s*=\s*'insert'[\s\S]*?new\.status\s*=\s*'published'[\s\S]*?old\.status\s*=\s*'draft'[\s\S]*?new\.status\s*=\s*'published'/i, "first-publication guard"],
   [/'giving_campaign_published'[\s\S]*?'New Giving campaign'[\s\S]*?'ITC published “'\s*\|\|\s*new\.title\s*\|\|\s*'”\.'/i, "exact publication notification copy"],
@@ -150,6 +151,14 @@ for (const [contract, label] of givingSourceContracts) {
 }
 if (/grant\s+delete|for\s+delete/i.test(givingMigrationSource)) {
   throw new Error("Giving campaigns must expose no browser DELETE grant or policy");
+}
+for (const contract of [
+  /update public\.giving_campaigns set created_at\s*=/i,
+  /update public\.giving_campaigns set id\s*=/i,
+]) {
+  if (!contract.test(givingIntegrationSource)) {
+    throw new Error("missing closed campaign identity/timestamp mutation regression");
+  }
 }
 for (const [source, label, contracts] of [
   [givingIntegrationSource, "integration SQL", ["audience fan-out", "duplicate suppression", "one-open invariant", "closed immutability", "member RLS", "pending RLS"]],
