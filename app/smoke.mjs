@@ -475,6 +475,41 @@ const adminActivitiesOut = await views.viewAdmin("activities");
 await check("admin activities", () => adminActivitiesOut);
 const adminMembersOut = await views.viewAdmin("members");
 await check("admin members", () => adminMembersOut);
+const adminStatusCounts = Object.fromEntries(["approved", "pending", "declined"].map((status) => [
+  status,
+  store.allUsers().filter((user) => user.status === status).length,
+]));
+for (const contract of [
+  new RegExp(`Approved[^\\d]*${adminStatusCounts.approved}`),
+  new RegExp(`Pending[^\\d]*${adminStatusCounts.pending}`),
+  new RegExp(`Declined[^\\d]*${adminStatusCounts.declined}`),
+  /Search members/,
+  />Super Admin</,
+  />Admin</,
+  />Member</,
+]) {
+  if (!contract.test(adminMembersOut)) {
+    failures++;
+    console.error(`FAIL Admin members missing ${contract}`);
+  }
+}
+views.adminMemberFilters.query = "tina";
+views.adminMemberFilters.status = "approved";
+views.adminMemberFilters.role = "admin";
+const filteredAdminMembers = await views.viewAdmin("members");
+if (!filteredAdminMembers.includes("Tina") || filteredAdminMembers.includes("CM Chui") || filteredAdminMembers.includes("Marco Santos")) {
+  failures++;
+  console.error("FAIL Admin member search/status/role filters must combine truthfully");
+} else console.log("ok  Admin member filters combine truthfully");
+views.adminMemberFilters.query = "nobody";
+const emptyAdminMembers = await views.viewAdmin("members");
+if (!/No members match[\s\S]*nobody[\s\S]*Approved[\s\S]*Admin/i.test(emptyAdminMembers)) {
+  failures++;
+  console.error("FAIL Admin member empty state must name active filters");
+} else console.log("ok  Admin member empty state names active filters");
+views.adminMemberFilters.query = "";
+views.adminMemberFilters.status = "all";
+views.adminMemberFilters.role = "all";
 await check("admin activity edit", () => views.viewAdminActivity("hyrox"));
 await check("admin activity new", () => views.viewAdminActivity("new"));
 const newApplicant = store.pendingApplicants().find((u) => u.email === "test@example.com");
@@ -1263,11 +1298,15 @@ if (!/NAV_FOR = \{[\s\S]*?notifications: "notifications"/.test(appSrc)) {
 } else {
   console.log("ok  app.js: NAV_FOR maps notifications to its own tab");
 }
-if (!/arg === "users"\s*\?\s*await views\.viewAdminUsers\(\)/.test(appSrc)) {
+if (!/arg === "users"\s*\?\s*\{ redirect: "#\/admin\/members" \}/.test(appSrc)) {
   failures++;
-  console.error("FAIL app.js: #/admin/users should route to viewAdminUsers");
+  console.error("FAIL app.js: #/admin/users should redirect to canonical #/admin/members");
 } else {
-  console.log("ok  app.js: #/admin/users routes to viewAdminUsers");
+  console.log("ok  app.js: #/admin/users redirects to canonical Members tab");
+}
+if (viewsSrc.includes("viewAdminUsers") || /class="(?:row|avatar)"/.test(adminMembersOut)) {
+  failures++;
+  console.error("FAIL legacy Admin users row/avatar UI should be removed");
 }
 
 // --- Admin entry consistency, live profile editing, weekly encouragement ---
@@ -1489,19 +1528,9 @@ if (cfg.config.url !== null || cfg.config.anonKey !== null) {
   console.log("ok  config: url/anonKey are null when window env vars unset");
 }
 
-// --- viewAdminUsers smoke (source-only) ---
-// viewAdminUsers depends on store.getCurrentUser / listProfiles /
-// listRoleChanges, which talk to Supabase in live mode. ES module exports
-// are read-only and cannot be stubbed. We verify the function exists in
-// views.js and that the helper functions are exported from store.js; the
-// actual render path is verified manually on a deployed staging
-// environment.
-if (!viewsSrc.includes("export async function viewAdminUsers")) {
-  failures++;
-  console.error("FAIL views.js: should export viewAdminUsers");
-} else {
-  console.log("ok  views.js: exports viewAdminUsers");
-}
+// --- Supabase admin store seams (source-only) ---
+// The canonical Members tab exercises listProfiles and updateProfileRole in
+// the live smoke; retain the role-audit seam for database compatibility.
 const storeSrc = readFileSync(resolve(__dirname, "js/store.js"), "utf8");
 for (const fn of ["listProfiles", "listRoleChanges", "updateProfileRole"]) {
   if (!storeSrc.includes(`export async function ${fn}`)) {

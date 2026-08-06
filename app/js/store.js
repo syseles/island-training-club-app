@@ -707,6 +707,10 @@ export function setRole(userId, role) {
   const user = state.users.find((u) => u.id === userId);
   if (!user || user.status !== "approved") return;
   user.role = role;
+  // Revocation returns an approved local demo account to the same pending
+  // access state used by live profiles. Re-approval still goes through the
+  // existing application decision flow.
+  if (role === "pending") user.status = "pending";
   save();
 }
 

@@ -59,16 +59,17 @@ async function withBusyControl(control, busyLabel, work) {
   if (!control || controlBusy.has(control)) return;
   controlBusy.add(control);
   const label = control.textContent;
+  const canReplaceLabel = control.tagName !== "SELECT";
   control.disabled = true;
   control.setAttribute("aria-busy", "true");
-  control.textContent = busyLabel;
+  if (canReplaceLabel) control.textContent = busyLabel;
   try {
     return await work();
   } finally {
     controlBusy.delete(control);
     control.disabled = false;
     control.removeAttribute("aria-busy");
-    control.textContent = label;
+    if (canReplaceLabel) control.textContent = label;
   }
 }
 
@@ -199,14 +200,13 @@ async function render(generation = renderGeneration) {
       out = views.viewReceipt(arg);
       break;
     case "admin":
-      // The tabbed admin page (approvals / activities / members) is the
-      // canonical admin surface — Admin Tools and the Admin tab both land
-      // here. #/admin/users stays as the role-audit subpage.
+      // The tabbed admin page is canonical. Keep old bookmarks working by
+      // redirecting the removed users subpage to its Members replacement.
       out =
         arg === "activity"
           ? views.viewAdminActivity(arg2)
           : arg === "users"
-            ? await views.viewAdminUsers()
+            ? { redirect: "#/admin/members" }
             : await views.viewAdmin(arg || "approvals");
       break;
     case "notifications":
@@ -261,9 +261,17 @@ document.addEventListener("change", (e) => {
 });
 
 // Custom errors become stale as soon as the member edits that field.
-document.addEventListener("input", (e) => {
+document.addEventListener("input", async (e) => {
   const field = e.target;
   if (field?.getAttribute?.("aria-invalid") === "true") clearFieldError(field);
+  if (field?.dataset?.input === "member-search") {
+    views.adminMemberFilters.query = field.value;
+    const cursor = field.selectionStart;
+    await renderWithFeedback();
+    const nextSearch = document.getElementById("member-search");
+    nextSearch?.focus();
+    nextSearch?.setSelectionRange?.(cursor, cursor);
+  }
 });
 
 // --- ICS download -------------------------------------------------------------------
@@ -365,32 +373,20 @@ document.addEventListener("click", async (e) => {
       }
       break;
 
-    case "promote":
-    case "demote": {
-      const roleMap = { promote: "admin", demote: "member" };
-      const msgMap  = { promote: "Promoted to admin.", demote: "Demoted to member." };
-      const id = el.dataset.id;
+    case "revoke-member": {
+      const viewer = store.currentUser();
+      if (!viewer || !["superadmin", "super_admin"].includes(viewer.role) || viewer.id === el.dataset.user) break;
+      const name = el.dataset.memberName || "this member";
+      if (!window.confirm(`Revoke ${name}’s access and move them to Pending?`)) break;
       try {
-        await store.updateProfileRole(id, roleMap[action]);
-        toast(msgMap[action]);
-        await renderWithFeedback();
+        await withBusyControl(el, "Revoking…", async () => {
+          if (isLive()) await store.updateProfileRole(el.dataset.user, "pending");
+          else store.setRole(el.dataset.user, "pending");
+          await renderWithFeedback();
+          toast(`${name} moved to Pending.`);
+        });
       } catch (err) {
-        toast(err.message || "Action failed", true);
-      }
-      break;
-    }
-
-    case "revoke": {
-      const id = el.dataset.id;
-      const profile = await store.listProfiles().then((all) => all.find((p) => p.id === id));
-      const typed = window.prompt(`Type the user's email to confirm revocation: ${profile?.email || ""}`);
-      if (typed !== profile?.email) break;
-      try {
-        await store.updateProfileRole(id, "pending");
-        toast("Revoked.");
-        await renderWithFeedback();
-      } catch (err) {
-        toast(err.message || "Revoke failed", true);
+        toast(err.message || "Unable to revoke access", true);
       }
       break;
     }
@@ -724,11 +720,43 @@ document.addEventListener("change", async (e) => {
   if (!el) return;
 
   switch (el.dataset.change) {
-    case "set-role":
-      store.setRole(el.dataset.user, el.value);
-      toast(`Role updated to ${el.value}`);
+    case "member-status-filter":
+      views.adminMemberFilters.status = el.value;
       await renderWithFeedback();
       break;
+
+    case "member-role-filter":
+      views.adminMemberFilters.role = el.value;
+      await renderWithFeedback();
+      break;
+
+    case "set-role": {
+      const viewer = store.currentUser();
+      if (!viewer || !["superadmin", "super_admin"].includes(viewer.role) || viewer.id === el.dataset.user) break;
+      const labels = { member: "Member", admin: "Admin", superadmin: "Super Admin" };
+      const name = el.dataset.memberName || "this member";
+      const targetLabel = labels[el.value];
+      if (!window.confirm(`Change ${name}’s role to ${targetLabel}?`)) {
+        el.value = el.dataset.currentRole;
+        break;
+      }
+      try {
+        await withBusyControl(el, "Updating…", async () => {
+          if (isLive()) {
+            const liveRole = el.value === "superadmin" ? "super_admin" : el.value;
+            await store.updateProfileRole(el.dataset.user, liveRole);
+          } else {
+            store.setRole(el.dataset.user, el.value);
+          }
+          await renderWithFeedback();
+          toast(`${name} is now ${targetLabel}.`);
+        });
+      } catch (err) {
+        el.value = el.dataset.currentRole;
+        toast(err.message || "Unable to change role", true);
+      }
+      break;
+    }
 
     case "kind-toggle":
       form_kind_toggle(el);

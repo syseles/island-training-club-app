@@ -989,7 +989,37 @@ a.profile-row:hover .pr-text strong { color: var(--accent); }
   font-weight: 600;
 }
 
+.member-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.member-summary span {
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.member-summary strong { color: var(--ink); }
+
+.member-filters {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) 1fr 1fr;
+  gap: 10px;
+  align-items: end;
+}
+
 .role-select { width: auto; min-height: 44px; padding: 10px; font-size: 12px; }
+
+.member-role-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
 
 .member-row {
   display: flex;
@@ -1002,6 +1032,18 @@ a.profile-row:hover .pr-text strong { color: var(--accent); }
 
 .member-row .who strong { display: block; font-size: 13.5px; }
 .member-row .who span { font-size: 11px; color: var(--muted); }
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
 
 /* ---- Community -------------------------------------------------------- */
 
@@ -1129,7 +1171,9 @@ a.profile-row:hover .pr-text strong { color: var(--accent); }
 }
 
 @media (max-width: 420px) {
-  .field-row { grid-template-columns: 1fr; gap: 0; }
+  .field-row,
+  .member-filters { grid-template-columns: 1fr; gap: 0; }
   .booking-card .actions { flex-wrap: wrap; }
   .member-row { align-items: flex-start; flex-wrap: wrap; }
+  .member-role-actions { width: 100%; justify-content: space-between; }
 }

@@ -114,6 +114,14 @@ const ICONS = {
 const ADMIN_ROLES = ["admin", "superadmin", "super_admin"];
 const isAdminRole = (role) => ADMIN_ROLES.includes(role);
 const isSuperRole = (role) => ["superadmin", "super_admin"].includes(role);
+const normalizedRole = (role) => role === "super_admin" ? "superadmin" : role;
+const roleLabel = (role) => ({
+  member: "Member",
+  admin: "Admin",
+  superadmin: "Super Admin",
+}[normalizedRole(role)] || String(role || ""));
+
+export const adminMemberFilters = { query: "", status: "all", role: "all" };
 
 const NAV_ITEMS = [
   { key: "home", label: "Home", icon: "home", href: "#/home" },
@@ -1449,29 +1457,65 @@ function adminActivities() {
 
 function adminMembers(viewer, users) {
   const canEdit = isSuperRole(viewer.role);
+  const counts = {
+    approved: users.filter((u) => u.status === "approved").length,
+    pending: users.filter((u) => u.status === "pending").length,
+    declined: users.filter((u) => u.status === "declined").length,
+  };
+  const query = adminMemberFilters.query.trim().toLocaleLowerCase();
+  const filtered = users.filter((u) => {
+    const matchesQuery = !query || `${u.fullName || ""} ${u.email || ""}`.toLocaleLowerCase().includes(query);
+    const matchesStatus = adminMemberFilters.status === "all" || u.status === adminMemberFilters.status;
+    const matchesRole = adminMemberFilters.role === "all" || normalizedRole(u.role) === adminMemberFilters.role;
+    return matchesQuery && matchesStatus && matchesRole;
+  });
+  const option = (value, label, selected) =>
+    `<option value="${value}" ${selected === value ? "selected" : ""}>${label}</option>`;
+  const activeFilters = [
+    query ? `search “${esc(adminMemberFilters.query.trim())}”` : "",
+    adminMemberFilters.status !== "all" ? `status ${adminMemberFilters.status[0].toUpperCase()}${adminMemberFilters.status.slice(1)}` : "",
+    adminMemberFilters.role !== "all" ? `role ${roleLabel(adminMemberFilters.role)}` : "",
+  ].filter(Boolean).join(", ");
+  const rows = filtered.map((u) => {
+    const role = normalizedRole(u.role);
+    const roleBadge =
+      u.status === "pending"
+        ? '<span class="badge warn">Pending</span>'
+        : u.status === "declined"
+          ? '<span class="badge danger">Declined</span>'
+          : `<span class="badge ${role === "member" ? "free" : role === "admin" ? "paid" : "warn"}">${roleLabel(role)}</span>`;
+    const editor = canEdit && u.status === "approved" && u.id !== viewer.id
+      ? `<div class="member-role-actions">
+          <label class="sr-only" for="member-role-${esc(u.id)}">Role for ${esc(u.fullName)}</label>
+          <select id="member-role-${esc(u.id)}" class="role-select" data-change="set-role" data-user="${esc(u.id)}" data-member-name="${esc(u.fullName)}" data-current-role="${role}">
+            ${["member", "admin", "superadmin"].map((r) => option(r, roleLabel(r), role)).join("")}
+          </select>
+          <button class="btn danger sm" type="button" data-action="revoke-member" data-user="${esc(u.id)}" data-member-name="${esc(u.fullName)}">Revoke access</button>
+        </div>`
+      : roleBadge;
+    return `
+      <div class="member-row">
+        <div class="who"><strong>${esc(u.fullName)}</strong><span>${esc(u.email)}</span></div>
+        ${editor}
+      </div>`;
+  }).join("");
   return `
-    <p class="muted small mt16">${users.filter((u) => u.status === "approved").length} approved · ${users.filter((u) => u.status === "pending").length} pending. ${canEdit ? "Role changes are super-admin only." : "Only a super admin can change roles."}</p>
-    ${users
-      .map((u) => {
-        const roleBadge =
-          u.status === "pending"
-            ? '<span class="badge warn">Pending</span>'
-            : u.status === "declined"
-              ? '<span class="badge danger">Declined</span>'
-              : `<span class="badge ${u.role === "member" ? "free" : u.role === "admin" ? "paid" : "warn"}">${u.role}</span>`;
-        const editor =
-          canEdit && u.status === "approved" && u.id !== viewer.id
-            ? `<select class="role-select" data-change="set-role" data-user="${u.id}">
-                 ${["member", "admin", "superadmin"].map((r) => `<option value="${r}" ${u.role === r ? "selected" : ""}>${r}</option>`).join("")}
-               </select>`
-            : roleBadge;
-        return `
-          <div class="member-row">
-            <div class="who"><strong>${esc(u.fullName)}</strong><span>${esc(u.email)}</span></div>
-            ${editor}
-          </div>`;
-      })
-      .join("")}`;
+    <div class="member-summary mt16" aria-label="Member status counts">
+      <span><strong>Approved</strong> ${counts.approved}</span>
+      <span><strong>Pending</strong> ${counts.pending}</span>
+      <span><strong>Declined</strong> ${counts.declined}</span>
+    </div>
+    <p class="muted small mt8">${canEdit ? "Role changes are Super Admin only." : "Only a Super Admin can change roles."}</p>
+    <div class="member-filters" aria-label="Filter members">
+      <div class="field"><label for="member-search">Search members</label><input id="member-search" type="search" value="${esc(adminMemberFilters.query)}" placeholder="Name or email" data-input="member-search"></div>
+      <div class="field"><label for="member-status">Status</label><select id="member-status" data-change="member-status-filter">
+        ${option("all", "All statuses", adminMemberFilters.status)}${option("approved", "Approved", adminMemberFilters.status)}${option("pending", "Pending", adminMemberFilters.status)}${option("declined", "Declined", adminMemberFilters.status)}
+      </select></div>
+      <div class="field"><label for="member-role">Role</label><select id="member-role" data-change="member-role-filter">
+        ${option("all", "All roles", adminMemberFilters.role)}${option("member", "Member", adminMemberFilters.role)}${option("admin", "Admin", adminMemberFilters.role)}${option("superadmin", "Super Admin", adminMemberFilters.role)}
+      </select></div>
+    </div>
+    <div class="member-results">${rows || `<div class="empty">No members match${activeFilters ? ` ${activeFilters}` : " these filters"}.</div>`}</div>`;
 }
 
 export function viewAdminActivity(id) {
@@ -1593,100 +1637,4 @@ export async function unreadBadge() {
   const rows = await store.listMyNotifications();
   const n = rows.filter((r) => !r.read_at).length;
   return n > 0 ? `<span class="badge">${n}</span>` : "";
-}
-
-// --- Admin: users (live / Supabase) ------------------------------------------------------------
-
-export async function viewAdminUsers() {
-  if (!isLive()) {
-    // In local mode, fall back to the existing localStorage-backed admin
-    // view so the prototype continues to work for seed accounts.
-    return viewAdmin("approvals");
-  }
-  const cu = await store.getCurrentUser();
-  if (!cu || !["admin", "super_admin"].includes(cu.role)) {
-    return `<section class="card"><p class="muted">You don't have access to this page.</p></section>`;
-  }
-  const [profiles, audit] = await Promise.all([store.listProfiles(), store.listRoleChanges()]);
-  const latestByProfile = new Map();
-  for (const row of audit) {
-    if (!latestByProfile.has(row.profile_id)) latestByProfile.set(row.profile_id, row);
-  }
-  const pending = profiles.filter((p) => p.role === "pending");
-  const members = profiles.filter((p) => p.role !== "pending");
-  const counts = {
-    pending: pending.length,
-    member: profiles.filter((p) => p.role === "member").length,
-    admin: profiles.filter((p) => p.role === "admin").length,
-    super: profiles.filter((p) => p.role === "super_admin").length,
-  };
-  return `
-    <section class="card">
-      <p class="kicker">Admin</p>
-      <h2 class="display">Users</h2>
-      <p class="muted">${counts.pending} pending · ${counts.member} members · ${counts.admin} admins · ${counts.super} super admin</p>
-    </section>
-    ${adminPendingSection(pending, cu)}
-    ${adminMembersSection(members, cu, latestByProfile)}
-  `;
-}
-
-function adminPendingSection(rows, cu) {
-  if (rows.length === 0) {
-    return `<section class="card"><p class="muted">No pending applicants.</p></section>`;
-  }
-  return `
-    <section class="card">
-      <h3 class="section-head">Pending applicants</h3>
-      ${rows.map((p) => `
-        <div class="row" data-profile-id="${p.id}">
-          <img class="avatar" src="${p.avatar_url || ""}" alt="">
-          <div class="row-body">
-            <strong>${esc(p.full_name || p.email)}</strong>
-            <span class="muted">${esc(p.email)} · joined ${fmtDate(p.created_at)}</span>
-          </div>
-          ${cu.role === "admin" || cu.role === "super_admin"
-            ? `<button class="btn btn-primary" data-action="approve" data-user="${p.id}">Approve</button>`
-            : ""}
-        </div>
-      `).join("")}
-    </section>
-  `;
-}
-
-function adminMembersSection(rows, cu, latestByProfile) {
-  if (rows.length === 0) {
-    return `<section class="card"><p class="muted">No members yet.</p></section>`;
-  }
-  return `
-    <section class="card">
-      <h3 class="section-head">Members & admins</h3>
-      ${rows.map((p) => adminMemberRow(p, cu, latestByProfile.get(p.id))).join("")}
-    </section>
-  `;
-}
-
-function adminMemberRow(p, cu, lastChange) {
-  const isSelf = p.id === cu.id;
-  const actions = [];
-  if (!isSelf && cu.role === "super_admin") {
-    if (p.role === "member") actions.push(`<button class="btn" data-action="promote" data-id="${p.id}">Promote to admin</button>`);
-    if (p.role === "admin")  actions.push(`<button class="btn" data-action="demote"  data-id="${p.id}">Demote to member</button>`);
-    if (p.role !== "super_admin") actions.push(`<button class="btn btn-danger" data-action="revoke" data-id="${p.id}">Revoke</button>`);
-  }
-  const auditLine = lastChange
-    ? `<span class="muted">Last change: ${esc(lastChange.old_role)} → ${esc(lastChange.new_role)} on ${fmtDate(lastChange.created_at)}${lastChange.changed_by_profile ? ` by ${esc(lastChange.changed_by_profile.full_name || lastChange.changed_by_profile.email)}` : ""}${lastChange.reason ? ` — “${esc(lastChange.reason)}”` : ""}</span>`
-    : "";
-  return `
-    <div class="row" data-profile-id="${p.id}">
-      <img class="avatar" src="${p.avatar_url || ""}" alt="">
-      <div class="row-body">
-        <strong>${esc(p.full_name || p.email)}</strong>
-        <span class="muted">${esc(p.email)} · ${esc(p.role)} · joined ${fmtDate(p.created_at)}</span>
-        ${auditLine}
-        ${isSelf ? `<span class="muted">You can't change your own role.</span>` : ""}
-      </div>
-      <div class="row-actions">${actions.join("")}</div>
-    </div>
-  `;
 }

@@ -53,6 +53,22 @@ const applicationRows = new Map([
     },
   ],
 ]);
+const approvedProfiles = [
+  {
+    id: "approved-admin",
+    email: "tina.admin@example.com",
+    full_name: "Tina Admin",
+    role: "admin",
+    created_at: "2026-08-05T01:00:00.000Z",
+  },
+  {
+    id: "approved-member",
+    email: "micah.member@example.com",
+    full_name: "Micah Member",
+    role: "member",
+    created_at: "2026-08-05T02:00:00.000Z",
+  },
+];
 const pendingProfiles = [
   {
     id: "pending-submitted",
@@ -170,6 +186,7 @@ const fakeSupabase = {
               return Promise.resolve({
                 data: [
                   structuredClone(profile),
+                  ...structuredClone(approvedProfiles),
                   ...structuredClone(pendingProfiles),
                   ...structuredClone(declinedProfiles),
                 ],
@@ -195,7 +212,7 @@ const fakeSupabase = {
                   if (profileUpdateGate) await profileUpdateGate;
                   const target = targetId === profile.id
                     ? profile
-                    : pendingProfiles.find((item) => item.id === targetId);
+                    : [...approvedProfiles, ...pendingProfiles].find((item) => item.id === targetId);
                   profileUpdates.push({ id: targetId, expectedRole, ...structuredClone(patch) });
                   if (profileUpdateError) return { data: null, error: profileUpdateError };
                   if (profileUpdateResult === "zero" || !target || (expectedRole && target.role !== expectedRole)) {
@@ -320,9 +337,36 @@ for (const action of ["approve", "decline"]) {
     `Submitted ${action} must be enabled`);
 }
 const membersHtml = await views.viewAdmin("members");
+assert.match(membersHtml, /Approved[^\d]*3/);
+assert.match(membersHtml, /Pending[^\d]*2/);
+assert.match(membersHtml, /Declined[^\d]*1/);
 if (!/Declined Runner[\s\S]*badge danger">Declined</.test(membersHtml)) {
   throw new Error("Members must badge declined profiles as Declined");
 }
+assert.match(membersHtml, />Super Admin</);
+assert.match(membersHtml, />Admin</);
+assert.match(membersHtml, />Member</);
+assert.doesNotMatch(membersHtml, />super_?admin</i, "Raw role spellings must not appear as labels");
+assert.match(membersHtml, /Search members/);
+assert.match(membersHtml, /Status/);
+assert.match(membersHtml, /Role/);
+views.adminMemberFilters.query = "tina";
+views.adminMemberFilters.status = "approved";
+views.adminMemberFilters.role = "admin";
+const filteredMembersHtml = await views.viewAdmin("members");
+assert.match(filteredMembersHtml, /Tina Admin/);
+for (const excluded of ["Riley Runner", "Micah Member", "Submitted Runner", "Declined Runner"]) {
+  assert.doesNotMatch(filteredMembersHtml, new RegExp(excluded));
+}
+views.adminMemberFilters.query = "nobody";
+const noMembersHtml = await views.viewAdmin("members");
+assert.match(noMembersHtml, /No members match/i);
+assert.match(noMembersHtml, /nobody/i);
+assert.match(noMembersHtml, /Approved/);
+assert.match(noMembersHtml, /Admin/);
+views.adminMemberFilters.query = "";
+views.adminMemberFilters.status = "all";
+views.adminMemberFilters.role = "all";
 await store.decideApplication(submitted.id, "declined");
 if (!profileUpdates.some((update) =>
   update.id === submitted.id && update.role === "declined" && update.expectedRole === "pending"
@@ -843,6 +887,63 @@ for (const [errorType, setError] of [
 }
 
 const click = domListeners.get("click");
+const change = domListeners.get("change");
+
+// Legacy member-management URLs canonicalize instead of rendering the removed
+// row/avatar implementation.
+location.hash = "#/admin/users";
+await windowListeners.get("hashchange")();
+assert.equal(location.hash, "#/admin/members");
+assert.doesNotMatch(elements.get("view").innerHTML, /class="(?:row|avatar)"/);
+
+// Every role/access change names the member and target state before touching
+// the store. Cancelling leaves the profile untouched.
+const roleSelect = makeElement();
+roleSelect.dataset = { change: "set-role", user: "approved-member", memberName: "Micah Member" };
+roleSelect.value = "admin";
+roleSelect.closest = () => roleSelect;
+let confirmMessage = null;
+window.confirm = (message) => { confirmMessage = message; return false; };
+const updatesBeforeRoleCancel = profileUpdates.length;
+await change({ target: roleSelect });
+assert.equal(confirmMessage, "Change Micah Member’s role to Admin?");
+assert.equal(profileUpdates.length, updatesBeforeRoleCancel, "Cancelled promotion must not call the store");
+
+const demoteSelect = makeElement();
+demoteSelect.dataset = { change: "set-role", user: "approved-admin", memberName: "Tina Admin", currentRole: "admin" };
+demoteSelect.value = "member";
+demoteSelect.closest = () => demoteSelect;
+await change({ target: demoteSelect });
+assert.equal(confirmMessage, "Change Tina Admin’s role to Member?");
+assert.equal(profileUpdates.length, updatesBeforeRoleCancel, "Cancelled demotion must not call the store");
+
+const revokeControl = makeElement();
+revokeControl.textContent = "Revoke access";
+revokeControl.dataset = { action: "revoke-member", user: "approved-admin", memberName: "Tina Admin" };
+revokeControl.closest = () => revokeControl;
+await click({ target: revokeControl });
+assert.equal(confirmMessage, "Revoke Tina Admin’s access and move them to Pending?");
+assert.equal(profileUpdates.length, updatesBeforeRoleCancel, "Cancelled revoke must not call the store");
+
+window.confirm = () => true;
+const successfulRoleSelect = makeElement();
+successfulRoleSelect.tagName = "SELECT";
+successfulRoleSelect.dataset = { change: "set-role", user: "approved-member", memberName: "Micah Member", currentRole: "member" };
+successfulRoleSelect.value = "admin";
+successfulRoleSelect.closest = () => successfulRoleSelect;
+const roleGate = deferred();
+profileUpdateGate = roleGate.promise;
+const pendingRoleChange = change({ target: successfulRoleSelect });
+assert.equal(successfulRoleSelect.disabled, true);
+assert.equal(successfulRoleSelect.getAttribute("aria-busy"), "true");
+roleGate.resolve();
+await pendingRoleChange;
+profileUpdateGate = null;
+assert.equal(successfulRoleSelect.disabled, false);
+assert.equal(successfulRoleSelect.hasAttribute("aria-busy"), false);
+assert.ok(profileUpdates.some((update) => update.id === "approved-member" && update.role === "admin"));
+location.hash = "#/admin";
+await windowListeners.get("hashchange")();
 
 // Delegated async controls expose exact progress copy, suppress a duplicate
 // action, and recover without a success toast when the store rejects.
@@ -904,7 +1005,7 @@ const makeDecisionCard = (action) => {
   }
   return { card, approve, decline, error, target: action === "approve" ? approve : decline };
 };
-let confirmMessage = null;
+confirmMessage = null;
 window.confirm = (message) => { confirmMessage = message; return false; };
 const cancelledDecline = makeDecisionCard("decline");
 const updatesBeforeCancel = profileUpdates.length;
