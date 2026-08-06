@@ -11,7 +11,6 @@ import {
   LEADERS,
   CULTURE,
   ANNOUNCEMENTS,
-  GIVING_CAMPAIGN,
   findSession,
   sessionStarted,
   sessionsInRange,
@@ -487,13 +486,26 @@ export function viewGiving() {
   const user = store.currentUser();
   if (!user || user.status !== "approved") return givingLocked(user);
 
-  const raised = store.campaignRaised();
-  const goal = GIVING_CAMPAIGN.goalHKD;
-  const pct = Math.min(100, Math.round((raised / goal) * 100));
+  const campaign = store.activeGivingCampaign();
+  const gifts = store.donationsForUser(user.id);
+  if (!campaign) {
+    return `
+      <div class="kicker">Giving &amp; Fundraising</div>
+      <h1 class="display">Every step can give back.</h1>
+      <div class="card mt16"><div class="card-body">
+        <h3>No active campaign right now</h3>
+        <p class="hero-meta mt8">Check back soon for the next opportunity to support the ITC community.</p>
+      </div></div>
+      ${gifts.length ? `<div class="section-head"><h2>Giving history</h2></div>${givingHistory(gifts)}` : ""}`;
+  }
+
+  const raised = store.campaignRaised(campaign);
+  const goal = Number(campaign.goalHKD) || 0;
+  const pct = goal > 0 ? Math.min(100, Math.round((raised / goal) * 100)) : 0;
 
   const flow =
     givingState.step === 2
-      ? givingFpsStep()
+      ? givingFpsStep(campaign)
       : givingState.step === 3
         ? givingThanksStep()
         : givingAmountStep(user);
@@ -503,8 +515,8 @@ export function viewGiving() {
     <h1 class="display">Every step can give back.</h1>
     <div class="card mt16"><div class="card-body">
       <span class="kicker">Current campaign</span>
-      <h3 class="mt8">${esc(GIVING_CAMPAIGN.title)}</h3>
-      <p class="hero-meta">${esc(GIVING_CAMPAIGN.subtitle)}</p>
+      <h3 class="mt8">${esc(campaign.title)}</h3>
+      <p class="hero-meta">${esc(campaign.description)}</p>
       <div class="progress mt16"><i style="width:${pct}%"></i></div>
       <div class="progress-meta">
         <strong>${fmtMoney(raised)} raised</strong>
@@ -512,8 +524,7 @@ export function viewGiving() {
       </div>
     </div></div>
     ${flow}
-    <div class="section-head"><h2>Giving history</h2></div>
-    ${givingHistory(user)}`;
+    ${gifts.length ? `<div class="section-head"><h2>Giving history</h2></div>${givingHistory(gifts)}` : ""}`;
 }
 
 function givingAmountStep(user) {
@@ -549,15 +560,15 @@ function givingAmountStep(user) {
     </div></div>`;
 }
 
-function givingFpsStep() {
+function givingFpsStep(campaign) {
   return `
     <div class="card mt16"><div class="card-body">
       <span class="kicker">Step 2 · Complete the transfer</span>
       <h3 class="mt8">Pay ${fmtMoney(givingState.amount)} via FPS</h3>
       <div class="fps-qr" aria-hidden="true">FPS QR<br>placeholder</div>
       <div class="receipt-lines">
-        <div class="line"><span>FPS ID</span><strong class="mono">${esc(GIVING_CAMPAIGN.fpsId)}</strong></div>
-        <div class="line"><span>Payee</span><strong>${esc(GIVING_CAMPAIGN.fpsPayee)}</strong></div>
+        <div class="line"><span>FPS ID</span><strong class="mono">${esc(campaign.fpsId)}</strong></div>
+        <div class="line"><span>Payee</span><strong>${esc(campaign.fpsPayee)}</strong></div>
         <div class="line"><span>Amount</span><strong>${fmtMoney(givingState.amount)}</strong></div>
         <div class="line total"><span>Reference</span><strong class="mono">${esc(givingState.ref)}</strong></div>
       </div>
@@ -580,14 +591,8 @@ function givingThanksStep() {
     </div>`;
 }
 
-function givingHistory(user) {
-  if (!user) {
-    return `<div class="locked-note">🔒 Sign in to see your giving history.</div>`;
-  }
-  const list = store.donationsForUser(user.id);
-  if (!list.length) {
-    return `<div class="empty">Your gifts will appear here.</div>`;
-  }
+function givingHistory(list) {
+  const campaignById = new Map(store.campaigns().map((campaign) => [campaign.id, campaign]));
   return `
     <div class="session-list">
       ${list
@@ -597,7 +602,7 @@ function givingHistory(user) {
           <time>${new Date(d.createdAt).toLocaleDateString("en-HK", { day: "numeric", month: "short" })}<small>${esc(d.ref)}</small></time>
           <div>
             <h3>${fmtMoney(d.amount)}</h3>
-            <p>${esc(GIVING_CAMPAIGN.title)} · FPS${d.note ? ` · “${esc(d.note)}”` : ""}</p>
+            <p>${esc(campaignById.get(d.campaignId)?.title || d.campaignTitle || "Giving campaign")} · FPS${d.note ? ` · “${esc(d.note)}”` : ""}</p>
           </div>
           <div class="row-end">
             ${d.status === "confirmed" ? '<span class="badge free">Confirmed</span>' : '<span class="badge warn">Awaiting confirmation</span>'}

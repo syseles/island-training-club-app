@@ -119,6 +119,8 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const indexHtml = readFileSync(resolve(__dirname, "index.html"), "utf8");
 const stylesCss = readFileSync(resolve(__dirname, "styles.css"), "utf8");
 const viewsSource = readFileSync(resolve(__dirname, "js/views.js"), "utf8");
+const dataSource = readFileSync(resolve(__dirname, "js/data.js"), "utf8");
+const storeSource = readFileSync(resolve(__dirname, "js/store.js"), "utf8");
 for (const path of [
   "../assets/fonts/archivo-latin-variable.woff2",
   "../assets/fonts/OFL-Archivo.txt",
@@ -285,6 +287,31 @@ async function check(label, fn) {
 }
 
 store.load();
+
+// --- Giving demo-state cleanup ---
+const freshGivingState = JSON.parse(mem.get("itc.prototype.v1"));
+if (!Array.isArray(freshGivingState.campaigns) || freshGivingState.campaigns.length ||
+    !Array.isArray(freshGivingState.donations) || freshGivingState.donations.length) {
+  failures++;
+  console.error("FAIL fresh Giving state must have empty campaigns and donations");
+} else console.log("ok  fresh Giving state has no demo records");
+const freshGivingJson = JSON.stringify({
+  campaigns: freshGivingState.campaigns,
+  donations: freshGivingState.donations,
+});
+if (/Standard Chartered|18450|d-seed-[12]|scm-2027/i.test(freshGivingJson)) {
+  failures++;
+  console.error("FAIL fresh Giving state must not contain campaign demo references");
+} else console.log("ok  fresh Giving state contains no campaign demo references");
+if (store.activeGivingCampaign?.() !== null) {
+  failures++;
+  console.error("FAIL active campaign lookup must return null in fresh state");
+} else console.log("ok  fresh state has no active Giving campaign");
+if (/export\s+(?:const|function)\s+(?:GIVING_CAMPAIGN|seedDonations)\b/.test(dataSource) ||
+    /\b(?:GIVING_CAMPAIGN|seedDonations)\b/.test(storeSource)) {
+  failures++;
+  console.error("FAIL Giving campaign constants and seed helpers must be removed");
+} else console.log("ok  Giving campaign constants and seed helpers are removed");
 
 // --- Visitor state ---
 store.signOut();
@@ -614,11 +641,11 @@ const adminMembersOut = await views.viewAdmin("members");
 await check("admin members", () => adminMembersOut);
 const adminGiving = views.viewGiving();
 if (!views.navHTML("giving", store.currentUser()).includes("#/giving") ||
-    !adminGiving.includes("Give via FPS") || !adminGiving.includes("Current campaign") ||
-    !adminGiving.includes("Giving history")) {
+    !adminGiving.includes("No active campaign right now") ||
+    givingSensitiveCopy.some((copy) => adminGiving.includes(copy))) {
   failures++;
-  console.error("FAIL Admin must retain the full Giving flow");
-} else console.log("ok  Admin retains the full Giving flow");
+  console.error("FAIL Admin must see the control-free no-campaign Giving state");
+} else console.log("ok  Admin sees the control-free no-campaign Giving state");
 if (/member-summary|Member status counts|data-change="member-(?:status|role)-filter"/.test(adminMembersOut)) {
   failures++;
   console.error("FAIL Admin members must omit redundant counts and native filter selects");
@@ -1154,37 +1181,33 @@ if (writtenIndemnity !== 1780000000000 || store.currentUser().indemnityAcceptedA
 } else {
   console.log("ok  acceptMyIndemnity writes one local timestamp when absent");
 }
-// Giving flow remains available after integrating auth/profile behavior.
+// Approved roles retain Giving access, but an empty campaign list must not
+// expose transfer controls or an empty history section.
 const memberGiving = await check("giving (member)", () => views.viewGiving());
 if (!views.navHTML("giving", member).includes("#/giving") ||
-    !memberGiving.includes("Give via FPS") || !memberGiving.includes("Current campaign") ||
-    !memberGiving.includes("Giving history")) {
+    !memberGiving.includes("No active campaign right now") ||
+    givingSensitiveCopy.some((copy) => memberGiving.includes(copy)) ||
+    /FPS QR|FPS ID|Payee|form-giving/.test(memberGiving)) {
   failures++;
-  console.error("FAIL approved members must retain the full Giving flow");
-} else console.log("ok  approved members retain the full Giving flow");
+  console.error("FAIL approved members need a control-free no-campaign Giving state");
+} else console.log("ok  approved members see the control-free no-campaign Giving state");
 store.demoSignIn("superadmin");
 const superGiving = views.viewGiving();
 if (!views.navHTML("giving", store.currentUser()).includes("#/giving") ||
-    !superGiving.includes("Give via FPS") || !superGiving.includes("Current campaign") ||
-    !superGiving.includes("Giving history")) {
+    !superGiving.includes("No active campaign right now") ||
+    givingSensitiveCopy.some((copy) => superGiving.includes(copy))) {
   failures++;
-  console.error("FAIL Super Admin must retain the full Giving flow");
-} else console.log("ok  Super Admin retains the full Giving flow");
+  console.error("FAIL Super Admin needs the control-free no-campaign Giving state");
+} else console.log("ok  Super Admin sees the control-free no-campaign Giving state");
 store.demoSignIn("member");
-const raisedBefore = store.campaignRaised();
-const donation = store.recordDonation({
-  userId: member.id,
-  name: member.fullName,
-  amount: 300,
-  note: "smoke",
-  ref: "SCM27-SMOKE1",
-});
-if (donation.status !== "pending") throw new Error("FPS gift should start pending");
-if (store.campaignRaised() !== raisedBefore + 300) throw new Error("campaign total did not increase");
-if (!store.donationsForUser(member.id).some((d) => d.ref === "SCM27-SMOKE1")) {
-  throw new Error("donation missing from giving history");
+if (store.campaignRaised() !== 0) throw new Error("no active campaign should raise zero");
+try {
+  store.recordDonation({ userId: member.id, name: member.fullName, amount: 300, ref: "NO-CAMPAIGN" });
+  throw new Error("donation should not record without a campaign");
+} catch (err) {
+  if (err.message !== "No active Giving campaign") throw err;
 }
-await check("giving history with new gift", () => views.viewGiving());
+console.log("ok  gifts cannot be recorded without a campaign");
 
 // community: prayer request records locally (no public reader by design)
 const prayer = store.recordPrayer({ userId: member.id, name: member.fullName, request: "Smoke test request" });
@@ -1314,10 +1337,41 @@ store.resetDemo();
     failures++;
     console.error(`FAIL v10 migration should keep only the user receipt, got ${JSON.stringify(persistedReceiptIds)}`);
   } else console.log("ok  v10 migration keeps the user receipt only");
-  if (persisted.version !== 10) {
+  if (persisted.version !== 11) {
     failures++;
-    console.error(`FAIL state version should be 10 after migration, got ${persisted.version}`);
-  } else console.log("ok  state version is 10");
+    console.error(`FAIL state version should be 11 after migration, got ${persisted.version}`);
+  } else console.log("ok  state version is 11");
+}
+
+// --- v11 migration: Giving demo records stripped without losing real gifts ---
+store.resetDemo();
+{
+  const raw = JSON.parse(mem.get("itc.prototype.v1"));
+  raw.version = 10;
+  delete raw.campaigns;
+  raw.donations = [
+    { id: "d-seed-1", userId: "u-member", campaignId: "scm-2027", amount: 500 },
+    { id: "d-user-1", userId: "u-member", campaignId: "scm-2027", amount: 275, ref: "REAL-GIFT" },
+    { id: "d-seed-2", userId: "u-member", campaignId: "scm-2027", amount: 200 },
+  ];
+  mem.set("itc.prototype.v1", JSON.stringify(raw));
+  store.load();
+  const persisted = JSON.parse(mem.get("itc.prototype.v1"));
+  const donationIds = persisted.donations.map((donation) => donation.id);
+  if (persisted.version !== 11 || !Array.isArray(persisted.campaigns) || persisted.campaigns.length ||
+      donationIds.length !== 1 || donationIds[0] !== "d-user-1") {
+    failures++;
+    console.error(`FAIL v11 migration must remove only seed gifts and initialize campaigns: ${JSON.stringify({ version: persisted.version, campaigns: persisted.campaigns, donationIds })}`);
+  } else console.log("ok  v11 migration removes only known Giving seeds");
+  store.signIn("member@itc.hk");
+  const migratedHistory = views.viewGiving();
+  if (!migratedHistory.includes("No active campaign right now") ||
+      !migratedHistory.includes("Giving history") || !migratedHistory.includes("REAL-GIFT") ||
+      /form-giving|FPS QR|FPS ID|I’ve made the transfer/.test(migratedHistory)) {
+    failures++;
+    console.error("FAIL no-campaign Giving must show genuine history without transfer controls");
+  } else console.log("ok  no-campaign Giving preserves genuine member history only");
+  store.signOut();
 }
 
 // --- viewAccount live-mode branch ---

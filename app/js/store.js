@@ -8,8 +8,6 @@
 import {
   SEED_ACTIVITIES,
   SEED_USERS,
-  seedDonations,
-  GIVING_CAMPAIGN,
   sessionsInRange,
   sessionStarted,
   todayLocal,
@@ -23,7 +21,7 @@ import {
 import { supabase, isLive } from "./config.js";
 
 const STORAGE_KEY = "itc.prototype.v1";
-const STATE_VERSION = 10;
+const STATE_VERSION = 11;
 
 // Live-mode (Supabase) session cache. Avoids hammering the DB on every
 // page load. The TTL is short so role flips and welcome notifications
@@ -53,7 +51,8 @@ function freshState() {
     bookings: [],
     receipts: [],
     receiptCounter: 49,
-    donations: seedDonations(),
+    campaigns: [],
+    donations: [],
     prayers: [],
   };
 }
@@ -113,8 +112,8 @@ function migrate() {
   if (v < 4) {
     // v4: HYROX venue renamed "Causeway Bay BFT" -> "BFT Causeway Bay"
     // (activity location + any booking snapshots carrying the old string);
-    // giving + shop state introduced, with donations seeded for the demo
-    // member. Only exact old-string matches are rewritten so admin edits
+    // giving + shop state introduced. Only exact old-string matches are
+    // rewritten so admin edits
     // made since are preserved.
     const hyrox = state.activities.find((a) => a.id === "hyrox");
     if (hyrox && hyrox.location === "Causeway Bay BFT") {
@@ -125,7 +124,7 @@ function migrate() {
         b.snapshot.location = "BFT Causeway Bay";
       }
     }
-    if (!Array.isArray(state.donations)) state.donations = seedDonations();
+    if (!Array.isArray(state.donations)) state.donations = [];
   }
   if (v < 5) {
     // v5: Wednesday Night Training venue changed to TBC (location, maps
@@ -191,6 +190,15 @@ function migrate() {
     const seedReceiptIds = new Set(["r-seed-past", "r-seed-next"]);
     state.bookings = state.bookings.filter((b) => !seedBookingIds.has(b.id));
     state.receipts = state.receipts.filter((r) => !seedReceiptIds.has(r.id));
+  }
+  if (v < 11) {
+    // v11: remove the old Giving demo campaign and its two known donations.
+    // Any member-created gifts remain intact, including gifts associated with
+    // the old campaign ID.
+    if (!Array.isArray(state.campaigns)) state.campaigns = [];
+    const seedDonationIds = new Set(["d-seed-1", "d-seed-2"]);
+    if (!Array.isArray(state.donations)) state.donations = [];
+    state.donations = state.donations.filter((d) => !seedDonationIds.has(d.id));
   }
   state.version = STATE_VERSION;
 }
@@ -932,11 +940,20 @@ export function recordPrayer({ userId, name, request }) {
 // records every gift as "pending" until a leader reconciles it against the
 // club account — there is no instant confirmation path like card checkout.
 
-export function campaignRaised() {
-  const local = state.donations
-    .filter((d) => d.campaignId === GIVING_CAMPAIGN.id)
-    .reduce((sum, d) => sum + d.amount, 0);
-  return GIVING_CAMPAIGN.baseRaisedHKD + local;
+export function campaigns() {
+  return state.campaigns;
+}
+
+export function activeGivingCampaign() {
+  return state.campaigns.find((campaign) => campaign.status === "published") ?? null;
+}
+
+export function campaignRaised(campaign = activeGivingCampaign()) {
+  const campaignId = typeof campaign === "string" ? campaign : campaign?.id;
+  if (!campaignId) return 0;
+  return state.donations
+    .filter((donation) => donation.campaignId === campaignId)
+    .reduce((sum, donation) => sum + Number(donation.amount || 0), 0);
 }
 
 export function donationsForUser(userId) {
@@ -945,14 +962,18 @@ export function donationsForUser(userId) {
     .sort((a, b) => b.createdAt - a.createdAt);
 }
 
-export function recordDonation({ userId, name, amount, note, ref }) {
+export function recordDonation({ userId, name, amount, note, ref, campaignId }) {
+  const campaign = campaignId
+    ? state.campaigns.find((item) => item.id === campaignId && item.status === "published")
+    : activeGivingCampaign();
+  if (!campaign) throw new Error("No active Giving campaign");
   const donation = {
     id: uid("d"),
     userId: userId ?? null,
     name: String(name).trim(),
     amount: Math.round(Number(amount)),
     currency: "HKD",
-    campaignId: GIVING_CAMPAIGN.id,
+    campaignId: campaign.id,
     method: "FPS",
     ref,
     note: String(note ?? "").trim(),

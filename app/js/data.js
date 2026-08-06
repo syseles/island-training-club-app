@@ -203,53 +203,6 @@ export const ANNOUNCEMENTS = [
   },
 ];
 
-// --- Giving campaign -------------------------------------------------------------
-// The current donation campaign. FPS details and goal are placeholders for
-// review with ITC leadership; baseRaisedHKD stands in for gifts made outside
-// the app so the progress bar reflects the real campaign.
-
-export const GIVING_CAMPAIGN = {
-  id: "scm-2027",
-  title: "Standard Chartered Marathon 2027",
-  subtitle:
-    "Support our runners as ITC raises funds for community outreach through IECC.",
-  goalHKD: 50000,
-  baseRaisedHKD: 18450,
-  fpsId: "112 233 445", // placeholder FPS identifier
-  fpsPayee: "Island Training Club",
-};
-
-export function seedDonations() {
-  return [
-    {
-      id: "d-seed-1",
-      userId: "u-member",
-      name: "CM Chui",
-      amount: 500,
-      currency: "HKD",
-      campaignId: "scm-2027",
-      method: "FPS",
-      ref: "SCM27-9K2F4A",
-      note: "Run well, team!",
-      status: "confirmed",
-      createdAt: daysAgo(6),
-    },
-    {
-      id: "d-seed-2",
-      userId: "u-member",
-      name: "CM Chui",
-      amount: 200,
-      currency: "HKD",
-      campaignId: "scm-2027",
-      method: "FPS",
-      ref: "SCM27-7QW1XZ",
-      note: "",
-      status: "pending",
-      createdAt: daysAgo(1),
-    },
-  ];
-}
-
 // --- Leaders & culture (draft community content) ------------------------------
 
 export const LEADERS = [
