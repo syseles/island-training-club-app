@@ -8,8 +8,8 @@ No production application has been built yet. The `app/` directory contains a cl
 
 ## Live deployment
 
-This prototype has a live Supabase-backed auth + admin panel + approval
-workflow on the `feature/auth-identity` branch. To deploy, see
+This prototype has a live Supabase-backed auth, admin approval workflow, and
+in-app notification inbox on the `feature/notification` branch. To deploy, see
 [`docs/runbooks/live-auth.md`](docs/runbooks/live-auth.md).
 
 ## Working Prototype
@@ -41,7 +41,7 @@ The design review remains available at `http://127.0.0.1:4173/references/itc-mob
 ### Prototype conventions
 
 - Zero dependencies, no build step. Plain ES modules so the codebase stays easy to refine; the production stack is still an open decision.
-- Auth, payments, and the database are simulated in `localStorage`. `app/js/store.js` is the single seam where a real backend/API would later connect.
+- Without Supabase configuration, identity, payments, and application data are simulated in `localStorage`. `app/js/store.js` is the seam used by both local and live data paths.
 - Local state starts empty. Applying through the membership flow creates a pending profile on this device, which can sign in again by email without a password.
 - Checkout is a test payment — any card details work, no charge occurs.
 - Administrative testing requires Supabase live mode or the historical `archive/demo` branch. The archive is for demonstration only and must not be used as a production source branch.
@@ -50,7 +50,7 @@ The design review remains available at `http://127.0.0.1:4173/references/itc-mob
 ### Deliberately not in the prototype
 
 - Merchandise shop (deferred in the phase-one brief).
-- Real payments, email receipts, notifications, and a service worker (manifest is included; a cache layer would fight the refinement loop).
+- Real payments, email receipts, push/email notification delivery, and a service worker (manifest is included; a cache layer would fight the refinement loop).
 - Final waiver/privacy/guidelines copy — all such text is draft placeholder.
 
 ## Selected Direction

@@ -1,7 +1,8 @@
 # Live Auth — Operational Runbook
 
-This runbook covers the day-to-day operations of the live Supabase auth +
-identity + admin panel + approval workflow stack on `feature/auth-identity`.
+This runbook covers the day-to-day operations of the live Supabase auth,
+identity, admin approval workflow, and in-app notification stack on
+`feature/notification`.
 
 ## Vercel env vars
 

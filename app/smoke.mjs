@@ -294,10 +294,16 @@ const cleanAccountHtml = await views.viewAccount();
 for (const removed of ["demo-signin", "reset-demo", "one-tap demo", "seeded email"]) {
   if (cleanAccountHtml.toLowerCase().includes(removed)) throw new Error(`Account still contains removed demo content: ${removed}`);
 }
+const freshLocalNotifications = await store.listMyNotifications();
+views.notificationFilters.kind = "all";
+const cleanNotificationsHtml = await views.viewNotifications(new Date("2026-08-05T06:40:00.000Z"), freshLocalNotifications);
+if (freshLocalNotifications.length || !cleanNotificationsHtml.includes("New notifications will appear here.")) {
+  throw new Error("fresh local notification state must be empty");
+}
 if (views.viewCommunity("announcements").includes("Marathon fundraiser passes first milestone")) {
   throw new Error("fake fundraiser announcement must not ship");
 }
-console.log("ok  v11 fresh local state and Account are free of demo identities and controls");
+console.log("ok  v11 fresh local account and notification state is empty and free of demo controls");
 
 // Neutral fixtures exercise authenticated local paths without shipping to users.
 const installLocalFixtures = () => {
@@ -1238,20 +1244,44 @@ store.resetLocalData();
 store.resetLocalData();
 {
   const raw = JSON.parse(mem.get("itc.prototype.v1"));
-  raw.version = 10;
-  raw.sessionUserId = "u-admin";
-  raw.users = [
-    { id: "u-admin", email: " ADMIN@ITC.HK " },
-    { id: "renamed-owner", email: " owner@itc.hk " },
-    { id: "real-member", email: "real-member@example.test", donorId: "REAL-1234" },
+  const historicalIdentities = [
+    ["u-super", "owner@itc.hk"],
+    ["u-admin", "admin@itc.hk"],
+    ["u-member", "member@itc.hk"],
+    ["u-pend-1", "marco.santos@example.com"],
+    ["u-pend-2", "jenny.wu@example.com"],
   ];
+  const idMatchedUsers = historicalIdentities.map(([id], index) => ({
+    id,
+    email: `historical-id-${index}@example.test`,
+  }));
+  const emailMatchedUsers = historicalIdentities.map(([, email], index) => ({
+    id: `historical-email-${index}`,
+    email: ` ${email.toUpperCase()} `,
+  }));
+  const removedUsers = [...idMatchedUsers, ...emailMatchedUsers];
+  const preservedUsers = [
+    { id: "real-member", email: "real-member@example.test", donorId: "REAL-1234" },
+    { id: "u-admin-extra", email: "admin@itc.hk.example.test" },
+  ];
+  raw.version = 10;
+  raw.sessionUserId = "u-pend-2";
+  raw.users = [...removedUsers, ...preservedUsers];
   raw.bookings = [
-    { id: "legacy-booking", userId: "u-admin" },
-    { id: "real-booking", userId: "real-member" },
+    ...removedUsers.map((user, index) => ({ id: `historical-booking-${index}`, userId: user.id })),
+    ...preservedUsers.map((user, index) => ({ id: `preserved-booking-${index}`, userId: user.id })),
   ];
   raw.receipts = [
-    { id: "legacy-receipt", bookingId: "legacy-booking", userId: "u-admin" },
-    { id: "real-receipt", bookingId: "real-booking", userId: "real-member" },
+    ...removedUsers.map((user, index) => ({
+      id: `historical-receipt-${index}`,
+      bookingId: `historical-booking-${index}`,
+      userId: user.id,
+    })),
+    ...preservedUsers.map((user, index) => ({
+      id: `preserved-receipt-${index}`,
+      bookingId: `preserved-booking-${index}`,
+      userId: user.id,
+    })),
   ];
   raw.prayers = [{ id: "real-prayer", userId: "real-member", request: "Preserve this" }];
   raw.activities[0].baseBooked = 7;
@@ -1259,9 +1289,13 @@ store.resetLocalData();
   mem.set("itc.prototype.v1", JSON.stringify(raw));
   store.load();
   const migrated = JSON.parse(mem.get("itc.prototype.v1"));
-  const preserved = migrated.users.length === 1 && migrated.users[0].id === "real-member"
-    && migrated.bookings.length === 1 && migrated.bookings[0].id === "real-booking"
-    && migrated.receipts.length === 1 && migrated.receipts[0].id === "real-receipt"
+  const preservedIds = new Set(preservedUsers.map((user) => user.id));
+  const preserved = migrated.users.length === preservedUsers.length
+    && migrated.users.every((user) => preservedIds.has(user.id))
+    && migrated.bookings.length === preservedUsers.length
+    && migrated.bookings.every((booking) => preservedIds.has(booking.userId))
+    && migrated.receipts.length === preservedUsers.length
+    && migrated.receipts.every((receipt) => preservedIds.has(receipt.userId))
     && migrated.prayers.length === 1 && migrated.prayers[0].id === "real-prayer"
     && migrated.activities[0].location === "Genuine admin edit";
   const cleaned = migrated.version === 11 && migrated.sessionUserId === null

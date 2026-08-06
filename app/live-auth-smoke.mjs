@@ -91,7 +91,7 @@ const approvedProfiles = [
   {
     id: "approved-admin",
     email: "tina.admin@example.com",
-    full_name: "Tina Admin",
+    full_name: "Operations Admin",
     role: "admin",
     created_at: "2026-08-05T01:00:00.000Z",
   },
@@ -462,7 +462,7 @@ views.adminMemberFilters.status = "approved";
 views.adminMemberFilters.role = "admin";
 const filteredMembersHtml = await views.viewAdmin("members");
 assert.match(filteredMembersHtml, /data-action="admin-member-filters-clear"[^>]*>Clear filters</);
-assert.match(filteredMembersHtml, /Tina Admin/);
+assert.match(filteredMembersHtml, /Operations Admin/);
 for (const excluded of ["Riley Runner", "Micah Member", "Submitted Runner", "Declined Runner"]) {
   assert.doesNotMatch(filteredMembersHtml, new RegExp(excluded));
 }
@@ -530,6 +530,22 @@ for (const badge of ["Application", "Decision", "Role change", "Club update", "M
   assert.match(categoryNotificationsHtml, new RegExp(`class="notification-kind-badge">${badge}<`));
 }
 assert.match(categoryNotificationsHtml, /Giving campaign published[\s\S]*?data-destination="#\/giving"|data-destination="#\/giving"[\s\S]*?Giving campaign published/);
+const categoryFilterCases = [
+  ["application", "Application &lt;submitted&gt;"],
+  ["decision", "Application approved"],
+  ["role", "Role changed"],
+  ["club", "Giving campaign published"],
+];
+for (const [kind, expectedTitle] of categoryFilterCases) {
+  views.notificationFilters.kind = kind;
+  const filteredHtml = await views.viewNotifications(notificationNow, categoryRows);
+  assert.match(filteredHtml, new RegExp(expectedTitle), `${kind} notifications must display in their filter`);
+  for (const [, otherTitle] of categoryFilterCases) {
+    if (otherTitle !== expectedTitle) {
+      assert.doesNotMatch(filteredHtml, new RegExp(otherTitle), `${kind} filter must exclude other notification categories`);
+    }
+  }
+}
 views.notificationFilters.kind = "all";
 const adminNotificationsHtml = await views.viewNotifications(notificationNow);
 assert.match(adminNotificationsHtml, /<h1[^>]*>Notifications<\/h1>/);
@@ -1424,19 +1440,19 @@ assert.equal(confirmMessage, "Change Micah Member’s role to Admin?");
 assert.equal(profileUpdates.length, updatesBeforeRoleCancel, "Cancelled promotion must not call the store");
 
 const demoteSelect = makeElement();
-demoteSelect.dataset = { change: "set-role", user: "approved-admin", memberName: "Tina Admin", currentRole: "admin" };
+demoteSelect.dataset = { change: "set-role", user: "approved-admin", memberName: "Operations Admin", currentRole: "admin" };
 demoteSelect.value = "member";
 demoteSelect.closest = () => demoteSelect;
 await change({ target: demoteSelect });
-assert.equal(confirmMessage, "Change Tina Admin’s role to Member?");
+assert.equal(confirmMessage, "Change Operations Admin’s role to Member?");
 assert.equal(profileUpdates.length, updatesBeforeRoleCancel, "Cancelled demotion must not call the store");
 
 const revokeControl = makeElement();
 revokeControl.textContent = "Revoke access";
-revokeControl.dataset = { action: "revoke-member", user: "approved-admin", memberName: "Tina Admin" };
+revokeControl.dataset = { action: "revoke-member", user: "approved-admin", memberName: "Operations Admin" };
 revokeControl.closest = () => revokeControl;
 await click({ target: revokeControl });
-assert.equal(confirmMessage, "Revoke Tina Admin’s access and move them to Pending?");
+assert.equal(confirmMessage, "Revoke Operations Admin’s access and move them to Pending?");
 assert.equal(profileUpdates.length, updatesBeforeRoleCancel, "Cancelled revoke must not call the store");
 
 window.confirm = () => true;
@@ -1463,12 +1479,12 @@ assert.ok(toastStack.children.some((item) => item.textContent === "Micah Member 
 toastStack.children.length = 0;
 const successfulDemotion = makeElement();
 successfulDemotion.tagName = "SELECT";
-successfulDemotion.dataset = { change: "set-role", user: "approved-admin", memberName: "Tina Admin", currentRole: "admin" };
+successfulDemotion.dataset = { change: "set-role", user: "approved-admin", memberName: "Operations Admin", currentRole: "admin" };
 successfulDemotion.value = "member";
 successfulDemotion.closest = () => successfulDemotion;
 await change({ target: successfulDemotion });
 assert.ok(profileUpdates.some((update) => update.id === "approved-admin" && update.role === "member"));
-assert.deepEqual(toastStack.children.map((item) => item.textContent), ["Tina Admin is now Member."]);
+assert.deepEqual(toastStack.children.map((item) => item.textContent), ["Operations Admin is now Member."]);
 
 toastStack.children.length = 0;
 const successfulRevoke = makeElement();
@@ -1501,7 +1517,7 @@ assert.equal(toastStack.children.some((item) => /is now Admin/.test(item.textCon
 toastStack.children.length = 0;
 const refreshFailedRole = makeElement();
 refreshFailedRole.tagName = "SELECT";
-refreshFailedRole.dataset = { change: "set-role", user: "approved-admin", memberName: "Tina Admin", currentRole: "member" };
+refreshFailedRole.dataset = { change: "set-role", user: "approved-admin", memberName: "Operations Admin", currentRole: "member" };
 refreshFailedRole.value = "admin";
 refreshFailedRole.closest = () => refreshFailedRole;
 profileListError = new Error("Members refresh failed");
@@ -1510,7 +1526,7 @@ profileListError = null;
 assert.equal(approvedProfiles.find((item) => item.id === "approved-admin").role, "admin");
 assert.equal(refreshFailedRole.disabled, true, "refresh failure must lock the stale role control");
 assert.deepEqual(toastStack.children.map((item) => item.textContent), [
-  "Tina Admin is now Admin.",
+  "Operations Admin is now Admin.",
   "Change saved, but this Admin view could not refresh. Members refresh failed",
 ]);
 assert.equal(toastStack.children.some((item) => /Unable to change role/.test(item.textContent)), false);
