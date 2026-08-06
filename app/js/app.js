@@ -819,6 +819,10 @@ document.addEventListener("submit", async (e) => {
       const errEl = form.querySelector("#donor-error");
       const raw = String(new FormData(form).get("donorId") || "").trim();
       const donorField = form.querySelector("#donor-id");
+      if (!raw) {
+        showFieldError(form, donorField, errEl, "Enter your Donor ID to save it.");
+        return;
+      }
       if (donorIdProblem(raw)) {
         showFieldError(
           form,
@@ -828,13 +832,17 @@ document.addEventListener("submit", async (e) => {
         );
         return;
       }
-      const saved = store.updateDonorId(user.id, raw);
-      if (!saved) {
-        showFieldError(form, donorField, errEl, "Enter your Donor ID to save it.");
-        return;
-      }
-      toast("Donor ID saved");
-      await renderWithFeedback();
+      const control = form.querySelector('[type="submit"]');
+      await withBusyControl(control, "Saving…", async () => {
+        try {
+          await store.updateMyDonorId(raw);
+          toast("Donor ID saved");
+          await renderWithFeedback();
+        } catch (err) {
+          console.error(err);
+          toast("Unable to save Donor ID", true);
+        }
+      });
       break;
     }
 

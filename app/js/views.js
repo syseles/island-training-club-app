@@ -761,7 +761,7 @@ export async function viewAccount(section, editMode) {
   }
   if (user.status === "declined") return accountDeclined(user);
 
-  const needsApplication = section === undefined || section === "details" || section === "indemnity" || section === "privacy";
+  const needsApplication = section === undefined || section === "details" || section === "indemnity" || section === "donor" || section === "privacy";
   const application = needsApplication ? await store.getMyApplication() : null;
 
   switch (section) {
@@ -772,7 +772,7 @@ export async function viewAccount(section, editMode) {
     case "indemnity":
       return accountIndemnity(user, application);
     case "donor":
-      return accountDonor(user);
+      return accountDonor(user, application);
     case "payments":
       return accountPayments(user);
     case "privacy":
@@ -1080,7 +1080,8 @@ function accountIndemnity(user, application) {
     <p class="muted small mt16">Draft wording — the final indemnity will be confirmed with ITC leadership before launch.</p>`;
 }
 
-function accountDonor(user) {
+function accountDonor(user, application) {
+  const donorId = application?.donor_id || user.donorId || null;
   const gifts = store.donationsForUser(user.id);
   const totalGiven = gifts.reduce((sum, d) => sum + d.amount, 0);
   return `
@@ -1089,7 +1090,7 @@ function accountDonor(user) {
     <h1 class="display sm">Donor Profile.</h1>
     <div class="card mt16"><div class="card-body">
       <div class="receipt-lines" style="margin-top:0;border-top:0">
-        <div class="line"><span>Donor ID</span><strong>${user.donorId ? esc(user.donorId) : "Not provided"}</strong></div>
+        <div class="line"><span>Donor ID</span><strong>${donorId ? esc(donorId) : "Not provided"}</strong></div>
         ${
           gifts.length
             ? `
@@ -1100,7 +1101,7 @@ function accountDonor(user) {
         }
       </div>
       ${
-        user.donorId
+        donorId
           ? ""
           : `
         <form id="form-donor-id" class="mt16" novalidate>
