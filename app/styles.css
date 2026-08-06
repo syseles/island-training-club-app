@@ -172,7 +172,7 @@ strong { font-weight: 700; }
   background: var(--accent);
   color: var(--accent-ink);
   font-size: 9px;
-  font-weight: 900;
+  font-weight: 700;
   line-height: 1;
 }
 
@@ -1096,7 +1096,7 @@ a.profile-row:hover .pr-text strong { color: var(--accent); }
   margin: 0;
   font-family: var(--font-display);
   font-size: 21px;
-  font-weight: 900;
+  font-weight: 800;
   letter-spacing: -.02em;
 }
 
