@@ -1158,6 +1158,11 @@ export function recordDonation({ userId, name, amount, note, ref, campaignId }) 
       (isLive() && liveGivingCampaign?.id === campaignId ? liveGivingCampaign : null)
     : activeGivingCampaign() || (isLive() ? liveGivingCampaign : null);
   if (!campaign) throw new Error("No active Giving campaign");
+  const transferRef = String(ref || "").trim();
+  const existing = transferRef
+    ? state.donations.find((item) => item.campaignId === campaign.id && item.ref === transferRef)
+    : null;
+  if (existing) return existing;
   const donation = {
     id: uid("d"),
     userId: userId ?? null,
@@ -1167,7 +1172,7 @@ export function recordDonation({ userId, name, amount, note, ref, campaignId }) 
     campaignId: campaign.id,
     campaignTitle: campaign.title,
     method: "FPS",
-    ref,
+    ref: transferRef,
     note: String(note ?? "").trim(),
     status: "pending", // reconciled manually by a leader
     createdAt: Date.now(),

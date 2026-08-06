@@ -182,8 +182,8 @@ for (const [contract, label] of [
 }
 for (const [contract, label] of [
   [/case "giving":[\s\S]*await views\.viewGiving\(\{[\s\S]*ownsGeneration/, "generation-owned awaited Giving route"],
-  [/case "campaign-publish"[\s\S]*withBusyControl\(el, "Publishing…"[\s\S]*refreshAfterAdminMutation/, "truthful publish feedback"],
-  [/case "campaign-close"[\s\S]*withBusyControl\(el, "Closing…"[\s\S]*refreshAfterAdminMutation/, "truthful close feedback"],
+  [/case "campaign-publish"[\s\S]*withCampaignMutationControl\(form, el, "Publishing…"[\s\S]*refreshAfterAdminMutation/, "truthful publish feedback"],
+  [/case "campaign-close"[\s\S]*withCampaignMutationControl\(form, el, "Closing…"[\s\S]*refreshAfterAdminMutation/, "truthful close feedback"],
   [/Publish “\$\{name\}”\? Approved members will be notified\./, "publication confirmation"],
   [/Close “\$\{name\}”\? Closed campaigns cannot be edited or republished\./, "named close confirmation"],
 ]) {
@@ -2436,6 +2436,9 @@ const makeCampaignForm = (campaign, values = {}) => {
   const error = makeLocalElement();
   const submit = localControl({});
   submit.textContent = "Save changes";
+  const fields = ["title", "description", "goalHKD", "fpsId", "fpsPayee"].map(() => localControl({}));
+  fields.forEach((field) => { field.tagName = "INPUT"; });
+  const controls = [...fields, submit];
   const form = Object.assign(new HTMLFormElement(), makeLocalElement(), {
     id: "form-campaign",
     dataset: { campaign: campaign.id },
@@ -2455,16 +2458,23 @@ const makeCampaignForm = (campaign, values = {}) => {
     : selector === '[type="submit"]'
       ? submit
       : null;
-  return { form, error, submit };
+  form.querySelectorAll = (selector) => selector === "input, textarea, select, button" ? controls : [];
+  return { form, error, submit, fields, controls };
 };
 const campaignAction = (action, campaign, form) => {
   const control = localControl({ action, campaign: campaign.id, campaignName: campaign.title });
   control.textContent = action === "campaign-publish" ? "Publish campaign" : "Close campaign";
   control.closest = (selector) => selector === "form" ? form : control;
+  form.querySelectorAll("input, textarea, select, button").push(control);
   return control;
 };
 let campaignConfirm = "";
-window.confirm = (message) => { campaignConfirm = message; return true; };
+let campaignConfirmCount = 0;
+window.confirm = (message) => {
+  campaignConfirm = message;
+  campaignConfirmCount++;
+  return true;
+};
 
 // Native-invalid unsaved fields stop before confirmation or mutation.
 const invalidEditor = makeCampaignForm(delegatedCampaign, { title: "" });
@@ -2487,22 +2497,28 @@ const validEditor = makeCampaignForm(delegatedCampaign, {
   fpsPayee: "Visible Unsaved Payee",
 });
 const validPublish = campaignAction("campaign-publish", delegatedCampaign, validEditor.form);
+campaignConfirmCount = 0;
 const pendingValidPublish = localClick({ target: validPublish });
+const duplicateValidPublish = localClick({ target: validPublish });
+const overlappingPublishSave = localSubmit({ target: validEditor.form, preventDefault() {} });
 if (!validPublish.disabled || validPublish.textContent !== "Publishing…" ||
-    validPublish.getAttribute("aria-busy") !== "true") {
+    validPublish.getAttribute("aria-busy") !== "true" ||
+    validEditor.controls.some((control) => !control.disabled)) {
   failures++;
-  console.error("FAIL campaign publish must expose inherited busy feedback immediately");
+  console.error("FAIL campaign publish must lock every campaign mutation control immediately");
 }
-await pendingValidPublish;
+await Promise.all([pendingValidPublish, duplicateValidPublish, overlappingPublishSave]);
 const persistedPublished = store.campaigns().find((item) => item.id === delegatedCampaign.id);
-if (campaignConfirm !== "Publish “Visible Unsaved Title”? Approved members will be notified." ||
+if (campaignConfirmCount !== 1 ||
+    campaignConfirm !== "Publish “Visible Unsaved Title”? Approved members will be notified." ||
     persistedPublished?.status !== "published" || persistedPublished.title !== "Visible Unsaved Title" ||
     persistedPublished.description !== "Visible unsaved description." || persistedPublished.goalHKD !== 6200 ||
     persistedPublished.fpsId !== "7654321" || persistedPublished.fpsPayee !== "Visible Unsaved Payee" ||
-    !localToastText().includes("“Visible Unsaved Title” published.")) {
+    localToastText().filter((text) => text === "“Visible Unsaved Title” published.").length !== 1 ||
+    validEditor.controls.some((control) => control.disabled) || validPublish.textContent !== "Publish campaign") {
   failures++;
-  console.error("FAIL publish must persist current valid form values before transition");
-} else console.log("ok  publish saves visible valid edits and confirms their current title");
+  console.error("FAIL rapid Publish/Save events must produce one restored publication operation");
+} else console.log("ok  rapid Publish and overlapping Save events no-op behind one campaign operation");
 
 // Cancellation, successful close, rejected close, and refresh-after-close feedback.
 let closeCampaign = campaignAction("campaign-close", persistedPublished, validEditor.form);
@@ -2515,12 +2531,20 @@ if (campaignConfirm !== "Close “Visible Unsaved Title”? Closed campaigns can
 } else console.log("ok  campaign close names the campaign and respects cancellation");
 window.confirm = () => true;
 clearLocalToasts();
-await localClick({ target: closeCampaign });
-if (store.campaigns().find((item) => item.id === delegatedCampaign.id)?.status !== "closed" ||
-    !localToastText().includes("“Visible Unsaved Title” closed.")) {
+const pendingClose = localClick({ target: closeCampaign });
+const overlappingCloseSave = localSubmit({ target: validEditor.form, preventDefault() {} });
+if (closeCampaign.textContent !== "Closing…" || validEditor.controls.some((control) => !control.disabled)) {
   failures++;
-  console.error("FAIL successful campaign close must mutate and report success");
-} else console.log("ok  successful campaign close reports confirmed mutation");
+  console.error("FAIL campaign Close must lock fields and sibling Save immediately");
+}
+await Promise.all([pendingClose, overlappingCloseSave]);
+if (store.campaigns().find((item) => item.id === delegatedCampaign.id)?.status !== "closed" ||
+    localToastText().filter((text) => text === "“Visible Unsaved Title” closed.").length !== 1 ||
+    localToastText().includes("Campaign saved.") || validEditor.controls.some((control) => control.disabled) ||
+    closeCampaign.textContent !== "Close campaign") {
+  failures++;
+  console.error("FAIL overlapping Close/Save must run one restored closure operation");
+} else console.log("ok  campaign Close excludes overlapping Save and restores the group");
 clearLocalToasts();
 const rejectedClose = campaignAction("campaign-close", persistedPublished, validEditor.form);
 await localClick({ target: rejectedClose });
@@ -2529,6 +2553,53 @@ if (!validEditor.error.textContent.includes("published") || rejectedClose.disabl
   failures++;
   console.error("FAIL rejected campaign close must recover without false success");
 } else console.log("ok  rejected campaign close recovers without false success");
+
+// Save owns the same operation group: sibling Publish and Close events are
+// ignored while its promise is pending, with every field/control restored.
+const saveOverlapDraft = await store.saveGivingCampaign({
+  title: "Save Overlap Campaign",
+  description: "Save overlap fixture.",
+  goalHKD: 6800,
+  fpsId: "6800000",
+  fpsPayee: "Save Overlap Payee",
+});
+const saveOverlapEditor = makeCampaignForm(saveOverlapDraft, { title: "Saved Without Publish" });
+const blockedPublish = campaignAction("campaign-publish", saveOverlapDraft, saveOverlapEditor.form);
+campaignConfirmCount = 0;
+window.confirm = (message) => { campaignConfirm = message; campaignConfirmCount++; return true; };
+clearLocalToasts();
+const pendingOverlapSave = localSubmit({ target: saveOverlapEditor.form, preventDefault() {} });
+const pendingBlockedPublish = localClick({ target: blockedPublish });
+if (saveOverlapEditor.submit.textContent !== "Saving…" ||
+    saveOverlapEditor.controls.some((control) => !control.disabled)) {
+  failures++;
+  console.error("FAIL campaign Save must lock fields and sibling Publish immediately");
+}
+await Promise.all([pendingOverlapSave, pendingBlockedPublish]);
+let savedOverlapCampaign = store.campaigns().find((item) => item.id === saveOverlapDraft.id);
+if (savedOverlapCampaign?.status !== "draft" || savedOverlapCampaign.title !== "Saved Without Publish" ||
+    campaignConfirmCount !== 0 || saveOverlapEditor.submit.textContent !== "Save changes" ||
+    saveOverlapEditor.controls.some((control) => control.disabled)) {
+  failures++;
+  console.error("FAIL overlapping Save/Publish must run only Save and restore the group");
+} else console.log("ok  campaign Save excludes overlapping Publish and restores the group");
+
+savedOverlapCampaign = await store.publishGivingCampaign(saveOverlapDraft.id);
+const saveCloseEditor = makeCampaignForm(savedOverlapCampaign, { title: "Saved Without Close" });
+const blockedClose = campaignAction("campaign-close", savedOverlapCampaign, saveCloseEditor.form);
+campaignConfirmCount = 0;
+clearLocalToasts();
+const pendingSaveBeforeClose = localSubmit({ target: saveCloseEditor.form, preventDefault() {} });
+const pendingBlockedClose = localClick({ target: blockedClose });
+await Promise.all([pendingSaveBeforeClose, pendingBlockedClose]);
+savedOverlapCampaign = store.campaigns().find((item) => item.id === saveOverlapDraft.id);
+if (savedOverlapCampaign?.status !== "published" || savedOverlapCampaign.title !== "Saved Without Close" ||
+    campaignConfirmCount !== 0 || saveCloseEditor.controls.some((control) => control.disabled) ||
+    saveCloseEditor.submit.textContent !== "Save changes") {
+  failures++;
+  console.error("FAIL overlapping Save/Close must run only Save and restore the group");
+} else console.log("ok  campaign Save excludes overlapping Close and restores the group");
+await store.closeGivingCampaign(saveOverlapDraft.id);
 
 // A stale Publish event can save a now-published campaign but must describe the
 // subsequent transition rejection as a partial success rather than a save failure.
@@ -2579,7 +2650,9 @@ clearLocalToasts();
 await localClick({ target: refreshPublishControl });
 if (store.campaigns().find((item) => item.id === refreshPublishDraft.id)?.status !== "published" ||
     !refreshPublishEditor.error.textContent.includes("Change saved, but this Admin view could not refresh") ||
-    !refreshPublishControl.disabled || !localToastText().includes("“Publish Refresh Campaign” published.")) {
+    refreshPublishEditor.controls.some((control) => !control.disabled) ||
+    refreshPublishControl.textContent !== "Publish campaign" ||
+    !localToastText().includes("“Publish Refresh Campaign” published.")) {
   failures++;
   console.error("FAIL publish refresh failure must preserve and truthfully report publication");
 } else console.log("ok  publish refresh failure truthfully preserves publication");
@@ -2616,7 +2689,9 @@ clearLocalToasts();
 await localClick({ target: closeRefreshControl });
 if (store.campaigns().find((item) => item.id === closeRefreshDraft.id)?.status !== "closed" ||
     !closeRefreshEditor.error.textContent.includes("Change saved, but this Admin view could not refresh") ||
-    closeRefreshEditor.error.getAttribute("role") !== "alert" || !closeRefreshControl.disabled ||
+    closeRefreshEditor.error.getAttribute("role") !== "alert" ||
+    closeRefreshEditor.controls.some((control) => !control.disabled) ||
+    closeRefreshControl.textContent !== "Close campaign" ||
     !localToastText().includes("“Close Refresh Campaign” closed.")) {
   failures++;
   console.error("FAIL close refresh failure must preserve and truthfully report closure");
@@ -2675,7 +2750,8 @@ clearLocalToasts();
 await localSubmit({ target: refreshEditor.form, preventDefault() {} });
 if (store.campaigns().find((item) => item.id === saveDraft.id)?.title !== "Saved Before Refresh Failure" ||
     !refreshEditor.error.textContent.includes("Change saved, but this Admin view could not refresh") ||
-    !refreshEditor.submit.disabled) {
+    refreshEditor.controls.some((control) => !control.disabled) ||
+    refreshEditor.submit.textContent !== "Save changes") {
   failures++;
   console.error("FAIL save refresh failure must preserve and truthfully report the mutation");
 } else console.log("ok  save refresh failure truthfully preserves the mutation");
@@ -2689,6 +2765,59 @@ await store.publishGivingCampaign(saveDraft.id);
 store.demoSignIn("member");
 location.hash = "#/giving";
 await localWindowListeners.get("hashchange")();
+
+// FPS confirmation remains disabled through its awaited Giving render. Rapid
+// duplicate events produce one record and one success announcement.
+const givingMember = store.currentUser();
+views.givingState.step = 2;
+views.givingState.campaignId = saveDraft.id;
+views.givingState.amount = 525;
+views.givingState.name = "Rapid Donor";
+views.givingState.note = "One transfer";
+views.givingState.ref = "GIVE-RAPID-ONCE";
+const givingConfirm = localControl({ action: "giving-confirm" });
+givingConfirm.textContent = "I’ve made the transfer";
+clearLocalToasts();
+const pendingGivingConfirm = localClick({ target: givingConfirm });
+const duplicateGivingConfirm = localClick({ target: givingConfirm });
+if (!givingConfirm.disabled || givingConfirm.textContent !== "Recording…" ||
+    givingConfirm.getAttribute("aria-busy") !== "true") {
+  failures++;
+  console.error("FAIL FPS confirmation must expose busy state through record and render");
+}
+await Promise.all([pendingGivingConfirm, duplicateGivingConfirm]);
+const rapidGifts = store.donationsForUser(givingMember.id).filter((gift) => gift.ref === "GIVE-RAPID-ONCE");
+const idempotentGift = store.recordDonation({
+  userId: givingMember.id,
+  name: "Rapid Donor",
+  amount: 525,
+  note: "Retry",
+  ref: "GIVE-RAPID-ONCE",
+  campaignId: saveDraft.id,
+});
+if (rapidGifts.length !== 1 || idempotentGift.id !== rapidGifts[0]?.id ||
+    localToastText().filter((text) => text === "Gift recorded — awaiting confirmation").length !== 1 ||
+    givingConfirm.disabled || givingConfirm.hasAttribute("aria-busy") ||
+    givingConfirm.textContent !== "I’ve made the transfer") {
+  failures++;
+  console.error("FAIL rapid FPS confirmation must record the reference exactly once and restore");
+} else console.log("ok  rapid FPS confirmation records one reference and one success message");
+
+// A rejected record restores the stale control and reports an accessible error.
+views.givingState.step = 2;
+views.givingState.campaignId = "missing-campaign";
+views.givingState.ref = "GIVE-REJECTED";
+const rejectedGivingConfirm = localControl({ action: "giving-confirm" });
+rejectedGivingConfirm.textContent = "I’ve made the transfer";
+clearLocalToasts();
+await localClick({ target: rejectedGivingConfirm });
+if (store.donationsForUser(givingMember.id).some((gift) => gift.ref === "GIVE-REJECTED") ||
+    !localToastText().includes("No active Giving campaign") || rejectedGivingConfirm.disabled ||
+    rejectedGivingConfirm.hasAttribute("aria-busy") || rejectedGivingConfirm.textContent !== "I’ve made the transfer") {
+  failures++;
+  console.error("FAIL rejected FPS confirmation must recover without recording");
+} else console.log("ok  rejected FPS confirmation restores control without recording");
+
 const givingError = makeLocalElement();
 const givingForm = Object.assign(new HTMLFormElement(), makeLocalElement(), {
   id: "form-giving",

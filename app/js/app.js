@@ -58,14 +58,17 @@ let prevPage = null;
 const controlBusy = new WeakSet();
 
 async function withBusyControl(control, busyLabel, work, options = {}) {
-  if (!control || controlBusy.has(control)) return;
-  controlBusy.add(control);
+  const busyKey = options.busyKey || control;
+  if (!control || !busyKey || controlBusy.has(busyKey)) return;
+  controlBusy.add(busyKey);
+  const controls = [...new Set(options.controls || [control])];
+  const disabledStates = controls.map((item) => [item, Boolean(item.disabled)]);
   const label = control.textContent;
   const canReplaceLabel = options.replaceLabel ?? control.tagName !== "SELECT";
   const announceWithoutReplacing = options.announceWithoutReplacing === true;
   const hadAriaLabel = control.hasAttribute("aria-label");
   const ariaLabel = control.getAttribute("aria-label");
-  control.disabled = true;
+  controls.forEach((item) => { item.disabled = true; });
   control.setAttribute("aria-busy", "true");
   if (canReplaceLabel) control.textContent = busyLabel;
   if (announceWithoutReplacing) {
@@ -75,8 +78,8 @@ async function withBusyControl(control, busyLabel, work, options = {}) {
   try {
     return await work();
   } finally {
-    controlBusy.delete(control);
-    control.disabled = false;
+    controlBusy.delete(busyKey);
+    disabledStates.forEach(([item, disabled]) => { item.disabled = disabled; });
     control.removeAttribute("aria-busy");
     if (canReplaceLabel) control.textContent = label;
     if (announceWithoutReplacing) {
@@ -85,6 +88,23 @@ async function withBusyControl(control, busyLabel, work, options = {}) {
       control.classList.toggle("is-busy", false);
     }
   }
+}
+
+function campaignMutationControls(form, control = null) {
+  const controls = [...(form?.querySelectorAll?.("input, textarea, select, button") || [])];
+  if (control && !controls.includes(control)) controls.push(control);
+  return controls;
+}
+
+function withCampaignMutationControl(form, control, busyLabel, work) {
+  return withBusyControl(control, busyLabel, work, {
+    busyKey: form,
+    controls: campaignMutationControls(form, control),
+  });
+}
+
+function lockCampaignMutationControls(form) {
+  campaignMutationControls(form).forEach((control) => { control.disabled = true; });
 }
 
 async function refreshAfterAdminMutation(successMessage) {
@@ -644,17 +664,26 @@ document.addEventListener("click", async (e) => {
     case "giving-confirm": {
       const g = views.givingState;
       const user = store.currentUser();
-      store.recordDonation({
-        userId: user ? user.id : null,
-        name: g.name,
-        amount: g.amount,
-        note: g.note,
-        ref: g.ref,
-        campaignId: g.campaignId,
-      });
-      g.step = 3;
-      toast("Gift recorded — awaiting confirmation");
-      await renderWithFeedback();
+      let recorded = false;
+      try {
+        await withBusyControl(el, "Recording…", async () => {
+          store.recordDonation({
+            userId: user ? user.id : null,
+            name: g.name,
+            amount: g.amount,
+            note: g.note,
+            ref: g.ref,
+            campaignId: g.campaignId,
+          });
+          recorded = true;
+          g.step = 3;
+          toast("Gift recorded — awaiting confirmation");
+          await renderWithFeedback();
+        });
+      } catch (err) {
+        const detail = err.message || "Unable to record gift";
+        toast(recorded ? `Gift recorded, but Giving could not refresh. ${detail}` : detail, true);
+      }
       break;
     }
 
@@ -665,7 +694,7 @@ document.addEventListener("click", async (e) => {
 
     case "campaign-publish": {
       const form = el.closest?.("form");
-      if (!form || !form.reportValidity()) break;
+      if (!form || controlBusy.has(form) || !form.reportValidity()) break;
       clearCampaignError(form);
       const payload = campaignFormPayload(form);
       const name = String(payload.title || "").trim() || "this campaign";
@@ -673,7 +702,7 @@ document.addEventListener("click", async (e) => {
       let saved = false;
       let refreshResult = null;
       try {
-        await withBusyControl(el, "Publishing…", async () => {
+        await withCampaignMutationControl(form, el, "Publishing…", async () => {
           const campaign = await store.saveGivingCampaign(payload);
           saved = true;
           await store.publishGivingCampaign(campaign.id);
@@ -681,7 +710,7 @@ document.addEventListener("click", async (e) => {
         });
         if (refreshResult && !refreshResult.refreshed) {
           showCampaignError(el, refreshResult.message);
-          el.disabled = true;
+          lockCampaignMutationControls(form);
         }
       } catch (err) {
         const detail = err.message || (saved ? "Unable to publish campaign" : "Unable to save campaign");
@@ -695,17 +724,19 @@ document.addEventListener("click", async (e) => {
     }
 
     case "campaign-close": {
+      const form = el.closest?.("form");
+      if (!form || controlBusy.has(form)) break;
       const name = el.dataset.campaignName || "this campaign";
       if (!window.confirm(`Close “${name}”? Closed campaigns cannot be edited or republished.`)) break;
       let refreshResult = null;
       try {
-        await withBusyControl(el, "Closing…", async () => {
+        await withCampaignMutationControl(form, el, "Closing…", async () => {
           await store.closeGivingCampaign(el.dataset.campaign);
           refreshResult = await refreshAfterAdminMutation(`“${name}” closed.`);
         });
         if (refreshResult && !refreshResult.refreshed) {
           showCampaignError(el, refreshResult.message);
-          el.disabled = true;
+          lockCampaignMutationControls(form);
         }
       } catch (err) {
         const message = err.message || "Unable to close campaign";
@@ -969,12 +1000,12 @@ document.addEventListener("submit", async (e) => {
 
     case "form-campaign": {
       e.preventDefault();
-      if (!form.reportValidity()) return;
+      if (controlBusy.has(form) || !form.reportValidity()) return;
       const control = form.querySelector('[type="submit"]');
       const errorHost = form.querySelector("#campaign-error");
       clearCampaignError(form);
       let refreshFailed = false;
-      await withBusyControl(control, "Saving…", async () => {
+      await withCampaignMutationControl(form, control, "Saving…", async () => {
         try {
           const campaign = await store.saveGivingCampaign(campaignFormPayload(form));
           toast(form.dataset.campaign ? "Campaign saved." : "Campaign draft created.");
@@ -1001,7 +1032,7 @@ document.addEventListener("submit", async (e) => {
           toast(message, true);
         }
       });
-      if (refreshFailed) control.disabled = true;
+      if (refreshFailed) lockCampaignMutationControls(form);
       break;
     }
 

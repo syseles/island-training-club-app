@@ -498,7 +498,16 @@ const liveGift = store.recordDonation({
   ref: "GIVE-LIVE",
   campaignId: liveDraft.id,
 });
+const duplicateLiveGift = store.recordDonation({
+  userId: authUser.id,
+  name: "Riley Runner",
+  amount: 400,
+  ref: "GIVE-LIVE",
+  campaignId: liveDraft.id,
+});
 assert.equal(liveGift.campaignTitle, "Live Winter Relief 2027");
+assert.equal(duplicateLiveGift.id, liveGift.id, "same campaign transfer reference must be idempotent");
+assert.equal(store.donationsForUser(authUser.id).filter((gift) => gift.ref === "GIVE-LIVE").length, 1);
 assert.equal(store.campaignRaised(liveDraft.id), 400);
 profile.role = "super_admin";
 await store.getCurrentUser();
