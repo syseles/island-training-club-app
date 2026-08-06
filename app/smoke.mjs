@@ -480,28 +480,48 @@ if (!/href="#\/admin\/activities" class="active" aria-current="page"/.test(admin
 } else console.log("ok  active Admin tab exposes aria-current page");
 const adminMembersOut = await views.viewAdmin("members");
 await check("admin members", () => adminMembersOut);
-const adminStatusCounts = Object.fromEntries(["approved", "pending", "declined"].map((status) => [
-  status,
-  store.allUsers().filter((user) => user.status === status).length,
-]));
-for (const contract of [
-  new RegExp(`Approved[^\\d]*${adminStatusCounts.approved}`),
-  new RegExp(`Pending[^\\d]*${adminStatusCounts.pending}`),
-  new RegExp(`Declined[^\\d]*${adminStatusCounts.declined}`),
-  /Search members/,
-  />Super Admin</,
-  />Admin</,
-  />Member</,
-]) {
-  if (!contract.test(adminMembersOut)) {
-    failures++;
-    console.error(`FAIL Admin members missing ${contract}`);
+if (/member-summary|Member status counts|data-change="member-(?:status|role)-filter"/.test(adminMembersOut)) {
+  failures++;
+  console.error("FAIL Admin members must omit redundant counts and native filter selects");
+}
+if ((adminMembersOut.match(/class="admin-filter-chips"/g) || []).length !== 2 ||
+    !/<fieldset class="admin-filter-group">[\s\S]*?<legend>Status<\/legend>/.test(adminMembersOut) ||
+    !/<fieldset class="admin-filter-group">[\s\S]*?<legend>Role<\/legend>/.test(adminMembersOut)) {
+  failures++;
+  console.error("FAIL Admin member chips must render as labeled semantic groups");
+}
+const chipCss = stylesCss.match(/\.admin-filter-chips \{[\s\S]*?\n\}/)?.[0] || "";
+const chipButtonCss = stylesCss.match(/\.admin-filter-chips button \{[\s\S]*?\n\}/)?.[0] || "";
+if (!/overflow-x:\s*auto/.test(chipCss) || !/gap:\s*8px/.test(chipCss) ||
+    !/min-height:\s*44px/.test(chipButtonCss) || !/white-space:\s*nowrap/.test(chipButtonCss) ||
+    !/button\[aria-pressed="true"\]/.test(stylesCss)) {
+  failures++;
+  console.error("FAIL Admin member chips need accessible Night Circuit sizing, overflow, and active styles");
+}
+for (const [key, options] of Object.entries({
+  status: [["all", "All statuses"], ["approved", "Approved"], ["pending", "Pending"], ["declined", "Declined"]],
+  role: [["all", "All roles"], ["member", "Member"], ["admin", "Admin"], ["superadmin", "Super Admin"]],
+})) {
+  for (const [value, label] of options) {
+    const chip = new RegExp(`<button[^>]*data-action="admin-member-filter"[^>]*data-filter-key="${key}"[^>]*data-filter-value="${value}"[^>]*aria-pressed="${value === "all"}"[^>]*>${label}</button>`);
+    if (!chip.test(adminMembersOut)) {
+      failures++;
+      console.error(`FAIL Admin members missing ${key} chip ${label}`);
+    }
   }
+}
+if (!/Search members/.test(adminMembersOut) || !/(?:Role changes are Super Admin only|Only a Super Admin can change roles)/.test(adminMembersOut) || /Clear filters/.test(adminMembersOut)) {
+  failures++;
+  console.error("FAIL default Admin member filters must preserve guidance/search and hide Clear filters");
 }
 views.adminMemberFilters.query = "tina";
 views.adminMemberFilters.status = "approved";
 views.adminMemberFilters.role = "admin";
 const filteredAdminMembers = await views.viewAdmin("members");
+if (!/data-action="admin-member-filters-clear"[^>]*>Clear filters</.test(filteredAdminMembers)) {
+  failures++;
+  console.error("FAIL active Admin member filters must show Clear filters");
+}
 if (!filteredAdminMembers.includes("Tina") || filteredAdminMembers.includes("CM Chui") || filteredAdminMembers.includes("Marco Santos")) {
   failures++;
   console.error("FAIL Admin member search/status/role filters must combine truthfully");
@@ -1754,13 +1774,13 @@ const searchFilter = localControl({ input: "member-search" }, "tina");
 searchFilter.getAttribute = () => null;
 searchFilter.selectionStart = 4;
 await localInput({ target: searchFilter });
-const statusFilter = localControl({ change: "member-status-filter" }, "approved");
-localElements.set("member-status", statusFilter);
-await localChange({ target: statusFilter });
+const statusFilter = localControl({ action: "admin-member-filter", filterKey: "status", filterValue: "approved" });
+localElements.set("member-filter-status-approved", statusFilter);
+await localClick({ target: statusFilter });
 const statusFocusRestored = localActiveElement === statusFilter;
-const roleFilter = localControl({ change: "member-role-filter" }, "admin");
-localElements.set("member-role", roleFilter);
-await localChange({ target: roleFilter });
+const roleFilter = localControl({ action: "admin-member-filter", filterKey: "role", filterValue: "admin" });
+localElements.set("member-filter-role-admin", roleFilter);
+await localClick({ target: roleFilter });
 if (mem.get("itc.prototype.v1") !== persistedBeforeFilters ||
     views.adminMemberFilters.query !== "tina" || views.adminMemberFilters.status !== "approved" ||
     views.adminMemberFilters.role !== "admin") {
@@ -1769,11 +1789,17 @@ if (mem.get("itc.prototype.v1") !== persistedBeforeFilters ||
 } else console.log("ok  delegated member filters do not persist");
 if (!statusFocusRestored || localActiveElement !== roleFilter) {
   failures++;
-  console.error("FAIL status and role filters must restore corresponding focus after rerender");
-} else console.log("ok  status and role filters restore corresponding focus after rerender");
-views.adminMemberFilters.query = "";
-views.adminMemberFilters.status = "all";
-views.adminMemberFilters.role = "all";
+  console.error("FAIL status and role chips must restore corresponding focus after rerender");
+} else console.log("ok  status and role chips restore corresponding focus after rerender");
+const resetSearch = localControl({ input: "member-search" });
+localElements.set("member-search", resetSearch);
+const clearFilters = localControl({ action: "admin-member-filters-clear" });
+await localClick({ target: clearFilters });
+if (views.adminMemberFilters.query || views.adminMemberFilters.status !== "all" ||
+    views.adminMemberFilters.role !== "all" || localActiveElement !== resetSearch) {
+  failures++;
+  console.error("FAIL Clear filters must reset all view-local filters and focus search");
+} else console.log("ok  Clear filters resets all filters and focuses search");
 globalThis.setTimeout = realSetTimeout;
 globalThis.clearTimeout = realClearTimeout;
 

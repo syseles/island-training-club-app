@@ -1457,11 +1457,6 @@ function adminActivities() {
 
 function adminMembers(viewer, users) {
   const canEdit = isSuperRole(viewer.role);
-  const counts = {
-    approved: users.filter((u) => u.status === "approved").length,
-    pending: users.filter((u) => u.status === "pending").length,
-    declined: users.filter((u) => u.status === "declined").length,
-  };
   const query = adminMemberFilters.query.trim().toLocaleLowerCase();
   const filtered = users.filter((u) => {
     const matchesQuery = !query || `${u.fullName || ""} ${u.email || ""}`.toLocaleLowerCase().includes(query);
@@ -1471,6 +1466,8 @@ function adminMembers(viewer, users) {
   });
   const option = (value, label, selected) =>
     `<option value="${value}" ${selected === value ? "selected" : ""}>${label}</option>`;
+  const filterChip = (key, value, label) =>
+    `<button id="member-filter-${key}-${value}" type="button" data-action="admin-member-filter" data-filter-key="${key}" data-filter-value="${value}" aria-pressed="${adminMemberFilters[key] === value}">${label}</button>`;
   const activeFilters = [
     query ? `search “${esc(adminMemberFilters.query.trim())}”` : "",
     adminMemberFilters.status !== "all" ? `status ${adminMemberFilters.status[0].toUpperCase()}${adminMemberFilters.status.slice(1)}` : "",
@@ -1499,21 +1496,25 @@ function adminMembers(viewer, users) {
         ${editor}
       </div>`;
   }).join("");
+  const hasActiveFilters = adminMemberFilters.query.length > 0 ||
+    adminMemberFilters.status !== "all" || adminMemberFilters.role !== "all";
   return `
-    <div class="member-summary mt16" aria-label="Member status counts">
-      <span><strong>Approved</strong> ${counts.approved}</span>
-      <span><strong>Pending</strong> ${counts.pending}</span>
-      <span><strong>Declined</strong> ${counts.declined}</span>
-    </div>
-    <p class="muted small mt8">${canEdit ? "Role changes are Super Admin only." : "Only a Super Admin can change roles."}</p>
+    <p class="muted small mt16">${canEdit ? "Role changes are Super Admin only." : "Only a Super Admin can change roles."}</p>
     <div class="member-filters" aria-label="Filter members">
       <div class="field"><label for="member-search">Search members</label><input id="member-search" type="search" value="${esc(adminMemberFilters.query)}" placeholder="Name or email" data-input="member-search"></div>
-      <div class="field"><label for="member-status">Status</label><select id="member-status" data-change="member-status-filter">
-        ${option("all", "All statuses", adminMemberFilters.status)}${option("approved", "Approved", adminMemberFilters.status)}${option("pending", "Pending", adminMemberFilters.status)}${option("declined", "Declined", adminMemberFilters.status)}
-      </select></div>
-      <div class="field"><label for="member-role">Role</label><select id="member-role" data-change="member-role-filter">
-        ${option("all", "All roles", adminMemberFilters.role)}${option("member", "Member", adminMemberFilters.role)}${option("admin", "Admin", adminMemberFilters.role)}${option("superadmin", "Super Admin", adminMemberFilters.role)}
-      </select></div>
+      <fieldset class="admin-filter-group">
+        <legend>Status</legend>
+        <div class="admin-filter-chips">
+          ${filterChip("status", "all", "All statuses")}${filterChip("status", "approved", "Approved")}${filterChip("status", "pending", "Pending")}${filterChip("status", "declined", "Declined")}
+        </div>
+      </fieldset>
+      <fieldset class="admin-filter-group">
+        <legend>Role</legend>
+        <div class="admin-filter-chips">
+          ${filterChip("role", "all", "All roles")}${filterChip("role", "member", "Member")}${filterChip("role", "admin", "Admin")}${filterChip("role", "superadmin", "Super Admin")}
+        </div>
+      </fieldset>
+      ${hasActiveFilters ? '<button class="admin-filters-clear" type="button" data-action="admin-member-filters-clear">Clear filters</button>' : ""}
     </div>
     <div class="member-results">${rows || `<div class="empty">No members match${activeFilters ? ` ${activeFilters}` : " these filters"}.</div>`}</div>`;
 }

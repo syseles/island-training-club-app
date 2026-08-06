@@ -314,6 +314,27 @@ document.addEventListener("click", async (e) => {
   const { action } = el.dataset;
 
   switch (action) {
+    case "admin-member-filter": {
+      const { filterKey, filterValue } = el.dataset;
+      const allowedValues = {
+        status: ["all", "approved", "pending", "declined"],
+        role: ["all", "member", "admin", "superadmin"],
+      };
+      if (!allowedValues[filterKey]?.includes(filterValue)) break;
+      views.adminMemberFilters[filterKey] = filterValue;
+      await renderWithFeedback();
+      document.getElementById(`member-filter-${filterKey}-${filterValue}`)?.focus();
+      break;
+    }
+
+    case "admin-member-filters-clear":
+      views.adminMemberFilters.query = "";
+      views.adminMemberFilters.status = "all";
+      views.adminMemberFilters.role = "all";
+      await renderWithFeedback();
+      document.getElementById("member-search")?.focus();
+      break;
+
     case "sched-day":
       views.scheduleState.selected = el.dataset.date;
       await renderWithFeedback();
@@ -750,18 +771,6 @@ document.addEventListener("change", async (e) => {
   if (!el) return;
 
   switch (el.dataset.change) {
-    case "member-status-filter":
-      views.adminMemberFilters.status = el.value;
-      await renderWithFeedback();
-      document.getElementById("member-status")?.focus();
-      break;
-
-    case "member-role-filter":
-      views.adminMemberFilters.role = el.value;
-      await renderWithFeedback();
-      document.getElementById("member-role")?.focus();
-      break;
-
     case "set-role": {
       const viewer = store.currentUser();
       if (!viewer || !["superadmin", "super_admin"].includes(viewer.role) || viewer.id === el.dataset.user) break;
