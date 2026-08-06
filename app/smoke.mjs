@@ -1516,50 +1516,100 @@ const adminNotificationsSql = existsSync(adminNotificationsPath)
   ? readFileSync(adminNotificationsPath, "utf8")
   : "";
 let adminNotificationsOk = true;
-for (const kind of [
-  "admin_application_submitted",
-  "admin_application_approved",
-  "admin_application_declined",
-  "admin_role_promoted",
-  "admin_role_demoted",
-  "admin_membership_revoked",
-]) {
-  if (!adminNotificationsSql.includes(`'${kind}'`)) {
-    failures++;
-    adminNotificationsOk = false;
-    console.error(`FAIL missing Admin notification kind: ${kind}`);
-  }
-}
-for (const contract of [
-  "OLD.submitted_at is null",
-  "NEW.submitted_at is not null",
-  "role in ('admin', 'super_admin')",
-  "insert into public.role_changes",
-  "'welcome'",
-  "security definer",
-  "set search_path = public",
-  "drop trigger if exists",
-]) {
-  if (!adminNotificationsSql.includes(contract)) {
-    failures++;
-    adminNotificationsOk = false;
-    console.error(`FAIL missing Admin notification SQL contract: ${contract}`);
-  }
-}
-const submissionFunction = adminNotificationsSql.match(
-  /create or replace function public\.notify_admins_application_submitted\(\)[\s\S]*?\$\$;/
-)?.[0] || "";
-if (
-  !adminNotificationsSql.includes("after insert or update of submitted_at on public.applications") ||
-  submissionFunction.includes("on public.profiles") ||
-  submissionFunction.includes("TG_TABLE_NAME")
-) {
+const failAdminNotifications = message => {
   failures++;
   adminNotificationsOk = false;
-  console.error("FAIL Admin submission notifications must come only from submitted applications, not profile bootstrap");
+  console.error(`FAIL ${message}`);
+};
+const submissionFunction = adminNotificationsSql.match(
+  /create or replace function public\.notify_admins_application_submitted\(\)[\s\S]*?\n\$\$;/
+)?.[0] || "";
+const roleChangeFunction = adminNotificationsSql.match(
+  /create or replace function public\.record_role_change\(\)[\s\S]*?\n\$\$;/
+)?.[0] || "";
+
+if (!submissionFunction || !roleChangeFunction) {
+  failAdminNotifications("Admin notification SQL must contain both complete trigger function bodies");
+}
+for (const [functionName, functionSql] of [
+  ["application submission", submissionFunction],
+  ["role change", roleChangeFunction],
+]) {
+  if (!functionSql.includes("security definer") || !functionSql.includes("set search_path = public")) {
+    failAdminNotifications(`${functionName} notification function must own trusted writes with a fixed search path`);
+  }
+  if (!functionSql.includes("role in ('admin', 'super_admin')")) {
+    failAdminNotifications(`${functionName} notification function must fan out to current Admins and Super Admins`);
+  }
+}
+
+if (
+  !submissionFunction.includes("if TG_OP = 'INSERT' then") ||
+  !submissionFunction.includes("should_notify := NEW.submitted_at is not null;") ||
+  !submissionFunction.includes("elsif TG_OP = 'UPDATE' then") ||
+  !submissionFunction.includes("should_notify := OLD.submitted_at is null and NEW.submitted_at is not null;") ||
+  !submissionFunction.includes("'admin_application_submitted'") ||
+  !submissionFunction.includes("'Membership application submitted'") ||
+  !submissionFunction.includes("applicant_name || ' submitted a membership application.'")
+) {
+  failAdminNotifications("application notifications must use the exact first-submission event and copy");
+}
+if (
+  !adminNotificationsSql.includes("drop trigger if exists applications_notify_admins_submitted on public.applications;") ||
+  !adminNotificationsSql.includes("after insert or update of submitted_at on public.applications") ||
+  /create\s+trigger[^;]*\bon\s+public\.profiles\b/i.test(adminNotificationsSql) ||
+  submissionFunction.includes("TG_TABLE_NAME")
+) {
+  failAdminNotifications("Admin submission notifications must come only from the rerunnable applications trigger, not profile bootstrap");
+}
+
+const roleClassification = roleChangeFunction.match(/event_kind := case[\s\S]*?\n    end;/)?.[0]
+  .replace(/\s+/g, " ")
+  .trim() || "";
+const exactRoleClassification = [
+  "event_kind := case",
+  "when OLD.role = 'pending' and NEW.role = 'member' then 'admin_application_approved'",
+  "when OLD.role = 'pending' and NEW.role = 'declined' then 'admin_application_declined'",
+  "when OLD.role = 'member' and NEW.role = 'admin' then 'admin_role_promoted'",
+  "when OLD.role = 'admin' and NEW.role = 'member' then 'admin_role_demoted'",
+  "when OLD.role in ('member', 'admin') and NEW.role = 'pending' then 'admin_membership_revoked'",
+  "else null end;",
+].join(" ");
+if (roleClassification !== exactRoleClassification) {
+  failAdminNotifications("role notification function must classify exactly the five supported transitions");
+}
+for (const eventContract of [
+  "event_title := 'Application approved';\n          event_body := target_name || ' was approved by ' || actor_name || '.';",
+  "event_title := 'Application declined';\n          event_body := target_name || ' was declined by ' || actor_name || '.';",
+  "event_title := 'Member promoted';\n          event_body := actor_name || ' promoted ' || target_name || ' from Member to Admin.';",
+  "event_title := 'Admin demoted';\n          event_body := actor_name || ' changed ' || target_name || ' from Admin to Member.';",
+  "event_title := 'Membership revoked';\n          event_body := actor_name || ' revoked ' || target_name || '’s member access.';",
+]) {
+  if (!roleChangeFunction.includes(eventContract)) {
+    failAdminNotifications(`role notification function is missing exact event copy: ${eventContract.split(";")[0]}`);
+  }
+}
+
+const actorLookup = "select id, coalesce(nullif(full_name, ''), email, 'An administrator')\n      into actor_profile_id, actor_name\n      from public.profiles\n     where id = auth.uid();";
+if (
+  !roleChangeFunction.includes("actor_profile_id uuid;") ||
+  !roleChangeFunction.includes(actorLookup) ||
+  !roleChangeFunction.includes("actor_name := coalesce(actor_name, 'An administrator');") ||
+  !roleChangeFunction.includes("values (NEW.id, actor_profile_id, OLD.role, NEW.role);") ||
+  roleChangeFunction.includes("values (NEW.id, auth.uid(), OLD.role, NEW.role)") ||
+  roleChangeFunction.indexOf(actorLookup) > roleChangeFunction.indexOf("insert into public.role_changes")
+) {
+  failAdminNotifications("role audit must resolve one nullable actor profile ID before insert and derive actor copy from that lookup");
+}
+if (
+  !roleChangeFunction.includes("insert into public.role_changes (profile_id, changed_by, old_role, new_role)") ||
+  !roleChangeFunction.includes("if NEW.role = 'member' then") ||
+  !roleChangeFunction.includes("'welcome'")
+) {
+  failAdminNotifications("role notification function must preserve audit and member welcome writes inside its body");
 }
 if (adminNotificationsOk) {
-  console.log("ok  migration creates trusted Admin operational notifications without a profile-only event");
+  console.log("ok  migration creates trusted, transition-specific Admin notifications with nullable matched actors");
 }
 
 // --- store.getCurrentUser fallback (local mode) ---

@@ -57,14 +57,24 @@ set search_path = public
 as $$
 declare
   target_name text;
+  actor_profile_id uuid;
   actor_name text;
   event_kind text;
   event_title text;
   event_body text;
 begin
   if OLD.role is distinct from NEW.role then
+    -- Resolve the actor through profiles before writing the FK-backed audit row.
+    -- An authenticated user without a profile is recorded as a null actor rather
+    -- than aborting this trigger with a changed_by foreign-key violation.
+    select id, coalesce(nullif(full_name, ''), email, 'An administrator')
+      into actor_profile_id, actor_name
+      from public.profiles
+     where id = auth.uid();
+    actor_name := coalesce(actor_name, 'An administrator');
+
     insert into public.role_changes (profile_id, changed_by, old_role, new_role)
-    values (NEW.id, auth.uid(), OLD.role, NEW.role);
+    values (NEW.id, actor_profile_id, OLD.role, NEW.role);
 
     if NEW.role = 'member' then
       insert into public.notifications (profile_id, kind, title, body)
@@ -77,12 +87,6 @@ begin
     end if;
 
     target_name := coalesce(nullif(NEW.full_name, ''), NEW.email, 'A member');
-
-    select coalesce(nullif(full_name, ''), email, 'An administrator')
-      into actor_name
-      from public.profiles
-     where id = auth.uid();
-    actor_name := coalesce(actor_name, 'An administrator');
 
     event_kind := case
       when OLD.role = 'pending' and NEW.role = 'member' then 'admin_application_approved'
