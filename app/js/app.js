@@ -56,14 +56,21 @@ const NAV_FOR = {
 let prevPage = null;
 const controlBusy = new WeakSet();
 
-async function withBusyControl(control, busyLabel, work) {
+async function withBusyControl(control, busyLabel, work, options = {}) {
   if (!control || controlBusy.has(control)) return;
   controlBusy.add(control);
   const label = control.textContent;
-  const canReplaceLabel = control.tagName !== "SELECT";
+  const canReplaceLabel = options.replaceLabel ?? control.tagName !== "SELECT";
+  const announceWithoutReplacing = options.announceWithoutReplacing === true;
+  const hadAriaLabel = control.hasAttribute("aria-label");
+  const ariaLabel = control.getAttribute("aria-label");
   control.disabled = true;
   control.setAttribute("aria-busy", "true");
   if (canReplaceLabel) control.textContent = busyLabel;
+  if (announceWithoutReplacing) {
+    control.setAttribute("aria-label", busyLabel);
+    control.classList.toggle("is-busy", true);
+  }
   try {
     return await work();
   } finally {
@@ -71,6 +78,11 @@ async function withBusyControl(control, busyLabel, work) {
     control.disabled = false;
     control.removeAttribute("aria-busy");
     if (canReplaceLabel) control.textContent = label;
+    if (announceWithoutReplacing) {
+      if (hadAriaLabel) control.setAttribute("aria-label", ariaLabel);
+      else control.removeAttribute("aria-label");
+      control.classList.toggle("is-busy", false);
+    }
   }
 }
 
@@ -449,12 +461,17 @@ document.addEventListener("click", async (e) => {
     }
 
     case "notification-open": {
-      const id = el.closest("[data-notification-id]").dataset.notificationId;
+      const destination = el.dataset.destination || "#/account";
       try {
-        await store.markNotificationRead(id);
-        await renderWithFeedback();
-      } catch (err) {
-        toast(err.message || "Failed to mark read");
+        await withBusyControl(el, "Opening…", async () => {
+          if (el.dataset.notificationRead !== "true") {
+            await store.markNotificationRead(el.dataset.notificationId);
+          }
+          location.hash = destination;
+          await renderWithFeedback();
+        }, { replaceLabel: false, announceWithoutReplacing: true });
+      } catch {
+        toast("Failed to mark notification read", true);
       }
       break;
     }

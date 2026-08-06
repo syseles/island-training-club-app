@@ -1744,6 +1744,32 @@ for (const fn of ["listMyNotifications", "markNotificationRead"]) {
     console.log(`ok  store.js: exports ${fn}`);
   }
 }
+const markReadStoreBlock = storeSrc.match(
+  /export async function markNotificationRead\(id\) \{([\s\S]*?)\n\}/
+)?.[1] || "";
+for (const [contract, label] of [
+  [/\.eq\("id", id\)[\s\S]*?\.is\("read_at", null\)/, "targets one unread notification"],
+  [/\.select\("id, read_at"\)[\s\S]*?\.single\(\)/, "requires one returned update row"],
+  [/if \(!data\?\.id\) throw new Error\("Notification update conflict\."\)/, "rejects zero-row conflicts"],
+  [/return data;/, "returns the confirmed update"],
+]) {
+  if (!contract.test(markReadStoreBlock)) {
+    failures++;
+    console.error(`FAIL markNotificationRead ${label}`);
+  } else console.log(`ok  markNotificationRead ${label}`);
+}
+const notificationOpenBlock = appSrc.match(/case "notification-open": \{([\s\S]*?)\n    \}/)?.[1] || "";
+for (const [contract, label] of [
+  [/dataset\.notificationRead !== "true"/, "skips writes for already-read rows"],
+  [/await store\.markNotificationRead[\s\S]*?location\.hash = destination/, "waits for update before navigation"],
+  [/withBusyControl[\s\S]*?replaceLabel: false[\s\S]*?announceWithoutReplacing: true/, "uses row-safe duplicate protection"],
+  [/toast\("Failed to mark notification read", true\)/, "reports an accessible generic error"],
+]) {
+  if (!contract.test(notificationOpenBlock)) {
+    failures++;
+    console.error(`FAIL notification-open ${label}`);
+  } else console.log(`ok  notification-open ${label}`);
+}
 
 if (!viewsSrc.includes("export async function viewApplyLive")) {
   failures++;

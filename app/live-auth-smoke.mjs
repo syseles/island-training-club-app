@@ -141,6 +141,10 @@ const applicationReadGates = [];
 let notificationReadError = null;
 let notificationReadGate = null;
 let notificationQueryCount = 0;
+const notificationUpdates = [];
+let notificationUpdateError = null;
+let notificationUpdateResult = "row";
+let notificationUpdateGate = null;
 let profileListError = null;
 let profileListErrorAfterUpdate = null;
 let applicationListError = null;
@@ -288,14 +292,39 @@ const fakeSupabase = {
           };
         },
         update(patch) {
-          return {
-            async eq(column, value) {
+          let targetId = null;
+          const result = {
+            eq(column, value) {
               if (column !== "id") throw new Error("Notification update should target its id");
-              const row = notificationRows.find((item) => item.id === value);
-              if (row) Object.assign(row, structuredClone(patch));
-              return { error: null };
+              targetId = value;
+              return result;
+            },
+            is(column, value) {
+              if (column !== "read_at" || value !== null) {
+                throw new Error("Notification update should require an unread row");
+              }
+              return result;
+            },
+            select(columns) {
+              if (columns !== "id, read_at") {
+                throw new Error("Notification update must return id and read_at");
+              }
+              return {
+                single: async () => {
+                  notificationUpdates.push({ id: targetId, ...structuredClone(patch) });
+                  if (notificationUpdateGate) await notificationUpdateGate;
+                  if (notificationUpdateError) return { data: null, error: notificationUpdateError };
+                  const row = notificationRows.find((item) => item.id === targetId);
+                  if (notificationUpdateResult === "zero" || !row || row.read_at) {
+                    return { data: null, error: null };
+                  }
+                  Object.assign(row, structuredClone(patch));
+                  return { data: { id: row.id, read_at: row.read_at }, error: null };
+                },
+              };
             },
           };
+          return result;
         },
       };
     }
@@ -824,14 +853,24 @@ if (missingPrivacy?.redirect || !missingPrivacy.includes("Application details un
 const domListeners = new Map();
 const windowListeners = new Map();
 let activeElement = null;
-const makeElement = () => ({
+const makeElement = () => {
+  const classes = new Set();
+  return {
   children: [],
   className: "",
   innerHTML: "",
   textContent: "",
   hidden: false,
   attributes: new Map(),
-  classList: { toggle() {} },
+  classList: {
+    toggle(name, force) {
+      const enabled = force === undefined ? !classes.has(name) : force;
+      if (enabled) classes.add(name);
+      else classes.delete(name);
+      return enabled;
+    },
+    contains: (name) => classes.has(name),
+  },
   appendChild(child) { this.children.push(child); },
   setAttribute(name, value) { this.attributes.set(name, String(value)); },
   getAttribute(name) { return this.attributes.get(name) ?? null; },
@@ -843,7 +882,8 @@ const makeElement = () => ({
   },
   remove() {},
   querySelector() { return null; },
-});
+  };
+};
 const routeLoader = makeElement();
 routeLoader.hidden = true;
 const elements = new Map([
@@ -1056,24 +1096,110 @@ assert.equal(notificationBell.getAttribute("aria-label"), "Notifications, 2 unre
 assert.doesNotMatch(elements.get("bottom-nav").innerHTML, /aria-current="page"/,
   "Notifications must not activate a bottom navigation item");
 
-// A mark-read rerender advances the generation. An older query from this same
-// route may finish later, but its pre-mutation count cannot replace the new one.
+// Unread row activation is checked, duplicate-safe, and row-safe. It does not
+// navigate until one unread row is confirmed updated, then advances the render
+// generation so an older same-route count cannot overwrite the new badge.
 const sameRouteStaleGate = deferred();
 notificationReadGate = sameRouteStaleGate.promise;
 const sameRouteStaleRender = windowListeners.get("hashchange")();
+const updateGate = deferred();
+notificationUpdateGate = updateGate.promise;
 const notificationControl = makeElement();
-notificationControl.dataset = { action: "notification-open" };
-notificationControl.closest = (selector) => selector === "[data-action]"
-  ? notificationControl
-  : { dataset: { notificationId: "notification-admin-application" } };
+notificationControl.tagName = "BUTTON";
+notificationControl.textContent = "Application submitted Review Riley";
+notificationControl.dataset = {
+  action: "notification-open",
+  notificationId: "notification-admin-application",
+  notificationRead: "false",
+  destination: "#/admin/approvals",
+};
+notificationControl.closest = () => notificationControl;
+const updatesBeforeOpen = notificationUpdates.length;
 const markReadRender = domListeners.get("click")({ target: notificationControl });
+const duplicateOpen = domListeners.get("click")({ target: notificationControl });
+assert.equal(notificationUpdates.length, updatesBeforeOpen + 1, "double activation must send one update");
+assert.equal(location.hash, "#/notifications", "an unread row must wait for update success before navigating");
+assert.equal(notificationControl.disabled, true);
+assert.equal(notificationControl.getAttribute("aria-busy"), "true");
+assert.equal(notificationControl.getAttribute("aria-label"), "Opening…");
+assert.equal(notificationControl.classList.contains("is-busy"), true);
+assert.equal(notificationControl.textContent, "Application submitted Review Riley",
+  "structured notification content must not be replaced by a busy label");
+await duplicateOpen;
+updateGate.resolve();
 await markReadRender;
+notificationUpdateGate = null;
+assert.equal(location.hash, "#/admin/approvals");
+assert.match(viewEl.innerHTML, /Ready for review/);
 assert.equal(notificationBell.getAttribute("aria-label"), "Notifications, 1 unread");
+assert.equal(notificationControl.disabled, false);
+assert.equal(notificationControl.hasAttribute("aria-busy"), false);
+assert.equal(notificationControl.hasAttribute("aria-label"), false);
+assert.equal(notificationControl.classList.contains("is-busy"), false);
 sameRouteStaleGate.resolve();
 await sameRouteStaleRender;
 await new Promise(setImmediate);
 assert.equal(notificationBell.getAttribute("aria-label"), "Notifications, 1 unread",
   "a stale same-route count must not overwrite the post-mark-read generation");
+
+// Already-read rows skip the write and route immediately to their semantic destination.
+location.hash = "#/notifications";
+await windowListeners.get("hashchange")();
+const alreadyReadControl = makeElement();
+alreadyReadControl.tagName = "BUTTON";
+alreadyReadControl.textContent = "Role changed";
+alreadyReadControl.dataset = {
+  action: "notification-open",
+  notificationId: "notification-admin-role",
+  notificationRead: "true",
+  destination: "#/admin/members",
+};
+alreadyReadControl.closest = () => alreadyReadControl;
+const updatesBeforeReadOpen = notificationUpdates.length;
+const readOpen = domListeners.get("click")({ target: alreadyReadControl });
+assert.equal(location.hash, "#/admin/members", "read rows should navigate without waiting for a write");
+await readOpen;
+assert.equal(notificationUpdates.length, updatesBeforeReadOpen, "read rows must not update again");
+assert.match(viewEl.innerHTML, /href="#\/admin\/members" class="active"/);
+
+// Update errors and zero-row conflicts retain the Notifications page, hash,
+// and unread count, recover the row, and expose one accessible generic error.
+for (const failureMode of ["error", "zero"]) {
+  location.hash = "#/notifications";
+  await windowListeners.get("hashchange")();
+  const retainedNotificationHtml = viewEl.innerHTML;
+  const retainedNotificationLabel = notificationBell.getAttribute("aria-label");
+  const queriesBeforeFailure = notificationQueryCount;
+  toastStack.children.length = 0;
+  notificationUpdateError = failureMode === "error" ? new Error("Notification update unavailable") : null;
+  notificationUpdateResult = failureMode === "zero" ? "zero" : "row";
+  const failedControl = makeElement();
+  failedControl.tagName = "BUTTON";
+  failedControl.textContent = "Welcome to ITC";
+  failedControl.setAttribute("aria-label", "Open welcome notification");
+  failedControl.dataset = {
+    action: "notification-open",
+    notificationId: "notification-welcome",
+    notificationRead: "false",
+    destination: "#/account",
+  };
+  failedControl.closest = () => failedControl;
+  await domListeners.get("click")({ target: failedControl });
+  assert.equal(location.hash, "#/notifications", `${failureMode} must retain the current hash`);
+  assert.equal(viewEl.innerHTML, retainedNotificationHtml, `${failureMode} must retain the current page`);
+  assert.equal(notificationBell.getAttribute("aria-label"), retainedNotificationLabel,
+    `${failureMode} must retain the unread count`);
+  assert.equal(notificationQueryCount, queriesBeforeFailure, `${failureMode} must not render a destination`);
+  assert.equal(failedControl.disabled, false);
+  assert.equal(failedControl.hasAttribute("aria-busy"), false);
+  assert.equal(failedControl.getAttribute("aria-label"), "Open welcome notification");
+  assert.equal(failedControl.classList.contains("is-busy"), false);
+  assert.deepEqual(toastStack.children.map((item) => [item.textContent, item.getAttribute("role")]),
+    [["Failed to mark notification read", "alert"]]);
+  assert.match(toastStack.children[0].className, /err/);
+}
+notificationUpdateError = null;
+notificationUpdateResult = "row";
 
 // Approval queue failures must be truthful and preserve the last good queue.
 applicationReadError = null;
