@@ -1508,6 +1508,60 @@ if (!adminDecisionSql.includes("'declined'") || !adminDecisionSql.includes("prof
   console.log("ok  migration limits approve and decline decisions to submitted applications");
 }
 
+const adminNotificationsPath = resolve(
+  __dirname,
+  "../supabase/migrations/20260805000008_admin_operational_notifications.sql"
+);
+const adminNotificationsSql = existsSync(adminNotificationsPath)
+  ? readFileSync(adminNotificationsPath, "utf8")
+  : "";
+let adminNotificationsOk = true;
+for (const kind of [
+  "admin_application_submitted",
+  "admin_application_approved",
+  "admin_application_declined",
+  "admin_role_promoted",
+  "admin_role_demoted",
+  "admin_membership_revoked",
+]) {
+  if (!adminNotificationsSql.includes(`'${kind}'`)) {
+    failures++;
+    adminNotificationsOk = false;
+    console.error(`FAIL missing Admin notification kind: ${kind}`);
+  }
+}
+for (const contract of [
+  "OLD.submitted_at is null",
+  "NEW.submitted_at is not null",
+  "role in ('admin', 'super_admin')",
+  "insert into public.role_changes",
+  "'welcome'",
+  "security definer",
+  "set search_path = public",
+  "drop trigger if exists",
+]) {
+  if (!adminNotificationsSql.includes(contract)) {
+    failures++;
+    adminNotificationsOk = false;
+    console.error(`FAIL missing Admin notification SQL contract: ${contract}`);
+  }
+}
+const submissionFunction = adminNotificationsSql.match(
+  /create or replace function public\.notify_admins_application_submitted\(\)[\s\S]*?\$\$;/
+)?.[0] || "";
+if (
+  !adminNotificationsSql.includes("after insert or update of submitted_at on public.applications") ||
+  submissionFunction.includes("on public.profiles") ||
+  submissionFunction.includes("TG_TABLE_NAME")
+) {
+  failures++;
+  adminNotificationsOk = false;
+  console.error("FAIL Admin submission notifications must come only from submitted applications, not profile bootstrap");
+}
+if (adminNotificationsOk) {
+  console.log("ok  migration creates trusted Admin operational notifications without a profile-only event");
+}
+
 // --- store.getCurrentUser fallback (local mode) ---
 store.signOut();
 const localUser = await store.getCurrentUser();
