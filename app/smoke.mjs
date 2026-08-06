@@ -263,8 +263,15 @@ for (const [input, expect] of [
   }
 }
 console.log("ok  donor ID format validation");
-check("account (pending)", () => views.viewAccount());
-assertCleanAccount("pending", views.viewAccount());
+const pendingAccountHtml = check("account (pending)", () => views.viewAccount());
+assertCleanAccount("pending", pendingAccountHtml);
+for (const removedGuidance of ["admin demo profile", "see the approval side"]) {
+  if (pendingAccountHtml.toLowerCase().includes(removedGuidance)) {
+    failures++;
+    console.error(`FAIL pending Account contains removed admin-demo guidance: ${removedGuidance}`);
+  }
+}
+console.log("ok  pending Account has no removed admin-demo approval guidance");
 const pendHtml = views.viewActivity(paid.id);
 if (!pendHtml.includes("Booking locked")) {
   failures++;
