@@ -616,8 +616,25 @@ if (!/No members match[\s\S]*nobody[\s\S]*Approved[\s\S]*Admin/i.test(emptyAdmin
 views.adminMemberFilters.query = "";
 views.adminMemberFilters.status = "all";
 views.adminMemberFilters.role = "all";
-await check("admin activity edit", () => views.viewAdminActivity("hyrox"));
-await check("admin activity new", () => views.viewAdminActivity("new"));
+const adminActivityEdit = views.viewAdminActivity("hyrox");
+const adminActivityNew = views.viewAdminActivity("new");
+await check("admin activity edit", () => adminActivityEdit);
+await check("admin activity new", () => adminActivityNew);
+if ([adminActivityEdit, adminActivityNew].some((html) => /baseBooked|Simulated existing bookings|simulated demand/i.test(html))) {
+  failures++;
+  console.error("FAIL Admin activity forms must not render simulated demand controls or copy");
+} else console.log("ok  Admin activity forms cannot render simulated demand controls");
+const activityDraft = { ...store.getActivity("hyrox"), baseBooked: 17 };
+store.saveActivity(activityDraft);
+if ("baseBooked" in store.getActivity("hyrox")) {
+  failures++;
+  console.error("FAIL saveActivity must discard simulated demand input");
+} else console.log("ok  saveActivity discards simulated demand input");
+const capacityProbe = { id: "runtime-demand-probe", kind: "paid", capacity: 12, baseBooked: 11 };
+if (store.spotsLeft(capacityProbe) !== capacityProbe.capacity) {
+  failures++;
+  console.error("FAIL capacity must be calculated from real confirmed bookings only");
+} else console.log("ok  capacity uses real confirmed bookings only");
 const newApplicant = store.pendingApplicants().find((u) => u.email === "test@example.com");
 store.approveApplicant(newApplicant.id);
 console.log("ok  admin approved new applicant");
@@ -1274,6 +1291,12 @@ if (!viewsSrc.includes("Signed in as")) {
 }
 
 const appSrc = readFileSync(resolve(__dirname, "js/app.js"), "utf8");
+const activityStoreRuntimeSrc = readFileSync(resolve(__dirname, "js/store.js"), "utf8")
+  .split("// --- Activities & sessions")[1] || "";
+if (viewsSrc.includes("baseBooked") || appSrc.includes("baseBooked") || activityStoreRuntimeSrc.includes("baseBooked")) {
+  failures++;
+  console.error("FAIL runtime activity source must not support baseBooked");
+} else console.log("ok  runtime activity source has no baseBooked support");
 const indexSrc = readFileSync(resolve(__dirname, "index.html"), "utf8");
 const stylesSrc = readFileSync(resolve(__dirname, "styles.css"), "utf8");
 const feedbackChecks = [

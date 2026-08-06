@@ -770,22 +770,34 @@ export function getActivity(id) {
 }
 
 export function saveActivity(draft) {
-  const existing = state.activities.find((a) => a.id === draft.id);
+  const existingIndex = state.activities.findIndex((a) => a.id === draft.id);
+  const source = existingIndex >= 0
+    ? { ...state.activities[existingIndex], ...draft }
+    : draft;
+  const id = source.id || uid("act");
   const record = {
-    ...draft,
-    price: draft.kind === "paid" ? Number(draft.price) || 0 : undefined,
-    capacity: draft.kind === "paid" ? Number(draft.capacity) || 0 : undefined,
-    baseBooked: draft.kind === "paid" ? Number(draft.baseBooked) || 0 : undefined,
-    durationMin: Number(draft.durationMin) || 60,
-    weekday: Number(draft.weekday),
+    id,
+    name: source.name,
+    kind: source.kind,
+    category: source.category,
+    weekday: Number(source.weekday),
+    time: source.time,
+    durationMin: Number(source.durationMin) || 60,
+    location: source.location,
+    mapsQuery: source.mapsQuery,
+    blurb: source.blurb,
+    memberNote: source.memberNote,
+    photo: source.photo,
+    price: source.kind === "paid" ? Number(source.price) || 0 : undefined,
+    capacity: source.kind === "paid" ? Number(source.capacity) || 0 : undefined,
+    published: source.published,
   };
-  if (existing) {
-    Object.assign(existing, record);
+  if (existingIndex >= 0) {
+    state.activities[existingIndex] = record;
     save();
-    return { id: existing.id, created: false };
+    return { id, created: false };
   }
-  const id = draft.id || uid("act");
-  state.activities.push({ ...record, id });
+  state.activities.push(record);
   save();
   return { id, created: true };
 }
@@ -802,7 +814,7 @@ export function activeBookingsForSession(sessionId) {
 
 export function spotsLeft(session) {
   if (session.kind !== "paid") return null;
-  const taken = (session.baseBooked || 0) + activeBookingsForSession(session.id).length;
+  const taken = activeBookingsForSession(session.id).length;
   return Math.max(0, session.capacity - taken);
 }
 
