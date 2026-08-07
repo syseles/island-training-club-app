@@ -1,7 +1,7 @@
 # Testing Domain Integration Design
 
-**Date:** 2026-08-07  
-**Target:** `testing`  
+**Date:** 2026-08-07
+**Target:** `testing`
 **Integration branch:** `work/testing-feature-integration`
 
 ## Source Tips
