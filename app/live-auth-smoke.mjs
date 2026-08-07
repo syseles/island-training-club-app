@@ -625,14 +625,20 @@ assert.doesNotMatch(memberClubNotificationsHtml, /Application &lt;submitted&gt;|
 const emptyClubNotificationsHtml = await views.viewNotifications(notificationNow);
 assert.match(emptyClubNotificationsHtml, /No Club updates notifications\./,
   "The active filter empty state must name its filter");
+assert.doesNotMatch(emptyClubNotificationsHtml, /<section class="card notification-section"/,
+  "Filter empty states must not wrap in a card/box container");
 const emptyMemberNotificationsHtml = await views.viewNotifications(notificationNow, []);
-assert.match(emptyMemberNotificationsHtml, /New notifications will appear here\./);
+assert.doesNotMatch(emptyMemberNotificationsHtml, /New notifications will appear here\./,
+  "Empty inbox must not render the explanatory 'New notifications will appear here.' sentence");
 assert.match(emptyMemberNotificationsHtml, /No Club updates notifications\./);
+assert.doesNotMatch(emptyMemberNotificationsHtml, /<section class="card notification-section"/);
 renderedUser.role = "super_admin";
 views.notificationFilters.kind = "all";
 const emptyAdminNotificationsHtml = await views.viewNotifications(notificationNow, []);
-assert.match(emptyAdminNotificationsHtml, /New notifications will appear here\./);
-assert.match(emptyAdminNotificationsHtml, /No notifications in All\./);
+assert.doesNotMatch(emptyAdminNotificationsHtml, /New notifications will appear here\./);
+assert.match(emptyAdminNotificationsHtml, /No any notifications\./,
+  "The All filter empty state must use the simplified copy");
+assert.doesNotMatch(emptyAdminNotificationsHtml, /<section class="card notification-section"/);
 const liveApplication = await store.getMyApplication();
 if (!liveApplication || liveApplication.waiver_accepted_at !== "2026-08-05T01:00:00.000Z") {
   throw new Error("waiver missing");

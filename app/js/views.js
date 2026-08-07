@@ -2153,8 +2153,7 @@ export async function viewNotifications(now = new Date(), prefetchedRows = null)
   };
 
   const activeLabel = availableFilters.find(([kind]) => kind === activeKind)?.[1] || "All";
-  const emptyCopy = activeKind === "all" ? "No notifications in All." : `No ${activeLabel} notifications.`;
-  const wholeInboxEmpty = visibleRows.length === 0;
+  const emptyCopy = activeKind === "all" ? "No any notifications." : `No ${activeLabel} notifications.`;
   const filterButtons = availableFilters.map(([kind, label]) => `
     <button type="button" data-action="notification-filter" data-notification-filter="${kind}"
       aria-pressed="${kind === activeKind ? "true" : "false"}">${esc(label)}</button>`).join("");
@@ -2167,14 +2166,11 @@ export async function viewNotifications(now = new Date(), prefetchedRows = null)
     <div class="notification-filter-scroll">
       <div class="notification-filter-chips" role="group" aria-label="Filter notifications">${filterButtons}</div>
     </div>
-    ${wholeInboxEmpty
-      ? `<div class="empty notification-inbox-empty"><p>New notifications will appear here.</p></div>`
-      : ""}
-    <section class="card notification-section" aria-label="${esc(activeLabel)} notifications">
-      <div class="card-body">
-        ${filteredRows.length
-          ? `<div class="notification-list">${filteredRows.map(notificationRow).join("")}</div>`
-          : `<p class="notification-empty">${esc(emptyCopy)}</p>`}
-      </div>
-    </section>`;
+    ${filteredRows.length
+      ? `<section class="card notification-section" aria-label="${esc(activeLabel)} notifications">
+          <div class="card-body">
+            <div class="notification-list">${filteredRows.map(notificationRow).join("")}</div>
+          </div>
+        </section>`
+      : `<p class="notification-empty">${esc(emptyCopy)}</p>`}`;
 }
