@@ -1355,11 +1355,16 @@ export async function listMyNotifications() {
 
 export async function markNotificationRead(id) {
   if (!isLive() || !supabase) return;
-  const { error } = await supabase
+  const { data, error } = await supabase
     .from("notifications")
     .update({ read_at: new Date().toISOString() })
-    .eq("id", id);
+    .eq("id", id)
+    .is("read_at", null)
+    .select("id, read_at")
+    .single();
   if (error) throw error;
+  if (!data?.id) throw new Error("Notification update conflict.");
+  return data;
 }
 
 // --- Approval workflow (Supabase) — canonical Auth baseline exports ---

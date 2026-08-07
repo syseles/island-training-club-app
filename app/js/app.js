@@ -9,6 +9,7 @@ import { isLive, supabase } from "./config.js";
 
 const viewEl = document.getElementById("view");
 const navEl = document.getElementById("bottom-nav");
+const notificationEl = document.getElementById("top-notifications");
 const avatarEl = document.getElementById("top-avatar");
 const toastStack = document.getElementById("toast-stack");
 
@@ -49,18 +50,27 @@ const NAV_FOR = {
 
 let prevPage = null;
 let renderGeneration = 0;
+let notificationRouteRows = null;
+let pendingNotificationRouteRequest = null;
 const controlBusy = new WeakSet();
 
 // --- Async render + busy + feedback helpers (canonical Auth baseline) ---
 
-async function withBusyControl(control, busyLabel, work) {
+async function withBusyControl(control, busyLabel, work, options = {}) {
   if (!control || controlBusy.has(control)) return;
   controlBusy.add(control);
   const label = control.textContent;
-  const canReplaceLabel = control.tagName !== "SELECT";
+  const canReplaceLabel = options.replaceLabel ?? control.tagName !== "SELECT";
+  const announceWithoutReplacing = options.announceWithoutReplacing === true;
+  const hadAriaLabel = control.hasAttribute("aria-label");
+  const ariaLabel = control.getAttribute("aria-label");
   control.disabled = true;
   control.setAttribute("aria-busy", "true");
   if (canReplaceLabel) control.textContent = busyLabel;
+  if (announceWithoutReplacing) {
+    control.setAttribute("aria-label", busyLabel);
+    control.classList.toggle("is-busy", true);
+  }
   try {
     return await work();
   } finally {
@@ -68,6 +78,11 @@ async function withBusyControl(control, busyLabel, work) {
     control.disabled = false;
     control.removeAttribute("aria-busy");
     if (canReplaceLabel) control.textContent = label;
+    if (announceWithoutReplacing) {
+      if (hadAriaLabel) control.setAttribute("aria-label", ariaLabel);
+      else control.removeAttribute("aria-label");
+      control.classList.toggle("is-busy", false);
+    }
   }
 }
 
@@ -130,6 +145,34 @@ export async function maybeRedirectToApply() {
   }
 }
 
+function renderNotificationChrome(user, active, generation, rowsPromise = null) {
+  notificationEl.hidden = !user;
+  notificationEl.innerHTML = user ? views.notificationBellHTML(0, active) : "";
+  if (!user) {
+    notificationEl.removeAttribute("aria-label");
+    notificationEl.removeAttribute("aria-current");
+    return null;
+  }
+
+  notificationEl.setAttribute("aria-label", "Notifications");
+  if (active) notificationEl.setAttribute("aria-current", "page");
+  else notificationEl.removeAttribute("aria-current");
+
+  // Best-effort and detached from ordinary route renders. The Notifications
+  // page passes its own request so page content and the badge share one query.
+  const request = rowsPromise || store.listMyNotifications();
+  request.then((rows) => {
+    if (generation !== renderGeneration) return;
+    const unreadCount = rows.filter((row) => !row.read_at).length;
+    notificationEl.innerHTML = views.notificationBellHTML(unreadCount, active);
+    notificationEl.setAttribute(
+      "aria-label",
+      unreadCount ? `Notifications, ${unreadCount} unread` : "Notifications"
+    );
+  }).catch(() => {});
+  return request;
+}
+
 async function renderWithFeedback() {
   const generation = ++renderGeneration;
   const routeLoader = document.getElementById("route-loader");
@@ -156,12 +199,30 @@ async function render(generation = renderGeneration) {
   const parts = parseHash();
   const [page, arg, arg2] = parts.length ? parts : ["home"];
 
+  // Route rows are valid only for the Notifications render that committed
+  // them. Invalidate before any replacement can await or fail.
+  notificationRouteRows = null;
+
   // Entering the Schedule tab fresh (bottom nav, Home, Profile…) resets it
   // to this week + today — a week offset left over from earlier browsing
   // must not hide today's sessions. Back links from activity/checkout keep
   // the week and day you were looking at.
   if (page === "schedule" && !["schedule", "activity", "checkout"].includes(prevPage)) {
     views.resetScheduleState();
+  }
+
+  const notificationsActive = page === "notifications";
+  const routeUser = store.currentUser();
+  let notificationRowsPromise = null;
+  let nextNotificationRouteRows = null;
+
+  // Commit the bell and its active state before the Notifications request can
+  // delay route content. This same promise is also consumed by the page.
+  if (notificationsActive) {
+    notificationRowsPromise = pendingNotificationRouteRequest
+      || (routeUser ? store.listMyNotifications() : Promise.resolve([]));
+    pendingNotificationRouteRequest = null;
+    renderNotificationChrome(routeUser, true, generation, notificationRowsPromise);
   }
 
   let out;
@@ -187,7 +248,8 @@ async function render(generation = renderGeneration) {
       break;
     }
     case "notifications":
-      out = await views.viewNotifications();
+      nextNotificationRouteRows = await notificationRowsPromise;
+      out = await views.viewNotifications(new Date(), nextNotificationRouteRows);
       break;
     case "checkout":
       out = views.viewCheckout(arg);
@@ -212,26 +274,23 @@ async function render(generation = renderGeneration) {
       out = views.viewNotFound();
   }
 
+  // A newer route may finish while this view was awaiting live data. Only
+  // the latest generation may redirect or commit shared page chrome.
+  if (generation !== renderGeneration) return;
+
   if (out && typeof out === "object" && out.redirect) {
-    if (generation === renderGeneration) location.hash = out.redirect;
+    location.hash = out.redirect;
     return;
   }
 
-  // Only the latest navigation writes to the DOM. Older renders stay on disk
-  // but never replace committed view content.
-  if (generation !== renderGeneration) return;
+  // Keep the local filter cache paired with this generation's HTML commit.
+  if (notificationsActive) notificationRouteRows = nextNotificationRouteRows;
   viewEl.innerHTML = out;
   const user = store.currentUser();
   navEl.innerHTML = views.navHTML(NAV_FOR[page] ?? "home", user);
   avatarEl.classList.toggle("is-empty", !user);
   avatarEl.innerHTML = views.avatarHTML(user);
-  if (isLive() && user) {
-    views.unreadBadge().then((badge) => {
-      if (generation !== renderGeneration) return;
-      const notificationLink = navEl.querySelector?.('a[href="#/notifications"]');
-      if (notificationLink && badge) notificationLink.insertAdjacentHTML("afterbegin", badge);
-    }).catch(() => {});
-  }
+  if (!notificationsActive) renderNotificationChrome(user, false, generation);
   window.scrollTo({ top: 0 });
   viewEl.focus({ preventScroll: true });
   prevPage = page;
@@ -272,6 +331,17 @@ document.addEventListener("click", async (e) => {
   e.preventDefault?.();
 
   switch (action) {
+    case "notification-filter": {
+      const kind = el.dataset.notificationFilter;
+      const allowedKinds = ["all", "application", "decision", "role", "club", "personal"];
+      if (parseHash()[0] !== "notifications" || !allowedKinds.includes(kind) || !notificationRouteRows) break;
+      views.notificationFilters.kind = kind;
+      viewEl.innerHTML = await views.viewNotifications(new Date(), notificationRouteRows);
+      viewEl.querySelector(
+        `[data-action="notification-filter"][data-notification-filter="${kind}"]`
+      )?.focus();
+      break;
+    }
     case "admin-member-filter": {
       const { filterKey, filterValue } = el.dataset;
       const allowedValues = {
@@ -299,29 +369,25 @@ document.addEventListener("click", async (e) => {
       }
       break;
     case "notification-open": {
-      const id = el.dataset.notification;
-      const user = store.currentUser();
-      // Stale event suppression: when the row is already read we skip the
-      // network round-trip entirely so the navigation feels instant.
-      if (user && isLive()) {
+      const destination = el.dataset.destination || "#/account";
+      if (el.dataset.notificationRead !== "true") {
         try {
-          const cu = await store.getCurrentUser();
-          const list = await store.listMyNotifications();
-          const target = list.find((n) => n.id === id);
-          if (!target || target.read_at) {
-            if (target && target.link) location.hash = target.link;
-            return;
-          }
-          await store.markNotificationRead(id);
-          if (target.link) location.hash = target.link;
-          await renderWithFeedback();
-        } catch (err) {
-          toast(err.message || "Could not open notification", true);
+          await withBusyControl(
+            el,
+            "Opening…",
+            () => store.markNotificationRead(el.dataset.notificationId),
+            { replaceLabel: false, announceWithoutReplacing: true }
+          );
+        } catch {
+          toast("Failed to mark notification read", true);
+          break;
         }
-        return;
       }
-      const link = el.dataset.link || "#/home";
-      location.hash = link;
+
+      // Let the single hashchange route path render and report destination
+      // failures. A successful mark-read must never be relabelled as failed
+      // because the destination itself could not load.
+      location.hash = destination;
       break;
     }
     case "revoke-member": {
@@ -844,6 +910,18 @@ async function boot() {
   if (!location.hash) location.hash = "#/home";
   window.addEventListener("hashchange", async () => {
     const generation = ++renderGeneration;
+    // The Payment/Auth baseline hydrates identity before rendering. Commit
+    // Notifications chrome synchronously so direct inbox navigation still
+    // exposes its active state while that hydration is in flight.
+    if (parseHash()[0] === "notifications") {
+      const user = store.currentUser();
+      pendingNotificationRouteRequest = user
+        ? store.listMyNotifications()
+        : Promise.resolve([]);
+      renderNotificationChrome(user, true, generation, pendingNotificationRouteRequest);
+    } else {
+      pendingNotificationRouteRequest = null;
+    }
     viewEl.setAttribute("aria-busy", "true");
     const routeLoader = document.getElementById("route-loader");
     const loaderTimer = setTimeout(() => {

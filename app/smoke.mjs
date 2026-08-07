@@ -85,6 +85,18 @@ for (const marker of ['case "pay"', 'case "form-reserve"', 'case "form-mark-paid
   }
 }
 console.log("ok  Payment reserve and mark-paid routes remain delegated");
+for (const marker of [
+  "notificationBellHTML",
+  "notification-filter",
+  "notification-kind-badge",
+  "notificationRelativeTime",
+  "notificationHktTime",
+]) {
+  if (!integratedViewSource.includes(marker) && !integratedAppSource.includes(marker)) {
+    throw new Error(`integrated Notification domain missing ${marker}`);
+  }
+}
+console.log("ok  latest Notification domain markers coexist");
 
 // --- Visitor state ---
 store.signOut();

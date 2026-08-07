@@ -53,6 +53,40 @@ const applicationRows = new Map([
     },
   ],
 ]);
+const notificationRows = [
+  {
+    id: 'notification-admin-application',
+    kind: 'admin_application_submitted',
+    title: 'Application <submitted>',
+    body: 'Review Riley & approve.',
+    created_at: '2026-08-05T06:35:00.000Z',
+    read_at: null,
+  },
+  {
+    id: 'notification-admin-role',
+    kind: 'admin_role_changed',
+    title: 'Role changed',
+    body: 'A member role changed.',
+    created_at: '2026-08-05T04:40:00.000Z',
+    read_at: '2026-08-05T05:00:00.000Z',
+  },
+  {
+    id: 'notification-welcome',
+    kind: 'welcome',
+    title: 'Welcome to ITC',
+    body: 'Your membership is ready.',
+    created_at: '2026-08-05T06:32:00.000Z',
+    read_at: null,
+  },
+  {
+    id: 'notification-malformed',
+    kind: null,
+    title: 'Imported notification',
+    body: 'This row has incomplete metadata.',
+    created_at: 'not-a-date',
+    read_at: '2026-08-05T06:39:00.000Z',
+  },
+];
 const approvedProfiles = [
   {
     id: "approved-admin",
@@ -104,6 +138,13 @@ const profileUpdates = [];
 let applicationReadError = null;
 let applicationReadGate = null;
 const applicationReadGates = [];
+let notificationReadError = null;
+let notificationReadGate = null;
+let notificationQueryCount = 0;
+const notificationUpdates = [];
+let notificationUpdateError = null;
+let notificationUpdateResult = "row";
+let notificationUpdateGate = null;
 let profileListError = null;
 let profileListErrorAfterUpdate = null;
 let applicationListError = null;
@@ -224,6 +265,63 @@ const fakeSupabase = {
                   Object.assign(target, patch);
                   if (profileListErrorAfterUpdate) profileListError = profileListErrorAfterUpdate;
                   return { data: { id: targetId, role: target.role }, error: null };
+                },
+              };
+            },
+          };
+          return result;
+        },
+      };
+    }
+    if (table === "notifications") {
+      return {
+        select(columns) {
+          if (columns !== "*") throw new Error("Notification query should select all row fields");
+          return {
+            async order(column, options) {
+              if (column !== "created_at" || options?.ascending !== false) {
+                throw new Error("Notifications should be newest first");
+              }
+              notificationQueryCount++;
+              const rows = structuredClone(notificationRows);
+              const error = notificationReadError;
+              const gate = notificationReadGate;
+              notificationReadError = null;
+              notificationReadGate = null;
+              if (gate) await gate;
+              return { data: rows, error };
+            },
+          };
+        },
+        update(patch) {
+          let targetId = null;
+          const result = {
+            eq(column, value) {
+              if (column !== "id") throw new Error("Notification update should target its id");
+              targetId = value;
+              return result;
+            },
+            is(column, value) {
+              if (column !== "read_at" || value !== null) {
+                throw new Error("Notification update should require an unread row");
+              }
+              return result;
+            },
+            select(columns) {
+              if (columns !== "id, read_at") {
+                throw new Error("Notification update must return id and read_at");
+              }
+              return {
+                single: async () => {
+                  notificationUpdates.push({ id: targetId, ...structuredClone(patch) });
+                  if (notificationUpdateGate) await notificationUpdateGate;
+                  if (notificationUpdateError) return { data: null, error: notificationUpdateError };
+                  const row = notificationRows.find((item) => item.id === targetId);
+                  if (notificationUpdateResult === "zero" || !row || row.read_at) {
+                    return { data: null, error: null };
+                  }
+                  Object.assign(row, structuredClone(patch));
+                  return { data: { id: row.id, read_at: row.read_at }, error: null };
                 },
               };
             },
@@ -400,10 +498,115 @@ if (store.currentUser().status !== "declined") {
 }
 profile.role = "super_admin";
 await store.getCurrentUser();
-const renderedUser = store.currentUser();
+let renderedUser = store.currentUser();
 if (!renderedUser || renderedUser.id !== authUser.id) {
   throw new Error("A fetched Supabase session was not available to synchronous views");
 }
+const notificationNow = new RealDate("2026-08-05T06:40:00.000Z");
+profile.role = "admin";
+await store.getCurrentUser();
+const ordinaryAdminNotificationsHtml = await views.viewNotifications(notificationNow);
+assert.match(ordinaryAdminNotificationsHtml, /Application &lt;submitted&gt;/,
+  "Ordinary admins must receive operational notifications");
+profile.role = "super_admin";
+await store.getCurrentUser();
+renderedUser = store.currentUser();
+const categoryRows = [
+  ...notificationRows,
+  {
+    id: "notification-decision",
+    kind: "admin_application_approved",
+    title: "Application approved",
+    body: "A membership was approved.",
+    created_at: "2026-08-05T06:34:00.000Z",
+    read_at: null,
+  },
+  {
+    id: "notification-club",
+    kind: "giving_campaign_published",
+    title: "Giving campaign published",
+    body: "A campaign is ready.",
+    created_at: "2026-08-05T06:33:00.000Z",
+    read_at: null,
+  },
+];
+views.notificationFilters.kind = "all";
+const categoryNotificationsHtml = await views.viewNotifications(notificationNow, categoryRows);
+for (const badge of ["Application", "Decision", "Role change", "Club update", "My account"]) {
+  assert.match(categoryNotificationsHtml, new RegExp(`class="notification-kind-badge">${badge}<`));
+}
+assert.match(categoryNotificationsHtml, /Giving campaign published[\s\S]*?data-destination="#\/giving"|data-destination="#\/giving"[\s\S]*?Giving campaign published/);
+const categoryFilterCases = [
+  ["application", "Application &lt;submitted&gt;"],
+  ["decision", "Application approved"],
+  ["role", "Role changed"],
+  ["club", "Giving campaign published"],
+];
+for (const [kind, expectedTitle] of categoryFilterCases) {
+  views.notificationFilters.kind = kind;
+  const filteredHtml = await views.viewNotifications(notificationNow, categoryRows);
+  assert.match(filteredHtml, new RegExp(expectedTitle), `${kind} notifications must display in their filter`);
+  for (const [, otherTitle] of categoryFilterCases) {
+    if (otherTitle !== expectedTitle) {
+      assert.doesNotMatch(filteredHtml, new RegExp(otherTitle), `${kind} filter must exclude other notification categories`);
+    }
+  }
+}
+views.notificationFilters.kind = "all";
+const adminNotificationsHtml = await views.viewNotifications(notificationNow);
+assert.match(adminNotificationsHtml, /<h1[^>]*>Notifications<\/h1>/);
+for (const label of ["All", "Applications", "Decisions", "Role changes", "Club updates", "My account"]) {
+  assert.match(adminNotificationsHtml, new RegExp(`data-notification-filter="[^"]+"[^>]*>${label}<\\/button>`));
+}
+assert.match(adminNotificationsHtml, /data-notification-filter="all"[^>]*aria-pressed="true"/);
+assert.doesNotMatch(adminNotificationsHtml, /<h2[^>]*>Club operations<\/h2>|<h2[^>]*>My notifications<\/h2>/);
+assert.equal((adminNotificationsHtml.match(/class="notification-list"/g) || []).length, 1,
+  "Notifications must render one chronological list");
+assert.ok(adminNotificationsHtml.indexOf("Application &lt;submitted&gt;") < adminNotificationsHtml.indexOf("Welcome to ITC"));
+assert.ok(adminNotificationsHtml.indexOf("Welcome to ITC") < adminNotificationsHtml.indexOf("Role changed"));
+assert.doesNotMatch(adminNotificationsHtml, /Application <submitted>|Riley & approve/,
+  "Notification content must be HTML escaped");
+const notificationButtons = adminNotificationsHtml.match(/<button class="notification-row[\s\S]*?<\/button>/g) || [];
+assert.equal(notificationButtons.length, 4, "Every valid or malformed notification row must remain visible");
+for (const button of notificationButtons) {
+  assert.match(button, /<span class="notification-unread"/,
+    "Read and unread rows must have the same grid indicator structure");
+  assert.match(button, /class="notification-kind-badge"/,
+    "Every notification row must show its category badge");
+}
+assert.match(adminNotificationsHtml, /class="notification-row unread"[^>]*type="button"/);
+assert.match(adminNotificationsHtml, /class="notification-row"[^>]*[\s\S]*?class="notification-unread" aria-hidden="true"/,
+  "Read rows must retain a hidden indicator placeholder");
+assert.match(adminNotificationsHtml, /class="notification-unread" aria-label="Unread"/);
+assert.match(adminNotificationsHtml, /5 minutes ago/);
+assert.match(adminNotificationsHtml, /5 Aug 2026, 2:32 PM HKT/);
+assert.match(adminNotificationsHtml, /Imported notification[\s\S]*?Time unavailable/,
+  "Malformed metadata must fall back without dropping the row");
+assert.doesNotMatch(adminNotificationsHtml, /Invalid Date|NaN/);
+assert.match(adminNotificationsHtml, /data-destination="#\/admin\/approvals"/);
+assert.match(adminNotificationsHtml, /data-destination="#\/account"/);
+renderedUser.role = "member";
+views.notificationFilters.kind = "all";
+const memberNotificationsHtml = await views.viewNotifications(notificationNow);
+for (const label of ["All", "Club updates", "My account"]) assert.match(memberNotificationsHtml, new RegExp(`>${label}<\\/button>`));
+assert.doesNotMatch(memberNotificationsHtml, />Applications<\/button>|>Decisions<\/button>|>Role changes<\/button>/);
+assert.doesNotMatch(memberNotificationsHtml, /Application &lt;submitted&gt;|Role changed/);
+assert.match(memberNotificationsHtml, /Welcome to ITC/);
+views.notificationFilters.kind = "club";
+const memberClubNotificationsHtml = await views.viewNotifications(notificationNow, categoryRows);
+assert.match(memberClubNotificationsHtml, /Giving campaign published/);
+assert.doesNotMatch(memberClubNotificationsHtml, /Application &lt;submitted&gt;|Application approved|Role changed|Welcome to ITC/);
+const emptyClubNotificationsHtml = await views.viewNotifications(notificationNow);
+assert.match(emptyClubNotificationsHtml, /No Club updates notifications\./,
+  "The active filter empty state must name its filter");
+const emptyMemberNotificationsHtml = await views.viewNotifications(notificationNow, []);
+assert.match(emptyMemberNotificationsHtml, /New notifications will appear here\./);
+assert.match(emptyMemberNotificationsHtml, /No Club updates notifications\./);
+renderedUser.role = "super_admin";
+views.notificationFilters.kind = "all";
+const emptyAdminNotificationsHtml = await views.viewNotifications(notificationNow, []);
+assert.match(emptyAdminNotificationsHtml, /New notifications will appear here\./);
+assert.match(emptyAdminNotificationsHtml, /No notifications in All\./);
 const liveApplication = await store.getMyApplication();
 if (!liveApplication || liveApplication.waiver_accepted_at !== "2026-08-05T01:00:00.000Z") {
   throw new Error("waiver missing");
@@ -741,14 +944,24 @@ if (missingPrivacy?.redirect || !missingPrivacy.includes("Application details un
 const domListeners = new Map();
 const windowListeners = new Map();
 let activeElement = null;
-const makeElement = () => ({
+const makeElement = () => {
+  const classes = new Set();
+  return {
   children: [],
   className: "",
   innerHTML: "",
   textContent: "",
   hidden: false,
   attributes: new Map(),
-  classList: { toggle() {} },
+  classList: {
+    toggle(name, force) {
+      const enabled = force === undefined ? !classes.has(name) : force;
+      if (enabled) classes.add(name);
+      else classes.delete(name);
+      return enabled;
+    },
+    contains: (name) => classes.has(name),
+  },
   appendChild(child) { this.children.push(child); },
   setAttribute(name, value) { this.attributes.set(name, String(value)); },
   getAttribute(name) { return this.attributes.get(name) ?? null; },
@@ -760,12 +973,14 @@ const makeElement = () => ({
   },
   remove() {},
   querySelector() { return null; },
-});
+  };
+};
 const routeLoader = makeElement();
 routeLoader.hidden = true;
 const elements = new Map([
   ["view", makeElement()],
   ["bottom-nav", makeElement()],
+  ["top-notifications", makeElement()],
   ["top-avatar", makeElement()],
   ["toast-stack", makeElement()],
   ["route-loader", routeLoader],
@@ -893,6 +1108,311 @@ await oldestRender;
 assert.equal(viewEl.innerHTML, currentRouteHtml, "an older route must not commit after the current route");
 assert.equal(viewEl.hasAttribute("aria-busy"), false);
 assert.equal(routeLoader.hidden, true);
+
+// Signed-in notification chrome appears before its best-effort count query,
+// fails silently, and ignores stale generations.
+const notificationBell = elements.get("top-notifications");
+const countGate = deferred();
+notificationReadGate = countGate.promise;
+location.hash = "#/home";
+const immediateBellRender = windowListeners.get("hashchange")();
+await immediateBellRender;
+assert.equal(notificationBell.hidden, false, "signed-in bell must be visible without waiting for its count");
+assert.equal(notificationBell.getAttribute("aria-label"), "Notifications");
+assert.doesNotMatch(notificationBell.innerHTML, /notification-badge/);
+countGate.resolve();
+await new Promise(setImmediate);
+assert.match(notificationBell.innerHTML, /notification-badge[^>]*[\s\S]*>2<\/span>/);
+assert.equal(notificationBell.getAttribute("aria-label"), "Notifications, 2 unread");
+
+const cappedRows = Array.from({ length: 118 }, (_, index) => ({
+  id: `notification-cap-${index}`,
+  kind: "welcome",
+  title: "Unread update",
+  body: "Unread count cap fixture.",
+  created_at: "2026-08-05T06:39:00.000Z",
+  read_at: null,
+}));
+notificationRows.push(...cappedRows);
+await windowListeners.get("hashchange")();
+await new Promise(setImmediate);
+assert.equal(notificationBell.getAttribute("aria-label"), "Notifications, 120 unread",
+  "the accessible label must retain the full unread count");
+assert.match(notificationBell.innerHTML, />99\+<\/span>/, "only the visual badge should cap at 99+");
+notificationRows.splice(-cappedRows.length);
+
+const toastsBeforeCountFailure = toastStack.children.length;
+notificationReadError = new Error("Notification count unavailable");
+await windowListeners.get("hashchange")();
+await new Promise(setImmediate);
+assert.equal(notificationBell.hidden, false);
+assert.equal(notificationBell.getAttribute("aria-label"), "Notifications");
+assert.doesNotMatch(notificationBell.innerHTML, /notification-badge/);
+assert.equal(toastStack.children.length, toastsBeforeCountFailure, "count failures must not toast");
+
+const staleCountGate = deferred();
+notificationReadGate = staleCountGate.promise;
+const staleCountRender = windowListeners.get("hashchange")();
+await staleCountRender;
+notificationRows.push({
+  id: "notification-new-unread",
+  kind: "welcome",
+  title: "New update",
+  body: "A newer generation sees this unread row.",
+  created_at: "2026-08-05T06:39:00.000Z",
+  read_at: null,
+});
+await windowListeners.get("hashchange")();
+await new Promise(setImmediate);
+assert.equal(notificationBell.getAttribute("aria-label"), "Notifications, 3 unread");
+staleCountGate.resolve();
+await new Promise(setImmediate);
+assert.equal(notificationBell.getAttribute("aria-label"), "Notifications, 3 unread",
+  "a stale unread query must not overwrite newer chrome");
+notificationRows.pop();
+
+const directRouteGate = deferred();
+notificationReadGate = directRouteGate.promise;
+const queriesBeforeDirectRoute = notificationQueryCount;
+location.hash = "#/notifications";
+const directRouteRender = windowListeners.get("hashchange")();
+assert.equal(notificationBell.hidden, false,
+  "a direct Notifications route must commit signed-in chrome before its query resolves");
+assert.equal(notificationBell.getAttribute("aria-label"), "Notifications");
+assert.equal(notificationBell.getAttribute("aria-current"), "page");
+assert.equal(notificationQueryCount, queriesBeforeDirectRoute + 1,
+  "the Notifications page and unread badge must share one query");
+directRouteGate.resolve();
+await directRouteRender;
+await new Promise(setImmediate);
+assert.equal(notificationQueryCount, queriesBeforeDirectRoute + 1,
+  "resolving the direct route must not start a second unread query");
+assert.equal(notificationBell.getAttribute("aria-label"), "Notifications, 2 unread");
+assert.doesNotMatch(elements.get("bottom-nav").innerHTML, /aria-current="page"/,
+  "Notifications must not activate a bottom navigation item");
+
+// Out-of-order overlapping Notifications renders must leave the route cache
+// paired with the newest committed HTML. Filtering that page remains local.
+const olderNotificationsGate = deferred();
+notificationReadGate = olderNotificationsGate.promise;
+const queriesBeforeOverlap = notificationQueryCount;
+const olderNotificationsRender = windowListeners.get("hashchange")();
+notificationRows.unshift({
+  id: "notification-latest-application",
+  kind: "admin_application_submitted",
+  title: "Latest application",
+  body: "This row belongs only to the newest route request.",
+  created_at: "2026-08-05T06:39:30.000Z",
+  read_at: null,
+});
+const currentNotificationsGate = deferred();
+notificationReadGate = currentNotificationsGate.promise;
+const currentNotificationsRender = windowListeners.get("hashchange")();
+assert.equal(notificationQueryCount, queriesBeforeOverlap + 2,
+  "each overlapping Notifications route should issue exactly one shared query");
+currentNotificationsGate.resolve();
+await currentNotificationsRender;
+olderNotificationsGate.resolve();
+await olderNotificationsRender;
+notificationRows.shift();
+const overlapFilterControl = makeElement();
+overlapFilterControl.tagName = "BUTTON";
+overlapFilterControl.dataset = { action: "notification-filter", notificationFilter: "application" };
+overlapFilterControl.closest = () => overlapFilterControl;
+const queriesBeforeOverlapFilter = notificationQueryCount;
+await domListeners.get("click")({ target: overlapFilterControl });
+assert.equal(notificationQueryCount, queriesBeforeOverlapFilter,
+  "filtering after overlapping routes must not fetch again");
+assert.match(viewEl.innerHTML, /Latest application/,
+  "a stale Notifications completion must not replace the newest route rows");
+views.notificationFilters.kind = "all";
+
+// Kind filters are view-local: activating one reuses route rows, rerenders the
+// Notifications HTML, and restores keyboard focus to the equivalent new chip.
+const filterControl = makeElement();
+filterControl.tagName = "BUTTON";
+filterControl.dataset = { action: "notification-filter", notificationFilter: "application" };
+filterControl.closest = () => filterControl;
+const replacementFilterControl = makeElement();
+const filterSelector = '[data-action="notification-filter"][data-notification-filter="application"]';
+viewEl.querySelector = (selector) => selector === filterSelector ? replacementFilterControl : null;
+const queriesBeforeFilter = notificationQueryCount;
+await domListeners.get("click")({ target: filterControl });
+assert.equal(views.notificationFilters.kind, "application");
+assert.equal(notificationQueryCount, queriesBeforeFilter,
+  "a local kind filter must not refetch notifications");
+assert.match(viewEl.innerHTML, /data-notification-filter="application"[^>]*aria-pressed="true"/);
+assert.match(viewEl.innerHTML, /Application &lt;submitted&gt;/);
+assert.doesNotMatch(viewEl.innerHTML, /Welcome to ITC|Role changed/);
+assert.equal(activeElement, replacementFilterControl,
+  "filter rerender must restore focus to the activated chip");
+viewEl.querySelector = () => null;
+views.notificationFilters.kind = "all";
+await domListeners.get("click")({
+  target: {
+    dataset: { action: "notification-filter", notificationFilter: "all" },
+    closest() { return this; },
+  },
+});
+
+// Unread row activation is checked, duplicate-safe, and row-safe. It does not
+// navigate until one unread row is confirmed updated, then advances the render
+// generation so an older same-route count cannot overwrite the new badge.
+const sameRouteStaleGate = deferred();
+notificationReadGate = sameRouteStaleGate.promise;
+const sameRouteStaleRender = windowListeners.get("hashchange")();
+const updateGate = deferred();
+notificationUpdateGate = updateGate.promise;
+const notificationControl = makeElement();
+notificationControl.tagName = "BUTTON";
+notificationControl.textContent = "Application submitted Review Riley";
+notificationControl.dataset = {
+  action: "notification-open",
+  notificationId: "notification-admin-application",
+  notificationRead: "false",
+  destination: "#/admin/approvals",
+};
+notificationControl.closest = () => notificationControl;
+const updatesBeforeOpen = notificationUpdates.length;
+const notificationHtmlBeforeOpen = viewEl.innerHTML;
+const markReadRender = domListeners.get("click")({ target: notificationControl });
+const duplicateOpen = domListeners.get("click")({ target: notificationControl });
+assert.equal(notificationUpdates.length, updatesBeforeOpen + 1, "double activation must send one update");
+assert.equal(location.hash, "#/notifications", "an unread row must wait for update success before navigating");
+assert.equal(notificationControl.disabled, true);
+assert.equal(notificationControl.getAttribute("aria-busy"), "true");
+assert.equal(notificationControl.getAttribute("aria-label"), "Opening…");
+assert.equal(notificationControl.classList.contains("is-busy"), true);
+assert.equal(notificationControl.textContent, "Application submitted Review Riley",
+  "structured notification content must not be replaced by a busy label");
+await duplicateOpen;
+updateGate.resolve();
+await markReadRender;
+notificationUpdateGate = null;
+assert.equal(location.hash, "#/admin/approvals");
+assert.equal(viewEl.innerHTML, notificationHtmlBeforeOpen,
+  "notification activation must not explicitly render in addition to hashchange");
+await windowListeners.get("hashchange")();
+assert.match(viewEl.innerHTML, /Ready for review/);
+assert.equal(notificationBell.getAttribute("aria-label"), "Notifications, 1 unread");
+assert.equal(notificationControl.disabled, false);
+assert.equal(notificationControl.hasAttribute("aria-busy"), false);
+assert.equal(notificationControl.hasAttribute("aria-label"), false);
+assert.equal(notificationControl.classList.contains("is-busy"), false);
+sameRouteStaleGate.resolve();
+await sameRouteStaleRender;
+await new Promise(setImmediate);
+assert.equal(notificationBell.getAttribute("aria-label"), "Notifications, 1 unread",
+  "a stale same-route count must not overwrite the post-mark-read generation");
+
+// Already-read rows skip the write and route immediately to their semantic destination.
+location.hash = "#/notifications";
+await windowListeners.get("hashchange")();
+const alreadyReadControl = makeElement();
+alreadyReadControl.tagName = "BUTTON";
+alreadyReadControl.textContent = "Role changed";
+alreadyReadControl.dataset = {
+  action: "notification-open",
+  notificationId: "notification-admin-role",
+  notificationRead: "true",
+  destination: "#/admin/members",
+};
+alreadyReadControl.closest = () => alreadyReadControl;
+const updatesBeforeReadOpen = notificationUpdates.length;
+const readOpen = domListeners.get("click")({ target: alreadyReadControl });
+assert.equal(location.hash, "#/admin/members", "read rows should navigate without waiting for a write");
+await readOpen;
+assert.equal(notificationUpdates.length, updatesBeforeReadOpen, "read rows must not update again");
+await windowListeners.get("hashchange")();
+assert.match(viewEl.innerHTML, /href="#\/admin\/members" class="active"/);
+
+// Destination failures use shared route feedback after mutation handling has
+// finished. They must never be misreported as mark-read failures, whether the
+// activated row started unread or read.
+for (const initiallyRead of [false, true]) {
+  location.hash = "#/notifications";
+  await windowListeners.get("hashchange")();
+  const retainedDestinationHtml = viewEl.innerHTML;
+  toastStack.children.length = 0;
+  const destinationFailure = new Error(initiallyRead
+    ? "Read notification destination unavailable"
+    : "Unread notification destination unavailable");
+  profileListError = destinationFailure;
+  const destinationControl = makeElement();
+  destinationControl.tagName = "BUTTON";
+  destinationControl.textContent = "Open operational notification";
+  destinationControl.dataset = {
+    action: "notification-open",
+    notificationId: initiallyRead ? "notification-admin-role" : "notification-destination-unread",
+    notificationRead: initiallyRead ? "true" : "false",
+    destination: "#/admin/members",
+  };
+  destinationControl.closest = () => destinationControl;
+  if (!initiallyRead) {
+    notificationRows.push({
+      id: "notification-destination-unread",
+      kind: "admin_role_promoted",
+      title: "Destination test",
+      body: "Destination failure fixture.",
+      created_at: "2026-08-05T06:39:30.000Z",
+      read_at: null,
+    });
+  }
+  const updatesBeforeDestinationFailure = notificationUpdates.length;
+  await domListeners.get("click")({ target: destinationControl });
+  assert.equal(location.hash, "#/admin/members");
+  assert.equal(notificationUpdates.length, updatesBeforeDestinationFailure + (initiallyRead ? 0 : 1));
+  await windowListeners.get("hashchange")();
+  assert.equal(viewEl.innerHTML, retainedDestinationHtml,
+    "A failed destination render must retain the last successful Notifications page");
+  assert.deepEqual(toastStack.children.map((item) => item.textContent), [destinationFailure.message]);
+  assert.equal(toastStack.children.some((item) => item.textContent === "Failed to mark notification read"), false);
+  if (!initiallyRead) {
+    assert.ok(notificationRows.find((row) => row.id === "notification-destination-unread")?.read_at,
+      "Unread destination failure must not roll back or misreport a successful mark-read");
+    notificationRows.splice(notificationRows.findIndex((row) => row.id === "notification-destination-unread"), 1);
+  }
+  profileListError = null;
+}
+
+// Update errors and zero-row conflicts retain the Notifications page, hash,
+// and unread count, recover the row, and expose one accessible generic error.
+for (const failureMode of ["error", "zero"]) {
+  location.hash = "#/notifications";
+  await windowListeners.get("hashchange")();
+  const retainedNotificationHtml = viewEl.innerHTML;
+  const retainedNotificationLabel = notificationBell.getAttribute("aria-label");
+  const queriesBeforeFailure = notificationQueryCount;
+  toastStack.children.length = 0;
+  notificationUpdateError = failureMode === "error" ? new Error("Notification update unavailable") : null;
+  notificationUpdateResult = failureMode === "zero" ? "zero" : "row";
+  const failedControl = makeElement();
+  failedControl.tagName = "BUTTON";
+  failedControl.textContent = "Welcome to ITC";
+  failedControl.setAttribute("aria-label", "Open welcome notification");
+  failedControl.dataset = {
+    action: "notification-open",
+    notificationId: "notification-welcome",
+    notificationRead: "false",
+    destination: "#/account",
+  };
+  failedControl.closest = () => failedControl;
+  await domListeners.get("click")({ target: failedControl });
+  assert.equal(location.hash, "#/notifications", `${failureMode} must retain the current hash`);
+  assert.equal(viewEl.innerHTML, retainedNotificationHtml, `${failureMode} must retain the current page`);
+  assert.equal(notificationBell.getAttribute("aria-label"), retainedNotificationLabel,
+    `${failureMode} must retain the unread count`);
+  assert.equal(notificationQueryCount, queriesBeforeFailure, `${failureMode} must not render a destination`);
+  assert.equal(failedControl.disabled, false);
+  assert.equal(failedControl.hasAttribute("aria-busy"), false);
+  assert.equal(failedControl.getAttribute("aria-label"), "Open welcome notification");
+  assert.equal(failedControl.classList.contains("is-busy"), false);
+  assert.deepEqual(toastStack.children.map((item) => [item.textContent, item.getAttribute("role")]),
+    [["Failed to mark notification read", "alert"]]);
+  assert.match(toastStack.children[0].className, /err/);
+}
+notificationUpdateError = null;
+notificationUpdateResult = "row";
 
 // Approval queue failures must be truthful and preserve the last good queue.
 applicationReadError = null;

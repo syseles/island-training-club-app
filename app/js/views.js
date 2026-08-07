@@ -23,6 +23,10 @@ import {
   fmtTime,
   fmtMoney,
   initials,
+  notificationRelativeTime,
+  notificationHktTime,
+  notificationDestination,
+  notificationCategory,
 } from "./data.js";
 
 // Auth roles are normalized: live Supabase returns "super_admin"; the
@@ -152,7 +156,6 @@ const NAV_ITEMS = [
   { key: "home", label: "Home", icon: "home", href: "#/home" },
   { key: "schedule", label: "Schedule", icon: "calendar", href: "#/schedule" },
   { key: "community", label: "Community", icon: "people", href: "#/community" },
-  { key: "notifications", label: "Notifications", icon: "bell", href: "#/notifications", roles: ["signed-in"] },
   { key: "account", label: "Account", icon: "user", href: "#/account" },
   { key: "admin", label: "Admin", icon: "shield", href: "#/admin", roles: ["admin", "superadmin"] },
 ];
@@ -176,6 +179,11 @@ export function navHTML(routeKey, user) {
 
 export function avatarHTML(user) {
   return user ? initials(user.fullName) : ICONS.user;
+}
+
+export function notificationBellHTML(unreadCount = 0, active = false) {
+  const visibleCount = unreadCount > 99 ? "99+" : String(unreadCount);
+  return `${ICONS.bell}${unreadCount ? `<span class="notification-badge" aria-hidden="true">${visibleCount}</span>` : ""}`;
 }
 
 // ============================================================================
@@ -1742,26 +1750,98 @@ export function viewAdminActivity(id) {
 }
 
 
-export async function viewNotifications() {
-  const rows = isLive()
-    ? await store.listMyNotifications()
-    : [];
-  if (!rows.length) {
-    return `<div class="kicker">Notifications</div>
-<h1 class="display">What’s new.</h1>
-<div class="card mt16"><div class="card-body">
-  <p class="empty">No notifications right now — booking updates, waitlist moves and payment confirmations land here.</p>
-</div></div>`;
-  }
-  return rows.map((n) => `
-    <a class="card booking-card mt16" href="${esc(n.link || "#/home")}" data-action="notification-open" data-notification="${esc(n.id)}"><div class="card-body">
-      <strong>${esc(n.title || n.body || "Notification")}</strong>
-      <span class="muted small">${esc(n.body || "")}</span>
-    </div></a>`).join("");
-}
+export const notificationFilters = { kind: "all" };
 
-export async function unreadBadge() {
-  const rows = await store.listMyNotifications();
-  const count = rows.filter((row) => !row.read_at).length;
-  return count > 0 ? `<span class="badge">${count}</span>` : "";
+const ADMIN_NOTIFICATION_FILTERS = [
+  ["all", "All"],
+  ["application", "Applications"],
+  ["decision", "Decisions"],
+  ["role", "Role changes"],
+  ["club", "Club updates"],
+  ["personal", "My account"],
+];
+const MEMBER_NOTIFICATION_FILTERS = ADMIN_NOTIFICATION_FILTERS.filter(([kind]) =>
+  ["all", "club", "personal"].includes(kind)
+);
+const NOTIFICATION_CATEGORY_LABELS = {
+  application: "Application",
+  decision: "Decision",
+  role: "Role change",
+  club: "Club update",
+  personal: "My account",
+};
+
+export async function viewNotifications(now = new Date(), prefetchedRows = null) {
+  const user = store.currentUser();
+  const rows = prefetchedRows ?? await store.listMyNotifications();
+  const admin = isAdminRole(user?.role);
+  const availableFilters = admin ? ADMIN_NOTIFICATION_FILTERS : MEMBER_NOTIFICATION_FILTERS;
+  const availableKinds = new Set(availableFilters.map(([kind]) => kind));
+  const activeKind = availableKinds.has(notificationFilters.kind) ? notificationFilters.kind : "all";
+  notificationFilters.kind = activeKind;
+
+  // Keep the existing member boundary even for unknown future admin kinds:
+  // malformed categories fall back safely without exposing operational rows.
+  const visibleRows = rows.filter((notification) => {
+    const kind = typeof notification?.kind === "string" ? notification.kind.trim() : "";
+    return admin || !kind.startsWith("admin_");
+  }).sort((a, b) => {
+    const aTime = Date.parse(a?.created_at);
+    const bTime = Date.parse(b?.created_at);
+    return (Number.isFinite(bTime) ? bTime : -Infinity) - (Number.isFinite(aTime) ? aTime : -Infinity);
+  });
+  const filteredRows = activeKind === "all"
+    ? visibleRows
+    : visibleRows.filter((notification) => notificationCategory(notification?.kind) === activeKind);
+
+  const notificationRow = (notification) => {
+    const unread = !notification?.read_at;
+    const kind = typeof notification?.kind === "string" ? notification.kind.trim() : "";
+    const category = notificationCategory(kind);
+    const relativeTime = notificationRelativeTime(notification?.created_at, now);
+    const exactTime = notificationHktTime(notification?.created_at);
+    const time = relativeTime && exactTime
+      ? `<span>${esc(relativeTime)}</span><span>${esc(exactTime)}</span>`
+      : `<span>Time unavailable</span>`;
+    return `
+      <button class="notification-row${unread ? " unread" : ""}" type="button"
+        data-action="notification-open"
+        data-notification-id="${esc(notification?.id)}"
+        data-notification-read="${unread ? "false" : "true"}"
+        data-destination="${esc(notificationDestination(kind))}">
+        <span class="notification-unread" ${unread ? `aria-label="Unread"` : `aria-hidden="true"`}></span>
+        <span class="notification-copy">
+          <span class="notification-kind-badge">${esc(NOTIFICATION_CATEGORY_LABELS[category])}</span>
+          <strong>${esc(notification?.title)}</strong>
+          <span>${esc(notification?.body)}</span>
+        </span>
+        <span class="notification-time">${time}</span>
+      </button>`;
+  };
+
+  const activeLabel = availableFilters.find(([kind]) => kind === activeKind)?.[1] || "All";
+  const emptyCopy = activeKind === "all" ? "No notifications in All." : `No ${activeLabel} notifications.`;
+  const wholeInboxEmpty = visibleRows.length === 0;
+  const filterButtons = availableFilters.map(([kind, label]) => `
+    <button type="button" data-action="notification-filter" data-notification-filter="${kind}"
+      aria-pressed="${kind === activeKind ? "true" : "false"}">${esc(label)}</button>`).join("");
+
+  return `
+    <header class="notification-header">
+      <p class="kicker">Inbox</p>
+      <h1 class="display sm">Notifications</h1>
+    </header>
+    <div class="notification-filter-scroll">
+      <div class="notification-filter-chips" role="group" aria-label="Filter notifications">${filterButtons}</div>
+    </div>
+    ${wholeInboxEmpty
+      ? `<div class="empty notification-inbox-empty"><p>New notifications will appear here.</p></div>`
+      : ""}
+    <section class="card notification-section" aria-label="${esc(activeLabel)} notifications">
+      <div class="card-body">
+        ${filteredRows.length
+          ? `<div class="notification-list">${filteredRows.map(notificationRow).join("")}</div>`
+          : `<p class="notification-empty">${esc(emptyCopy)}</p>`}
+      </div>
+    </section>`;
 }

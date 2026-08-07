@@ -386,3 +386,70 @@ export function mapsUrl(session) {
   const q = session.mapsQuery || session.location;
   return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(q)}`;
 }
+
+// ============================================================================
+// Notifications — deterministic display helpers
+// ============================================================================
+
+const notificationDate = (value) => {
+  if (value == null || (typeof value === "string" && !value.trim())) return null;
+  const date = value instanceof Date ? value : new Date(value);
+  return Number.isFinite(date.getTime()) ? date : null;
+};
+
+const notificationKind = (kind) => typeof kind === "string" ? kind.trim() : "";
+
+const NOTIFICATION_CATEGORIES = new Map([
+  ["admin_application_submitted", "application"],
+  ["admin_application_approved", "decision"],
+  ["admin_application_declined", "decision"],
+  ["admin_role_promoted", "role"],
+  ["admin_role_demoted", "role"],
+  ["admin_membership_revoked", "role"],
+  // Retain a stable category for notifications created before transition-
+  // specific role kinds were introduced.
+  ["admin_role_changed", "role"],
+  ["giving_campaign_published", "club"],
+]);
+
+export function notificationCategory(kind) {
+  return NOTIFICATION_CATEGORIES.get(notificationKind(kind)) || "personal";
+}
+
+export function notificationRelativeTime(value, now = new Date()) {
+  const createdAt = notificationDate(value);
+  const currentTime = notificationDate(now);
+  if (!createdAt || !currentTime) return "";
+  const seconds = Math.max(0, Math.floor((currentTime - createdAt) / 1000));
+  if (seconds < 60) return "Just now";
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes} minute${minutes === 1 ? "" : "s"} ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours} hour${hours === 1 ? "" : "s"} ago`;
+  if (hours < 48) return "Yesterday";
+  const days = Math.floor(hours / 24);
+  return `${days} days ago`;
+}
+
+export function notificationHktTime(value) {
+  const date = notificationDate(value);
+  if (!date) return "";
+  const formatted = new Intl.DateTimeFormat("en-HK", {
+    timeZone: "Asia/Hong_Kong",
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
+  }).format(date);
+  return `${formatted.replace(/\b(am|pm)\b/i, (period) => period.toUpperCase())} HKT`;
+}
+
+export function notificationDestination(kind) {
+  const normalizedKind = notificationKind(kind);
+  if (normalizedKind === "admin_application_submitted") return "#/admin/approvals";
+  if (normalizedKind.startsWith("admin_")) return "#/admin/members";
+  if (normalizedKind === "giving_campaign_published") return "#/giving";
+  return "#/account";
+}
