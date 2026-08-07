@@ -158,17 +158,11 @@ const NAV_ITEMS = [
   { key: "community", label: "Community", icon: "people", href: "#/community" },
   { key: "giving", label: "Giving", icon: "heart", href: "#/giving", roles: ["signed-in"] },
   { key: "account", label: "Account", icon: "user", href: "#/account" },
-  { key: "admin", label: "Admin", icon: "shield", href: "#/admin", roles: ["admin", "superadmin"] },
 ];
 
 export function navHTML(routeKey, user) {
-  const isAdmin = user && isAdminRole(user.role);
   const isSignedIn = !!user;
-  return NAV_ITEMS.filter((i) => {
-    if (!i.roles) return true;
-    if (i.roles.includes("signed-in")) return isSignedIn;
-    return isAdmin;
-  })
+  return NAV_ITEMS.filter((i) => !i.roles || (i.roles.includes("signed-in") && isSignedIn))
     .map(
       (i) => `
       <a href="${i.href}" class="${i.key === routeKey ? "active" : ""}" ${i.key === routeKey ? 'aria-current="page"' : ""}>
@@ -198,19 +192,26 @@ export function viewHome() {
   const upcoming = store.upcomingSessions(14);
   const name = user ? esc(user.preferredName || user.fullName.split(" ")[0]) : null;
 
-  // "My week" shows a signed-in member only the sessions they've booked
-  // (free ones included); the full week stays discoverable via Schedule.
-  let rows = upcoming.slice(0, 3);
-  let emptyMsg = "No upcoming sessions — check back soon.";
-  if (user && user.status === "approved") {
+  let rows;
+  let emptyMsg;
+  let weekHeading;
+  if (!user) {
+    rows = upcoming.filter((session) => session.kind === "free");
+    emptyMsg = "No open sessions this week — check back soon.";
+    weekHeading = "This week — open to all";
+  } else if (user.status !== "approved") {
+    rows = upcoming.filter((session) => session.kind === "free");
+    emptyMsg = "No open sessions this week — check back soon.";
+    weekHeading = "My Week";
+  } else {
     const bookedIds = new Set(
-      store
-        .bookingsForUser(user.id)
-        .filter((b) => b.status === "confirmed" && !sessionStarted(b.snapshot))
-        .map((b) => b.sessionId)
+      store.bookingsForUser(user.id)
+        .filter((booking) => booking.status === "confirmed" && !sessionStarted(booking.snapshot))
+        .map((booking) => booking.sessionId)
     );
-    rows = upcoming.filter((s) => bookedIds.has(s.id));
+    rows = upcoming.filter((session) => bookedIds.has(session.id));
     emptyMsg = `Nothing booked this week yet. <a href="#/schedule" style="color:var(--accent)">Find a session →</a>`;
+    weekHeading = "My Week";
   }
 
   const guest = !user
@@ -232,7 +233,7 @@ export function viewHome() {
     ${user && user.status === "pending" ? pendingBanner() : ""}
     ${guest}
     <div class="section-head">
-      <h2>My Week</h2>
+      <h2>${weekHeading}</h2>
       <a href="#/schedule">See more →</a>
     </div>
     <div class="session-list">

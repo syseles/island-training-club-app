@@ -179,7 +179,22 @@ if (
 
 // --- Visitor state ---
 store.signOut();
+const allUpcoming = store.upcomingSessions(14);
+// booking tests need a session that hasn't started yet — today's sessions
+// are unbookable once their start time passes
+const paid = allUpcoming.find((s) => s.kind === "paid" && !data.sessionStarted(s));
+const free = allUpcoming.find((s) => s.kind === "free");
+if (!paid || !free) throw new Error("expected both paid and free sessions in window");
 const localVisitorHome = views.viewHome();
+if (!localVisitorHome.includes("This week — open to all")) {
+  throw new Error("visitor Home must show the open-to-all heading");
+}
+if (localVisitorHome.includes("My Week")) {
+  throw new Error("visitor Home must not show My Week");
+}
+if (!localVisitorHome.includes(free.name) || localVisitorHome.includes(paid.name)) {
+  throw new Error("visitor Home must show free sessions only");
+}
 if (!localVisitorHome.includes('href="#/account">Sign in or join</a>')) {
   throw new Error("local signed-out Home must retain the Account sign-in link");
 }
@@ -190,12 +205,6 @@ console.log("ok  signed-out Home uses the correct live/local sign-in action");
 await check("home (visitor)", () => views.viewHome());
 await check("schedule", () => views.viewSchedule());
 const hyroxSid = store.nextSession().kind === "paid" ? store.nextSession().id : null;
-const allUpcoming = store.upcomingSessions(14);
-// booking tests need a session that hasn't started yet — today's sessions
-// are unbookable once their start time passes
-const paid = allUpcoming.find((s) => s.kind === "paid" && !data.sessionStarted(s));
-const free = allUpcoming.find((s) => s.kind === "free");
-if (!paid || !free) throw new Error("expected both paid and free sessions in window");
 await check("activity paid (visitor)", () => views.viewActivity(paid.id));
 await check("activity free (visitor)", () => views.viewActivity(free.id));
 await check("community", () => views.viewCommunity());
@@ -391,6 +400,10 @@ for (const [input, expect] of [
 }
 console.log("ok  donor ID format validation");
 await check("account (pending)", () => views.viewAccount());
+const pendingHome = views.viewHome();
+if (!pendingHome.includes("My Week") || !pendingHome.includes(free.name) || pendingHome.includes(paid.name)) {
+  throw new Error("pending Home must show My Week with free sessions only");
+}
 const pendingCommunity = views.viewCommunity();
 if (!pendingCommunity.includes("You’re welcome here.")) {
   failures++;
@@ -416,6 +429,14 @@ for (const tab of ["approvals", "members", "activities", "giving", "payments"]) 
   }
 }
 console.log("ok  every Admin route exposes exactly one active tab");
+const adminPrimaryNav = views.navHTML("account", store.currentUser());
+if (adminPrimaryNav.includes('href="#/admin"') || adminPrimaryNav.includes("<span>Admin</span>")) {
+  throw new Error("Admin must not appear in primary navigation");
+}
+const adminProfile = await views.viewAccount();
+if (!adminProfile.includes("Admin Tools") || !adminProfile.includes('href="#/admin"')) {
+  throw new Error("Admin Tools must remain available from Profile");
+}
 await check("admin activity edit", () => views.viewAdminActivity("hyrox"));
 await check("admin activity new", () => views.viewAdminActivity("new"));
 const newApplicant = store.pendingApplicants().find((u) => u.email === "test@example.com");
@@ -553,6 +574,15 @@ if (conf.receipt.method !== "PayMe") throw new Error("receipt should record the 
 if (!store.receiptForBooking(r1.id)) throw new Error("receipt should attach to the booking");
 console.log("ok  collector confirms -> booking confirmed + receipt (PayMe)");
 const booking = conf.booking, receipt = conf.receipt;
+const approvedHome = views.viewHome();
+if (!approvedHome.includes("My Week") || !approvedHome.includes(booking.snapshot.name)) {
+  throw new Error("approved Home must show booked sessions in My Week");
+}
+for (const session of allUpcoming.filter((item) => item.id !== booking.sessionId)) {
+  if (approvedHome.includes(`href="#/activity/${session.id}"`)) {
+    throw new Error("approved My Week must exclude unbooked sessions");
+  }
+}
 await check("booking confirmation", () => views.viewBooking(booking.id));
 await check("receipt", () => views.viewReceipt(receipt.id));
 await check("activity (member, booked)", () => views.viewActivity(paid.id));
