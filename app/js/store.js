@@ -1249,6 +1249,10 @@ export async function getActiveGivingCampaign({ ownsGeneration = () => true } = 
     .select(campaignColumns)
     .eq("status", "published")
     .maybeSingle();
+  if (error?.code === "PGRST205") {
+    if (ownsGeneration()) liveGivingCampaign = null;
+    return null;
+  }
   if (error) throw error;
   const campaign = normalizeGivingCampaign(data);
   if (ownsGeneration()) liveGivingCampaign = campaign;

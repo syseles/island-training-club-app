@@ -529,7 +529,7 @@ export async function viewGiving({
       <div class="kicker">Giving &amp; Fundraising</div>
       <h1 class="display">Every step can give back.</h1>
       <div class="card mt16"><div class="card-body">
-        <h3>No active campaign right now</h3>
+        <h3>No active Giving campaign at the moment</h3>
         <p class="hero-meta mt8">Check back soon for the next opportunity to support the ITC community.</p>
       </div></div>
       ${gifts.length ? `<div class="section-head"><h2>Giving history</h2></div>${givingHistory(gifts)}` : ""}`;

@@ -157,6 +157,7 @@ let profileUpdateError = null;
 let profileUpdateResult = "row";
 let profileUpdateGate = null;
 let activeGivingCampaignRow = null;
+let activeGivingCampaignError = null;
 let authStateChangeHandler = null;
 let authCallbackLocked = false;
 let oauthCalls = 0;
@@ -347,7 +348,7 @@ const fakeSupabase = {
               return {
                 maybeSingle: async () => ({
                   data: structuredClone(activeGivingCampaignRow),
-                  error: null,
+                  error: activeGivingCampaignError,
                 }),
               };
             },
@@ -1931,6 +1932,23 @@ process.off("unhandledRejection", captureRejection);
 applicationReadError = null;
 profile.role = "super_admin";
 await store.getCurrentUser();
+activeGivingCampaignRow = null;
+activeGivingCampaignError = {
+  code: "PGRST205",
+  message: "Could not find the table 'public.giving_campaigns' in the schema cache",
+};
+const missingSchemaGiving = await views.viewGiving();
+assert.match(missingSchemaGiving, /No active Giving campaign at the moment/);
+assert.match(missingSchemaGiving, /Check back soon for the next opportunity to support the ITC community\./);
+
+activeGivingCampaignError = null;
+const emptyGiving = await views.viewGiving();
+assert.match(emptyGiving, /No active Giving campaign at the moment/);
+
+activeGivingCampaignError = { code: "42501", message: "permission denied" };
+await assert.rejects(() => views.viewGiving(), { message: "permission denied" });
+activeGivingCampaignError = null;
+
 activeGivingCampaignRow = {
   id: "campaign-current", title: "Current campaign", description: "Current route data",
   goal_hkd: 1000, fps_id: "1111111", fps_payee: "ITC", status: "published",

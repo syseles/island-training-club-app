@@ -1723,6 +1723,11 @@ for (const email of ["giving-pending@example.test", "giving-declined@example.tes
 store.signIn("giving-admin@example.test");
 await store.closeGivingCampaign(givingCampaign.id);
 if (await store.getActiveGivingCampaign()) throw new Error("closed campaigns must not remain active");
+const emptyGivingHtml = await views.viewGiving();
+if (!emptyGivingHtml.includes("No active Giving campaign at the moment")
+    || !emptyGivingHtml.includes("Check back soon for the next opportunity to support the ITC community.")) {
+  throw new Error("closed campaigns must render the exact Giving empty state");
+}
 console.log("ok  Giving access, donor ID, campaign, FPS, thanks, history, and close flow");
 
 const sourceSnapshots = [
