@@ -93,6 +93,46 @@ To use live mode locally, edit `app/index.html`'s inline `<script>` block to set
 project's values. Refresh the page after changes. Manage live identities in
 Supabase Admin; this cleanup does not change the schema or delete live users.
 
+## Giving schema and campaign
+
+The member route treats PostgREST `PGRST205` as no active campaign so Giving
+remains reachable. This does not make donations functional.
+
+To enable Giving:
+
+1. Apply the ordered migration chain, including
+   `20260805000011_giving_campaigns.sql` and `20260806000001_donor_id.sql`, to
+   the intended Supabase project.
+2. Sign in as an approved Admin or Super Admin and use **Admin Tools → Giving**
+   to create and publish a real campaign.
+3. Verify the published campaign as an approved member.
+
+No fake campaign data is restored.
+
+Before production deployment, verify the migration chain against a fresh,
+disposable Supabase-compatible database:
+
+```bash
+export ITC_GIVING_TEST_DATABASE_URL='postgresql://...disposable database...'
+export ITC_ALLOW_DATABASE_RESET=1
+bash supabase/tests/verify_giving_campaigns.sh
+```
+
+This verifier applies every migration and runs SQL integration checks. It is
+destructive and must never target production, staging, a shared database, or
+any database containing users or application objects. Its safety gate requires
+an explicitly acknowledged, empty target. Exercise the gate without applying
+migrations with:
+
+```bash
+bash supabase/tests/verify_giving_campaigns.sh --safety-check-only
+bash supabase/tests/verify_giving_campaigns_safety.sh
+```
+
+Applying the migrations to the real remote target remains a manual deployment
+operation; confirm the selected project and backups before running
+`supabase db push`.
+
 ## Initial Super Admin bootstrap
 
 Every OAuth-created profile starts `pending`, including the first profile in a

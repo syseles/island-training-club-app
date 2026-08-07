@@ -76,6 +76,20 @@ const liveAuthRunbookSource = readFileSync(
   resolve(__dirnameSmoke, "../docs/runbooks/live-auth.md"),
   "utf8"
 );
+const readmeSource = readFileSync(resolve(__dirnameSmoke, "../README.md"), "utf8");
+const deploymentDocs = `${readmeSource}\n${liveAuthRunbookSource}`;
+for (const marker of [
+  "20260805000011_giving_campaigns.sql",
+  "20260806000001_donor_id.sql",
+  "Admin Tools → Giving",
+  "No fake campaign data is restored",
+]) {
+  if (!deploymentDocs.includes(marker)) {
+    throw new Error(`Giving deployment recovery docs missing ${marker}`);
+  }
+}
+console.log("ok  Giving deployment recovery is documented without fake campaign data");
+
 if (!/values\s*\([\s\S]*?'pending'\s*\)/i.test(profilesMigrationSource)
     || /existing_count|count\s*\(\s*\*\s*\)[\s\S]*super_admin/i.test(profilesMigrationSource)) {
   throw new Error("fresh OAuth profiles must always bootstrap as pending");
