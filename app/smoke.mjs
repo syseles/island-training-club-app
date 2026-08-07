@@ -995,7 +995,13 @@ console.log("ok  reset");
     { id: "r-user-1", bookingId: "b-user-1", userId: "real-member" },
   ];
   raw.queues = {
-    "hyrox-2026-09-05": { waitlist: ["u-member", "real-member"], interest: ["u-member"] },
+    "hyrox-2026-09-05": {
+      waitlist: [
+        { userId: "u-member", joinedAt: 1 },
+        { userId: "real-member", joinedAt: 2 },
+      ],
+      interest: ["u-member", "real-member"],
+    },
   };
   raw.duty = {
     "2026-08-15": { userId: "u-admin", setAt: 1 },
@@ -1023,16 +1029,18 @@ console.log("ok  reset");
     failures++;
     console.error("FAIL v10 migration must keep genuine bookings");
   } else console.log("ok  v10 migration keeps genuine bookings");
-  // The demo waitlist entry for u-member is removed; the genuine entry survives.
+  // Demo entries are removed in both current object and legacy string shapes;
+  // genuine entries and their original shape survive.
   const q = migrated.queues?.["hyrox-2026-09-05"];
-  if (q && q.waitlist.includes("u-member")) {
+  if (q?.waitlist.some((entry) => entry.userId === "u-member") || q?.interest.includes("u-member")) {
     failures++;
-    console.error("FAIL v10 migration must remove demo waitlist entries");
-  } else console.log("ok  v10 migration removes demo queue entries");
-  if (q && !q.waitlist.includes("real-member")) {
+    console.error("FAIL v13 migration must remove current and legacy demo queue entries");
+  } else console.log("ok  v13 migration removes current and legacy demo queue entries");
+  if (!q?.waitlist.some((entry) => entry.userId === "real-member" && entry.joinedAt === 2)
+      || !q?.interest.includes("real-member")) {
     failures++;
-    console.error("FAIL v10 migration must keep genuine queue entries");
-  } else console.log("ok  v10 migration keeps genuine queue entries");
+    console.error("FAIL v13 migration must keep current and legacy genuine queue entries");
+  } else console.log("ok  v13 migration keeps current and legacy genuine queue entries");
   // Duty reassignment for removed demo collector, but genuine duty survives.
   if (migrated.duty?.["2026-08-15"]?.userId === "u-admin") {
     failures++;
@@ -1140,6 +1148,56 @@ const givingFixture = {
 };
 mem.set("itc.prototype.v1", JSON.stringify(givingFixture));
 store.load();
+
+// Payment access belongs at the state seam, including mutations called
+// without rendering their gated controls first.
+const paymentGateSession = store.upcomingSessions(14).find(
+  (session) => session.kind === "paid" && !data.sessionStarted(session) && !store.isMidtown(session)
+);
+if (!paymentGateSession) throw new Error("Payment seam checks need an upcoming paid session");
+for (const blockedId of ["giving-pending", "giving-declined", "missing-member"]) {
+  for (const mutate of [
+    () => store.reserveSession(blockedId, paymentGateSession),
+    () => store.joinWaitlist(blockedId, paymentGateSession.id),
+    () => store.leaveWaitlist(blockedId, paymentGateSession.id),
+    () => store.joinInterest(blockedId, paymentGateSession.id),
+    () => store.leaveInterest(blockedId, paymentGateSession.id),
+  ]) {
+    try {
+      mutate();
+      throw new Error(`${blockedId} Payment mutation should be rejected`);
+    } catch (err) {
+      if (!/Approved member access required/.test(err.message)) throw err;
+    }
+  }
+}
+const approvedReservation = store.reserveSession("giving-member", paymentGateSession);
+givingFixture.users.find((user) => user.id === "giving-member").status = "declined";
+mem.set("itc.prototype.v1", JSON.stringify({
+  ...JSON.parse(mem.get("itc.prototype.v1")),
+  users: givingFixture.users,
+}));
+store.load();
+try {
+  store.markBookingPaid(approvedReservation.id, "FPS", "BLOCKED-PAYMENT");
+  throw new Error("declined reservation owner should not mark payment paid");
+} catch (err) {
+  if (!/Approved member access required/.test(err.message)) throw err;
+}
+givingFixture.users.find((user) => user.id === "giving-member").status = "approved";
+mem.set("itc.prototype.v1", JSON.stringify({
+  ...JSON.parse(mem.get("itc.prototype.v1")),
+  users: givingFixture.users,
+}));
+store.load();
+if (!store.markBookingPaid(approvedReservation.id, "FPS", "APPROVED-PAYMENT")) {
+  throw new Error("approved booking owner should remain operable by Admin payment flows");
+}
+if (!store.confirmBookingPayment(approvedReservation.id, "giving-admin")) {
+  throw new Error("Admin should confirm payment for an approved affected profile");
+}
+console.log("ok  Payment store seams reject unapproved owners and retain approved Admin operations");
+
 const givingCampaign = await store.saveGivingCampaign({
   title: "Member campaign", description: "Support the community.", goalHKD: 1000,
   fpsId: "1234567", fpsPayee: "Island Training Club",
@@ -1154,6 +1212,25 @@ const gift = store.recordDonation({ userId: "giving-member", name: "Giving Membe
 if (gift.status !== "pending" || store.campaignRaised(givingCampaign) !== 250 || !store.donationsForUser("giving-member").length) {
   throw new Error("Giving amount/FPS/history persistence failed");
 }
+const derivedGift = store.recordDonation({ name: "Derived Owner", amount: 100, ref: "GIVE-DERIVED", campaignId: givingCampaign.id });
+if (derivedGift.userId !== "giving-member") throw new Error("Giving must derive donation ownership from currentUser().id");
+for (const badUserId of ["giving-admin", null, ""]) {
+  try {
+    store.recordDonation({ userId: badUserId, name: "Wrong Owner", amount: 10, ref: `WRONG-${badUserId}`, campaignId: givingCampaign.id });
+    throw new Error(`Giving should reject caller userId ${JSON.stringify(badUserId)}`);
+  } catch (err) {
+    if (!/Donation owner must match the approved member/.test(err.message)) throw err;
+  }
+}
+console.log("ok  Giving donation ownership is derived and caller IDs must match");
+store.signOut();
+try {
+  store.recordDonation({ name: "No Identity", amount: 10, ref: "NO-IDENTITY", campaignId: givingCampaign.id });
+  throw new Error("Giving should reject absent identity");
+} catch (err) {
+  if (!/Approved member access required/.test(err.message)) throw err;
+}
+store.signIn("giving-member@example.test");
 views.givingState.step = 3;
 views.givingState.name = "Giving Member";
 views.givingState.amount = 250;
@@ -1178,7 +1255,16 @@ console.log("ok  Giving access, donor ID, campaign, FPS, thanks, history, and cl
 
 const sourceSnapshots = [
   { version: 9, prayers: [{ id: "p-real" }] },
-  { version: 10, queues: { real: { waitlist: ["real-user"], interest: [] } }, duty: { "2026-08-08": { userId: "real-user" } } },
+  {
+    version: 10,
+    queues: {
+      real: {
+        waitlist: [{ userId: "real-user", joinedAt: 123 }],
+        interest: ["real-user"],
+      },
+    },
+    duty: { "2026-08-08": { userId: "real-user" } },
+  },
   { version: 11, notifications: [{ id: "n-real", userId: "real-user" }] },
   { version: 12, campaigns: [{ id: "c-real", title: "Member campaign" }], donations: [{ id: "d-real", userId: "real-user" }] },
 ];

@@ -223,7 +223,10 @@ function migrate() {
     // Queue and notification entries referencing removed demo users are
     // stripped; unmatched ones survive.
     const filterByUserId = (entries) =>
-      (Array.isArray(entries) ? entries : []).filter((id) => !removedUserIds.has(id));
+      (Array.isArray(entries) ? entries : []).filter((entry) => {
+        const userId = entry && typeof entry === "object" ? entry.userId : entry;
+        return !removedUserIds.has(userId);
+      });
     for (const [sessionId, q] of Object.entries(state.queues || {})) {
       state.queues[sessionId] = {
         waitlist: filterByUserId(q?.waitlist),
@@ -272,6 +275,22 @@ export function currentUser() {
   if (isLive()) return liveUser;
   if (!state.sessionUserId) return null;
   return state.users.find((u) => u.id === state.sessionUserId) ?? null;
+}
+
+// Payment records may be changed by the member who owns them or by Admin
+// operational flows (promotion, collection, cancellation). Resolve the
+// affected profile rather than assuming the currently rendered profile owns
+// every mutation.
+function requireApprovedPaymentOwner(userId) {
+  const id = String(userId || "").trim();
+  const signedIn = currentUser();
+  const owner = signedIn?.id === id
+    ? signedIn
+    : state.users.find((user) => user.id === id);
+  if (!id || !owner || owner.status !== "approved") {
+    throw new Error("Approved member access required");
+  }
+  return owner;
 }
 
 export function signIn(email) {
@@ -562,6 +581,7 @@ function snapshotFor(session) {
 // Reserve a spot without paying. The spot is held until the next payment
 // checkpoint (Thu 6 PM, then Fri 2 PM, then a 2-hour last-minute window).
 export function reserveSession(userId, session, now = Date.now()) {
+  requireApprovedPaymentOwner(userId);
   if (session.kind !== "paid") throw new Error("Session is not paid");
   if (session.cancelled) throw new Error("Session is cancelled");
   if (sessionStarted(session)) throw new Error("Session has already started");
@@ -599,6 +619,7 @@ export function reserveSession(userId, session, now = Date.now()) {
 export function markBookingPaid(bookingId, method, ref, now = Date.now()) {
   const b = getBooking(bookingId);
   if (!b || b.status !== "reserved" || b.paymentMarkedAt) return null;
+  requireApprovedPaymentOwner(b.userId);
   b.paymentMarkedAt = now;
   b.paidMethod = method === "FPS" ? "FPS" : "PayMe";
   b.paymentRef = String(ref ?? "").trim() || null;
@@ -621,6 +642,7 @@ export function markBookingPaid(bookingId, method, ref, now = Date.now()) {
 export function confirmBookingPayment(bookingId, collectorId, now = Date.now()) {
   const b = getBooking(bookingId);
   if (!b || b.status !== "reserved" || !b.paymentMarkedAt) return null;
+  requireApprovedPaymentOwner(b.userId);
   b.status = "confirmed";
   b.paidAt = now;
   b.confirmedBy = collectorId;
@@ -741,6 +763,7 @@ export function cascadeSession(sessionId, now = Date.now()) {
 // --- Queues: waitlist (open sessions) & interest (closed Midtown) ----------
 
 function joinQueue(userId, sessionId, kind) {
+  requireApprovedPaymentOwner(userId);
   if (userBookingFor(userId, sessionId) || userReservationFor(userId, sessionId))
     throw new Error("Already booked");
   const q = queueFor(sessionId);
@@ -753,6 +776,7 @@ function joinQueue(userId, sessionId, kind) {
 }
 
 function leaveQueue(userId, sessionId, kind) {
+  requireApprovedPaymentOwner(userId);
   const q = queueFor(sessionId);
   q[kind] = q[kind].filter((e) => e.userId !== userId);
   save();
@@ -1057,7 +1081,7 @@ export async function listGivingCampaigns() {
   return (data || []).map(normalizeGivingCampaign);
 }
 
-export async function getActiveGivingCampaign() {
+export async function getActiveGivingCampaign({ ownsGeneration = () => true } = {}) {
   const user = isLive() ? await getCurrentUser() : currentUser();
   if (!user || user.status !== "approved") return null;
   if (!isLive() || !supabase) return normalizeGivingCampaign(activeGivingCampaign());
@@ -1067,8 +1091,9 @@ export async function getActiveGivingCampaign() {
     .eq("status", "published")
     .maybeSingle();
   if (error) throw error;
-  liveGivingCampaign = normalizeGivingCampaign(data);
-  return liveGivingCampaign;
+  const campaign = normalizeGivingCampaign(data);
+  if (ownsGeneration()) liveGivingCampaign = campaign;
+  return campaign;
 }
 
 export async function saveGivingCampaign(draft) {
@@ -1193,11 +1218,15 @@ export function donationsForUser(userId) {
     .sort((a, b) => b.createdAt - a.createdAt);
 }
 
-export function recordDonation({ userId, name, amount, note, ref, campaignId }) {
+export function recordDonation(input = {}) {
   const user = currentUser();
-  if (!user || user.status !== "approved" || (userId && userId !== user.id)) {
+  if (!user || !user.id || user.status !== "approved") {
     throw new Error("Approved member access required");
   }
+  if (Object.hasOwn(input, "userId") && input.userId !== user.id) {
+    throw new Error("Donation owner must match the approved member");
+  }
+  const { name, amount, note, ref, campaignId } = input;
   const campaign = campaignId
     ? state.campaigns.find((item) => item.id === campaignId && item.status === "published") ||
       (isLive() && liveGivingCampaign?.id === campaignId ? liveGivingCampaign : null)
@@ -1210,7 +1239,7 @@ export function recordDonation({ userId, name, amount, note, ref, campaignId }) 
   if (existing) return existing;
   const donation = {
     id: uid("d"),
-    userId: userId ?? null,
+    userId: user.id,
     name: String(name).trim(),
     amount: Math.round(Number(amount)),
     currency: "HKD",

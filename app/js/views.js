@@ -511,12 +511,15 @@ function givingLocked(user) {
 
 export async function viewGiving({
   ownsGeneration = () => true,
-  activeCampaignLookup = () => store.getActiveGivingCampaign(),
+  activeCampaignLookup = (options) => store.getActiveGivingCampaign(options),
 } = {}) {
   const user = store.currentUser();
   if (!user || user.status !== "approved") return givingLocked(user);
 
-  const campaign = await activeCampaignLookup();
+  // The lookup receives the same ownership token as the view so stale route
+  // completion cannot mutate store-level live campaign state before the DOM
+  // generation guard runs.
+  const campaign = await activeCampaignLookup({ ownsGeneration });
   const generationOwned = ownsGeneration();
   const gifts = store.donationsForUser(user.id);
   if (!campaign) {

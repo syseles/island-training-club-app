@@ -156,6 +156,7 @@ let applicationListError = null;
 let profileUpdateError = null;
 let profileUpdateResult = "row";
 let profileUpdateGate = null;
+let activeGivingCampaignRow = null;
 let authStateChangeHandler = null;
 let authCallbackLocked = false;
 let oauthCalls = 0;
@@ -332,6 +333,25 @@ const fakeSupabase = {
             },
           };
           return result;
+        },
+      };
+    }
+    if (table === "giving_campaigns") {
+      return {
+        select() {
+          return {
+            eq(column, value) {
+              if (column !== "status" || value !== "published") {
+                throw new Error("Active Giving query must target published campaigns");
+              }
+              return {
+                maybeSingle: async () => ({
+                  data: structuredClone(activeGivingCampaignRow),
+                  error: null,
+                }),
+              };
+            },
+          };
         },
       };
     }
@@ -1039,7 +1059,11 @@ async function dispatchAuthStateChange(event) {
 const escapedRejections = [];
 const captureRejection = (reason) => escapedRejections.push(reason);
 process.on("unhandledRejection", captureRejection);
+const originalConsoleError = console.error;
+let expectedApplicationErrorLogs = [];
+const captureExpectedApplicationErrors = (...args) => expectedApplicationErrorLogs.push(args);
 applicationReadError = new Error("Application read failed");
+console.error = captureExpectedApplicationErrors;
 const app = await import("./js/app.js?application-read-errors");
 await app.bootPromise;
 await new Promise(setImmediate);
@@ -1060,6 +1084,17 @@ await new Promise(setImmediate);
 if (hashRejected || escapedRejections.length || toastStack.children.length !== 1 || toastStack.children[0].textContent !== "Application read failed") {
   throw new Error("Hash changes should catch failed application reads and show one error toast");
 }
+console.error = originalConsoleError;
+assert.deepEqual(
+  expectedApplicationErrorLogs.map(([message, error]) => [message, error?.message]),
+  [
+    ["Failed to load live application for account", "Application read failed"],
+    ["Failed to hydrate live user", "Application read failed"],
+    ["Failed to load live application for account", "Application read failed"],
+    ["Failed to hydrate live user", "Application read failed"],
+  ],
+  "expected boot/hash application failures must be explicitly observed without noisy stderr"
+);
 
 // Route feedback announces work immediately, only exposes visible copy after
 // the delay, and always clears once the awaited view is complete.
@@ -1729,6 +1764,35 @@ if (escapedRejections.length || toastStack.children.length !== 1 || toastStack.c
 process.off("unhandledRejection", captureRejection);
 applicationReadError = null;
 profile.role = "super_admin";
+await store.getCurrentUser();
+activeGivingCampaignRow = {
+  id: "campaign-current", title: "Current campaign", description: "Current route data",
+  goal_hkd: 1000, fps_id: "1111111", fps_payee: "ITC", status: "published",
+};
+await store.getActiveGivingCampaign();
+activeGivingCampaignRow = {
+  id: "campaign-stale", title: "Stale campaign", description: "Obsolete route data",
+  goal_hkd: 2000, fps_id: "2222222", fps_payee: "ITC", status: "published",
+};
+const staleGivingHtml = await views.viewGiving({ ownsGeneration: () => false });
+assert.match(staleGivingHtml, /Stale campaign/, "stale route may finish with its own result");
+const retainedCampaignGift = store.recordDonation({
+  name: "Riley Runner", amount: 50, ref: "STALE-CACHE-REGRESSION",
+});
+assert.equal(retainedCampaignGift.userId, authUser.id, "live Giving must derive the authenticated UUID");
+assert.equal(retainedCampaignGift.campaignId, "campaign-current",
+  "stale Giving completion must not replace the shared live campaign cache");
+const liveGivingUser = store.currentUser();
+const liveGivingUserId = liveGivingUser.id;
+liveGivingUser.id = "";
+assert.throws(
+  () => store.recordDonation({ name: "Missing UUID", amount: 10, ref: "MISSING-UUID" }),
+  /Approved member access required/,
+  "Giving must reject an approved-looking identity with no UUID"
+);
+liveGivingUser.id = liveGivingUserId;
+console.log("ok  stale Giving lookups cannot mutate the owned live campaign cache");
+
 const finalSignOut = store.signOutLive();
 releaseSignOut({ error: null });
 await finalSignOut;
