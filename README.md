@@ -35,14 +35,10 @@ The design review remains available at `http://127.0.0.1:4173/references/itc-mob
 ### Prototype conventions
 
 - Zero dependencies, no build step. Plain ES modules so the codebase stays easy to refine; the production stack is still an open decision.
-- The combined Testing candidate has explicit ownership boundaries:
-  - **Supabase:** identity, roles, applications, notifications, Giving campaigns, and donor profiles.
-  - **`localStorage`:** Payment operations and Community prototype interactions. Payment reservations, bookings, queues, collector duty, payout details, confirmations, receipts, and prototype donation records are keyed by the authenticated Supabase profile UUID. No real money is moved.
-- Navigation combines the Notification bell with a signed-in-only Giving tab. Admin navigation contains Approvals, Members, Activities, Giving, and Payments / Ops.
-- Persisted prototype state is **v13** and accepts/migrates existing **v9–v12** snapshots without discarding genuine domain records.
-- With Supabase configured, a new Google profile remains `pending` until its application is submitted and an Admin approves it. Pending and declined profiles cannot use Payment or Giving controls.
+- With Supabase configured, Google Auth owns sessions and Supabase owns profiles, roles, applications, approvals, and notifications. A new Google profile remains `pending` until its application is submitted and an Admin approves it.
+- Payment operations remain prototype-only and device-local in `localStorage`: reservations, bookings, queues, collector duty, payout details, confirmations, and receipts are keyed by the authenticated Supabase profile UUID. No real money is moved.
 - Without Supabase configuration, local state starts empty. Apply through the membership flow to create a local pending profile, which can then sign in again by email (no password).
-- `app/js/store.js` remains the backend seam across both ownership domains until a production backend is selected.
+- `app/js/store.js` remains the backend seam. Identity data is live where configured; Payment operational data is intentionally local until a production backend is selected.
 - Administrative testing requires Supabase live mode or the historical `archive/demo` branch. The archive is demonstration-only and must not be used as a production source branch.
 - `app/smoke.mjs` is a headless regression check for the product rules (`node smoke.mjs` from `app/`).
 
