@@ -7,9 +7,6 @@
 
 import {
   SEED_ACTIVITIES,
-  SEED_USERS,
-  seedBookings,
-  seedReceipts,
   SHOP_PRODUCTS,
   sessionsInRange,
   sessionStarted,
@@ -23,7 +20,7 @@ import {
 } from "./data.js";
 
 const STORAGE_KEY = "itc.prototype.v1";
-const STATE_VERSION = 8;
+const STATE_VERSION = 9;
 
 let state = null;
 
@@ -32,10 +29,11 @@ function freshState() {
     version: STATE_VERSION,
     sessionUserId: null,
     activities: structuredClone(SEED_ACTIVITIES),
-    users: structuredClone(SEED_USERS),
-    bookings: seedBookings(),
-    receipts: seedReceipts(),
+    users: [],
+    bookings: [],
+    receipts: [],
     receiptCounter: 49,
+    donations: [],
     orders: [],
     prayers: [],
   };
@@ -57,6 +55,13 @@ export function load() {
 // seed-data revision. Each step runs once per version so admin edits made
 // afterwards are not reverted on the next load.
 function migrate() {
+  // Persisted prototypes may predate individual collections or contain null
+  // values. Normalize every collection before a legacy step or early return.
+  for (const key of ["users", "activities", "bookings", "receipts", "donations",
+    "orders", "prayers"]) {
+    if (!Array.isArray(state[key])) state[key] = [];
+  }
+
   const v = state.version || 0;
   if (v >= STATE_VERSION) return;
   if (v < 2) {
@@ -70,36 +75,16 @@ function migrate() {
         structuredClone(a)
       )
     );
-    // Seed-owned bookings/receipts are replaced outright: their snapshots
-    // describe the old session. User-created records are left untouched.
-    for (const [key, seeded] of [
-      ["bookings", seedBookings()],
-      ["receipts", seedReceipts()],
-    ]) {
-      const ids = new Set(seeded.map((r) => r.id));
-      state[key] = [...state[key].filter((r) => !ids.has(r.id)), ...seeded];
-    }
   }
   if (v < 3) {
     // v3: Run Club moved to Mon 7:30 PM with venue TBC; Water Sports Evening
-    // renamed ITC Swimming at 7:30 PM; leaders renamed (Arnold Wong, Tina,
-    // CM Chui). Activities are replaced in place from the seed; seed users
-    // get the new names only, keeping any role/status changes.
+    // renamed ITC Swimming at 7:30 PM. Activities are replaced in place
+    // from the current activity configuration.
     const seedAct = new Map(SEED_ACTIVITIES.map((a) => [a.id, a]));
     state.activities = state.activities.map((a) =>
       a.id === "run" || a.id === "water"
         ? structuredClone(seedAct.get(a.id))
         : a
-    );
-    const seedUser = new Map(SEED_USERS.map((u) => [u.id, u]));
-    state.users = state.users.map((u) =>
-      seedUser.has(u.id)
-        ? {
-            ...u,
-            fullName: seedUser.get(u.id).fullName,
-            preferredName: seedUser.get(u.id).preferredName,
-          }
-        : u
     );
   }
   if (v < 4) {
@@ -136,13 +121,9 @@ function migrate() {
     }
   }
   if (v < 6) {
-    // v6: donor IDs follow IECC's LASTNAME-NNNN(N) format, so the seeded
-    // demo member's ID moves from the old placeholder to CHUI-08879 (only
-    // an exact old-seed match is rewritten). Indemnity acceptance is now
-    // tracked per member; approved seed members predate the requirement
-    // and are backfilled, everyone else accepts from Profile > Indemnity.
-    const member = state.users.find((u) => u.id === "u-member");
-    if (member && member.donorId === "IECC-10028") member.donorId = "CHUI-08879";
+    // v6: indemnity acceptance is now tracked per member; approved seed
+    // members predate the requirement and are backfilled, everyone else
+    // accepts from Profile > Indemnity. Exact-sentinel match only.
     for (const id of ["u-super", "u-admin", "u-member"]) {
       const u = state.users.find((x) => x.id === id);
       if (u && u.indemnityAcceptedAt === undefined) {
@@ -166,7 +147,44 @@ function migrate() {
   }
   if (v < 8) {
     // v8: prayer requests (Community > Prayers) are stored locally.
-    if (!Array.isArray(state.prayers)) state.prayers = [];
+    // (No-op: collection normalization above initializes the array.)
+  }
+  if (v < 9) {
+    // v9: strip the historical local demo. Exact-sentinel match only —
+    // every genuine user, application, booking, receipt, donation, and
+    // order is preserved. Demo demand on activities is removed so capacity
+    // reflects real confirmed bookings only.
+    const demoIds = new Set(["u-super", "u-admin", "u-member", "u-pend-1", "u-pend-2"]);
+    const demoEmails = new Set([
+      "owner@itc.hk",
+      "admin@itc.hk",
+      "member@itc.hk",
+      "marco.santos@example.com",
+      "jenny.wu@example.com",
+    ]);
+    const removedUserIds = new Set(demoIds);
+    state.users = state.users.filter((user) => {
+      const matches = demoIds.has(user.id)
+        || demoEmails.has(String(user.email ?? "").trim().toLowerCase());
+      if (matches) removedUserIds.add(user.id);
+      return !matches;
+    });
+    if (removedUserIds.has(state.sessionUserId)) state.sessionUserId = null;
+
+    const removedBookingIds = new Set();
+    state.bookings = state.bookings.filter((booking) => {
+      const remove = removedUserIds.has(booking.userId);
+      if (remove) removedBookingIds.add(booking.id);
+      return !remove;
+    });
+    state.receipts = state.receipts.filter(
+      (receipt) => !removedUserIds.has(receipt.userId)
+        && !removedBookingIds.has(receipt.bookingId)
+    );
+    state.donations = state.donations.filter((donation) => !removedUserIds.has(donation.userId));
+    state.orders = state.orders.filter((order) => !removedUserIds.has(order.userId));
+
+    for (const activity of state.activities) delete activity.baseBooked;
   }
   state.version = STATE_VERSION;
 }
@@ -175,7 +193,7 @@ function save() {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
 }
 
-export function resetDemo() {
+export function resetLocalData() {
   localStorage.removeItem(STORAGE_KEY);
   return load();
 }
@@ -197,14 +215,6 @@ export function signIn(email) {
     save();
     return { ok: true, user, declined: true };
   }
-  state.sessionUserId = user.id;
-  save();
-  return { ok: true, user };
-}
-
-export function demoSignIn(role) {
-  const user = state.users.find((u) => u.role === role && u.status === "approved");
-  if (!user) return { ok: false, reason: "not-found" };
   state.sessionUserId = user.id;
   save();
   return { ok: true, user };

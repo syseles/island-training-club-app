@@ -177,15 +177,11 @@ document.addEventListener("click", (e) => {
       break;
     }
 
-    case "demo-signin": {
-      const res = store.demoSignIn(el.dataset.role);
-      if (res.ok) {
-        toast(`Signed in as ${res.user.preferredName || res.user.fullName} (demo)`);
-        location.hash = "#/home";
-        render();
-      }
+    case "demo-signin":
+      // No longer supported: the local prototype starts empty and uses
+      // email sign-in only. Visitors who have not yet applied are
+      // directed to the application form from the Account page.
       break;
-    }
 
     case "signout":
       store.signOut();
@@ -195,12 +191,9 @@ document.addEventListener("click", (e) => {
       break;
 
     case "reset-demo":
-      if (confirm("Reset all demo data? Bookings, applications and edits will be cleared.")) {
-        store.resetDemo();
-        toast("Demo data reset");
-        location.hash = "#/home";
-        render();
-      }
+      // Reset action removed: a local install starts empty and never
+      // accumulates demo data. Admin resets are handled via the Supabase
+      // operational tools.
       break;
 
     case "approve": {
@@ -397,7 +390,6 @@ document.addEventListener("submit", (e) => {
         photo: "../assets/itc/main.webp",
         price: fd.get("price"),
         capacity: fd.get("capacity"),
-        baseBooked: fd.get("baseBooked"),
         published: fd.get("published") === "on",
       });
       toast(res.created ? "Activity created" : "Activity saved");

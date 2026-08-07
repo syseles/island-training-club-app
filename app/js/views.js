@@ -635,12 +635,7 @@ function accountVisitor() {
         <div id="signin-error"></div>
         <button class="btn mt16" type="submit">Sign in</button>
       </form>
-      <p class="muted small mt16">Prototype: there is no password — sign in with a seeded email, or use a one-tap demo profile.</p>
-      <div class="btn-row">
-        <button class="btn ghost sm" type="button" data-action="demo-signin" data-role="member">Demo · Continue as member (CM)</button>
-        <button class="btn ghost sm" type="button" data-action="demo-signin" data-role="admin">Demo · Continue as admin (Tina)</button>
-        <button class="btn ghost sm" type="button" data-action="demo-signin" data-role="superadmin">Demo · Continue as super admin (Arnold)</button>
-      </div>
+      <p class="muted small mt16">This local prototype has no password. Sign in with the email used for an application on this device.</p>
     </div></div>
     <div class="card mt16"><div class="card-body">
       <h3>Not a member yet?</h3>
@@ -735,7 +730,6 @@ function accountMember(user) {
 
     <div class="btn-row">
       <button class="btn ghost" type="button" data-action="signout">Sign out</button>
-      <button class="btn danger sm" type="button" data-action="reset-demo">Reset demo data</button>
     </div>`;
 }
 
@@ -1019,10 +1013,10 @@ export function viewCheckout(sessionId) {
       <div class="card"><div class="card-body">
         <h3>Payment</h3>
         <div class="field"><label for="cc-name">Name on card</label><input id="cc-name" name="cardName" autocomplete="cc-name" value="${esc(user.fullName)}" required></div>
-        <div class="field"><label for="cc-num">Card number</label><input id="cc-num" name="cardNumber" inputmode="numeric" autocomplete="cc-number" value="4242 4242 4242 4242" required></div>
+        <div class="field"><label for="cc-num">Card number</label><input id="cc-num" name="cardNumber" inputmode="numeric" autocomplete="cc-number" placeholder="•••• •••• •••• ••••" required></div>
         <div class="field-row">
-          <div class="field"><label for="cc-exp">Expiry</label><input id="cc-exp" name="cardExp" inputmode="numeric" placeholder="MM/YY" value="12/28" required></div>
-          <div class="field"><label for="cc-cvc">CVC</label><input id="cc-cvc" name="cardCvc" inputmode="numeric" value="424" required></div>
+          <div class="field"><label for="cc-exp">Expiry</label><input id="cc-exp" name="cardExp" inputmode="numeric" placeholder="MM/YY" required></div>
+          <div class="field"><label for="cc-cvc">CVC</label><input id="cc-cvc" name="cardCvc" inputmode="numeric" placeholder="•••" required></div>
         </div>
         <p class="muted small mt8">Test checkout — no real charge. Any card details work.</p>
       </div></div>
@@ -1223,7 +1217,6 @@ export function viewAdminActivity(id) {
         photo: "../assets/itc/main.webp",
         price: 250,
         capacity: 18,
-        baseBooked: 0,
         published: true,
       }
     : store.getActivity(id);
@@ -1272,8 +1265,7 @@ export function viewAdminActivity(id) {
           <div class="field"><label for="ac-price">Price (HKD, fixed per session)</label><input id="ac-price" name="price" type="number" min="0" value="${a.price ?? 250}"></div>
           <div class="field"><label for="ac-cap">Capacity</label><input id="ac-cap" name="capacity" type="number" min="1" value="${a.capacity ?? 18}"></div>
         </div>
-        <div class="field"><label for="ac-base">Simulated existing bookings</label><input id="ac-base" name="baseBooked" type="number" min="0" value="${a.baseBooked ?? 0}">
-          <div class="hint">Prototype only — stands in for other members’ bookings.</div></div>
+        
       `)}
       <div class="field"><label for="ac-blurb">Description</label><textarea id="ac-blurb" name="blurb" rows="3">${esc(a.blurb)}</textarea></div>
       <div class="field"><label for="ac-note">Leader note (members only)</label><textarea id="ac-note" name="memberNote" rows="2">${esc(a.memberNote || "")}</textarea></div>

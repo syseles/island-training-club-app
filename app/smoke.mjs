@@ -186,7 +186,7 @@ if (!pendHtml.includes("Booking locked")) {
 } else console.log("ok  pending user blocked from paid booking");
 
 // --- Admin approval flow ---
-store.demoSignIn("admin");
+installLocalFixtures(); store.signIn("admin@example.test");
 check("admin approvals", () => views.viewAdmin("approvals"));
 check("admin activities", () => views.viewAdmin("activities"));
 check("admin members", () => views.viewAdmin("members"));
@@ -369,21 +369,23 @@ if (!histHtml.includes("booking-card") || !histHtml.includes("Cancelled")) {
 } else console.log("ok  History sub-page lists past bookings");
 
 // --- Seeded member view ---
-store.demoSignIn("member");
+installLocalFixtures(); store.signIn("member@example.test");
 check("account (seeded member)", () => views.viewAccount());
 const memberAcct = views.viewAccount();
-if (!views.viewAccount("donor").includes("CHUI-08879")) {
+// fixture-member has donorId TEST-1234
+if (!views.viewAccount("donor").includes("TEST-1234")) {
   failures++;
   console.error("FAIL seeded member donor ID not shown in Donor Profile");
 } else console.log("ok  seeded member donor ID shown in Donor Profile");
-if (memberAcct.includes("CHUI-08879")) {
+if (memberAcct.includes("TEST-1234")) {
   failures++;
   console.error("FAIL donor ID should not appear on the Profile card face");
 } else console.log("ok  seeded member card faces carry no donor details");
-if (!views.viewAccount("payments").includes("ITC-2026-0048")) {
+// Seeded receipts (ITC-2026-0048) are removed; Payments shows receipts created during the test.
+if (views.viewAccount("payments").includes("ITC-2026-0048")) {
   failures++;
-  console.error("FAIL seeded receipts missing from Payments sub-page");
-} else console.log("ok  seeded receipts show on Payments sub-page");
+  console.error("FAIL seeded receipts should not be present in fresh state");
+} else console.log("ok  no demo receipts are present");
 if (!memberAcct.includes("Indemnity confirmed on")) {
   failures++;
   console.error("FAIL seeded member should have indemnity confirmed");
@@ -392,20 +394,26 @@ if (!memberAcct.includes('class="kicker">Profile</div>') || memberAcct.includes(
   failures++;
   console.error('FAIL Profile header should read "Profile" with no name headline');
 } else console.log('ok  Profile header reads "Profile"');
-if (memberAcct.includes("member@itc.hk")) {
+if (memberAcct.includes("member@example.test")) {
   failures++;
   console.error("FAIL email should not appear on the Profile face");
 } else console.log("ok  Profile face carries no contact details");
-if (!views.viewAccount("details").includes("member@itc.hk")) {
+if (!views.viewAccount("details").includes("member@example.test")) {
   failures++;
   console.error("FAIL email missing from Membership Details sub-page");
 } else console.log("ok  email lives on Membership Details sub-page");
 check("home (member)", () => views.viewHome());
+installLocalFixtures({ withMemberBooking: true });
+store.signIn("member@example.test");
 const memberHome = views.viewHome();
-if (!memberHome.includes("BFT Causeway Bay") || memberHome.includes("Midtown 28")) {
+const fixtureMember = store.currentUser();
+const fixtureBookings = store.bookingsForUser(fixtureMember.id);
+const bookedMarker = fixtureBookings[0]?.snapshot?.location ?? "BFT Causeway Bay";
+const otherMarker = "Midtown 28";
+if (!memberHome.includes(bookedMarker) || memberHome.includes(otherMarker)) {
   failures++;
-  console.error('FAIL "My week" should show only the member\'s booked 11:15 HYROX');
-} else console.log('ok  "My week" shows only the member\'s booked session');
+  console.error(`FAIL "My week" should show only the member's booked HYROX (${bookedMarker})`);
+} else console.log(`ok  "My week" shows only the member's booked session (${bookedMarker})`);
 check("shop (member)", () => views.viewShop());
 const shopHtml = views.viewShop();
 if (!shopHtml.includes("product-tee.png") || !shopHtml.includes("product-vest.png")) {
@@ -423,20 +431,23 @@ if (!ics.includes("BEGIN:VEVENT") || !ics.includes(free.name)) throw new Error("
 console.log("ok  ICS generation");
 
 // --- v7 migration: legacy hyphen-less donor IDs get repaired on load ---
-store.resetDemo();
+store.resetLocalData();
 {
   const raw = JSON.parse(mem.get("itc.prototype.v1"));
   raw.version = 6;
-  raw.users.find((u) => u.id === "u-member").donorId = "CHUI08879"; // no separator
-  raw.users.find((u) => u.id === "u-admin").donorId = "not a real id"; // unrecognizable
+  raw.users = [
+    { id: "legacy-member", role: "member", status: "approved", fullName: "Legacy", email: "legacy1@example.test", donorId: "CHUI08879" },
+    { id: "legacy-admin", role: "admin", status: "approved", fullName: "Legacy Admin", email: "legacy2@example.test", donorId: "not a real id" },
+  ];
   mem.set("itc.prototype.v1", JSON.stringify(raw));
   store.load();
-  const fixed = store.allUsers().find((u) => u.id === "u-member").donorId;
+  const allUsers = store.allUsers();
+  const fixed = allUsers.find((u) => u.id === "legacy-member")?.donorId;
   if (fixed !== "CHUI-08879") {
     failures++;
     console.error(`FAIL v7 migration should repair CHUI08879 -> CHUI-08879, got ${fixed}`);
   } else console.log("ok  v7 migration inserts the missing hyphen");
-  const cleared = store.allUsers().find((u) => u.id === "u-admin").donorId;
+  const cleared = allUsers.find((u) => u.id === "legacy-admin")?.donorId;
   if (cleared !== null) {
     failures++;
     console.error(`FAIL v7 migration should clear unrecognizable donor ID, got ${cleared}`);
@@ -444,8 +455,176 @@ store.resetDemo();
 }
 
 // --- Reset ---
-store.resetDemo();
+store.resetLocalData();
 console.log("ok  reset");
+
+// --- v9 cleanup: fresh state, no demo UI, no simulated demand, no Shop orders ---
+{
+  const fresh = JSON.parse(mem.get("itc.prototype.v1"));
+  if (Array.isArray(fresh.users) && fresh.users.length) {
+    failures++;
+    console.error("FAIL v9 fresh state must have zero users");
+  } else console.log("ok  v9 fresh state has zero users");
+  if (Array.isArray(fresh.bookings) && fresh.bookings.length) {
+    failures++;
+    console.error("FAIL v9 fresh state must have zero bookings");
+  } else console.log("ok  v9 fresh state has zero bookings");
+  if (Array.isArray(fresh.receipts) && fresh.receipts.length) {
+    failures++;
+    console.error("FAIL v9 fresh state must have zero receipts");
+  } else console.log("ok  v9 fresh state has zero receipts");
+  if (Array.isArray(fresh.activities)) {
+    for (const a of fresh.activities) {
+      if ("baseBooked" in a) {
+        failures++;
+        console.error(`FAIL v9 fresh state activity ${a.id} must not carry baseBooked`);
+      }
+    }
+  }
+  const accountHtml = views.viewAccount();
+  for (const removed of ["demo-signin", "reset-demo", "one-tap demo", "seeded email"]) {
+    if (accountHtml.toLowerCase().includes(removed)) {
+      failures++;
+      console.error(`FAIL Account still renders removed demo content: ${removed}`);
+    }
+  }
+  for (const email of ["owner@itc.hk", "admin@itc.hk", "member@itc.hk",
+    "marco.santos@example.com", "jenny.wu@example.com"]) {
+    if (accountHtml.includes(email)) {
+      failures++;
+      console.error(`FAIL Account still exposes demo email ${email}`);
+    }
+  }
+}
+
+// --- v9 mixed migration: known demo records removed, genuine records preserved ---
+{
+  store.resetLocalData();
+  const raw = JSON.parse(mem.get("itc.prototype.v1"));
+  raw.version = 8;
+  raw.users = [
+    { id: "u-super", role: "superadmin", status: "approved", fullName: "Demo Super", email: "owner@itc.hk" },
+    { id: "u-admin", role: "admin", status: "approved", fullName: "Demo Admin", email: "admin@itc.hk" },
+    { id: "u-member", role: "member", status: "approved", fullName: "Demo Member", email: "member@itc.hk" },
+    { id: "real-member", role: "member", status: "approved", fullName: "Real Member", email: "real@example.test" },
+  ];
+  raw.sessionUserId = "u-member";
+  raw.bookings = [
+    { id: "b-seed-1", userId: "u-member" },
+    { id: "b-user-1", userId: "real-member" },
+  ];
+  raw.receipts = [
+    { id: "r-seed-1", bookingId: "b-seed-1", userId: "u-member" },
+    { id: "r-user-1", bookingId: "b-user-1", userId: "real-member" },
+  ];
+  raw.donations = [
+    { id: "d-seed-1", userId: "u-member", campaignId: "scm-2027", amount: 500 },
+    { id: "d-user-1", userId: "real-member", campaignId: "scm-2027", amount: 275, ref: "REAL-GIFT" },
+  ];
+  raw.orders = [
+    { id: "o-seed-1", userId: "u-member", productId: "tee" },
+    { id: "o-user-1", userId: "real-member", productId: "vest" },
+  ];
+  raw.activities[0].baseBooked = 7;
+  mem.set("itc.prototype.v1", JSON.stringify(raw));
+  store.load();
+  const migrated = JSON.parse(mem.get("itc.prototype.v1"));
+  if (!migrated.users.some((u) => u.id === "real-member")) {
+    failures++;
+    console.error("FAIL v9 migration must keep genuine users");
+  } else console.log("ok  v9 migration keeps genuine users");
+  for (const demoId of ["u-super", "u-admin", "u-member"]) {
+    if (migrated.users.some((u) => u.id === demoId)) {
+      failures++;
+      console.error(`FAIL v9 migration must remove demo user ${demoId}`);
+    }
+  }
+  if (migrated.bookings.some((b) => b.id === "b-seed-1")) {
+    failures++;
+    console.error("FAIL v9 migration must remove demo-owned bookings");
+  } else console.log("ok  v9 migration removes demo-owned bookings");
+  if (!migrated.bookings.some((b) => b.id === "b-user-1")) {
+    failures++;
+    console.error("FAIL v9 migration must keep genuine bookings");
+  } else console.log("ok  v9 migration keeps genuine bookings");
+  if (migrated.donations.some((d) => d.id === "d-seed-1")) {
+    failures++;
+    console.error("FAIL v9 migration must remove demo-owned donations");
+  } else console.log("ok  v9 migration removes demo donations");
+  if (!migrated.donations.some((d) => d.id === "d-user-1")) {
+    failures++;
+    console.error("FAIL v9 migration must keep genuine donations");
+  } else console.log("ok  v9 migration keeps genuine donations");
+  if (migrated.orders.some((o) => o.id === "o-seed-1")) {
+    failures++;
+    console.error("FAIL v9 migration must remove demo-owned orders");
+  } else console.log("ok  v9 migration removes demo orders");
+  if (!migrated.orders.some((o) => o.id === "o-user-1")) {
+    failures++;
+    console.error("FAIL v9 migration must keep genuine orders");
+  } else console.log("ok  v9 migration keeps genuine orders");
+  if (migrated.activities.some((a) => "baseBooked" in a)) {
+    failures++;
+    console.error("FAIL v9 migration must strip baseBooked from every activity");
+  } else console.log("ok  v9 migration strips simulated demand");
+  if (migrated.sessionUserId !== null) {
+    failures++;
+    console.error("FAIL v9 migration must clear session tied to a removed demo user");
+  } else console.log("ok  v9 migration clears removed session");
+  if (migrated.version !== 9) {
+    failures++;
+    console.error(`FAIL v9 migration must advance version to 9, got ${migrated.version}`);
+  } else console.log("ok  v9 migration advances version to 9");
+}
+
+// --- Install neutral fixtures for local authenticated paths (no demo seeds) ---
+function installLocalFixtures({ withMemberBooking = false } = {}) {
+  const clean = JSON.parse(mem.get("itc.prototype.v1"));
+  const preserved = (clean.users || []).filter((u) =>
+    !["fixture-admin", "fixture-member", "fixture-super"].includes(u.id)
+  );
+  clean.users = [
+    ...preserved,
+    {
+      id: "fixture-admin", role: "admin", status: "approved", fullName: "Test Admin",
+      preferredName: "Admin", email: "admin@example.test", phone: "+852 5000 0001",
+      emergencyName: "Test Contact", emergencyPhone: "+852 5000 9001", heard: "Test fixture",
+      isMinor: false, appliedAt: Date.now() - 86400000, indemnityAcceptedAt: Date.now() - 86400000,
+      privacyAcceptedAt: Date.now() - 86400000, whatsappReminders: false, emailReceipts: false,
+      communityNews: false,
+    },
+    {
+      id: "fixture-member", role: "member", status: "approved", fullName: "Test Member",
+      preferredName: "Tester", email: "member@example.test", phone: "+852 5000 0002",
+      emergencyName: "Test Contact", emergencyPhone: "+852 5000 9002", heard: "Test fixture",
+      mediaConsent: true, donorId: "TEST-1234", isMinor: false,
+      appliedAt: Date.now() - 172800000, indemnityAcceptedAt: Date.now() - 172800000,
+      privacyAcceptedAt: Date.now() - 172800000, whatsappReminders: false,
+      emailReceipts: false, communityNews: false,
+    },
+  ];
+  if (withMemberBooking) {
+    const upcoming = store.upcomingSessions(14);
+    const fixtureMemberSession = upcoming.find((s) => s.activityId === "hyrox" && !data.sessionStarted(s));
+    if (fixtureMemberSession) {
+      clean.bookings = [
+        ...(clean.bookings || []),
+        {
+          id: "fixture-booking", userId: "fixture-member", sessionId: fixtureMemberSession.id,
+          status: "confirmed", createdAt: Date.now(),
+          snapshot: {
+            name: fixtureMemberSession.name, kind: fixtureMemberSession.kind,
+            dateISO: fixtureMemberSession.dateISO, time: fixtureMemberSession.time,
+            durationMin: fixtureMemberSession.durationMin, location: fixtureMemberSession.location,
+            price: fixtureMemberSession.price,
+          },
+        },
+      ];
+    }
+  }
+  mem.set("itc.prototype.v1", JSON.stringify(clean));
+  store.load();
+}
 
 console.log(failures ? `\n${failures} FAILURE(S)` : "\nAll smoke tests passed.");
 process.exit(failures ? 1 : 0);
