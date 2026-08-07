@@ -21,6 +21,11 @@ insert into auth.users (id, email, raw_user_meta_data) values
   ('10000000-0000-0000-0000-000000000006', 'fallback-target@itc.invalid', '{}'::jsonb),
   ('10000000-0000-0000-0000-000000000007', 'unsupported-target@itc.invalid', '{}'::jsonb);
 
+select pg_temp.assert_true(
+  (select count(*) = 7 and bool_and(role = 'pending') from public.profiles),
+  'every auth-created profile must bootstrap pending'
+);
+
 update public.profiles set full_name = 'Owner Test', role = 'super_admin'
  where id = '10000000-0000-0000-0000-000000000001';
 update public.profiles set full_name = 'Admin Test', role = 'admin'

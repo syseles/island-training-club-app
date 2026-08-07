@@ -18,6 +18,11 @@ insert into auth.users (id, email, raw_user_meta_data) values
   ('41000000-0000-0000-0000-000000000004', 'giving-pending@itc.invalid', '{}'::jsonb),
   ('41000000-0000-0000-0000-000000000005', 'giving-declined@itc.invalid', '{}'::jsonb);
 
+select pg_temp.assert_true(
+  (select count(*) = 5 and bool_and(role = 'pending') from public.profiles),
+  'every auth-created profile must bootstrap pending'
+);
+
 update public.profiles set full_name = 'Giving Owner', role = 'super_admin'
  where id = '41000000-0000-0000-0000-000000000001';
 update public.profiles set full_name = 'Giving Admin', role = 'admin'

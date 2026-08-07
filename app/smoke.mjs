@@ -51,6 +51,25 @@ for (const relativePath of [
 }
 console.log("ok  Payment Auth baseline foundation files exist");
 
+const profilesMigrationSource = readFileSync(
+  resolve(__dirnameSmoke, "../supabase/migrations/20260804000000_profiles.sql"),
+  "utf8"
+);
+const liveAuthRunbookSource = readFileSync(
+  resolve(__dirnameSmoke, "../docs/runbooks/live-auth.md"),
+  "utf8"
+);
+if (!/values\s*\([\s\S]*?'pending'\s*\)/i.test(profilesMigrationSource)
+    || /existing_count|count\s*\(\s*\*\s*\)[\s\S]*super_admin/i.test(profilesMigrationSource)) {
+  throw new Error("fresh OAuth profiles must always bootstrap as pending");
+}
+for (const marker of ["trusted SQL", "known profile UUID", "role_changes", "Initial Super Admin bootstrap"]) {
+  if (!liveAuthRunbookSource.includes(marker)) {
+    throw new Error(`initial Super Admin bootstrap procedure missing ${marker}`);
+  }
+}
+console.log("ok  fresh OAuth bootstrap is pending-only with an audited trusted procedure");
+
 const integrationSourceTips = {
   payment: "720dc732944dac692334e885db2d9418d024d9bc",
   notification: "5842839e08f5e486f4b9e175232acec3cb347eb2",

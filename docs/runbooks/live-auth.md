@@ -66,22 +66,73 @@ To use live mode locally, edit `app/index.html`'s inline `<script>` block to set
 project's values. Refresh the page after changes. Manage live identities in
 Supabase Admin; this cleanup does not change the schema or delete live users.
 
-## Super Admin authorization
+## Initial Super Admin bootstrap
 
-Runtime authorization never hardcodes an owner email. The application reads
-the role from `public.profiles`; `syselesli@gmail.com` is already confirmed as
-`super_admin` in the existing Supabase project. Verify the database record
-before deployment:
+Every OAuth-created profile starts `pending`, including the first profile in a
+fresh project. There is no browser or first-user promotion path. After all
+migrations have run and the intended owner has signed in once, an operator must
+verify that person's identity out of band and promote the **known profile UUID**
+from the Supabase SQL editor or another **trusted SQL** / service-role context.
+Never run this with an UUID learned only from an unverified signup request.
+
+Replace both placeholders below, then run the whole block as one transaction.
+It requires the `role_changes` audit migration to be installed, requires an
+exact pending UUID/email match, and labels the trigger-created audit row:
 
 ```sql
-select id, email, role
-from public.profiles
-where email = 'syselesli@gmail.com';
+begin;
+
+do $$
+declare
+  target_id uuid := '<known-profile-uuid>';
+  target_email text := '<verified-owner-email>';
+  changed_rows integer;
+  audit_id uuid;
+begin
+  update public.profiles
+     set role = 'super_admin'
+   where id = target_id
+     and email = target_email
+     and role = 'pending';
+  get diagnostics changed_rows = row_count;
+  if changed_rows <> 1 then
+    raise exception 'bootstrap target must be one verified pending profile';
+  end if;
+
+  select id into audit_id
+    from public.role_changes
+   where profile_id = target_id
+     and old_role = 'pending'
+     and new_role = 'super_admin'
+   order by created_at desc
+   limit 1;
+  if audit_id is null then
+    raise exception 'Initial Super Admin bootstrap audit row missing';
+  end if;
+
+  update public.role_changes
+     set reason = 'Initial Super Admin bootstrap via trusted deployment SQL'
+   where id = audit_id;
+end $$;
+
+commit;
 ```
 
-If disaster recovery requires a role correction, make it explicitly in the
-existing project and verify the audit trail. Do not add email-based role logic
-to browser code.
+Verify the result and audit evidence before enabling general sign-in:
+
+```sql
+select id, email, role from public.profiles where id = '<known-profile-uuid>';
+select profile_id, old_role, new_role, reason, created_at
+  from public.role_changes
+ where profile_id = '<known-profile-uuid>'
+ order by created_at desc;
+```
+
+Runtime authorization never hardcodes an owner email. Existing deployments
+should verify their intended owner directly in `public.profiles`. If disaster
+recovery requires a role correction, make it explicitly in trusted context and
+verify the audit trail. Do not add email-based role logic to browser code.
+
 ## Promote a second admin
 
 Two paths:

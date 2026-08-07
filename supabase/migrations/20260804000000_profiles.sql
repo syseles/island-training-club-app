@@ -1,9 +1,10 @@
--- Island Training Club — profiles + first-sign-in bootstrap
+-- Island Training Club — profiles + pending-first-sign-in bootstrap
 --
 -- Creates the public.profiles table, an after-insert trigger on
--- auth.users that creates a matching profile row, and a touch trigger
--- that keeps updated_at honest. Apply via the Supabase SQL editor or
--- `supabase db push`.
+-- auth.users that creates a matching pending profile row, and a touch
+-- trigger that keeps updated_at honest. Initial administrator promotion is
+-- deliberately a separate trusted deployment operation. Apply via the
+-- Supabase SQL editor or `supabase db push`.
 
 create table public.profiles (
   id          uuid primary key references auth.users(id) on delete cascade,
@@ -23,29 +24,15 @@ language plpgsql
 security definer
 set search_path = public
 as $$
-declare
-  existing_count int;
 begin
-  select count(*) into existing_count from public.profiles;
-  if existing_count = 0 then
-    insert into public.profiles (id, email, full_name, avatar_url, role)
-    values (
-      new.id,
-      new.email,
-      new.raw_user_meta_data->>'full_name',
-      new.raw_user_meta_data->>'avatar_url',
-      'super_admin'
-    );
-  else
-    insert into public.profiles (id, email, full_name, avatar_url, role)
-    values (
-      new.id,
-      new.email,
-      new.raw_user_meta_data->>'full_name',
-      new.raw_user_meta_data->>'avatar_url',
-      'pending'
-    );
-  end if;
+  insert into public.profiles (id, email, full_name, avatar_url, role)
+  values (
+    new.id,
+    new.email,
+    new.raw_user_meta_data->>'full_name',
+    new.raw_user_meta_data->>'avatar_url',
+    'pending'
+  );
   return new;
 end;
 $$;
