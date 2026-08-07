@@ -7,9 +7,6 @@
 
 import {
   SEED_ACTIVITIES,
-  SEED_USERS,
-  seedDonations,
-  GIVING_CAMPAIGN,
   sessionsInRange,
   sessionStarted,
   todayLocal,
@@ -23,7 +20,7 @@ import {
 import { supabase, isLive } from "./config.js";
 
 const STORAGE_KEY = "itc.prototype.v1";
-const STATE_VERSION = 10;
+const STATE_VERSION = 11;
 
 // Live-mode (Supabase) session cache. Avoids hammering the DB on every
 // page load. The TTL is short so role flips and welcome notifications
@@ -49,11 +46,11 @@ function freshState() {
     version: STATE_VERSION,
     sessionUserId: null,
     activities: structuredClone(SEED_ACTIVITIES),
-    users: structuredClone(SEED_USERS).map(backfillProfilePreferences),
+    users: [],
     bookings: [],
     receipts: [],
     receiptCounter: 49,
-    donations: seedDonations(),
+    donations: [],
     prayers: [],
   };
 }
@@ -90,32 +87,20 @@ function migrate() {
   }
   if (v < 3) {
     // v3: Run Club moved to Mon 7:30 PM with venue TBC; Water Sports Evening
-    // renamed ITC Swimming at 7:30 PM; leaders renamed (Arnold Wong, Tina,
-    // CM Chui). Activities are replaced in place from the seed; seed users
-    // get the new names only, keeping any role/status changes.
+    // renamed ITC Swimming at 7:30 PM. Activities are replaced in place from
+    // the seed. The retired demo-user name refresh is intentionally omitted.
     const seedAct = new Map(SEED_ACTIVITIES.map((a) => [a.id, a]));
     state.activities = state.activities.map((a) =>
       a.id === "run" || a.id === "water"
         ? structuredClone(seedAct.get(a.id))
         : a
     );
-    const seedUser = new Map(SEED_USERS.map((u) => [u.id, u]));
-    state.users = state.users.map((u) =>
-      seedUser.has(u.id)
-        ? {
-            ...u,
-            fullName: seedUser.get(u.id).fullName,
-            preferredName: seedUser.get(u.id).preferredName,
-          }
-        : u
-    );
   }
   if (v < 4) {
     // v4: HYROX venue renamed "Causeway Bay BFT" -> "BFT Causeway Bay"
     // (activity location + any booking snapshots carrying the old string);
-    // giving + shop state introduced, with donations seeded for the demo
-    // member. Only exact old-string matches are rewritten so admin edits
-    // made since are preserved.
+    // giving + shop state introduced. Only exact old-string matches are
+    // rewritten so admin edits made since are preserved.
     const hyrox = state.activities.find((a) => a.id === "hyrox");
     if (hyrox && hyrox.location === "Causeway Bay BFT") {
       hyrox.location = "BFT Causeway Bay";
@@ -125,7 +110,7 @@ function migrate() {
         b.snapshot.location = "BFT Causeway Bay";
       }
     }
-    if (!Array.isArray(state.donations)) state.donations = seedDonations();
+    if (!Array.isArray(state.donations)) state.donations = [];
   }
   if (v < 5) {
     // v5: Wednesday Night Training venue changed to TBC (location, maps
@@ -192,6 +177,46 @@ function migrate() {
     state.bookings = state.bookings.filter((b) => !seedBookingIds.has(b.id));
     state.receipts = state.receipts.filter((r) => !seedReceiptIds.has(r.id));
   }
+  if (v < 11) {
+    // v11: strip the historical local demo. Exact-sentinel match only —
+    // every genuine user, application, booking, receipt, and donation
+    // is preserved. Demo demand on activities is removed so capacity
+    // reflects real confirmed bookings only.
+    const demoIds = new Set(["u-super", "u-admin", "u-member", "u-pend-1", "u-pend-2"]);
+    const demoEmails = new Set([
+      "owner@itc.hk",
+      "admin@itc.hk",
+      "member@itc.hk",
+      "marco.santos@example.com",
+      "jenny.wu@example.com",
+    ]);
+    const removedUserIds = new Set(demoIds);
+    state.users = state.users.filter((user) => {
+      const matches = demoIds.has(user.id)
+        || demoEmails.has(String(user.email ?? "").trim().toLowerCase());
+      if (matches) removedUserIds.add(user.id);
+      return !matches;
+    });
+    if (removedUserIds.has(state.sessionUserId)) state.sessionUserId = null;
+
+    const removedBookingIds = new Set();
+    state.bookings = state.bookings.filter((booking) => {
+      const remove = removedUserIds.has(booking.userId);
+      if (remove) removedBookingIds.add(booking.id);
+      return !remove;
+    });
+    state.receipts = state.receipts.filter(
+      (receipt) => !removedUserIds.has(receipt.userId)
+        && !removedBookingIds.has(receipt.bookingId)
+    );
+    const seedDonationIds = new Set(["d-seed-1", "d-seed-2"]);
+    state.donations = state.donations.filter(
+      (donation) => !removedUserIds.has(donation.userId)
+        && !seedDonationIds.has(donation.id)
+    );
+
+    for (const activity of state.activities) delete activity.baseBooked;
+  }
   state.version = STATE_VERSION;
 }
 
@@ -199,7 +224,7 @@ function save() {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
 }
 
-export function resetDemo() {
+export function resetLocalData() {
   localStorage.removeItem(STORAGE_KEY);
   return load();
 }
@@ -222,14 +247,6 @@ export function signIn(email) {
     save();
     return { ok: true, user, declined: true };
   }
-  state.sessionUserId = user.id;
-  save();
-  return { ok: true, user };
-}
-
-export function demoSignIn(role) {
-  const user = state.users.find((u) => u.role === role && u.status === "approved");
-  if (!user) return { ok: false, reason: "not-found" };
   state.sessionUserId = user.id;
   save();
   return { ok: true, user };
@@ -747,7 +764,7 @@ export function setRole(userId, role) {
   if (user.role === nextRole) throw new Error("Member already has that role.");
 
   user.role = nextRole;
-  // Revocation returns an approved local demo account to the same pending
+  // Revocation returns an approved local account to the same pending
   // access state used by live profiles. Re-approval still goes through the
   // existing application decision flow.
   if (nextRole === "pending") user.status = "pending";
@@ -793,7 +810,6 @@ export function saveActivity(draft) {
     ...draft,
     price: draft.kind === "paid" ? Number(draft.price) || 0 : undefined,
     capacity: draft.kind === "paid" ? Number(draft.capacity) || 0 : undefined,
-    baseBooked: draft.kind === "paid" ? Number(draft.baseBooked) || 0 : undefined,
     durationMin: Number(draft.durationMin) || 60,
     weekday: Number(draft.weekday),
   };
@@ -820,8 +836,7 @@ export function activeBookingsForSession(sessionId) {
 
 export function spotsLeft(session) {
   if (session.kind !== "paid") return null;
-  const taken = (session.baseBooked || 0) + activeBookingsForSession(session.id).length;
-  return Math.max(0, session.capacity - taken);
+  return Math.max(0, session.capacity - activeBookingsForSession(session.id).length);
 }
 
 export function attendeesFor(session) {
@@ -897,7 +912,7 @@ export function payForSession(userId, session, cardLast4) {
     userId,
     amount: session.price,
     currency: "HKD",
-    cardLast4: cardLast4 || "4242",
+    cardLast4: cardLast4 || null,
     status: "paid",
     issuedAt: Date.now(),
     line: `${session.name} — ${fmtDate(session.date)} ${fmtTime(session.time)}`,
@@ -956,12 +971,17 @@ export function recordPrayer({ userId, name, request }) {
 // FPS is a push payment from the member's banking app, so the prototype
 // records every gift as "pending" until a leader reconciles it against the
 // club account — there is no instant confirmation path like card checkout.
+// The historical Standard Chartered Marathon seed campaign is no longer
+// shipped; the prototype starts with no active campaign and Admin campaign
+// management is future work. Gifts recorded against a closed/unset campaign
+// remain in the donor's history so a leader can match them by reference.
+
+export function getActiveGivingCampaign() {
+  return null; // No active seed campaign. Admin campaign management is future work.
+}
 
 export function campaignRaised() {
-  const local = state.donations
-    .filter((d) => d.campaignId === GIVING_CAMPAIGN.id)
-    .reduce((sum, d) => sum + d.amount, 0);
-  return GIVING_CAMPAIGN.baseRaisedHKD + local;
+  return state.donations.reduce((sum, d) => sum + d.amount, 0);
 }
 
 export function donationsForUser(userId) {
@@ -977,7 +997,7 @@ export function recordDonation({ userId, name, amount, note, ref }) {
     name: String(name).trim(),
     amount: Math.round(Number(amount)),
     currency: "HKD",
-    campaignId: GIVING_CAMPAIGN.id,
+    campaignId: null,
     method: "FPS",
     ref,
     note: String(note ?? "").trim(),

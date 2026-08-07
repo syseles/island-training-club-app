@@ -331,6 +331,71 @@ globalThis.localStorage = {
   removeItem: (k) => mem.delete(k),
 };
 
+// --- Install neutral fixtures for local authenticated paths (no demo seeds) ---
+function installLocalFixtures({ withMemberBooking = false } = {}) {
+  const clean = JSON.parse(mem.get("itc.prototype.v1"));
+  const preserved = (clean.users || []).filter((u) =>
+    !["fixture-admin", "fixture-member", "fixture-super", "fixture-pend-1"].includes(u.id)
+  );
+  clean.users = [
+    ...preserved,
+    {
+      id: "fixture-admin", role: "admin", status: "approved", fullName: "Test Admin",
+      preferredName: "Admin", email: "admin@example.test", phone: "+852 5000 0001",
+      emergencyName: "Test Contact", emergencyPhone: "+852 5000 9001", heard: "Test fixture",
+      isMinor: false, appliedAt: Date.now() - 86400000, indemnityAcceptedAt: Date.now() - 86400000,
+      privacyAcceptedAt: Date.now() - 86400000, whatsappReminders: false, emailReceipts: false,
+      communityNews: false,
+    },
+    {
+      id: "fixture-member", role: "member", status: "approved", fullName: "Test Member",
+      preferredName: "Tester", email: "member@example.test", phone: "+852 5000 0002",
+      emergencyName: "Test Contact", emergencyPhone: "+852 5000 9002", heard: "Test fixture",
+      mediaConsent: true, donorId: "TEST-1234", isMinor: false,
+      appliedAt: Date.now() - 172800000, indemnityAcceptedAt: Date.now() - 172800000,
+      privacyAcceptedAt: Date.now() - 172800000, whatsappReminders: false,
+      emailReceipts: false, communityNews: false,
+    },
+    {
+      id: "fixture-super", role: "superadmin", status: "approved", fullName: "Test Super",
+      preferredName: "Super", email: "super@example.test", phone: "+852 5000 0003",
+      emergencyName: "Test Contact", emergencyPhone: "+852 5000 9003", heard: "Test fixture",
+      isMinor: false, appliedAt: Date.now() - 259200000, indemnityAcceptedAt: Date.now() - 259200000,
+      privacyAcceptedAt: Date.now() - 259200000, whatsappReminders: false, emailReceipts: false,
+      communityNews: false,
+    },
+    {
+      id: "fixture-pend-1", role: "pending", status: "pending", fullName: "Test Pending",
+      preferredName: "Pending", email: "pending@example.test", phone: "+852 5000 0004",
+      emergencyName: "Test Contact", emergencyPhone: "+852 5000 9004", heard: "Test fixture",
+      isMinor: false, appliedAt: Date.now() - 86400000, indemnityAcceptedAt: null,
+      privacyAcceptedAt: Date.now() - 86400000, whatsappReminders: false, emailReceipts: false,
+      communityNews: false,
+    },
+  ];
+  if (withMemberBooking) {
+    const upcoming = store.upcomingSessions(14);
+    const fixtureMemberSession = upcoming.find((s) => s.activityId === "hyrox" && !data.sessionStarted(s));
+    if (fixtureMemberSession) {
+      clean.bookings = [
+        ...(clean.bookings || []),
+        {
+          id: "fixture-booking", userId: "fixture-member", sessionId: fixtureMemberSession.id,
+          status: "confirmed", createdAt: Date.now(),
+          snapshot: {
+            name: fixtureMemberSession.name, kind: fixtureMemberSession.kind,
+            dateISO: fixtureMemberSession.dateISO, time: fixtureMemberSession.time,
+            durationMin: fixtureMemberSession.durationMin, location: fixtureMemberSession.location,
+            price: fixtureMemberSession.price,
+          },
+        },
+      ];
+    }
+  }
+  mem.set("itc.prototype.v1", JSON.stringify(clean));
+  store.load();
+}
+
 const store = await import("./js/store.js");
 const views = await import("./js/views.js");
 const data = await import("./js/data.js");
@@ -418,7 +483,23 @@ async function check(label, fn) {
   }
 }
 
-store.load();
+const fresh = store.load();
+const freshAccount = await views.viewAccount();
+if (fresh.users.length || fresh.bookings.length || fresh.receipts.length || fresh.donations.length ||
+    fresh.sessionUserId !== null || store.getActiveGivingCampaign() !== null) {
+  throw new Error("fresh local state must have no identities, transactions, or Giving campaign");
+}
+for (const forbidden of [
+  "owner@itc.hk",
+  "admin@itc.hk",
+  "member@itc.hk",
+  'data-action="demo-signin"',
+  "one-tap demo",
+  'data-action="reset-demo"',
+]) {
+  if (freshAccount.includes(forbidden)) throw new Error(`fresh Account contains retired demo marker: ${forbidden}`);
+}
+console.log("ok  fresh local state is identity/transaction-empty and free of demo controls");
 
 // --- Visitor state ---
 store.signOut();
@@ -478,7 +559,7 @@ if (store.spotsLeft(hyroxUpcoming) !== hyroxUpcoming.capacity) {
   failures++;
   console.error("FAIL HYROX spots should equal capacity with no bookings");
 } else console.log("ok  HYROX spots equal capacity with no bookings");
-if (store.bookingsForUser("u-member").length !== 0) {
+if (store.bookingsForUser("fixture-member").length !== 0) {
   failures++;
   console.error("FAIL seeded member should have no bookings after cleanup");
 } else console.log("ok  seeded member has no bookings");
@@ -718,7 +799,7 @@ if (!pendHtml.includes("Booking locked")) {
 } else console.log("ok  pending user blocked from paid booking");
 
 // --- Admin approval flow ---
-store.demoSignIn("admin");
+installLocalFixtures(); store.signIn("admin@example.test");
 const adminApprovalsOut = await views.viewAdmin("approvals");
 await check("admin approvals", () => adminApprovalsOut);
 for (const approvalContract of [
@@ -748,11 +829,11 @@ const adminMembersOut = await views.viewAdmin("members");
 await check("admin members", () => adminMembersOut);
 const adminGiving = views.viewGiving();
 if (!views.navHTML("giving", store.currentUser()).includes("#/giving") ||
-    !adminGiving.includes("Give via FPS") || !adminGiving.includes("Current campaign") ||
-    !adminGiving.includes("Giving history")) {
+    !adminGiving.includes("No active campaign right now") ||
+    adminGiving.includes("Give via FPS") || adminGiving.includes("Current campaign")) {
   failures++;
-  console.error("FAIL Admin must retain the full Giving flow");
-} else console.log("ok  Admin retains the full Giving flow");
+  console.error("FAIL Admin must see the clean no-campaign Giving state");
+} else console.log("ok  Admin sees the clean no-campaign Giving state");
 if (/member-summary|Member status counts|data-change="member-(?:status|role)-filter"/.test(adminMembersOut)) {
   failures++;
   console.error("FAIL Admin members must omit redundant counts and native filter selects");
@@ -787,7 +868,7 @@ if (!/Search members/.test(adminMembersOut) || !/(?:Role changes are Super Admin
   failures++;
   console.error("FAIL default Admin member filters must preserve guidance/search and hide Clear filters");
 }
-views.adminMemberFilters.query = "tina";
+views.adminMemberFilters.query = "test admin";
 views.adminMemberFilters.status = "approved";
 views.adminMemberFilters.role = "admin";
 const filteredAdminMembers = await views.viewAdmin("members");
@@ -795,7 +876,7 @@ if (!/data-action="admin-member-filters-clear"[^>]*>Clear filters</.test(filtere
   failures++;
   console.error("FAIL active Admin member filters must show Clear filters");
 }
-if (!filteredAdminMembers.includes("Tina") || filteredAdminMembers.includes("CM Chui") || filteredAdminMembers.includes("Marco Santos")) {
+if (!filteredAdminMembers.includes("Test Admin") || filteredAdminMembers.includes("Test Member") || filteredAdminMembers.includes("Test Pending")) {
   failures++;
   console.error("FAIL Admin member search/status/role filters must combine truthfully");
 } else console.log("ok  Admin member filters combine truthfully");
@@ -1003,14 +1084,14 @@ if (!histHtml.includes("booking-card") || !histHtml.includes("Cancelled")) {
 } else console.log("ok  History sub-page lists past bookings");
 
 // --- Seeded member view ---
-store.demoSignIn("member");
+installLocalFixtures(); store.signIn("member@example.test");
 await check("account (seeded member)", () => views.viewAccount());
 const memberAcct = await views.viewAccount();
-if (!(await views.viewAccount("donor")).includes("CHUI-08879")) {
+if (!(await views.viewAccount("donor")).includes("TEST-1234")) {
   failures++;
-  console.error("FAIL seeded member donor ID not shown in Donor Profile");
-} else console.log("ok  seeded member donor ID shown in Donor Profile");
-if (memberAcct.includes("CHUI-08879")) {
+  console.error("FAIL fixture member donor ID not shown in Donor Profile");
+} else console.log("ok  fixture member donor ID shown in Donor Profile");
+if (memberAcct.includes("TEST-1234")) {
   failures++;
   console.error("FAIL donor ID should not appear on the Profile card face");
 } else console.log("ok  seeded member card faces carry no donor details");
@@ -1026,13 +1107,13 @@ if (!memberAcct.includes('class="kicker">Profile</div>') || memberAcct.includes(
   failures++;
   console.error('FAIL Profile header should read "Profile" with no name headline');
 } else console.log('ok  Profile header reads "Profile"');
-if (memberAcct.includes("member@itc.hk")) {
+if (memberAcct.includes("member@example.test")) {
   failures++;
   console.error("FAIL email should not appear on the Profile face");
 } else console.log("ok  Profile face carries no contact details");
 const member = store.currentUser();
 const memberDetailsSummary = await views.viewAccount("details");
-if (!memberDetailsSummary.includes("member@itc.hk")) {
+if (!memberDetailsSummary.includes("member@example.test")) {
   failures++;
   console.error("FAIL email missing from Membership Details sub-page");
 } else console.log("ok  email lives on Membership Details sub-page");
@@ -1056,7 +1137,7 @@ if (!memberDetailsSummary.includes("18 or over")) {
   failures++;
   console.error("FAIL Membership Details summary should show adult age status");
 } else console.log("ok  Membership Details summary shows adult age status");
-if (!memberDetailsSummary.includes("Preferred name</span><strong>CM</strong>")) {
+if (!memberDetailsSummary.includes("Preferred name</span><strong>Tester</strong>")) {
   failures++;
   console.error("FAIL Membership Details summary should show the local preferred name");
 } else console.log("ok  Membership Details summary shows the local preferred name");
@@ -1101,7 +1182,7 @@ if (memberDetailsEdit.includes('name="photo_consent"')) {
   failures++;
   console.error("FAIL Membership Details edit route should exclude photo consent controls");
 } else console.log("ok  Membership Details edit route excludes photo consent controls");
-if (!memberDetailsEdit.includes('name="preferred_name" value="CM"')) {
+if (!memberDetailsEdit.includes('name="preferred_name" value="Tester"')) {
   failures++;
   console.error("FAIL Membership Details edit route should prefill the local preferred name");
 } else console.log("ok  Membership Details edit route prefills the local preferred name");
@@ -1291,31 +1372,31 @@ if (writtenIndemnity !== 1780000000000 || store.currentUser().indemnityAcceptedA
 // Giving flow remains available after integrating auth/profile behavior.
 const memberGiving = await check("giving (member)", () => views.viewGiving());
 if (!views.navHTML("giving", member).includes("#/giving") ||
-    !memberGiving.includes("Give via FPS") || !memberGiving.includes("Current campaign") ||
-    !memberGiving.includes("Giving history")) {
+    !memberGiving.includes("No active campaign right now") ||
+    memberGiving.includes("Give via FPS") || memberGiving.includes("Current campaign")) {
   failures++;
-  console.error("FAIL approved members must retain the full Giving flow");
-} else console.log("ok  approved members retain the full Giving flow");
-store.demoSignIn("superadmin");
+  console.error("FAIL approved members must see the clean no-campaign Giving state");
+} else console.log("ok  approved members see the clean no-campaign Giving state");
+installLocalFixtures(); store.signIn("super@example.test");
 const superGiving = views.viewGiving();
 if (!views.navHTML("giving", store.currentUser()).includes("#/giving") ||
-    !superGiving.includes("Give via FPS") || !superGiving.includes("Current campaign") ||
-    !superGiving.includes("Giving history")) {
+    !superGiving.includes("No active campaign right now") ||
+    superGiving.includes("Give via FPS") || superGiving.includes("Current campaign")) {
   failures++;
-  console.error("FAIL Super Admin must retain the full Giving flow");
-} else console.log("ok  Super Admin retains the full Giving flow");
-store.demoSignIn("member");
+  console.error("FAIL Super Admin must see the clean no-campaign Giving state");
+} else console.log("ok  Super Admin sees the clean no-campaign Giving state");
+installLocalFixtures(); store.signIn("member@example.test");
 const raisedBefore = store.campaignRaised();
 const donation = store.recordDonation({
   userId: member.id,
   name: member.fullName,
   amount: 300,
   note: "smoke",
-  ref: "SCM27-SMOKE1",
+  ref: "GIFT-SMOKE1",
 });
 if (donation.status !== "pending") throw new Error("FPS gift should start pending");
 if (store.campaignRaised() !== raisedBefore + 300) throw new Error("campaign total did not increase");
-if (!store.donationsForUser(member.id).some((d) => d.ref === "SCM27-SMOKE1")) {
+if (!store.donationsForUser(member.id).some((d) => d.ref === "GIFT-SMOKE1")) {
   throw new Error("donation missing from giving history");
 }
 await check("giving history with new gift", () => views.viewGiving());
@@ -1331,20 +1412,21 @@ if (!ics.includes("BEGIN:VEVENT") || !ics.includes(free.name)) throw new Error("
 console.log("ok  ICS generation");
 
 // --- v7 migration: legacy hyphen-less donor IDs get repaired on load ---
-store.resetDemo();
+store.resetLocalData();
+installLocalFixtures();
 {
   const raw = JSON.parse(mem.get("itc.prototype.v1"));
   raw.version = 6;
-  raw.users.find((u) => u.id === "u-member").donorId = "CHUI08879"; // no separator
-  raw.users.find((u) => u.id === "u-admin").donorId = "not a real id"; // unrecognizable
+  raw.users.find((u) => u.id === "fixture-member").donorId = "CHUI08879"; // no separator
+  raw.users.find((u) => u.id === "fixture-admin").donorId = "not a real id"; // unrecognizable
   mem.set("itc.prototype.v1", JSON.stringify(raw));
   store.load();
-  const fixed = store.allUsers().find((u) => u.id === "u-member").donorId;
+  const fixed = store.allUsers().find((u) => u.id === "fixture-member").donorId;
   if (fixed !== "CHUI-08879") {
     failures++;
     console.error(`FAIL v7 migration should repair CHUI08879 -> CHUI-08879, got ${fixed}`);
   } else console.log("ok  v7 migration inserts the missing hyphen");
-  const cleared = store.allUsers().find((u) => u.id === "u-admin").donorId;
+  const cleared = store.allUsers().find((u) => u.id === "fixture-admin").donorId;
   if (cleared !== null) {
     failures++;
     console.error(`FAIL v7 migration should clear unrecognizable donor ID, got ${cleared}`);
@@ -1352,11 +1434,12 @@ store.resetDemo();
 }
 
 // --- v9 migration: age status + notification preferences ---
-store.resetDemo();
+store.resetLocalData();
+installLocalFixtures();
 {
   const raw = JSON.parse(mem.get("itc.prototype.v1"));
   raw.version = 8;
-  const legacyUser = raw.users.find((u) => u.id === "u-member");
+  const legacyUser = raw.users.find((u) => u.id === "fixture-member");
   delete legacyUser.isMinor;
   delete legacyUser.privacyAcceptedAt;
   delete legacyUser.whatsappReminders;
@@ -1364,7 +1447,7 @@ store.resetDemo();
   delete legacyUser.communityNews;
   mem.set("itc.prototype.v1", JSON.stringify(raw));
   store.load();
-  const migrated = store.allUsers().find((u) => u.id === "u-member");
+  const migrated = store.allUsers().find((u) => u.id === "fixture-member");
   if (
     migrated.isMinor !== false ||
     migrated.whatsappReminders !== false ||
@@ -1403,7 +1486,7 @@ store.resetDemo();
 }
 
 // --- v10 migration: HYROX demo attendance data stripped ---
-store.resetDemo();
+store.resetLocalData();
 {
   const raw = JSON.parse(mem.get("itc.prototype.v1"));
   raw.version = 9;
@@ -1414,14 +1497,14 @@ store.resetDemo();
   raw.activities.find((a) => a.id === "run").baseBooked = 4;
   const snap = (dateISO) => ({ name: "ITC HYROX", kind: "paid", dateISO, time: "11:15", durationMin: 75, location: "BFT Causeway Bay", price: 180 });
   raw.bookings.push(
-    { id: "b-seed-past", userId: "u-member", sessionId: "hyrox-2026-07-25", status: "attended", createdAt: 1, snapshot: snap("2026-07-25") },
-    { id: "b-seed-next", userId: "u-member", sessionId: "hyrox-2026-08-08", status: "confirmed", createdAt: 2, snapshot: snap("2026-08-08") },
-    { id: "b-user-1", userId: "u-member", sessionId: "hyrox-2026-08-08", status: "confirmed", createdAt: 3, snapshot: snap("2026-08-08") }
+    { id: "b-seed-past", userId: "fixture-member", sessionId: "hyrox-2026-07-25", status: "attended", createdAt: 1, snapshot: snap("2026-07-25") },
+    { id: "b-seed-next", userId: "fixture-member", sessionId: "hyrox-2026-08-08", status: "confirmed", createdAt: 2, snapshot: snap("2026-08-08") },
+    { id: "b-user-1", userId: "fixture-member", sessionId: "hyrox-2026-08-08", status: "confirmed", createdAt: 3, snapshot: snap("2026-08-08") }
   );
   raw.receipts.push(
-    { id: "r-seed-past", bookingId: "b-seed-past", userId: "u-member", amount: 180, currency: "HKD", status: "paid", issuedAt: 1, line: "x" },
-    { id: "r-seed-next", bookingId: "b-seed-next", userId: "u-member", amount: 180, currency: "HKD", status: "paid", issuedAt: 2, line: "x" },
-    { id: "r-user-1", bookingId: "b-user-1", userId: "u-member", amount: 180, currency: "HKD", status: "paid", issuedAt: 3, number: "ITC-2026-0099", cardLast4: "4242", line: "ITC HYROX — 8 Aug 2026 11:15 AM" }
+    { id: "r-seed-past", bookingId: "b-seed-past", userId: "fixture-member", amount: 180, currency: "HKD", status: "paid", issuedAt: 1, line: "x" },
+    { id: "r-seed-next", bookingId: "b-seed-next", userId: "fixture-member", amount: 180, currency: "HKD", status: "paid", issuedAt: 2, line: "x" },
+    { id: "r-user-1", bookingId: "b-user-1", userId: "fixture-member", amount: 180, currency: "HKD", status: "paid", issuedAt: 3, number: "ITC-2026-0099", cardLast4: "4242", line: "ITC HYROX — 8 Aug 2026 11:15 AM" }
   );
   mem.set("itc.prototype.v1", JSON.stringify(raw));
   store.load();
@@ -1433,11 +1516,11 @@ store.resetDemo();
     }
   }
   const migratedRun = migratedActivities.find((a) => a.id === "run");
-  if (migratedRun?.baseBooked !== 4) {
+  if (migratedRun?.baseBooked !== undefined) {
     failures++;
-    console.error(`FAIL v10 migration should preserve run baseBooked 4, got ${migratedRun?.baseBooked}`);
-  } else console.log("ok  v10 migration preserves unrelated activity baseBooked");
-  const migratedIds = store.bookingsForUser("u-member").map((b) => b.id);
+    console.error(`FAIL v11 cleanup should strip simulated demand from run, got ${migratedRun?.baseBooked}`);
+  } else console.log("ok  v11 cleanup strips simulated demand from every activity");
+  const migratedIds = store.bookingsForUser("fixture-member").map((b) => b.id);
   if (migratedIds.length !== 1 || migratedIds[0] !== "b-user-1") {
     failures++;
     console.error(`FAIL v10 migration should remove seed bookings only, got ${JSON.stringify(migratedIds)}`);
@@ -1448,10 +1531,48 @@ store.resetDemo();
     failures++;
     console.error(`FAIL v10 migration should keep only the user receipt, got ${JSON.stringify(persistedReceiptIds)}`);
   } else console.log("ok  v10 migration keeps the user receipt only");
-  if (persisted.version !== 10) {
+  if (persisted.version !== 11) {
     failures++;
-    console.error(`FAIL state version should be 10 after migration, got ${persisted.version}`);
-  } else console.log("ok  state version is 10");
+    console.error(`FAIL state version should be 11 after migration, got ${persisted.version}`);
+  } else console.log("ok  state version is 11");
+}
+
+// --- v11 migration: exact demo sentinels are removed, unmatched records survive ---
+store.resetLocalData();
+{
+  const raw = JSON.parse(mem.get("itc.prototype.v1"));
+  raw.version = 10;
+  raw.sessionUserId = "u-member";
+  raw.users = [
+    { id: "u-member", role: "member", status: "approved", fullName: "Legacy Demo", preferredName: "Demo", email: "member@itc.hk", appliedAt: 1 },
+    { id: "legacy-email-match", role: "member", status: "approved", fullName: "Legacy Email", preferredName: "Legacy", email: "ADMIN@ITC.HK", appliedAt: 1 },
+    { id: "real-user-1", role: "member", status: "approved", fullName: "Real User", preferredName: "Real", email: "real.user@example.test", appliedAt: 1 },
+  ];
+  raw.bookings = [
+    { id: "demo-booking", userId: "u-member", sessionId: "paid-1", status: "confirmed" },
+    { id: "real-booking", userId: "real-user-1", sessionId: "paid-1", status: "confirmed" },
+  ];
+  raw.receipts = [
+    { id: "demo-receipt", bookingId: "demo-booking", userId: "u-member" },
+    { id: "real-receipt", bookingId: "real-booking", userId: "real-user-1" },
+  ];
+  raw.donations = [
+    { id: "d-seed-1", userId: "real-user-1", campaignId: "scm-2027", amount: 500, createdAt: 1 },
+    { id: "demo-user-gift", userId: "u-member", campaignId: "scm-2027", amount: 300, createdAt: 2 },
+    { id: "real-gift", userId: "real-user-1", campaignId: "scm-2027", amount: 250, createdAt: 3 },
+  ];
+  raw.activities[0].baseBooked = 7;
+  mem.set("itc.prototype.v1", JSON.stringify(raw));
+  store.load();
+  const migrated = JSON.parse(mem.get("itc.prototype.v1"));
+  if (migrated.sessionUserId !== null || migrated.users.map((u) => u.id).join(",") !== "real-user-1" ||
+      migrated.bookings.map((b) => b.id).join(",") !== "real-booking" ||
+      migrated.receipts.map((r) => r.id).join(",") !== "real-receipt" ||
+      migrated.donations.map((d) => d.id).join(",") !== "real-gift" ||
+      migrated.activities.some((a) => "baseBooked" in a)) {
+    failures++;
+    console.error("FAIL v11 migration must remove exact demo/dependent records and preserve unmatched state");
+  } else console.log("ok  v11 migration removes exact demo records and preserves unmatched state");
 }
 
 // --- viewAccount live-mode branch ---
@@ -1511,6 +1632,14 @@ if (!viewsSrc.includes("Signed in as")) {
 const appSrc = readFileSync(resolve(__dirname, "js/app.js"), "utf8");
 const indexSrc = readFileSync(resolve(__dirname, "index.html"), "utf8");
 const stylesSrc = readFileSync(resolve(__dirname, "styles.css"), "utf8");
+if (appSrc.includes("SCM27-")) {
+  failures++;
+  console.error("FAIL app.js must not generate references for the retired seed campaign");
+} else console.log("ok  app.js uses no retired seed-campaign references");
+if (/use a demo profile/i.test(appSrc)) {
+  failures++;
+  console.error("FAIL app.js local sign-in error must direct unknown users to apply, not to demo profiles");
+} else console.log("ok  app.js local sign-in error contains no demo guidance");
 const feedbackChecks = [
   [indexSrc.includes('id="route-loader"') && indexSrc.includes('role="status"'), "semantic delayed route loader"],
   [appSrc.includes("renderWithFeedback") && appSrc.includes('setAttribute("aria-busy", "true")'), "route busy wrapper"],
@@ -1589,17 +1718,17 @@ if (!/SIGNED_IN[\s\S]{0,300}location\.hash = "#\/home"/.test(appSrc)) {
 } else {
   console.log("ok  app.js: SIGNED_IN routes to #/home");
 }
-if (!/!isLive\(\)[\s\S]{0,200}admin demo profile/.test(viewsSrc)) {
+if (/admin demo profile/.test(viewsSrc)) {
   failures++;
-  console.error("FAIL views.js: pending view's demo-profile tip should be local-only");
+  console.error("FAIL views.js: pending state must not direct users to a demo profile");
 } else {
-  console.log("ok  views.js: pending view's demo-profile tip is local-only");
+  console.log("ok  views.js: pending state contains no demo-profile guidance");
 }
-if (!/!isLive\(\)[\s\S]{0,200}data-action="reset-demo"/.test(viewsSrc)) {
+if (/data-action="(?:reset-demo|demo-signin)"/.test(viewsSrc)) {
   failures++;
-  console.error("FAIL views.js: Reset demo data button should be local-only");
+  console.error("FAIL views.js: retired demo controls must be absent");
 } else {
-  console.log("ok  views.js: Reset demo data button is local-only");
+  console.log("ok  views.js: retired demo controls are absent");
 }
 
 // --- Live auth: home CTA + short application form ---
@@ -1993,8 +2122,9 @@ if (!localMatch) {
 } else {
   console.log("ok  getCurrentUser: mirrors currentUser() in local mode");
 }
-// Sign in as a seeded user so the local-mode mirror check has a real user.
-store.signIn("member@itc.hk");
+// Install and sign in as a neutral fixture so the local-mode mirror check has a real user.
+installLocalFixtures();
+store.signIn("member@example.test");
 const signedUser = await store.getCurrentUser();
 const signedCu = store.currentUser();
 const signedMatch = signedUser && signedCu && signedUser.id === signedCu.id;
@@ -2129,29 +2259,70 @@ if (!viewsSrc.includes("New notifications will appear here.")) {
 // --- Delegated local member-role behavior ---
 // Exercise app.js in local mode so stale events cannot produce false success,
 // successful changes use setRole(), and filter-only UI state stays in memory.
-store.resetDemo();
-store.demoSignIn("superadmin");
+store.resetLocalData();
+installLocalFixtures(); store.signIn("super@example.test");
 const localDomListeners = new Map();
 const localWindowListeners = new Map();
 let localActiveElement = null;
-const makeLocalElement = () => ({
-  children: [],
-  className: "",
-  innerHTML: "",
-  textContent: "",
-  hidden: false,
-  disabled: false,
-  attributes: new Map(),
-  classList: { toggle() {} },
-  appendChild(child) { this.children.push(child); },
-  setAttribute(name, value) { this.attributes.set(name, String(value)); },
-  getAttribute(name) { return this.attributes.get(name) ?? null; },
-  hasAttribute(name) { return this.attributes.has(name); },
-  removeAttribute(name) { this.attributes.delete(name); },
-  focus() { localActiveElement = this; },
-  remove() {},
-  querySelector() { return null; },
-});
+const makeLocalElement = () => {
+  const dataset = {};
+  const el = {
+    children: [],
+    className: "",
+    innerHTML: "",
+    textContent: "",
+    hidden: false,
+    disabled: false,
+    value: "",
+    ariaBusy: false,
+    get ariaBusy() { return this["aria-busy"]; },
+    set ariaBusy(v) { this["aria-busy"] = v; },
+    attributes: new Map(),
+    classList: { toggle() {} },
+    appendChild(child) { this.children.push(child); },
+    setAttribute(name, value) {
+      this.attributes.set(name, String(value));
+      if (name.startsWith("data-")) {
+        const key = name.slice(5).replace(/-([a-z])/g, (_, c) => c.toUpperCase());
+        dataset[key] = String(value);
+      }
+    },
+    getAttribute(name) { return this.attributes.get(name) ?? null; },
+    hasAttribute(name) { return this.attributes.has(name); },
+    removeAttribute(name) {
+      this.attributes.delete(name);
+      if (name.startsWith("data-")) {
+        const key = name.slice(5).replace(/-([a-z])/g, (_, c) => c.toUpperCase());
+        delete dataset[key];
+      }
+    },
+    get dataset() { return dataset; },
+    set dataset(value) {
+      // Replace the dataset, mirroring how setting el.dataset clears
+      // existing data-* attributes and re-installs the new ones.
+      for (const k of Object.keys(dataset)) {
+        this.removeAttribute(`data-${k.replace(/[A-Z]/g, (c) => `-${c.toLowerCase()}`)}`);
+      }
+      for (const [k, v] of Object.entries(value || {})) {
+        this.setAttribute(`data-${k.replace(/[A-Z]/g, (c) => `-${c.toLowerCase()}`)}`, String(v));
+      }
+    },
+    focus() { localActiveElement = this; },
+    remove() {},
+    querySelector() { return null; },
+    closest(selector) {
+      if (typeof selector !== "string") return null;
+      const m = selector.match(/^\[data-([\w-]+)(?:="([^"]*)")?\]$/);
+      if (!m) return null;
+      const attr = `data-${m[1]}`;
+      if (m[2] !== undefined) {
+        return this.attributes.get(attr) === m[2] ? this : null;
+      }
+      return this.attributes.has(attr) ? this : null;
+    },
+  };
+  return el;
+};
 const localElements = new Map([
   ["view", makeLocalElement()],
   ["bottom-nav", makeLocalElement()],
@@ -2212,7 +2383,7 @@ if (staleLocalRole.value !== "member" || staleLocalRole.disabled || staleLocalRo
 clearLocalToasts();
 const rejectedLocalRevoke = localControl({
   action: "revoke-member",
-  user: "u-pend-1",
+  user: "fixture-pend-1",
   memberName: "Marco Santos",
 });
 rejectedLocalRevoke.textContent = "Revoke access";
@@ -2228,22 +2399,22 @@ if (rejectedLocalRevoke.textContent !== "Revoke access" || rejectedLocalRevoke.d
 clearLocalToasts();
 const localDemotion = localControl({
   change: "set-role",
-  user: "u-admin",
+  user: "fixture-admin",
   memberName: "Tina",
   currentRole: "admin",
 }, "member");
 await localChange({ target: localDemotion });
-if (store.allUsers().find((user) => user.id === "u-admin")?.role !== "member" ||
+if (store.allUsers().find((user) => user.id === "fixture-admin")?.role !== "member" ||
     localToastText().join("|") !== "Tina is now Member.") {
   failures++;
   console.error("FAIL delegated local demotion must mutate through setRole and toast success");
 } else console.log("ok  delegated local demotion confirms setRole success");
 
 clearLocalToasts();
-const localRevoke = localControl({ action: "revoke-member", user: "u-member", memberName: "CM Chui" });
+const localRevoke = localControl({ action: "revoke-member", user: "fixture-member", memberName: "CM Chui" });
 localRevoke.textContent = "Revoke access";
 await localClick({ target: localRevoke });
-const revokedLocalUser = store.allUsers().find((user) => user.id === "u-member");
+const revokedLocalUser = store.allUsers().find((user) => user.id === "fixture-member");
 if (revokedLocalUser?.role !== "pending" || revokedLocalUser?.status !== "pending" ||
     localToastText().join("|") !== "CM Chui moved to Pending.") {
   failures++;
@@ -2287,9 +2458,9 @@ globalThis.clearTimeout = realClearTimeout;
 // Direct callers receive checked failures for every rejected local transition.
 for (const [userId, role, message] of [
   ["missing-user", "admin", "Member not found."],
-  ["u-pend-1", "admin", "Only approved members can change roles."],
-  ["u-admin", "owner", "Invalid role transition."],
-  ["u-admin", "member", "Member already has that role."],
+  ["fixture-pend-1", "admin", "Only approved members can change roles."],
+  ["fixture-admin", "owner", "Invalid role transition."],
+  ["fixture-admin", "member", "Member already has that role."],
 ]) {
   try {
     store.setRole(userId, role);
@@ -2305,7 +2476,7 @@ for (const [userId, role, message] of [
 console.log("ok  local setRole rejects missing, non-approved, and invalid transitions");
 
 // --- Reset ---
-store.resetDemo();
+store.resetLocalData();
 console.log("ok  reset");
 
 console.log(failures ? `\n${failures} FAILURE(S)` : "\nAll smoke tests passed.");
