@@ -1640,18 +1640,9 @@ export async function viewAdmin(tab = "approvals") {
   // Live mode reads real data (Supabase applications + profiles); local
   // mode keeps the local prototype lists.
   let memberUsers = null;
-  if (tab === "members") {
-    memberUsers = isLive()
-      ? (await store.listProfiles())
-          .map((p) => ({
-            id: p.id,
-            fullName: p.full_name || p.email,
-            email: p.email,
-            role: p.role === "super_admin" ? "superadmin" : p.role,
-            status: p.role === "pending" ? "pending" : p.role === "declined" ? "declined" : "approved",
-          }))
-          .sort((a, b) => a.fullName.localeCompare(b.fullName))
-      : [...store.allUsers()].sort((a, b) => a.fullName.localeCompare(b.fullName));
+  if (["members", "payments", "ops"].includes(tab)) {
+    memberUsers = (await store.listPaymentUsers())
+      .sort((a, b) => a.fullName.localeCompare(b.fullName));
   }
   const body =
     tab === "activities"
@@ -1660,7 +1651,7 @@ export async function viewAdmin(tab = "approvals") {
         ? adminMembers(user, memberUsers)
         : tab === "giving"
           ? adminGiving(await store.listGivingCampaigns())
-          : (["payments", "ops"].includes(tab) ? adminOps(user) : adminApprovals(await store.listApprovalCandidates()));
+          : (["payments", "ops"].includes(tab) ? adminOps(user, memberUsers) : adminApprovals(await store.listApprovalCandidates()));
 
   return `
     <div class="kicker">Admin</div>
@@ -1669,25 +1660,24 @@ export async function viewAdmin(tab = "approvals") {
     ${body}`;
 }
 
-function pendingPayments() {
-  return store.allUsers().flatMap((u) => store.bookingsForUser(u.id))
-    .filter((b) => b.status === "reserved" && b.paymentMarkedAt)
-    .sort((a, b) => a.snapshot.dateISO.localeCompare(b.snapshot.dateISO))
-    .map((b) => {
-      const u = store.allUsers().find((x) => x.id === b.userId);
-      return { booking: b, who: u ? (u.preferredName || u.fullName) : "Member" };
-    });
+function pendingPayments(memberUsers) {
+  const directory = new Map((memberUsers || []).map((user) => [user.id, user]));
+  return store.pendingPaymentBookings().map((booking) => {
+    const member = directory.get(booking.userId);
+    return { booking, who: member ? (member.preferredName || member.fullName) : "Member" };
+  });
 }
 
-function adminOps(viewer) {
+function adminOps(viewer, memberUsers) {
   const upcoming = store.upcomingSessions(21).filter((s) => s.category === "HYROX" && !sessionStarted(s));
   const thisWeekSat = upcoming[0]?.dateISO;
   const dutyUser = thisWeekSat ? store.collectorFor(`hyrox-${thisWeekSat}`) : null;
-  const admins = store.allUsers().filter(
+  const admins = (memberUsers || []).filter(
     (u) => isAdminRole(u.role) && u.status === "approved"
   );
+  const viewerPayouts = store.collectorPayoutsFor(viewer.id);
 
-  const pending = pendingPayments();
+  const pending = pendingPayments(memberUsers);
 
   const dutyCard = `
     <div class="card mt16"><div class="card-body">
@@ -1703,8 +1693,8 @@ function adminOps(viewer) {
       </div>
       <form id="form-payouts" class="mt16">
         <h3>My payout details</h3>
-        <div class="field"><label for="payme-link">PayMe link</label><input id="payme-link" name="paymeLink" value="${esc(viewer.paymeLink || "")}" placeholder="https://payme.hsbc.com.hk/…"></div>
-        <div class="field"><label for="fps-phone">FPS phone</label><input id="fps-phone" name="fpsPhone" value="${esc(viewer.fpsPhone || "")}" placeholder="+852 …"></div>
+        <div class="field"><label for="payme-link">PayMe link</label><input id="payme-link" name="paymeLink" value="${esc(viewerPayouts.paymeLink)}" placeholder="https://payme.hsbc.com.hk/…"></div>
+        <div class="field"><label for="fps-phone">FPS phone</label><input id="fps-phone" name="fpsPhone" value="${esc(viewerPayouts.fpsPhone)}" placeholder="+852 …"></div>
         <button class="btn ghost sm mt8" type="submit">Save payout details</button>
       </form>
     </div></div>`;

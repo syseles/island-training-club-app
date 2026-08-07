@@ -33,6 +33,9 @@ let liveProfile = null;
 let liveUser = null;
 let liveProfileFetchedAt = 0;
 let liveGivingCampaign = null;
+// Supabase remains the identity directory. Payment Ops caches live profiles
+// in memory only; device-local persistence stores UUID-keyed operations.
+let livePaymentDirectory = new Map();
 const LIVE_PROFILE_TTL_MS = 30_000;
 
 let state = null;
@@ -46,6 +49,7 @@ function freshState() {
     bookings: [],
     receipts: [],
     receiptCounter: 49,
+    paymentPayouts: {},
     campaigns: [],
     donations: [],
     prayers: [],
@@ -86,6 +90,17 @@ function migrate() {
     state.sessionOverrides = {};
   }
   if (!state.duty || typeof state.duty !== "object" || Array.isArray(state.duty)) state.duty = {};
+  if (!state.paymentPayouts || typeof state.paymentPayouts !== "object"
+      || Array.isArray(state.paymentPayouts)) state.paymentPayouts = {};
+  // v13 is not released yet: move legacy payout fields into the additive
+  // UUID-keyed operations map for every accepted v9-v13 snapshot.
+  for (const user of state.users) {
+    if (!user?.id || state.paymentPayouts[user.id] || (!user.paymeLink && !user.fpsPhone)) continue;
+    state.paymentPayouts[user.id] = {
+      paymeLink: String(user.paymeLink ?? "").trim(),
+      fpsPhone: String(user.fpsPhone ?? "").trim(),
+    };
+  }
 
   const v = state.version || 0;
   if (v >= STATE_VERSION) return;
@@ -282,16 +297,42 @@ export function currentUser() {
 // is the cached Supabase profile; affected members are not copied into local
 // identity state, so an approved Admin may operate on their UUID-owned record.
 const PAYMENT_ADMIN_ROLES = new Set(["admin", "superadmin", "super_admin"]);
-function requireApprovedPaymentOwner(userId) {
+const normalizePaymentUser = (profile) => {
+  if (!profile) return null;
+  const role = profile.role === "super_admin" ? "superadmin" : profile.role;
+  const fullName = profile.fullName || profile.full_name || profile.email || "ITC Member";
+  return {
+    id: profile.id,
+    email: profile.email,
+    fullName,
+    preferredName: profile.preferredName || null,
+    role,
+    status: profile.status || (role === "pending" || role === "declined" ? role : "approved"),
+  };
+};
+
+function paymentUserById(userId) {
   const id = String(userId || "").trim();
+  if (!id) return null;
+  if (!isLive()) return state.users.find((user) => user.id === id) ?? null;
   const actor = currentUser();
-  const owner = actor?.id === id
-    ? actor
-    : state.users.find((user) => user.id === id);
-  if (!id || (!owner && !isLive()) || (owner && owner.status !== "approved")) {
+  return livePaymentDirectory.get(id) ?? (actor?.id === id ? normalizePaymentUser(actor) : null);
+}
+
+function requireApprovedPaymentOwner(userId) {
+  const owner = paymentUserById(userId);
+  if (!owner || owner.status !== "approved") {
     throw new Error("Approved member access required");
   }
   return owner;
+}
+
+function requirePaymentAdminActor() {
+  const actor = currentUser();
+  if (!actor || actor.status !== "approved" || !PAYMENT_ADMIN_ROLES.has(actor.role)) {
+    throw new Error("Approved Admin access required");
+  }
+  return actor;
 }
 
 function requireAuthorizedPaymentOwner(userId) {
@@ -463,6 +504,26 @@ export function saveActivity(draft) {
 
 export function allUsers() {
   return state.users;
+}
+
+export async function listPaymentUsers() {
+  if (!isLive() || !supabase) return state.users;
+  const profiles = await listProfiles();
+  livePaymentDirectory = new Map(
+    profiles.map(normalizePaymentUser).filter(Boolean).map((user) => [user.id, user])
+  );
+  const actor = currentUser();
+  if (actor && !livePaymentDirectory.has(actor.id)) {
+    livePaymentDirectory.set(actor.id, normalizePaymentUser(actor));
+  }
+  return [...livePaymentDirectory.values()];
+}
+
+export function pendingPaymentBookings() {
+  requirePaymentAdminActor();
+  return state.bookings
+    .filter((booking) => booking.status === "reserved" && booking.paymentMarkedAt)
+    .sort((a, b) => a.snapshot.dateISO.localeCompare(b.snapshot.dateISO));
 }
 
 export function activeBookingsForSession(sessionId) {
@@ -871,23 +932,23 @@ export function recordPrayer({ userId, name, request }) {
 // change the target for new payments.
 
 export function collectorFor(sessionId) {
-  // Resolve the active collector for the session's Saturday. Prefer a
-  // explicitly-assigned duty entry for that date; fall back to any
-  // approved Admin/Super Admin. Returns null when no collector is
-  // available so callers can skip notifications.
+  // Resolve identity from Supabase's in-memory directory in live mode and
+  // compose only UUID-keyed payout operations from local persistence.
+  const withPayouts = (user) => user ? { ...user, ...(state.paymentPayouts[user.id] || {}) } : null;
   const session = findSession(state.activities, sessionId);
   if (session) {
     const slot = state.duty?.[isoDate(session.date)];
     if (slot?.userId) {
-      const assigned = state.users.find((u) => u.id === slot.userId);
-      if (assigned && assigned.status === "approved" &&
-          (assigned.role === "admin" || assigned.role === "superadmin")) {
-        return assigned;
+      const assigned = paymentUserById(slot.userId);
+      if (assigned && assigned.status === "approved" && PAYMENT_ADMIN_ROLES.has(assigned.role)) {
+        return withPayouts(assigned);
       }
     }
   }
-  return state.users.find((u) => u.status === "approved" &&
-    (u.role === "admin" || u.role === "superadmin")) ?? null;
+  const candidates = isLive() ? [...livePaymentDirectory.values()] : state.users;
+  return withPayouts(candidates.find((user) =>
+    user.status === "approved" && PAYMENT_ADMIN_ROLES.has(user.role)
+  ) ?? null);
 }
 
 export function dutyFor(sessionId) {
@@ -895,18 +956,28 @@ export function dutyFor(sessionId) {
 }
 
 export function setDuty(userId, saturdayISO) {
-  const u = state.users.find((x) => x.id === userId);
-  if (!u || !["admin", "superadmin"].includes(u.role) || u.status !== "approved") return;
-  state.duty[saturdayISO] = { userId, setAt: Date.now() };
+  requirePaymentAdminActor();
+  const target = paymentUserById(userId);
+  if (!target || target.status !== "approved" || !PAYMENT_ADMIN_ROLES.has(target.role)) return null;
+  state.duty[saturdayISO] = { userId: target.id, setAt: Date.now() };
   save();
+  return state.duty[saturdayISO];
+}
+
+export function collectorPayoutsFor(userId) {
+  return { paymeLink: "", fpsPhone: "", ...(state.paymentPayouts[userId] || {}) };
 }
 
 export function updateCollectorPayouts(userId, { paymeLink, fpsPhone }) {
-  const u = state.users.find((x) => x.id === userId);
-  if (!u) return;
-  u.paymeLink = String(paymeLink ?? "").trim();
-  u.fpsPhone = String(fpsPhone ?? "").trim();
+  requirePaymentAdminActor();
+  const target = paymentUserById(userId);
+  if (!target || target.status !== "approved" || !PAYMENT_ADMIN_ROLES.has(target.role)) return null;
+  state.paymentPayouts[target.id] = {
+    paymeLink: String(paymeLink ?? "").trim(),
+    fpsPhone: String(fpsPhone ?? "").trim(),
+  };
   save();
+  return collectorPayoutsFor(target.id);
 }
 
 // --- Deferral (defer-only policy; no member refunds) ------------------------
@@ -1326,6 +1397,7 @@ export async function getCurrentUser() {
           : "approved",
     profile: liveProfile,
   };
+  livePaymentDirectory.set(liveUser.id, normalizePaymentUser(liveUser));
   return liveUser;
 }
 
@@ -1345,6 +1417,7 @@ export async function signOutLive() {
   liveProfile = null;
   liveUser = null;
   liveProfileFetchedAt = 0;
+  livePaymentDirectory = new Map();
   const { error } = await supabase.auth.signOut();
   if (error) throw error;
 }

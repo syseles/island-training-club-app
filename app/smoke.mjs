@@ -1070,6 +1070,11 @@ console.log("ok  reset");
     failures++;
     console.error("FAIL v10 fresh state must have zero receipts");
   } else console.log("ok  v10 fresh state has zero receipts");
+  if (!fresh.paymentPayouts || Array.isArray(fresh.paymentPayouts)
+      || Object.keys(fresh.paymentPayouts).length) {
+    failures++;
+    console.error("FAIL v13 fresh state must have an empty UUID-keyed payout map");
+  } else console.log("ok  v13 fresh state has an empty UUID-keyed payout map");
   if (Array.isArray(fresh.activities)) {
     for (const a of fresh.activities) {
       if ("baseBooked" in a) {
@@ -1438,6 +1443,7 @@ const sourceSnapshots = [
   { version: 9, prayers: [{ id: "p-real" }] },
   {
     version: 10,
+    paymentPayouts: null,
     queues: {
       real: {
         waitlist: [{ userId: "real-user", joinedAt: 123 }],
@@ -1446,8 +1452,13 @@ const sourceSnapshots = [
     },
     duty: { "2026-08-08": { userId: "real-user" } },
   },
-  { version: 11, notifications: [{ id: "n-real", userId: "real-user" }] },
-  { version: 12, campaigns: [{ id: "c-real", title: "Member campaign" }], donations: [{ id: "d-real", userId: "real-user" }] },
+  { version: 11, paymentPayouts: [], notifications: [{ id: "n-real", userId: "real-user" }] },
+  {
+    version: 12,
+    paymentPayouts: { "real-admin": { paymeLink: "https://payme.example/real", fpsPhone: "+852 6000 0000" } },
+    campaigns: [{ id: "c-real", title: "Member campaign" }],
+    donations: [{ id: "d-real", userId: "real-user" }],
+  },
 ];
 for (const fixture of sourceSnapshots) {
   const snapshot = {
@@ -1461,7 +1472,13 @@ for (const fixture of sourceSnapshots) {
   const migrated = JSON.parse(mem.get("itc.prototype.v1"));
   const serialized = JSON.stringify(migrated);
   const suppliedIds = JSON.stringify(fixture).match(/[pcnd]-real|real-user/g) || [];
-  if (migrated.version !== 13 || suppliedIds.some((id) => !serialized.includes(id))) {
+  const payoutMapValid = migrated.paymentPayouts
+    && typeof migrated.paymentPayouts === "object"
+    && !Array.isArray(migrated.paymentPayouts);
+  const suppliedPayoutsPreserved = fixture.version !== 12
+    || migrated.paymentPayouts["real-admin"]?.fpsPhone === "+852 6000 0000";
+  if (migrated.version !== 13 || suppliedIds.some((id) => !serialized.includes(id))
+      || !payoutMapValid || !suppliedPayoutsPreserved) {
     failures++;
     console.error(`FAIL genuine v${fixture.version} fixture must reach v13 intact`);
   } else console.log(`ok  genuine v${fixture.version} fixture reaches v13 intact`);

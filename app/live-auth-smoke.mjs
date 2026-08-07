@@ -708,6 +708,38 @@ for (const status of ["pending", "declined"]) {
 console.log("ok  pending and declined live profiles cannot render Payment or Giving controls");
 store.currentUser().role = "super_admin";
 store.currentUser().status = "approved";
+
+// A live Admin must compose the Supabase UUID directory with device-local
+// Payment operations without copying editable identity records into storage.
+await views.viewAdmin("payments");
+const memberUuidBooking = store.reserveSession("approved-member", gatedPaidSession, Date.now());
+if (!store.markBookingPaid(memberUuidBooking.id, "FPS", "LIVE-MEMBER-REF", Date.now())) {
+  throw new Error("Live member UUID booking must enter pending Payment Ops");
+}
+store.setDuty(authUser.id, gatedPaidSession.dateISO);
+store.updateCollectorPayouts(authUser.id, {
+  paymeLink: "https://payme.example/live-admin",
+  fpsPhone: "+852 6999 0000",
+});
+let liveOpsHtml = await views.viewAdmin("payments");
+for (const marker of ["Micah Member", "LIVE-MEMBER-REF", "Riley Runner", "https://payme.example/live-admin", "+852 6999 0000"]) {
+  if (!liveOpsHtml.includes(marker)) {
+    throw new Error(`Live Payment Ops composition missing ${marker}`);
+  }
+}
+const persistedLiveOps = JSON.parse(mem.get("itc.prototype.v1"));
+if (persistedLiveOps.users.length !== 0
+    || persistedLiveOps.paymentPayouts?.[authUser.id]?.fpsPhone !== "+852 6999 0000") {
+  throw new Error("Live Payment Ops must persist UUID-keyed details without a local identity directory");
+}
+store.load();
+liveOpsHtml = await views.viewAdmin("payments");
+if (!liveOpsHtml.includes("https://payme.example/live-admin")
+    || !liveOpsHtml.includes("LIVE-MEMBER-REF")) {
+  throw new Error("Live Payment Ops details must survive a local state reload");
+}
+console.log("ok  live Admin composes Supabase members with UUID-keyed local Payment Ops");
+
 const detailsSummary = await views.viewAccount("details");
 for (const label of [
   "Full name",
