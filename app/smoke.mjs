@@ -749,6 +749,7 @@ installLocalFixtures(); store.signIn("member@example.test");
   const b = store.reserveSession("fixture-member", sess);
   store.markBookingPaid(b.id, "FPS", "");
   store.confirmBookingPayment(b.id, "fixture-admin");
+  store.signIn("admin@example.test");
   store.joinWaitlist("fixture-admin", sess.id);
   store.cancelSessionWeek(sess.id, "HYROX race weekend — no session");
   const after = store.getSession(sess.id);
@@ -1070,6 +1071,7 @@ function installLocalFixtures({ withMemberBooking = false } = {}) {
   const preserved = (clean.users || []).filter((u) =>
     !["fixture-admin", "fixture-member", "fixture-super"].includes(u.id)
   );
+  clean.sessionUserId = "fixture-admin";
   clean.users = [
     ...preserved,
     {
@@ -1140,6 +1142,7 @@ const givingFixture = {
   users: [
     { id: "giving-admin", role: "admin", status: "approved", fullName: "Giving Admin", email: "giving-admin@example.test" },
     { id: "giving-member", role: "member", status: "approved", fullName: "Giving Member", email: "giving-member@example.test" },
+    { id: "giving-other", role: "member", status: "approved", fullName: "Giving Other", email: "giving-other@example.test" },
     { id: "giving-pending", role: "pending", status: "pending", fullName: "Giving Pending", email: "giving-pending@example.test" },
     { id: "giving-declined", role: "pending", status: "declined", fullName: "Giving Declined", email: "giving-declined@example.test" },
   ],
@@ -1172,6 +1175,39 @@ for (const blockedId of ["giving-pending", "giving-declined", "missing-member"])
   }
 }
 const approvedReservation = store.reserveSession("giving-member", paymentGateSession);
+store.joinWaitlist("giving-member", "authz-waitlist-session");
+store.joinInterest("giving-member", "authz-interest-session");
+const assertPaymentImpersonationRejected = (label, mutate) => {
+  try {
+    mutate();
+    throw new Error(`${label} Payment impersonation should be rejected`);
+  } catch (err) {
+    if (!/Approved actor access required|Payment mutation not authorized/.test(err.message)) throw err;
+  }
+};
+for (const actor of [
+  { label: "pending", email: "giving-pending@example.test" },
+  { label: "declined", email: "giving-declined@example.test" },
+  { label: "approved non-admin", email: "giving-other@example.test" },
+  { label: "signed-out", email: null },
+]) {
+  if (actor.email) store.signIn(actor.email);
+  else store.signOut();
+  for (const mutate of [
+    () => store.reserveSession("giving-member", paymentGateSession),
+    () => store.markBookingPaid(approvedReservation.id, "FPS", `IMPERSONATED-${actor.label}`),
+    () => store.joinWaitlist("giving-member", `authz-join-waitlist-${actor.label}`),
+    () => store.leaveWaitlist("giving-member", "authz-waitlist-session"),
+    () => store.joinInterest("giving-member", `authz-join-interest-${actor.label}`),
+    () => store.leaveInterest("giving-member", "authz-interest-session"),
+  ]) assertPaymentImpersonationRejected(actor.label, mutate);
+}
+if (store.getBooking(approvedReservation.id).paymentMarkedAt
+    || store.waitlistPosition("giving-member", "authz-waitlist-session") !== 1
+    || store.interestPosition("giving-member", "authz-interest-session") !== 1) {
+  throw new Error("rejected Payment impersonation must not mutate state");
+}
+store.signIn("giving-admin@example.test");
 givingFixture.users.find((user) => user.id === "giving-member").status = "declined";
 mem.set("itc.prototype.v1", JSON.stringify({
   ...JSON.parse(mem.get("itc.prototype.v1")),
@@ -1190,13 +1226,30 @@ mem.set("itc.prototype.v1", JSON.stringify({
   users: givingFixture.users,
 }));
 store.load();
+store.signIn("giving-member@example.test");
 if (!store.markBookingPaid(approvedReservation.id, "FPS", "APPROVED-PAYMENT")) {
-  throw new Error("approved booking owner should remain operable by Admin payment flows");
+  throw new Error("approved booking owner should retain self-service payment access");
 }
+for (const actor of [
+  { label: "pending", email: "giving-pending@example.test" },
+  { label: "declined", email: "giving-declined@example.test" },
+  { label: "approved non-admin", email: "giving-other@example.test" },
+  { label: "signed-out", email: null },
+]) {
+  if (actor.email) store.signIn(actor.email);
+  else store.signOut();
+  assertPaymentImpersonationRejected(
+    `${actor.label} confirmation`,
+    () => store.confirmBookingPayment(approvedReservation.id, actor.email ? store.currentUser().id : "giving-admin")
+  );
+}
+store.signIn("giving-admin@example.test");
 if (!store.confirmBookingPayment(approvedReservation.id, "giving-admin")) {
   throw new Error("Admin should confirm payment for an approved affected profile");
 }
-console.log("ok  Payment store seams reject unapproved owners and retain approved Admin operations");
+store.leaveWaitlist("giving-member", "authz-waitlist-session");
+store.leaveInterest("giving-member", "authz-interest-session");
+console.log("ok  Payment store seams require approved authorized actors and retain self/Admin operations");
 
 const givingCampaign = await store.saveGivingCampaign({
   title: "Member campaign", description: "Support the community.", goalHKD: 1000,

@@ -277,20 +277,33 @@ export function currentUser() {
   return state.users.find((u) => u.id === state.sessionUserId) ?? null;
 }
 
-// Payment records may be changed by the member who owns them or by Admin
-// operational flows (promotion, collection, cancellation). Resolve the
-// affected profile rather than assuming the currently rendered profile owns
-// every mutation.
+// Payment records may be changed by their approved owner or by an approved
+// Admin/Super Admin performing an operational flow. In live mode currentUser()
+// is the cached Supabase profile; affected members are not copied into local
+// identity state, so an approved Admin may operate on their UUID-owned record.
+const PAYMENT_ADMIN_ROLES = new Set(["admin", "superadmin", "super_admin"]);
 function requireApprovedPaymentOwner(userId) {
   const id = String(userId || "").trim();
-  const signedIn = currentUser();
-  const owner = signedIn?.id === id
-    ? signedIn
+  const actor = currentUser();
+  const owner = actor?.id === id
+    ? actor
     : state.users.find((user) => user.id === id);
-  if (!id || !owner || owner.status !== "approved") {
+  if (!id || (!owner && !isLive()) || (owner && owner.status !== "approved")) {
     throw new Error("Approved member access required");
   }
   return owner;
+}
+
+function requireAuthorizedPaymentOwner(userId) {
+  const id = String(userId || "").trim();
+  const actor = currentUser();
+  if (!actor || actor.status !== "approved") {
+    throw new Error("Approved actor access required");
+  }
+  if (actor.id !== id && !PAYMENT_ADMIN_ROLES.has(actor.role)) {
+    throw new Error("Payment mutation not authorized");
+  }
+  return requireApprovedPaymentOwner(id);
 }
 
 export function signIn(email) {
@@ -553,7 +566,7 @@ export function setMidtownOpen(sessionId, open, now = Date.now()) {
     while (session && spotsLeft(session) > 0 && q.interest.length) {
       const { userId } = q.interest.shift();
       try {
-        const booking = reserveSession(userId, session, now);
+        const booking = reserveApprovedSession(userId, session, now);
         notify(userId, "midtown-open",
           `Midtown is open and you're in for ${session.name} · ${fmtDate(session.date)}! Pay by the checkpoint to keep your spot.`,
           `#/pay/${booking.id}`);
@@ -581,6 +594,13 @@ function snapshotFor(session) {
 // Reserve a spot without paying. The spot is held until the next payment
 // checkpoint (Thu 6 PM, then Fri 2 PM, then a 2-hour last-minute window).
 export function reserveSession(userId, session, now = Date.now()) {
+  requireAuthorizedPaymentOwner(userId);
+  return reserveApprovedSession(userId, session, now);
+}
+
+// Private consequence path for checkpoint and Admin queue promotion. The
+// exported mutation seam above remains actor-authorized.
+function reserveApprovedSession(userId, session, now = Date.now()) {
   requireApprovedPaymentOwner(userId);
   if (session.kind !== "paid") throw new Error("Session is not paid");
   if (session.cancelled) throw new Error("Session is cancelled");
@@ -619,7 +639,7 @@ export function reserveSession(userId, session, now = Date.now()) {
 export function markBookingPaid(bookingId, method, ref, now = Date.now()) {
   const b = getBooking(bookingId);
   if (!b || b.status !== "reserved" || b.paymentMarkedAt) return null;
-  requireApprovedPaymentOwner(b.userId);
+  requireAuthorizedPaymentOwner(b.userId);
   b.paymentMarkedAt = now;
   b.paidMethod = method === "FPS" ? "FPS" : "PayMe";
   b.paymentRef = String(ref ?? "").trim() || null;
@@ -642,7 +662,7 @@ export function markBookingPaid(bookingId, method, ref, now = Date.now()) {
 export function confirmBookingPayment(bookingId, collectorId, now = Date.now()) {
   const b = getBooking(bookingId);
   if (!b || b.status !== "reserved" || !b.paymentMarkedAt) return null;
-  requireApprovedPaymentOwner(b.userId);
+  requireAuthorizedPaymentOwner(b.userId);
   b.status = "confirmed";
   b.paidAt = now;
   b.confirmedBy = collectorId;
@@ -749,7 +769,7 @@ export function cascadeSession(sessionId, now = Date.now()) {
   while (spotsLeft(session) > 0 && q.waitlist.length) {
     const { userId } = q.waitlist.shift();
     try {
-      const booking = reserveSession(userId, session, now);
+      const booking = reserveApprovedSession(userId, session, now);
       notify(userId, "waitlist-promoted",
         `A spot opened for ${session.name} · ${fmtDate(session.date)} — you're in! Pay by the checkpoint to keep it.`,
         `#/pay/${booking.id}`);
@@ -763,7 +783,7 @@ export function cascadeSession(sessionId, now = Date.now()) {
 // --- Queues: waitlist (open sessions) & interest (closed Midtown) ----------
 
 function joinQueue(userId, sessionId, kind) {
-  requireApprovedPaymentOwner(userId);
+  requireAuthorizedPaymentOwner(userId);
   if (userBookingFor(userId, sessionId) || userReservationFor(userId, sessionId))
     throw new Error("Already booked");
   const q = queueFor(sessionId);
@@ -776,7 +796,7 @@ function joinQueue(userId, sessionId, kind) {
 }
 
 function leaveQueue(userId, sessionId, kind) {
-  requireApprovedPaymentOwner(userId);
+  requireAuthorizedPaymentOwner(userId);
   const q = queueFor(sessionId);
   q[kind] = q[kind].filter((e) => e.userId !== userId);
   save();
