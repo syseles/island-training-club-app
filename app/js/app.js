@@ -734,7 +734,7 @@ document.addEventListener("submit", async (e) => {
       const res = store.signIn(email);
       const errEl = form.querySelector("#signin-error");
       if (!res.ok) {
-        errEl.innerHTML = `<div class="form-error">No account found for that email — apply for membership below, or use a demo profile.</div>`;
+        errEl.innerHTML = `<div class="form-error">No account found for that email — apply for membership below, then sign in with the same email to check your application.</div>`;
         return;
       }
       toast(`Welcome back, ${res.user.preferredName || res.user.fullName}`);
@@ -777,11 +777,10 @@ document.addEventListener("submit", async (e) => {
 
     case "form-reserve": {
       e.preventDefault();
-      const session = findSession(store.activities(), form.dataset.session);
       const user = store.currentUser();
-      if (!session || !user || user.status !== "approved") return;
+      if (!form.dataset.session || !user || user.status !== "approved") return;
       try {
-        const booking = store.reserveSession(user.id, session);
+        const booking = store.reserveSession(user.id, form.dataset.session);
         toast("Spot reserved — pay before the deadline");
         location.hash = `#/pay/${booking.id}`;
       } catch (err) {
@@ -819,31 +818,6 @@ document.addEventListener("submit", async (e) => {
         ref: `GIVE-${Math.random().toString(36).slice(2, 8).toUpperCase()}`,
       });
       await renderWithFeedback();
-      break;
-    }
-
-    case "form-checkout": {
-      e.preventDefault();
-      if (!form.reportValidity()) return;
-      const sessionId = form.dataset.session;
-      const session = findSession(store.activities(), sessionId);
-      const user = store.currentUser();
-      if (!session || !user) return;
-      const btn = form.querySelector("#pay-btn");
-      btn.disabled = true;
-      btn.textContent = "Processing payment…";
-      const last4 = String(new FormData(form).get("cardNumber") || "").replace(/\D/g, "").slice(-4);
-      setTimeout(() => {
-        try {
-          const { booking } = store.payForSession(user.id, session, last4);
-          toast("Payment confirmed — you’re booked");
-          location.hash = `#/booking/${booking.id}`;
-        } catch (err) {
-          toast(err.message || "Payment failed", true);
-          btn.disabled = false;
-          btn.textContent = "Pay";
-        }
-      }, 900);
       break;
     }
 

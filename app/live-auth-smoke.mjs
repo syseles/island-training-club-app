@@ -1115,6 +1115,11 @@ globalThis.document = {
   addEventListener: (event, callback) => domListeners.set(event, callback),
 };
 globalThis.HTMLInputElement = class {};
+globalThis.HTMLFormElement = class {};
+globalThis.FormData = class {
+  constructor(form) { this.form = form; }
+  get(name) { return this.form.fields?.[name] ?? null; }
+};
 globalThis.location = {
   hash: "#/account",
   origin: "https://payment-preview.example",
@@ -1624,6 +1629,26 @@ fpsControl.closest = () => fpsControl;
 await click({ target: fpsControl, preventDefault() {} });
 assert.equal(copiedFps, "+852 6999 0000");
 console.log("ok  delegated release, deferral, and FPS copy controls execute prototype behavior");
+
+// Gym finalization must travel through the delegated submit seam, persist the
+// authorized Admin mutation, and rerender the confirmed state.
+const gymSession = routingSessions[0];
+location.hash = "#/admin/ops";
+await windowListeners.get("hashchange")();
+assert.match(viewEl.innerHTML, new RegExp(`form-gym-note[^>]*data-session="${gymSession.id}"|data-session="${gymSession.id}"[^>]*form-gym-note`));
+const gymForm = new HTMLFormElement();
+gymForm.id = "form-gym-note";
+gymForm.dataset = { session: gymSession.id };
+gymForm.fields = { note: "Confirmed 18 with BFT" };
+gymForm.reportValidity = () => true;
+await domListeners.get("submit")({ target: gymForm, preventDefault() {} });
+await new Promise(setImmediate);
+const confirmedGymSession = store.getSession(gymSession.id);
+assert.ok(confirmedGymSession.gymConfirmedAt, "delegated gym submit must persist confirmation");
+assert.equal(confirmedGymSession.gymNote, "Confirmed 18 with BFT");
+assert.match(viewEl.innerHTML, /Confirmed with gym/);
+assert.match(viewEl.innerHTML, /Confirmed 18 with BFT/);
+console.log("ok  delegated gym confirmation persists and rerenders confirmed state");
 
 // Legacy member-management URLs canonicalize instead of rendering the removed
 // row/avatar implementation.

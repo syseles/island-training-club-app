@@ -136,12 +136,15 @@ for (const marker of ['case "release-reservation"', 'case "defer-to"', 'case "co
     throw new Error(`integrated Payment router missing ${marker}`);
   }
 }
-for (const retiredAction of ['case "demo-signin"', 'case "reset-demo"']) {
+for (const retiredAction of [
+  'case "demo-signin"', 'case "reset-demo"', 'case "form-checkout"',
+  "store.payForSession", "use a demo profile",
+]) {
   if (integratedAppSource.includes(retiredAction)) {
-    throw new Error(`retired runtime action remains: ${retiredAction}`);
+    throw new Error(`retired runtime action/copy remains: ${retiredAction}`);
   }
 }
-console.log("ok  rendered Payment controls are delegated and retired actions are absent");
+console.log("ok  rendered Payment controls are delegated and retired actions/copy are absent");
 for (const marker of [
   "notificationBellHTML",
   "notification-filter",
@@ -1338,7 +1341,78 @@ for (const blockedId of ["giving-pending", "giving-declined", "missing-member"])
     }
   }
 }
-const approvedReservation = store.reserveSession("giving-member", paymentGateSession);
+const authoritySessions = store.upcomingSessions(42).filter(
+  (session) => session.kind === "paid" && !data.sessionStarted(session) && !store.isMidtown(session)
+);
+const cancelledAuthoritySession = authoritySessions.find((session) => session.id !== paymentGateSession.id);
+const tamperAuthoritySession = authoritySessions.find(
+  (session) => session.id !== paymentGateSession.id && session.id !== cancelledAuthoritySession?.id
+);
+if (!cancelledAuthoritySession || !tamperAuthoritySession) {
+  throw new Error("reservation authority regression needs three upcoming paid sessions");
+}
+store.cancelSessionWeek(cancelledAuthoritySession.id, "Authority regression cancellation");
+store.signIn("giving-member@example.test");
+try {
+  store.reserveSession("giving-member", {
+    ...cancelledAuthoritySession, cancelled: false, price: 1, capacity: 999,
+  });
+  throw new Error("forged uncancelled session should not bypass authoritative cancellation");
+} catch (err) {
+  if (!/Session is cancelled/.test(err.message)) throw err;
+}
+try {
+  store.reserveSession("giving-member", { id: "unknown-weekly-session", kind: "paid", price: 1, capacity: 999 });
+  throw new Error("unknown session ID should not reserve");
+} catch (err) {
+  if (!/Unknown session/.test(err.message)) throw err;
+}
+const freeAuthoritySession = store.upcomingSessions(14).find((session) => session.kind === "free");
+try {
+  store.reserveSession("giving-member", { ...freeAuthoritySession, kind: "paid", price: 1, capacity: 999 });
+  throw new Error("forged paid session should not bypass authoritative eligibility");
+} catch (err) {
+  if (!/Session is not paid/.test(err.message)) throw err;
+}
+const tamperReservation = store.reserveSession("giving-member", {
+  ...tamperAuthoritySession, price: 1, capacity: 999,
+});
+const authoritativeTamperSession = store.getSession(tamperAuthoritySession.id);
+if (tamperReservation.snapshot.price !== authoritativeTamperSession.price
+    || tamperReservation.snapshot.capacity !== authoritativeTamperSession.capacity) {
+  throw new Error("reservation snapshot must use authoritative price and capacity");
+}
+if (!store.releaseReservation(tamperReservation.id)) {
+  throw new Error("tamper regression cleanup should release the reservation");
+}
+const beforeFullFixture = JSON.parse(mem.get("itc.prototype.v1"));
+for (let i = 0; i < authoritativeTamperSession.capacity; i++) {
+  beforeFullFixture.bookings.push({
+    id: `authority-full-${i}`, userId: `authority-user-${i}`,
+    sessionId: authoritativeTamperSession.id, status: "confirmed", createdAt: Date.now(),
+    snapshot: { price: authoritativeTamperSession.price, capacity: authoritativeTamperSession.capacity },
+  });
+}
+mem.set("itc.prototype.v1", JSON.stringify(beforeFullFixture));
+store.load();
+store.signIn("giving-member@example.test");
+try {
+  store.reserveSession("giving-member", { ...tamperAuthoritySession, capacity: 999 });
+  throw new Error("forged capacity should not bypass an authoritatively full session");
+} catch (err) {
+  if (!/Session is full/.test(err.message)) throw err;
+}
+beforeFullFixture.bookings = beforeFullFixture.bookings.filter(
+  (booking) => !booking.id.startsWith("authority-full-")
+);
+mem.set("itc.prototype.v1", JSON.stringify(beforeFullFixture));
+store.load();
+store.signIn("giving-member@example.test");
+const approvedReservation = store.reserveSession("giving-member", paymentGateSession.id);
+if (approvedReservation.sessionId !== paymentGateSession.id || approvedReservation.status !== "reserved") {
+  throw new Error("approved member should reserve a normal authoritative session by ID");
+}
+console.log("ok  reservations resolve authoritative sessions and reject forged/unknown input");
 store.joinWaitlist("giving-member", "authz-waitlist-session");
 store.joinInterest("giving-member", "authz-interest-session");
 const assertPaymentImpersonationRejected = (label, mutate) => {

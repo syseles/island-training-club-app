@@ -673,20 +673,25 @@ function snapshotFor(session) {
     name: session.name, kind: session.kind, dateISO: session.dateISO,
     time: session.time, durationMin: session.durationMin,
     location: session.location, price: session.price ?? null,
+    capacity: session.capacity ?? null,
   };
 }
 
 // Reserve a spot without paying. The spot is held until the next payment
 // checkpoint (Thu 6 PM, then Fri 2 PM, then a 2-hour last-minute window).
-export function reserveSession(userId, session, now = Date.now()) {
+export function reserveSession(userId, sessionOrId, now = Date.now()) {
   requireAuthorizedPaymentOwner(userId);
-  return reserveApprovedSession(userId, session, now);
+  return reserveApprovedSession(userId, sessionOrId, now);
 }
 
-// Private consequence path for checkpoint and Admin queue promotion. The
-// exported mutation seam above remains actor-authorized.
-function reserveApprovedSession(userId, session, now = Date.now()) {
+// Private consequence path for checkpoint and Admin queue promotion. Both
+// paths accept only a canonical ID (or an object's ID for caller compatibility)
+// and resolve every operational field from authoritative weekly state.
+function reserveApprovedSession(userId, sessionOrId, now = Date.now()) {
   requireApprovedPaymentOwner(userId);
+  const sessionId = typeof sessionOrId === "string" ? sessionOrId : sessionOrId?.id;
+  const session = typeof sessionId === "string" ? getSession(sessionId) : null;
+  if (!session) throw new Error("Unknown session");
   if (session.kind !== "paid") throw new Error("Session is not paid");
   if (session.cancelled) throw new Error("Session is cancelled");
   if (sessionStarted(session)) throw new Error("Session has already started");
