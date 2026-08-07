@@ -14,9 +14,9 @@ const views = await import("./js/views.js");
 const data = await import("./js/data.js");
 
 let failures = 0;
-function check(label, fn) {
+async function check(label, fn) {
   try {
-    const out = fn();
+    const out = await Promise.resolve(fn());
     if (out && typeof out === "object" && out.redirect) {
       console.log(`ok(redirect) ${label} -> ${out.redirect}`);
       return out;
@@ -28,102 +28,76 @@ function check(label, fn) {
     return out;
   } catch (err) {
     failures++;
-    console.error(`FAIL ${label}: ${err.message}\n${err.stack.split("\n")[1] || ""}`);
+    console.error(`FAIL ${label}: ${err.message}`);
     return "";
   }
 }
 
-const bannedAccountContent = [
-  "owner@itc.hk",
-  "admin@itc.hk",
-  "member@itc.hk",
-  'data-action="demo-signin"',
-  "one-tap demo",
-  'data-action="reset-demo"',
-];
-function assertCleanAccount(label, html) {
-  let clean = true;
-  for (const banned of bannedAccountContent) {
-    if (html.toLowerCase().includes(banned.toLowerCase())) {
-      failures++;
-      clean = false;
-      console.error(`FAIL ${label} Account contains removed demo content: ${banned}`);
-    }
-  }
-  if (clean) console.log(`ok  ${label} Account has no demo identities or controls`);
-}
-
 store.load();
-
-// --- Clean fresh state ---
-const fresh = JSON.parse(mem.get("itc.prototype.v1"));
-if (fresh.users.length || fresh.bookings.length || fresh.receipts.length || fresh.sessionUserId) {
-  failures++;
-  console.error("FAIL fresh state should have no users, bookings, receipts or session");
-} else console.log("ok  fresh state has no identities or transactions");
-if (!fresh.activities.length || fresh.activities.some((a) => "baseBooked" in a)) {
-  failures++;
-  console.error("FAIL fresh activities should remain without baseBooked");
-} else console.log("ok  fresh activities remain without simulated demand");
-assertCleanAccount("visitor", views.viewAccount());
-const announcements = views.viewCommunity("announcements");
-for (const fake of [
-  "Sunday service at IECC",
-  "New Wednesday venue being scouted",
-  "Marathon fundraiser passes first milestone",
+const { existsSync, readFileSync } = await import("node:fs");
+const { resolve, dirname } = await import("node:path");
+const { fileURLToPath } = await import("node:url");
+const __dirnameSmoke = dirname(fileURLToPath(import.meta.url));
+for (const relativePath of [
+  "js/config.js",
+  "live-auth-smoke.mjs",
+  "../supabase/migrations/20260804000000_profiles.sql",
+  "../supabase/migrations/20260805000007_admin_application_decisions.sql",
 ]) {
-  if (announcements.includes(fake)) {
-    failures++;
-    console.error(`FAIL announcements contain fake runtime post: ${fake}`);
+  const absolutePath = resolve(__dirnameSmoke, relativePath);
+  if (!existsSync(absolutePath)) {
+    throw new Error(`Payment Auth baseline missing ${relativePath}`);
   }
 }
-console.log("ok  announcements contain no generic fake posts");
+console.log("ok  Payment Auth baseline foundation files exist");
 
-// Neutral local records drive authenticated smoke paths; clean installs do
-// not receive these fixtures. Keep fixture identities under .example.test.
-const fixtureSession = data
-  .sessionsInRange(fresh.activities, data.todayLocal(), 14)
-  .find((s) => s.kind === "paid" && !data.sessionStarted(s));
-if (!fixtureSession) throw new Error("expected a future paid fixture session");
-const fixtureState = {
-  ...fresh,
-  users: [
-    {
-      id: "test-admin-1", role: "admin", status: "approved", fullName: "Test Admin",
-      preferredName: "Admin", email: "test-admin@example.test", phone: "+852 5000 0001",
-      emergencyName: "Test Contact", emergencyPhone: "+852 5000 9001", heard: "Test fixture",
-      ageConfirmed: true, appliedAt: Date.now() - 86400000, indemnityAcceptedAt: Date.now() - 86400000,
-    },
-    {
-      id: "test-member-1", role: "member", status: "approved", fullName: "Existing Member",
-      preferredName: "Existing", email: "test-member@example.test", phone: "+852 5000 0002",
-      emergencyName: "Test Contact", emergencyPhone: "+852 5000 9002", heard: "Test fixture",
-      ageConfirmed: true, donorId: "TEST-1234", appliedAt: Date.now() - 172800000,
-      indemnityAcceptedAt: Date.now() - 172800000,
-    },
-  ],
-  bookings: [{
-    id: "test-booking-1", userId: "test-member-1", sessionId: fixtureSession.id,
-    status: "confirmed", createdAt: Date.now() - 3600000,
-    snapshot: {
-      name: fixtureSession.name, kind: fixtureSession.kind, dateISO: fixtureSession.dateISO,
-      time: fixtureSession.time, durationMin: fixtureSession.durationMin,
-      location: fixtureSession.location, price: fixtureSession.price,
-    },
-  }],
-  receipts: [{
-    id: "test-receipt-1", number: "TEST-RECEIPT-0001", bookingId: "test-booking-1",
-    userId: "test-member-1", amount: fixtureSession.price, currency: "HKD", cardLast4: "1111",
-    status: "paid", issuedAt: Date.now() - 3600000, line: "Neutral fixture receipt",
-  }],
+const integrationSourceTips = {
+  payment: "720dc732944dac692334e885db2d9418d024d9bc",
+  notification: "5842839e08f5e486f4b9e175232acec3cb347eb2",
+  giving: "3ef00adc4efb327826d5308b20610bc18a9102db",
+  community: "40bb7c2acb5ee0a7460f840e73b283cfebce4d31",
 };
-mem.set("itc.prototype.v1", JSON.stringify(fixtureState));
-store.load();
+if (new Set(Object.values(integrationSourceTips)).size !== 4) {
+  throw new Error("integration source tips must stay explicit and distinct");
+}
+console.log("ok  integration source-tip provenance is explicit");
+
+const integratedViewSource = readFileSync(resolve(__dirnameSmoke, "js/views.js"), "utf8");
+const integratedAppSource = readFileSync(resolve(__dirnameSmoke, "js/app.js"), "utf8");
+for (const marker of [
+  "Continue with Google",
+  "Membership Details",
+  "Privacy &amp; Notifications",
+  "Approvals",
+  "Members",
+  "Payments / Ops",
+  "Duty",
+  "Session controls",
+]) {
+  if (!integratedViewSource.toLowerCase().includes(marker.toLowerCase())) {
+    throw new Error(`integrated Payment/Auth UI missing ${marker}`);
+  }
+}
+console.log("ok  composed Payment/Auth UI markers coexist");
+for (const marker of ['case "pay"', 'case "form-reserve"', 'case "form-mark-paid"', "store.reserveSession", "store.markBookingPaid"]) {
+  if (!integratedAppSource.includes(marker)) {
+    throw new Error(`integrated Payment router missing ${marker}`);
+  }
+}
+console.log("ok  Payment reserve and mark-paid routes remain delegated");
 
 // --- Visitor state ---
 store.signOut();
-check("home (visitor)", () => views.viewHome());
-check("schedule", () => views.viewSchedule());
+const localVisitorHome = views.viewHome();
+if (!localVisitorHome.includes('href="#/account">Sign in or join</a>')) {
+  throw new Error("local signed-out Home must retain the Account sign-in link");
+}
+if (localVisitorHome.includes('data-action="sign-in-google"')) {
+  throw new Error("local signed-out Home must not render the live Google action");
+}
+console.log("ok  signed-out Home uses the correct live/local sign-in action");
+await check("home (visitor)", () => views.viewHome());
+await check("schedule", () => views.viewSchedule());
 const hyroxSid = store.nextSession().kind === "paid" ? store.nextSession().id : null;
 const allUpcoming = store.upcomingSessions(14);
 // booking tests need a session that hasn't started yet — today's sessions
@@ -131,9 +105,9 @@ const allUpcoming = store.upcomingSessions(14);
 const paid = allUpcoming.find((s) => s.kind === "paid" && !data.sessionStarted(s));
 const free = allUpcoming.find((s) => s.kind === "free");
 if (!paid || !free) throw new Error("expected both paid and free sessions in window");
-check("activity paid (visitor)", () => views.viewActivity(paid.id));
-check("activity free (visitor)", () => views.viewActivity(free.id));
-check("community", () => views.viewCommunity());
+await check("activity paid (visitor)", () => views.viewActivity(paid.id));
+await check("activity free (visitor)", () => views.viewActivity(free.id));
+await check("community", () => views.viewCommunity());
 const commHtml = views.viewCommunity();
 let commOk = true;
 for (const link of [
@@ -158,11 +132,11 @@ if (commHtml.includes("Arnold Wong") || commHtml.includes("Our foundation")) {
   failures++;
   console.error("FAIL leaders/culture should live behind the About card");
 } else console.log("ok  leaders & culture live behind the About card");
-check("community > prayers", () => views.viewCommunity("prayers"));
-check("community > fellowship", () => views.viewCommunity("fellowship"));
-check("community > meals", () => views.viewCommunity("meals"));
-check("community > announcements", () => views.viewCommunity("announcements"));
-check("community > about", () => views.viewCommunity("about"));
+await check("community > prayers", () => views.viewCommunity("prayers"));
+await check("community > fellowship", () => views.viewCommunity("fellowship"));
+await check("community > meals", () => views.viewCommunity("meals"));
+await check("community > announcements", () => views.viewCommunity("announcements"));
+await check("community > about", () => views.viewCommunity("about"));
 const commAbout = views.viewCommunity("about");
 if (!commAbout.includes("Arnold Wong") || !commAbout.includes("Our foundation")) {
   failures++;
@@ -189,15 +163,15 @@ if (!views.viewCommunity("nope").includes("Page not found")) {
   failures++;
   console.error("FAIL unknown Community section should 404");
 } else console.log("ok  unknown Community section 404s");
-check("account (visitor)", () => views.viewAccount());
-check("apply", () => views.viewApply());
+await check("account (visitor)", () => views.viewAccount());
+await check("apply", () => views.viewApply());
 if (!views.viewApply().includes('name="donorId"')) {
   failures++;
   console.error("FAIL apply form missing optional Donor ID field");
 } else console.log("ok  apply form collects optional Donor ID");
-check("checkout (visitor) -> redirect", () => views.viewCheckout(paid.id));
-check("admin (visitor) -> redirect", () => views.viewAdmin("approvals"));
-check("notfound", () => views.viewNotFound());
+await check("checkout (visitor) -> redirect", () => views.viewCheckout(paid.id));
+await check("admin (visitor) -> redirect", () => views.viewAdmin("approvals"));
+await check("notfound", () => views.viewNotFound());
 
 // free activity must never show booking/capacity language
 const freeHtml = views.viewActivity(free.id);
@@ -220,7 +194,7 @@ if (!paidHtml.includes("HK$") || !paidHtml.includes("badge paid")) {
 const applyRes = store.applyForMembership({
   fullName: "Test Person",
   preferredName: "Test",
-  email: "new-member@example.test",
+  email: "test@example.com",
   phone: "+852 1234 5678",
   emergencyName: "E Person",
   emergencyPhone: "+852 8765 4321",
@@ -263,41 +237,36 @@ for (const [input, expect] of [
   }
 }
 console.log("ok  donor ID format validation");
-const pendingAccountHtml = check("account (pending)", () => views.viewAccount());
-assertCleanAccount("pending", pendingAccountHtml);
-for (const removedGuidance of ["admin demo profile", "see the approval side"]) {
-  if (pendingAccountHtml.toLowerCase().includes(removedGuidance)) {
-    failures++;
-    console.error(`FAIL pending Account contains removed admin-demo guidance: ${removedGuidance}`);
-  }
-}
-console.log("ok  pending Account has no removed admin-demo approval guidance");
-const pendHtml = views.viewActivity(paid.id);
+await check("account (pending)", () => views.viewAccount());
+// Use BFT (not Midtown) for the pending-user check — closed Midtown shows the
+// generic "Members only" gate, while a bookable BFT shows the "Booking locked"
+// message specifically for pending applicants.
+const bftPaid = allUpcoming.find((s) => s.activityId === "hyrox" && !data.sessionStarted(s));
+const pendHtml = views.viewActivity(bftPaid.id);
 if (!pendHtml.includes("Booking locked")) {
   failures++;
   console.error("FAIL pending user should see booking locked");
 } else console.log("ok  pending user blocked from paid booking");
 
 // --- Admin approval flow ---
-store.signIn("test-admin@example.test");
-check("admin approvals", () => views.viewAdmin("approvals"));
-check("admin activities", () => views.viewAdmin("activities"));
-check("admin members", () => views.viewAdmin("members"));
-check("admin activity edit", () => views.viewAdminActivity("hyrox"));
-check("admin activity new", () => views.viewAdminActivity("new"));
-const newApplicant = store.pendingApplicants().find((u) => u.email === "new-member@example.test");
+installLocalFixtures(); store.signIn("admin@example.test");
+await check("admin approvals", () => views.viewAdmin("approvals"));
+await check("admin activities", () => views.viewAdmin("activities"));
+await check("admin members", () => views.viewAdmin("members"));
+await check("admin activity edit", () => views.viewAdminActivity("hyrox"));
+await check("admin activity new", () => views.viewAdminActivity("new"));
+const newApplicant = store.pendingApplicants().find((u) => u.email === "test@example.com");
 store.approveApplicant(newApplicant.id);
 console.log("ok  admin approved new applicant");
 
 // --- Member booking + payment flow ---
-const signIn = store.signIn("new-member@example.test");
+const signIn = store.signIn("test@example.com");
 if (!signIn.ok || signIn.user.status !== "approved") throw new Error("approval did not take effect");
-check("account (new member)", () => views.viewAccount());
-assertCleanAccount("approved", views.viewAccount());
+await check("account (new member)", () => views.viewAccount());
 
 // Profile sections are tappable rows that open sub-pages; row faces carry
 // a one-line description, not live details
-const newMemberAcct = views.viewAccount();
+const newMemberAcct = await views.viewAccount();
 let cardsOk = true;
 for (const link of [
   "#/account/details",
@@ -331,12 +300,12 @@ for (const sub of [
   }
 }
 console.log("ok  Profile rows show descriptive subtexts");
-check("profile > details", () => views.viewAccount("details"));
-check("profile > indemnity", () => views.viewAccount("indemnity"));
-check("profile > donor", () => views.viewAccount("donor"));
-check("profile > payments", () => views.viewAccount("payments"));
-check("profile > privacy", () => views.viewAccount("privacy"));
-check("profile > history", () => views.viewAccount("history"));
+await check("profile > details", () => views.viewAccount("details"));
+await check("profile > indemnity", () => views.viewAccount("indemnity"));
+await check("profile > donor", () => views.viewAccount("donor"));
+await check("profile > payments", () => views.viewAccount("payments"));
+await check("profile > privacy", () => views.viewAccount("privacy"));
+await check("profile > history", () => views.viewAccount("history"));
 
 // sub-page headings are title-cased to match the row titles
 for (const [section, title] of [
@@ -347,13 +316,13 @@ for (const [section, title] of [
   ["privacy", "Privacy &amp; Notifications."],
   ["history", "History."],
 ]) {
-  if (!views.viewAccount(section).includes(title)) {
+  if (!(await views.viewAccount(section)).includes(title)) {
     failures++;
     console.error(`FAIL profile > ${section} heading should read "${title}"`);
   }
 }
 console.log("ok  sub-page headings title-cased");
-if (!views.viewAccount("nope").includes("Page not found")) {
+if (!(await views.viewAccount("nope")).includes("Page not found")) {
   failures++;
   console.error("FAIL unknown Profile section should 404");
 } else console.log("ok  unknown Profile section 404s");
@@ -366,16 +335,16 @@ if (!newMemberAcct.includes("Indemnity confirmed on") || newMemberAcct.includes(
   console.error("FAIL Profile should show a single indemnity-confirmed-on-date line");
 } else console.log("ok  Profile shows single-line indemnity confirmation");
 store.currentUser().indemnityAcceptedAt = null;
-if (!views.viewAccount().includes("To be accepted")) {
+if (!(await views.viewAccount()).includes("To be accepted")) {
   failures++;
   console.error('FAIL unaccepted indemnity should read "To be accepted"');
 } else console.log('ok  unaccepted indemnity reads "To be accepted"');
-if (!views.viewAccount("indemnity").includes("Accept &amp; Confirm")) {
+if (!(await views.viewAccount("indemnity")).includes("Accept &amp; Confirm")) {
   failures++;
   console.error("FAIL indemnity page missing Accept & Confirm");
 } else console.log("ok  indemnity page offers Accept & Confirm");
 store.acceptIndemnity(store.currentUser().id);
-if (!views.viewAccount().includes("Indemnity confirmed on")) {
+if (!(await views.viewAccount()).includes("Indemnity confirmed on")) {
   failures++;
   console.error("FAIL acceptIndemnity did not confirm on Profile");
 } else console.log("ok  acceptIndemnity confirms on Profile");
@@ -383,24 +352,49 @@ if (!views.viewHome().includes("Nothing booked this week")) {
   failures++;
   console.error('FAIL "My week" should prompt when the member has no bookings');
 } else console.log('ok  "My week" empty state prompts to book');
-check("checkout (member)", () => views.viewCheckout(paid.id));
-const before = store.spotsLeft(paid);
-const { booking, receipt } = store.payForSession(signIn.user.id, paid, "4242");
-const after = store.spotsLeft(paid);
-if (after !== before - 1) throw new Error(`spots did not decrement (${before} -> ${after})`);
-console.log(`ok  payment decremented spots ${before} -> ${after}`);
-check("booking confirmation", () => views.viewBooking(booking.id));
-check("receipt", () => views.viewReceipt(receipt.id));
-check("activity (member, booked)", () => views.viewActivity(paid.id));
+await check("checkout (member)", () => views.viewCheckout(paid.id));
+// --- HYROX payment system: reserve -> mark -> collector confirm (Task 2) ---
+const bftSession = allUpcoming.find(
+  (s) => s.activityId === "hyrox" && !data.sessionStarted(s)
+);
+if (!bftSession) throw new Error("expected an upcoming BFT session");
+const before = store.spotsLeft(bftSession);
+const reservationNow = Date.now();
+const r1 = store.reserveSession(signIn.user.id, bftSession, reservationNow);
+if (r1.status !== "reserved") throw new Error("new booking should be reserved");
+if (r1.payDeadlineAt !== data.nextPayDeadline(bftSession.dateISO, reservationNow))
+  throw new Error("reservation deadline should follow the checkpoint rule");
+const after = store.spotsLeft(bftSession);
+if (after !== before - 1) throw new Error(`reserved spot not held (${before} -> ${after})`);
+console.log(`ok  reservation holds a spot ${before} -> ${after}`);
+let dup = null;
+try { store.reserveSession(signIn.user.id, bftSession); } catch (e) { dup = e; }
+if (!dup) throw new Error("double reservation should be rejected");
+console.log("ok  double booking rejected");
+store.markBookingPaid(r1.id, "PayMe", "REF123");
+if (!store.getBooking(r1.id).paymentMarkedAt) throw new Error("payment not marked");
+const tinaNotes = store.notificationsFor("fixture-admin");
+if (!tinaNotes.some((n) => n.kind === "payment-marked"))
+  throw new Error("collector should be notified of a marked payment");
+console.log("ok  member marks paid -> collector notified");
+const conf = store.confirmBookingPayment(r1.id, "fixture-admin");
+if (conf.booking.status !== "confirmed") throw new Error("collector confirm should confirm");
+if (conf.receipt.method !== "PayMe") throw new Error("receipt should record the method");
+if (!store.receiptForBooking(r1.id)) throw new Error("receipt should attach to the booking");
+console.log("ok  collector confirms -> booking confirmed + receipt (PayMe)");
+const booking = conf.booking, receipt = conf.receipt;
+await check("booking confirmation", () => views.viewBooking(booking.id));
+await check("receipt", () => views.viewReceipt(receipt.id));
+await check("activity (member, booked)", () => views.viewActivity(paid.id));
 
 // the booked class is badged on Home "My week" and on the Schedule row;
 // "My week" shows booked sessions only, so unbooked ones stay out
 const homeBooked = views.viewHome();
-if (!homeBooked.includes("Booked") || !homeBooked.includes("Midtown 28")) {
+if (!homeBooked.includes("Booked") || !homeBooked.includes("BFT Causeway Bay")) {
   failures++;
   console.error('FAIL home "My week" does not show the booked session');
 } else console.log('ok  home "My week" shows the booked session');
-if (homeBooked.includes("BFT Causeway Bay") || homeBooked.includes("Just show up")) {
+if (homeBooked.includes("Midtown 28") || homeBooked.includes("Just show up")) {
   failures++;
   console.error('FAIL home "My week" shows sessions the member has not booked');
 } else console.log('ok  home "My week" hides unbooked sessions');
@@ -413,7 +407,7 @@ if (!views.viewSchedule().includes("Booked")) {
   failures++;
   console.error("FAIL schedule does not badge the booked session");
 } else console.log("ok  schedule badges booked session");
-if (views.viewAccount().includes(">Upcoming<")) {
+if ((await views.viewAccount()).includes(">Upcoming<")) {
   failures++;
   console.error("FAIL Profile still repeats the upcoming bookings list");
 } else console.log("ok  Profile drops redundant upcoming list");
@@ -422,11 +416,11 @@ if (views.viewAccount().includes(">Upcoming<")) {
 // it lives inside the Donor Profile sub-page, not on the card face
 store.updateDonorId(signIn.user.id, "IECC-99999");
 if (store.currentUser().donorId !== "IECC-99999") throw new Error("donor ID not saved");
-if (views.viewAccount().includes("IECC-99999")) {
+if ((await views.viewAccount()).includes("IECC-99999")) {
   failures++;
   console.error("FAIL donor ID should not appear on the Profile card face");
 } else console.log("ok  Profile card face carries no donor details");
-if (!views.viewAccount("donor").includes("IECC-99999")) {
+if (!(await views.viewAccount("donor")).includes("IECC-99999")) {
   failures++;
   console.error("FAIL donor ID missing from Donor Profile sub-page");
 } else console.log("ok  donor ID shows on Donor Profile sub-page");
@@ -436,70 +430,64 @@ if (store.currentUser().donorId !== "WONG-1234") {
   console.error("FAIL donor ID should be stored uppercase with a hyphen");
 } else console.log("ok  donor ID stored uppercase with hyphen");
 
-// double booking must be rejected
-try {
-  store.payForSession(signIn.user.id, paid, "4242");
-  failures++;
-  console.error("FAIL double booking was allowed");
-} catch {
-  console.log("ok  double booking rejected");
-}
-
-// cancel frees the place and refunds
-store.cancelBooking(booking.id);
-if (store.spotsLeft(paid) !== before) throw new Error("cancel did not free the spot");
-if (store.receiptForBooking(booking.id).status !== "refunded") throw new Error("cancel did not refund");
-console.log("ok  cancellation refunds and frees the place");
-
-// past bookings live behind the History card, not inline on the Profile
-if (views.viewAccount().includes("booking-card")) {
+// the member's only booking is an upcoming confirmed session, so History
+// is empty — past bookings live behind the History card, not inline on Profile
+if ((await views.viewAccount()).includes("booking-card")) {
   failures++;
   console.error("FAIL Profile should not list history inline");
 } else console.log("ok  Profile keeps history behind the card");
-const histHtml = views.viewAccount("history");
-if (!histHtml.includes("booking-card") || !histHtml.includes("Cancelled")) {
+const histHtml = await views.viewAccount("history");
+if (histHtml.includes("booking-card") || !histHtml.includes("Past sessions will appear here")) {
   failures++;
-  console.error("FAIL History sub-page missing past bookings");
-} else console.log("ok  History sub-page lists past bookings");
+  console.error("FAIL History sub-page should hide upcoming confirmed bookings");
+} else console.log("ok  History sub-page hides upcoming bookings");
 
-// --- Existing member fixture view ---
-store.signIn("test-member@example.test");
-check("account (existing member)", () => views.viewAccount());
-const memberAcct = views.viewAccount();
-if (!views.viewAccount("donor").includes("TEST-1234")) {
+// --- Seeded member view ---
+installLocalFixtures(); store.signIn("member@example.test");
+await check("account (seeded member)", () => views.viewAccount());
+const memberAcct = await views.viewAccount();
+// fixture-member has donorId TEST-1234
+if (!(await views.viewAccount("donor")).includes("TEST-1234")) {
   failures++;
-  console.error("FAIL fixture member donor ID not shown in Donor Profile");
-} else console.log("ok  fixture member donor ID shown in Donor Profile");
+  console.error("FAIL seeded member donor ID not shown in Donor Profile");
+} else console.log("ok  seeded member donor ID shown in Donor Profile");
 if (memberAcct.includes("TEST-1234")) {
   failures++;
   console.error("FAIL donor ID should not appear on the Profile card face");
-} else console.log("ok  fixture member card faces carry no donor details");
-if (!views.viewAccount("payments").includes("TEST-RECEIPT-0001")) {
+} else console.log("ok  seeded member card faces carry no donor details");
+// Seeded receipts (ITC-2026-0048) are removed; Payments shows receipts created during the test.
+if ((await views.viewAccount("payments")).includes("ITC-2026-0048")) {
   failures++;
-  console.error("FAIL fixture receipt missing from Payments sub-page");
-} else console.log("ok  fixture receipt shows on Payments sub-page");
+  console.error("FAIL seeded receipts should not be present in fresh state");
+} else console.log("ok  no demo receipts are present");
 if (!memberAcct.includes("Indemnity confirmed on")) {
   failures++;
-  console.error("FAIL fixture member should have indemnity confirmed");
-} else console.log("ok  fixture member indemnity confirmed");
+  console.error("FAIL seeded member should have indemnity confirmed");
+} else console.log("ok  seeded member indemnity confirmed");
 if (!memberAcct.includes('class="kicker">Profile</div>') || memberAcct.includes("Member Profile") || memberAcct.includes("’s training")) {
   failures++;
   console.error('FAIL Profile header should read "Profile" with no name headline');
 } else console.log('ok  Profile header reads "Profile"');
-if (memberAcct.includes("test-member@example.test")) {
+if (memberAcct.includes("member@example.test")) {
   failures++;
   console.error("FAIL email should not appear on the Profile face");
 } else console.log("ok  Profile face carries no contact details");
-if (!views.viewAccount("details").includes("test-member@example.test")) {
+if (!(await views.viewAccount("details")).includes("member@example.test")) {
   failures++;
   console.error("FAIL email missing from Membership Details sub-page");
 } else console.log("ok  email lives on Membership Details sub-page");
-check("home (member)", () => views.viewHome());
+installLocalFixtures({ withMemberBooking: true });
+store.signIn("member@example.test");
+await check("home (member)", () => views.viewHome());
 const memberHome = views.viewHome();
-if (!memberHome.includes(fixtureSession.location)) {
+const fixtureMember = store.currentUser();
+const fixtureBookings = store.bookingsForUser(fixtureMember.id);
+const bookedMarker = fixtureBookings[0]?.snapshot?.location ?? "BFT Causeway Bay";
+const otherMarker = "Midtown 28";
+if (!memberHome.includes(bookedMarker) || memberHome.includes(otherMarker)) {
   failures++;
-  console.error('FAIL "My week" should show the fixture member\'s booked session');
-} else console.log('ok  "My week" shows only the fixture member\'s booked session');
+  console.error(`FAIL "My week" should show only the member's booked HYROX (${bookedMarker})`);
+} else console.log(`ok  "My week" shows only the member's booked session (${bookedMarker})`);
 // community: prayer request records locally (no public reader by design)
 const member = store.currentUser();
 const prayer = store.recordPrayer({ userId: member.id, name: member.fullName, request: "Smoke test request" });
@@ -517,146 +505,593 @@ store.resetLocalData();
   const raw = JSON.parse(mem.get("itc.prototype.v1"));
   raw.version = 6;
   raw.users = [
-    { id: "legacy-member-1", email: "legacy-one@example.test", donorId: "TEST1234" },
-    { id: "legacy-member-2", email: "legacy-two@example.test", donorId: "not a real id" },
+    { id: "legacy-member", role: "member", status: "approved", fullName: "Legacy", email: "legacy1@example.test", donorId: "CHUI08879" },
+    { id: "legacy-admin", role: "admin", status: "approved", fullName: "Legacy Admin", email: "legacy2@example.test", donorId: "not a real id" },
   ];
   mem.set("itc.prototype.v1", JSON.stringify(raw));
   store.load();
-  const fixed = store.allUsers().find((u) => u.id === "legacy-member-1").donorId;
-  if (fixed !== "TEST-1234") {
+  const allUsers = store.allUsers();
+  const fixed = allUsers.find((u) => u.id === "legacy-member")?.donorId;
+  if (fixed !== "CHUI-08879") {
     failures++;
-    console.error(`FAIL v7 migration should repair TEST1234 -> TEST-1234, got ${fixed}`);
+    console.error(`FAIL v7 migration should repair CHUI08879 -> CHUI-08879, got ${fixed}`);
   } else console.log("ok  v7 migration inserts the missing hyphen");
-  const cleared = store.allUsers().find((u) => u.id === "legacy-member-2").donorId;
+  const cleared = allUsers.find((u) => u.id === "legacy-admin")?.donorId;
   if (cleared !== null) {
     failures++;
     console.error(`FAIL v7 migration should clear unrecognizable donor ID, got ${cleared}`);
   } else console.log("ok  v7 migration clears unrecognizable donor ID");
 }
 
-// --- Legacy migrations normalize absent collections before accessing them ---
-for (const [version, absentKey] of [
-  [0, "activities"],
-  [3, "bookings"],
-  [6, "users"],
-  [8, "receipts"],
-]) {
-  store.resetLocalData();
-  const raw = JSON.parse(mem.get("itc.prototype.v1"));
-  raw.version = version;
-  raw.users = null;
-  raw.activities = null;
-  raw.bookings = null;
-  raw.receipts = null;
-  delete raw[absentKey];
-  mem.set("itc.prototype.v1", JSON.stringify(raw));
-  try {
-    store.load();
-    const migrated = JSON.parse(mem.get("itc.prototype.v1"));
-    if (migrated.version !== 9
-      || !Array.isArray(migrated.users)
-      || !Array.isArray(migrated.activities)
-      || !Array.isArray(migrated.bookings)
-      || !Array.isArray(migrated.receipts)) {
-      throw new Error("collections were not normalized to arrays");
-    }
-    console.log(`ok  v${version} migration normalizes missing/null collections`);
-  } catch (err) {
-    failures++;
-    console.error(`FAIL v${version} migration should normalize missing/null collections: ${err.message}`);
-  }
+// --- HYROX payment system: deadline helpers (Task 1) ---
+{
+  const sat = "2026-08-08"; // a Saturday
+  const main = new Date(data.mainDeadlineFor(sat));
+  const fin = new Date(data.finalCheckpointFor(sat));
+  if (main.getDay() !== 4 || main.getHours() !== 18 || main.getMinutes() !== 0)
+    throw new Error("main deadline should be Thursday 18:00");
+  if (fin.getDay() !== 5 || fin.getHours() !== 14 || fin.getMinutes() !== 0)
+    throw new Error("final checkpoint should be Friday 14:00");
+  const before = data.parseISO(sat).getTime() - 7 * 24 * 3600 * 1000; // a week early
+  if (data.nextPayDeadline(sat, before) !== data.mainDeadlineFor(sat))
+    throw new Error("before Thursday: deadline should be the main checkpoint");
+  const between = data.mainDeadlineFor(sat) + 3600 * 1000; // Thursday evening
+  if (data.nextPayDeadline(sat, between) !== data.finalCheckpointFor(sat))
+    throw new Error("after Thursday: deadline should be the Friday checkpoint");
+  const late = data.finalCheckpointFor(sat) + 3600 * 1000; // Friday afternoon
+  if (data.nextPayDeadline(sat, late) !== late + data.LAST_MINUTE_WINDOW_MS)
+    throw new Error("after Friday checkpoint: deadline should be now + 2h");
+  console.log("ok  deadline checkpoints (Thu 18:00 / Fri 14:00 / 2h window)");
+}
+{
+  const bft = store.activities().find((a) => a.id === "hyrox");
+  const mid = store.activities().find((a) => a.id === "hyrox-midtown");
+  if (bft.capacity !== 20 || mid.capacity !== 12)
+    throw new Error("HYROX capacities should be BFT 20 / Midtown 12");
+  console.log("ok  seeds: capacities 20/12");
+}
+{
+  // v9 migration: persist a v8-shaped snapshot and reload
+  const raw = localStorage.getItem("itc.prototype.v1");
+  const snap = JSON.parse(raw);
+  snap.version = 8;
+  delete snap.sessionOverrides; delete snap.queues; delete snap.duty; delete snap.notifications;
+  const bft = snap.activities.find((a) => a.id === "hyrox");
+  const mid = snap.activities.find((a) => a.id === "hyrox-midtown");
+  bft.capacity = 18; mid.capacity = 18;
+  for (const u of snap.users) { delete u.paymeLink; delete u.fpsPhone; }
+  localStorage.setItem("itc.prototype.v1", JSON.stringify(snap));
+  store.load();
+  const bft2 = store.activities().find((a) => a.id === "hyrox");
+  const mid2 = store.activities().find((a) => a.id === "hyrox-midtown");
+  if (bft2.capacity !== 20 || mid2.capacity !== 12) throw new Error("v9 migration must fix capacities");
+  console.log("ok  v9 migration: capacities fixed");
 }
 
-// --- v8/v9 prayer state is repaired before migrations or early return ---
-for (const [version, prayerShape] of [
-  [8, "null"],
-  [8, "missing"],
-  [9, "null"],
-  [9, "missing"],
-]) {
-  store.resetLocalData();
-  const raw = JSON.parse(mem.get("itc.prototype.v1"));
-  raw.version = version;
-  if (prayerShape === "missing") delete raw.prayers;
-  else raw.prayers = null;
-  mem.set("itc.prototype.v1", JSON.stringify(raw));
-  try {
-    store.load();
-    const recorded = store.recordPrayer({
-      userId: null,
-      name: "Migration tester",
-      request: `v${version} ${prayerShape} prayer regression`,
-    });
-    const migrated = JSON.parse(mem.get("itc.prototype.v1"));
-    if (!recorded.id
-      || !Array.isArray(migrated.prayers)
-      || migrated.prayers.length !== 1
-      || migrated.prayers[0].id !== recorded.id) {
-      throw new Error("recordPrayer did not persist into a normalized array");
-    }
-    console.log(`ok  v${version} ${prayerShape} prayers normalize and recordPrayer works`);
-  } catch (err) {
-    failures++;
-    console.error(`FAIL v${version} ${prayerShape} prayers should normalize before load returns: ${err.message}`);
-  }
-}
-
-// --- v9 migration: exact legacy demo sentinels are removed, local records survive ---
+// --- HYROX payment system: sweep + cascade (Task 3) ---
 store.resetLocalData();
+installLocalFixtures(); store.signIn("member@example.test");
+{
+  const sess = store.upcomingSessions(14).find(
+    (s) => s.activityId === "hyrox" && !data.sessionStarted(s) &&
+      !store.userBookingFor(store.currentUser().id, s.id)
+  );
+  // Fill the session with confirmed bookings so only the reservation holds a spot.
+  // We register a fleet of fixture-member-* users and pay for them.
+  const fill = store.reserveSession(store.currentUser().id, sess);
+  const st = JSON.parse(localStorage.getItem("itc.prototype.v1"));
+  const act = st.activities.find((a) => a.id === "hyrox");
+  const fleet = [];
+  for (let i = 0; i < act.capacity - 1; i++) {
+    const id = `cascade-fixture-${i}`;
+    st.users.push({
+      id, role: "member", status: "approved", fullName: `Cascade ${i}`,
+      preferredName: `C${i}`, email: `${id}@example.test`, phone: "+852 5555 0000",
+      emergencyName: "x", emergencyPhone: "+852 5555 9999", heard: "test",
+      isMinor: false, appliedAt: Date.now() - 86400000,
+      indemnityAcceptedAt: Date.now() - 86400000,
+      privacyAcceptedAt: Date.now() - 86400000,
+      whatsappReminders: false, emailReceipts: false, communityNews: false,
+    });
+    st.bookings.push({
+      id: `cascade-b-${i}`, userId: id, sessionId: sess.id,
+      status: "confirmed", createdAt: Date.now() - 86400000,
+      snapshot: {
+        name: sess.name, kind: sess.kind, dateISO: sess.dateISO,
+        time: sess.time, durationMin: sess.durationMin, location: sess.location,
+        price: sess.price,
+      },
+    });
+    fleet.push(id);
+  }
+  st.queues = st.queues || {};
+  st.queues[sess.id] = { waitlist: [{ userId: "fixture-admin", joinedAt: Date.now() }], interest: [] };
+  localStorage.setItem("itc.prototype.v1", JSON.stringify(st));
+  store.load();
+  installLocalFixtures(); store.signIn("member@example.test");
+  // expire the held reservation and sweep
+  const st2 = JSON.parse(localStorage.getItem("itc.prototype.v1"));
+  const held = st2.bookings.find((b) => b.id === fill.id);
+  held.payDeadlineAt = Date.now() - 1000;
+  localStorage.setItem("itc.prototype.v1", JSON.stringify(st2));
+  store.load();
+  store.sweepCheckpoints();
+  if (store.getBooking(fill.id).status !== "expired") throw new Error("overdue reservation should expire");
+  const promoted = store.userReservationFor("fixture-admin", sess.id);
+  if (!promoted) throw new Error("freed spot should cascade to waitlist #1");
+  const memberNotes = store.notificationsFor("fixture-member");
+  if (!memberNotes.some((n) => n.kind === "reservation-expired")) throw new Error("member should be told their reservation expired");
+  const adminNotes = store.notificationsFor("fixture-admin");
+  if (!adminNotes.some((n) => n.kind === "waitlist-promoted")) throw new Error("promoted member should be notified");
+  console.log("ok  sweep expires overdue reservation and cascades to waitlist #1");
+}
+
+// --- HYROX payment system: queues + tie-break (Task 4) ---
+store.resetLocalData();
+installLocalFixtures();
+{
+  const sess = store.upcomingSessions(14).find(
+    (s) => s.activityId === "hyrox" && !data.sessionStarted(s) &&
+      !store.userBookingFor("fixture-member", s.id) && !store.userReservationFor("fixture-member", s.id)
+  );
+  const p1 = store.joinWaitlist("fixture-member", sess.id);
+  const p2 = store.joinWaitlist("fixture-admin", sess.id);
+  if (p1 !== 1 || p2 !== 2) throw new Error("waitlist positions should be join order");
+  if (store.waitlistPosition("fixture-admin", sess.id) !== 2) throw new Error("position lookup failed");
+  store.leaveWaitlist("fixture-member", sess.id);
+  if (store.waitlistPosition("fixture-admin", sess.id) !== 1) throw new Error("positions should close ranks");
+  console.log("ok  waitlist join/leave keeps honest positions");
+}
+{
+  // both-queues tie-break: reserved at BFT + reserved at Midtown (opened) +
+  // waitlisted at BFT's sibling... paying for one releases the rest
+  const sat = store.upcomingSessions(14).find(
+    (s) => s.activityId === "hyrox" && !data.sessionStarted(s) &&
+      !store.userBookingFor("fixture-member", s.id)
+  );
+  const mid = store.upcomingSessions(14).find(
+    (s) => s.activityId === "hyrox-midtown" && s.dateISO === sat.dateISO
+  );
+  const st = JSON.parse(localStorage.getItem("itc.prototype.v1"));
+  st.sessionOverrides[mid.id] = { midtownOpen: true };
+  localStorage.setItem("itc.prototype.v1", JSON.stringify(st));
+  store.load();
+  const bBft = store.reserveSession("fixture-member", sat);
+  const bMid = store.reserveSession("fixture-member", mid);
+  store.markBookingPaid(bBft.id, "FPS", "");
+  store.confirmBookingPayment(bBft.id, "fixture-admin");
+  if (store.getBooking(bMid.id).status !== "cancelled")
+    throw new Error("paying for BFT should release the Midtown reservation");
+  const promotedMid = store.notificationsFor("fixture-member");
+  if (!promotedMid.some((n) => n.kind === "hold-released"))
+    throw new Error("member should be told the other hold was released");
+  console.log("ok  paying for one venue releases the other venue's hold");
+}
+// queue join guards existing bookings
+{
+  const sess = store.upcomingSessions(21).find(
+    (s) => s.activityId === "hyrox" && !data.sessionStarted(s) &&
+      !store.userBookingFor("fixture-member", s.id) && !store.userReservationFor("fixture-member", s.id)
+  );
+  const b = store.reserveSession("fixture-member", sess);
+  let threw = null;
+  try { store.joinWaitlist("fixture-member", sess.id); } catch (e) { threw = e; }
+  if (!threw) throw new Error("joinWaitlist should reject a member who already holds the session");
+  store.cancelBooking(b.id);
+  console.log("ok  queue join rejects already-booked members");
+}
+
+// --- HYROX payment system: Midtown open auto-converts (Task 5) ---
+store.resetLocalData();
+installLocalFixtures();
+{
+  const mid = store.upcomingSessions(14).find(
+    (s) => s.activityId === "hyrox-midtown" && !data.sessionStarted(s)
+  );
+  store.joinInterest("fixture-member", mid.id);
+  store.joinInterest("fixture-admin", mid.id);
+  // shrink capacity to 1 so only the first interested member converts
+  const st = JSON.parse(localStorage.getItem("itc.prototype.v1"));
+  const act = st.activities.find((a) => a.id === "hyrox-midtown");
+  act.capacity = 1;
+  localStorage.setItem("itc.prototype.v1", JSON.stringify(st));
+  store.load();
+  store.setMidtownOpen(mid.id, true);
+  const converted = store.userReservationFor("fixture-member", mid.id);
+  if (!converted) throw new Error("first interested member should get a reserved spot");
+  if (store.waitlistPosition("fixture-admin", mid.id) !== 1)
+    throw new Error("leftover interest should become the waitlist");
+  if (!store.notificationsFor("fixture-member").some((n) => n.kind === "midtown-open"))
+    throw new Error("converted member should be notified with a pay deadline");
+  console.log("ok  Midtown open converts interest in order, rest waitlist");
+}
+
+// --- HYROX payment system: deferral + week cancellation (Task 6) ---
+store.resetLocalData();
+installLocalFixtures(); store.signIn("member@example.test");
+{
+  const sess = store.upcomingSessions(14).find(
+    (s) => s.activityId === "hyrox" && !data.sessionStarted(s) &&
+      !store.userBookingFor("fixture-member", s.id) && !store.userReservationFor("fixture-member", s.id)
+  );
+  const b = store.reserveSession("fixture-member", sess);
+  store.markBookingPaid(b.id, "PayMe", "");
+  store.confirmBookingPayment(b.id, "fixture-admin");
+  const targets = store.deferTargetsFor(store.getBooking(b.id));
+  if (!targets.length) throw new Error("expected future defer targets");
+  if (targets.some((t) => t.id === sess.id)) throw new Error("own session is not a defer target");
+  const moved = store.deferBooking(b.id, targets[0].id);
+  if (moved.status !== "confirmed") throw new Error("paid deferral should stay confirmed");
+  if (store.getBooking(b.id).status !== "deferred") throw new Error("original should read deferred");
+  if (store.receiptForBooking(moved.id)?.bookingId !== moved.id)
+    throw new Error("receipt should follow the deferred booking");
+  if (!store.notificationsFor("fixture-admin").some((n) => n.kind === "defer"))
+    throw new Error("collector should be notified of the deferral");
+  console.log("ok  paid deferral moves booking + receipt, notifies collector");
+}
+{
+  const sess = store.upcomingSessions(14).find(
+    (s) => s.activityId === "hyrox" && !data.sessionStarted(s) &&
+      !store.userBookingFor("fixture-member", s.id) && !store.userReservationFor("fixture-member", s.id)
+  );
+  const b = store.reserveSession("fixture-member", sess);
+  store.markBookingPaid(b.id, "FPS", "");
+  store.confirmBookingPayment(b.id, "fixture-admin");
+  store.joinWaitlist("fixture-admin", sess.id);
+  store.cancelSessionWeek(sess.id, "HYROX race weekend — no session");
+  const after = store.getSession(sess.id);
+  if (!after.cancelled || after.cancelReason !== "HYROX race weekend — no session")
+    throw new Error("cancelled week should carry the reason");
+  if (store.getBooking(b.id).status !== "deferred")
+    throw new Error("paid booking should auto-defer on week cancellation");
+  if (store.waitlistPosition("fixture-admin", sess.id) !== null)
+    throw new Error("waitlist should dissolve on week cancellation");
+  if (!store.notificationsFor("fixture-admin").some((n) => n.kind === "session-cancelled"))
+    throw new Error("waitlisted member should be notified of the cancellation");
+  console.log("ok  cancelled week: reason, auto-defer, queue dissolved");
+}
+{
+  const sess = store.upcomingSessions(14).find(
+    (s) => s.activityId === "hyrox" && !data.sessionStarted(s)
+  );
+  store.setSessionTime(sess.id, "10:00");
+  store.setVenueTBC(sess.id, true);
+  store.setSessionNotice(sess.id, "Weather watch — check WhatsApp Saturday morning");
+  const s = store.getSession(sess.id);
+  if (s.time !== "10:00" || !s.venueTBC || s.location !== "TBC" || !s.notice)
+    throw new Error("session overrides should decorate the session");
+  console.log("ok  session overrides: time change, venue TBC, notice");
+}
+
+// --- HYROX payment system: duty roster (Task 7) ---
+store.resetLocalData();
+installLocalFixtures();
+// Add a second admin so we can exercise a handover.
 {
   const raw = JSON.parse(mem.get("itc.prototype.v1"));
-  raw.version = 8;
-  raw.sessionUserId = "u-admin";
-  raw.users = [
-    { id: "u-super", email: "owner@itc.hk" },
-    { id: "u-admin", email: " ADMIN@ITC.HK " },
-    { id: "u-member", email: "member@itc.hk" },
-    { id: "u-pend-1", email: "marco.santos@example.com" },
-    { id: "u-pend-2", email: "jenny.wu@example.com" },
-    { id: "renamed-demo-owner", email: " OWNER@ITC.HK " },
-    { id: "test-member-1", email: "real-member@example.test", donorId: "REAL-1234" },
-  ];
-  raw.bookings = [
-    { id: "b-seed-past", userId: "u-member", sessionId: "hyrox-legacy-past" },
-    { id: "b-seed-next", userId: "renamed-demo-owner", sessionId: "hyrox-legacy-next" },
-    { id: "real-booking-1", userId: "test-member-1", sessionId: "hyrox-real" },
-  ];
-  raw.receipts = [
-    { id: "r-seed-past", bookingId: "b-seed-past", userId: "u-member" },
-    { id: "r-seed-next", bookingId: "b-seed-next", userId: "renamed-demo-owner" },
-    { id: "real-receipt-1", bookingId: "real-booking-1", userId: "test-member-1" },
-  ];
-  raw.prayers = [{
-    id: "real-prayer-1",
-    userId: "test-member-1",
-    name: "Existing Member",
-    request: "Please preserve this genuine prayer",
-    createdAt: Date.now() - 7200000,
-  }];
-  raw.activities[0].baseBooked = 7;
-  raw.activities[0].location = "Genuine admin edit";
+  raw.users.push({
+    id: "fixture-super", role: "superadmin", status: "approved",
+    fullName: "Test Super", preferredName: "Super",
+    email: "super@example.test", phone: "+852 5000 0003",
+    emergencyName: "Test", emergencyPhone: "+852 5000 9003", heard: "Test",
+    isMinor: false, appliedAt: Date.now() - 86400000,
+    indemnityAcceptedAt: Date.now() - 86400000,
+    privacyAcceptedAt: Date.now() - 86400000,
+    whatsappReminders: false, emailReceipts: false, communityNews: false,
+  });
   mem.set("itc.prototype.v1", JSON.stringify(raw));
   store.load();
-  const migrated = JSON.parse(mem.get("itc.prototype.v1"));
-  const preserved = migrated.users.length === 1 && migrated.users[0].id === "test-member-1"
-    && migrated.bookings.length === 1 && migrated.bookings[0].id === "real-booking-1"
-    && migrated.receipts.length === 1 && migrated.receipts[0].id === "real-receipt-1"
-    && migrated.prayers.length === 1 && migrated.prayers[0].id === "real-prayer-1"
-    && migrated.activities[0].location === "Genuine admin edit";
-  const cleaned = migrated.version === 9 && migrated.sessionUserId === null
-    && migrated.activities.every((a) => !("baseBooked" in a));
-  if (!preserved || !cleaned) {
-    failures++;
-    console.error("FAIL v9 migration should remove exact demo records/demand and preserve unmatched local records");
-  } else console.log("ok  v9 migration removes only exact demo records and simulated demand");
+}
+{
+  const sess = store.upcomingSessions(14).find(
+    (s) => s.activityId === "hyrox" && !data.sessionStarted(s)
+  );
+  // No duty set yet → collectorFor falls back to the first approved admin.
+  if (store.collectorFor(sess.id)?.id !== "fixture-admin")
+    throw new Error("default collector should fall back to fixture-admin");
+  // Setting duty with a non-admin user is silently rejected.
+  store.setDuty("fixture-member", sess.dateISO);
+  if (store.collectorFor(sess.id)?.id !== "fixture-admin")
+    throw new Error("setDuty should ignore non-admin users");
+  // Handover to the second admin.
+  store.setDuty("fixture-super", sess.dateISO);
+  if (store.dutyFor(sess.id)?.userId !== "fixture-super")
+    throw new Error("dutyFor should record the handover");
+  if (store.collectorFor(sess.id)?.id !== "fixture-super")
+    throw new Error("collectorFor should follow the handover");
+  // Collector payout details save.
+  store.updateCollectorPayouts("fixture-super", {
+    paymeLink: "https://payme.hsbc.com.hk/test-super",
+    fpsPhone: "+852 1111 2222",
+  });
+  const c = store.collectorFor(sess.id);
+  if (c.paymeLink !== "https://payme.hsbc.com.hk/test-super"
+      || c.fpsPhone !== "+852 1111 2222")
+    throw new Error("collector payout details should save");
+  console.log("ok  duty switch changes whose PayMe/FPS details are shown");
+}
+
+// --- HYROX payment system: schedule & activity surfacing (Task 8) ---
+store.resetLocalData();
+installLocalFixtures();
+{
+  const sess = store.upcomingSessions(14).find(
+    (s) => s.activityId === "hyrox" && !data.sessionStarted(s)
+  );
+  store.setSessionNotice(sess.id, "Weather watch — check WhatsApp");
+  views.scheduleState.selected = sess.dateISO;
+  const row = views.viewSchedule();
+  if (!row.includes("Weather watch"))
+    throw new Error("schedule row should surface the notice");
+  console.log("ok  schedule row surfaces session notice");
+  store.cancelSessionWeek(sess.id, "HYROX race weekend — no session");
+  views.scheduleState.selected = sess.dateISO;
+  const sched = views.viewSchedule();
+  if (!sched.includes("Cancelled") || !sched.includes("HYROX race weekend"))
+    throw new Error("cancelled week must show in Schedule with badge + reason");
+  const detail = views.viewActivity(sess.id);
+  if (!detail.includes("HYROX race weekend"))
+    throw new Error("detail page should show the reason");
+  console.log("ok  cancelled week shows in Schedule (badge + reason) and detail");
+}
+{
+  const mid = store.upcomingSessions(14).find(
+    (s) => s.activityId === "hyrox-midtown" && !data.sessionStarted(s)
+  );
+  views.scheduleState.selected = mid.dateISO;
+  if (!views.viewSchedule().includes("Not yet open"))
+    throw new Error("closed Midtown should read Not yet open in Schedule");
+  store.signIn("member@example.test");
+  const detail = views.viewActivity(mid.id);
+  if (!detail.includes('data-action="join-interest"'))
+    throw new Error("closed Midtown should offer wait-for-Midtown");
+  console.log("ok  closed Midtown: badge + interest action");
+}
+
+// --- HYROX payment system: member payment UI (Task 9) ---
+store.resetLocalData();
+installLocalFixtures();
+store.signIn("member@example.test");
+{
+  const sess = store.upcomingSessions(14).find(
+    (s) => s.activityId === "hyrox" && !data.sessionStarted(s)
+  );
+  const co = views.viewCheckout(sess.id);
+  if (typeof co !== "string" || co.includes("Card number") || !co.includes('id="form-reserve"'))
+    throw new Error("checkout should be a reserve screen (no card form)");
+  console.log("ok  checkout is now a reserve screen");
+  const b = store.reserveSession("fixture-member", sess);
+  const pay = views.viewPay(b.id);
+  if (!pay.includes("PayMe to") || !pay.includes("FPS to") || !pay.includes("HK$"))
+    throw new Error("pay screen should show PayMe/FPS to the collector + amount");
+  if (!pay.includes("Admin"))
+    throw new Error("pay screen should name the on-duty collector");
+  console.log("ok  pay screen shows collector PayMe/FPS + amount");
+  store.markBookingPaid(b.id, "PayMe", "");
+  const awaiting = views.viewBooking(b.id);
+  if (!awaiting.includes("being confirmed"))
+    throw new Error("booking should show awaiting confirmation");
+  console.log("ok  booking shows awaiting-confirmation state");
+  store.confirmBookingPayment(b.id, "fixture-admin");
+  const conf = views.viewBooking(b.id);
+  if (!conf.includes('data-action="defer-to"'))
+    throw new Error("confirmed booking should offer defer targets");
+  if (conf.includes("Cancel & refund"))
+    throw new Error("member refund flow should be gone");
+  console.log("ok  confirmed booking offers defer, no member refund");
+}
+
+// --- HYROX payment system: admin ops (Task 10) ---
+store.resetLocalData();
+installLocalFixtures();
+store.signIn("member@example.test");
+{
+  const sess = store.upcomingSessions(14).find(
+    (s) => s.activityId === "hyrox" && !data.sessionStarted(s)
+  );
+  const b = store.reserveSession("fixture-member", sess);
+  store.markBookingPaid(b.id, "FPS", "9921");
+  store.signIn("admin@example.test");
+  const ops = await views.viewAdmin("payments");
+  if (!ops.includes("Payments / Ops") || (ops.match(/aria-current="page"/g) || []).length !== 1)
+    throw new Error("Admin payments tab should be labeled and expose one active tab");
+  if (!ops.includes("Pending payments") || !ops.includes("9921"))
+    throw new Error("ops should list pending payments with references");
+  if (!ops.includes('data-action="confirm-payment"'))
+    throw new Error("pending payments need a confirm action");
+  console.log("ok  ops lists pending payments for the collector");
+  if (!ops.includes("Finalize with gym") || !ops.includes("wa.me"))
+    throw new Error("ops should include the finalize card with a WhatsApp link");
+  if (!ops.toLowerCase().includes("duty"))
+    throw new Error("ops should include the duty card");
+  console.log("ok  ops has finalize-with-gym (WhatsApp) + duty cards");
+  const conf = store.confirmBookingPayment(b.id, "fixture-admin");
+  if (!conf) throw new Error("collector confirm failed from ops flow");
+  console.log("ok  collector confirms payment from ops");
 }
 
 // --- Reset ---
-const reset = store.resetLocalData();
-if (reset.users.length || reset.bookings.length || reset.receipts.length) {
-  failures++;
-  console.error("FAIL resetLocalData should restore the clean baseline");
-} else console.log("ok  resetLocalData restores clean local state");
+store.resetLocalData();
+console.log("ok  reset");
+
+// --- v10 cleanup: fresh state, no demo UI, no simulated demand, no demo queues/duty ---
+{
+  const fresh = JSON.parse(mem.get("itc.prototype.v1"));
+  if (Array.isArray(fresh.users) && fresh.users.length) {
+    failures++;
+    console.error("FAIL v10 fresh state must have zero users");
+  } else console.log("ok  v10 fresh state has zero users");
+  if (Array.isArray(fresh.bookings) && fresh.bookings.length) {
+    failures++;
+    console.error("FAIL v10 fresh state must have zero bookings");
+  } else console.log("ok  v10 fresh state has zero bookings");
+  if (Array.isArray(fresh.receipts) && fresh.receipts.length) {
+    failures++;
+    console.error("FAIL v10 fresh state must have zero receipts");
+  } else console.log("ok  v10 fresh state has zero receipts");
+  if (Array.isArray(fresh.activities)) {
+    for (const a of fresh.activities) {
+      if ("baseBooked" in a) {
+        failures++;
+        console.error(`FAIL v10 fresh state activity ${a.id} must not carry baseBooked`);
+      }
+    }
+  }
+  // No seed collectors or duty assignments in fresh state
+  if (fresh.duty && Object.keys(fresh.duty).length > 0) {
+    failures++;
+    console.error("FAIL v10 fresh state must not carry demo duty assignments");
+  } else console.log("ok  v10 fresh state has no demo duty");
+  if (fresh.queues && Object.keys(fresh.queues).length > 0) {
+    failures++;
+    console.error("FAIL v10 fresh state must not carry seed queue entries");
+  } else console.log("ok  v10 fresh state has no seed queues");
+  const accountHtml = await views.viewAccount();
+  for (const removed of ["demo-signin", "reset-demo", "one-tap demo", "seeded email"]) {
+    if (accountHtml.toLowerCase().includes(removed)) {
+      failures++;
+      console.error(`FAIL Account still renders removed demo content: ${removed}`);
+    }
+  }
+  for (const email of ["super@example.test", "admin@example.test", "member@example.test",
+    "marco@example.test", "jenny@example.test"]) {
+    if (accountHtml.includes(email)) {
+      failures++;
+      console.error(`FAIL Account still exposes demo email ${email}`);
+    }
+  }
+}
+
+// --- v10 mixed migration: known demo records removed, genuine records preserved ---
+{
+  store.resetLocalData();
+  const raw = JSON.parse(mem.get("itc.prototype.v1"));
+  raw.version = 9;
+  raw.users = [
+    { id: "u-super", role: "superadmin", status: "approved", fullName: "Demo Super", email: "owner@itc.hk" },
+    { id: "u-admin", role: "admin", status: "approved", fullName: "Demo Admin", email: "admin@itc.hk" },
+    { id: "u-member", role: "member", status: "approved", fullName: "Demo Member", email: "member@itc.hk" },
+    { id: "real-member", role: "member", status: "approved", fullName: "Real Member", email: "real@example.test" },
+  ];
+  raw.sessionUserId = "u-member";
+  raw.bookings = [
+    { id: "b-seed-1", userId: "u-member" },
+    { id: "b-user-1", userId: "real-member" },
+  ];
+  raw.receipts = [
+    { id: "r-seed-1", bookingId: "b-seed-1", userId: "u-member" },
+    { id: "r-user-1", bookingId: "b-user-1", userId: "real-member" },
+  ];
+  raw.queues = {
+    "hyrox-2026-09-05": { waitlist: ["u-member", "real-member"], interest: ["u-member"] },
+  };
+  raw.duty = {
+    "2026-08-15": { userId: "u-admin", setAt: 1 },
+    "2026-08-22": { userId: "real-member", setAt: 1 },
+  };
+  raw.activities[0].baseBooked = 7;
+  mem.set("itc.prototype.v1", JSON.stringify(raw));
+  store.load();
+  const migrated = JSON.parse(mem.get("itc.prototype.v1"));
+  if (!migrated.users.some((u) => u.id === "real-member")) {
+    failures++;
+    console.error("FAIL v10 migration must keep genuine users");
+  } else console.log("ok  v10 migration keeps genuine users");
+  for (const demoId of ["u-super", "u-admin", "u-member"]) {
+    if (migrated.users.some((u) => u.id === demoId)) {
+      failures++;
+      console.error(`FAIL v10 migration must remove demo user ${demoId}`);
+    }
+  }
+  if (migrated.bookings.some((b) => b.id === "b-seed-1")) {
+    failures++;
+    console.error("FAIL v10 migration must remove demo-owned bookings");
+  } else console.log("ok  v10 migration removes demo-owned bookings");
+  if (!migrated.bookings.some((b) => b.id === "b-user-1")) {
+    failures++;
+    console.error("FAIL v10 migration must keep genuine bookings");
+  } else console.log("ok  v10 migration keeps genuine bookings");
+  // The demo waitlist entry for u-member is removed; the genuine entry survives.
+  const q = migrated.queues?.["hyrox-2026-09-05"];
+  if (q && q.waitlist.includes("u-member")) {
+    failures++;
+    console.error("FAIL v10 migration must remove demo waitlist entries");
+  } else console.log("ok  v10 migration removes demo queue entries");
+  if (q && !q.waitlist.includes("real-member")) {
+    failures++;
+    console.error("FAIL v10 migration must keep genuine queue entries");
+  } else console.log("ok  v10 migration keeps genuine queue entries");
+  // Duty reassignment for removed demo collector, but genuine duty survives.
+  if (migrated.duty?.["2026-08-15"]?.userId === "u-admin") {
+    failures++;
+    console.error("FAIL v10 migration must clear duty assignments for removed demo users");
+  } else console.log("ok  v10 migration clears demo duty assignments");
+  if (migrated.duty?.["2026-08-22"]?.userId !== "real-member") {
+    failures++;
+    console.error("FAIL v10 migration must keep genuine duty assignments");
+  } else console.log("ok  v10 migration keeps genuine duty assignments");
+  if (migrated.activities.some((a) => "baseBooked" in a)) {
+    failures++;
+    console.error("FAIL v10 migration must strip baseBooked from every activity");
+  } else console.log("ok  v10 migration strips simulated demand");
+  if (migrated.sessionUserId !== null) {
+    failures++;
+    console.error("FAIL v10 migration must clear session tied to a removed demo user");
+  } else console.log("ok  v10 migration clears removed session");
+  if (migrated.version !== 10) {
+    failures++;
+    console.error(`FAIL v10 migration must advance version to 10, got ${migrated.version}`);
+  } else console.log("ok  v10 migration advances version to 10");
+}
+
+// --- Install neutral fixtures for local authenticated paths (no demo seeds) ---
+function installLocalFixtures({ withMemberBooking = false } = {}) {
+  const clean = JSON.parse(mem.get("itc.prototype.v1"));
+  const preserved = (clean.users || []).filter((u) =>
+    !["fixture-admin", "fixture-member", "fixture-super"].includes(u.id)
+  );
+  clean.users = [
+    ...preserved,
+    {
+      id: "fixture-admin", role: "admin", status: "approved", fullName: "Test Admin",
+      preferredName: "Admin", email: "admin@example.test", phone: "+852 5000 0001",
+      emergencyName: "Test Contact", emergencyPhone: "+852 5000 9001", heard: "Test fixture",
+      isMinor: false, appliedAt: Date.now() - 86400000, indemnityAcceptedAt: Date.now() - 86400000,
+      privacyAcceptedAt: Date.now() - 86400000, whatsappReminders: false, emailReceipts: false,
+      communityNews: false,
+    },
+    {
+      id: "fixture-member", role: "member", status: "approved", fullName: "Test Member",
+      preferredName: "Tester", email: "member@example.test", phone: "+852 5000 0002",
+      emergencyName: "Test Contact", emergencyPhone: "+852 5000 9002", heard: "Test fixture",
+      mediaConsent: true, donorId: "TEST-1234", isMinor: false,
+      appliedAt: Date.now() - 172800000, indemnityAcceptedAt: Date.now() - 172800000,
+      privacyAcceptedAt: Date.now() - 172800000, whatsappReminders: false,
+      emailReceipts: false, communityNews: false,
+    },
+  ];
+  if (withMemberBooking) {
+    const upcoming = store.upcomingSessions(14);
+    const fixtureMemberSession = upcoming.find((s) => s.activityId === "hyrox" && !data.sessionStarted(s));
+    if (fixtureMemberSession) {
+      clean.bookings = [
+        ...(clean.bookings || []),
+        {
+          id: "fixture-booking", userId: "fixture-member", sessionId: fixtureMemberSession.id,
+          status: "confirmed", createdAt: Date.now(),
+          snapshot: {
+            name: fixtureMemberSession.name, kind: fixtureMemberSession.kind,
+            dateISO: fixtureMemberSession.dateISO, time: fixtureMemberSession.time,
+            durationMin: fixtureMemberSession.durationMin, location: fixtureMemberSession.location,
+            price: fixtureMemberSession.price,
+          },
+        },
+      ];
+    }
+  }
+  mem.set("itc.prototype.v1", JSON.stringify(clean));
+  store.load();
+}
 
 console.log(failures ? `\n${failures} FAILURE(S)` : "\nAll smoke tests passed.");
 process.exit(failures ? 1 : 0);

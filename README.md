@@ -35,16 +35,17 @@ The design review remains available at `http://127.0.0.1:4173/references/itc-mob
 ### Prototype conventions
 
 - Zero dependencies, no build step. Plain ES modules so the codebase stays easy to refine; the production stack is still an open decision.
-- Auth, payments, and the database are simulated in `localStorage`. `app/js/store.js` is the single seam where a real backend/API would later connect.
-- Local state starts empty. Applying through the membership flow creates a pending profile on this device, which can sign in again by email without a password.
-- Checkout is a test payment — any card details work, no charge occurs.
-- Administrative testing requires Supabase live mode or the historical `archive/demo` branch. The archive is for demonstration only and must not be used as a production source branch.
+- With Supabase configured, Google Auth owns sessions and Supabase owns profiles, roles, applications, approvals, and notifications. A new Google profile remains `pending` until its application is submitted and an Admin approves it.
+- Payment operations remain prototype-only and device-local in `localStorage`: reservations, bookings, queues, collector duty, payout details, confirmations, and receipts are keyed by the authenticated Supabase profile UUID. No real money is moved.
+- Without Supabase configuration, local state starts empty. Apply through the membership flow to create a local pending profile, which can then sign in again by email (no password).
+- `app/js/store.js` remains the backend seam. Identity data is live where configured; Payment operational data is intentionally local until a production backend is selected.
+- Administrative testing requires Supabase live mode or the historical `archive/demo` branch. The archive is demonstration-only and must not be used as a production source branch.
 - `app/smoke.mjs` is a headless regression check for the product rules (`node smoke.mjs` from `app/`).
 
 ### Deliberately not in the prototype
 
 - Merchandise shop (deferred in the phase-one brief).
-- Real payments, email receipts, notifications, and a service worker (manifest is included; a cache layer would fight the refinement loop).
+- Real payments, delivered email receipts, outbound messages, and a service worker (manifest is included; a cache layer would fight the refinement loop). Live in-app notifications are Supabase-backed when configured.
 - Final waiver/privacy/guidelines copy — all such text is draft placeholder.
 
 ## Selected Direction
@@ -78,7 +79,7 @@ Version 1 is the chosen starting point.
 - [Phase-one product brief](docs/phase-one-product-brief.md)
 - [Detailed brainstorming notebook](docs/itc-web-app-product-notes.md)
 - [Collaboration handoff](docs/handoff.md)
-- [Agent execution guide](docs/agent-execution-guide.md)
+- [Live Auth operational runbook](docs/runbooks/live-auth.md)
 
 ## Phase-One Summary
 

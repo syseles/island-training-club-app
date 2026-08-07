@@ -76,7 +76,7 @@ export const SEED_ACTIVITIES = [
       "Weekly hybrid race training: ski, sled, burpees and running intervals. Every session is purchased separately at one fixed price.",
     memberNote: "Gym entry fee is included in the session price.",
     price: 180, // HKD
-    capacity: 18, // placeholder
+    capacity: 12,
     published: true,
   },
   {
@@ -94,8 +94,23 @@ export const SEED_ACTIVITIES = [
       "Weekly hybrid race training: ski, sled, burpees and running intervals. Every session is purchased separately at one fixed price.",
     memberNote: "Gym entry fee is included in the session price.",
     price: 180, // HKD
-    capacity: 18, // placeholder
+    capacity: 20,
     published: true,
+  },
+];
+
+export const ANNOUNCEMENTS = [
+  {
+    id: "ann-1",
+    title: "Sunday service at IECC",
+    body: "Several of us worship at Island Evangelical Community Church on Sundays — 10:30 AM. Come as you are, and look for the ITC crowd after the service.",
+    postedAt: daysAgo(3),
+  },
+  {
+    id: "ann-2",
+    title: "New Wednesday venue being scouted",
+    body: "Leaders are trialling alternate spots for Wednesday Night Training. Watch the session page — venue updates land there first.",
+    postedAt: daysAgo(6),
   },
 ];
 
@@ -164,6 +179,10 @@ export function todayLocal() {
   return new Date(d.getFullYear(), d.getMonth(), d.getDate());
 }
 
+export function daysAgo(n) {
+  return addDays(todayLocal(), -n).getTime();
+}
+
 export function addDays(date, n) {
   const d = new Date(date.getTime());
   d.setDate(d.getDate() + n);
@@ -174,6 +193,17 @@ export function mondayOf(date) {
   const d = new Date(date.getTime());
   const offset = (d.getDay() + 6) % 7; // Monday = 0
   return addDays(d, -offset);
+}
+
+function saturdayOnOrBefore(date) {
+  const d = new Date(date.getTime());
+  const offset = (d.getDay() + 1) % 7; // days since Saturday
+  return addDays(d, -offset);
+}
+
+export function saturdayOnOrAfter(date) {
+  const d = saturdayOnOrBefore(date);
+  return isoDate(d) === isoDate(date) ? d : addDays(d, 7);
 }
 
 export function isoDate(d) {
@@ -298,6 +328,35 @@ export function findSession(activities, sessionId) {
 
   const date = parseISO(dateISO);
   return { ...act, id: sessionId, activityId, dateISO, date };
+}
+
+// --- Payment checkpoints ---------------------------------------------------
+// The collector's week: unpaid reservations expire at Thursday 6:00 PM;
+// promotions after that get until Friday 2:00 PM (when the collector
+// finalizes with the gym); last-minute spots get a 2-hour window.
+
+export function mainDeadlineFor(dateISO) {
+  const d = parseISO(dateISO);
+  d.setDate(d.getDate() - 2); // Saturday -> Thursday
+  d.setHours(18, 0, 0, 0);
+  return d.getTime();
+}
+
+export function finalCheckpointFor(dateISO) {
+  const d = parseISO(dateISO);
+  d.setDate(d.getDate() - 1); // Saturday -> Friday
+  d.setHours(14, 0, 0, 0);
+  return d.getTime();
+}
+
+export const LAST_MINUTE_WINDOW_MS = 2 * 60 * 60 * 1000;
+
+export function nextPayDeadline(dateISO, now = Date.now()) {
+  const main = mainDeadlineFor(dateISO);
+  if (now < main) return main;
+  const fin = finalCheckpointFor(dateISO);
+  if (now < fin) return fin;
+  return now + LAST_MINUTE_WINDOW_MS;
 }
 
 // --- Calendar (.ics) ------------------------------------------------------------

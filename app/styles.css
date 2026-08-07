@@ -4,6 +4,15 @@
    white athletic type, restrained radii, documentary photography.
    ========================================================================== */
 
+@font-face {
+  font-family: "Archivo";
+  src: url("../assets/fonts/archivo-latin-variable.woff2") format("woff2");
+  font-style: normal;
+  font-weight: 100 900;
+  font-stretch: 100%;
+  font-display: swap;
+}
+
 :root {
   --bg: #030504;
   --surface: #0b0f0e;
@@ -11,18 +20,18 @@
   --surface-3: #111614;
   --ink: #f6f7f0;
   --muted: #8b918f;
-  --faint: #5c6360;
+  --faint: #79807d;
   --accent: #caff31;
   --accent-ink: #050704;
-  --line: #2a302e;
+  --line: #48504c;
   --line-soft: #232825;
   --danger: #ff6d5a;
   --warn: #ffd166;
   --radius-lg: 20px;
   --radius: 14px;
   --radius-sm: 10px;
-  --font: Arial, Helvetica, sans-serif;
-  --font-display: "Arial Narrow", Arial, Helvetica, sans-serif;
+  --font: "Archivo", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-display: "Archivo", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   --nav-h: 66px;
   --shell-w: 520px;
@@ -553,6 +562,21 @@ a.profile-row:hover .pr-text strong { color: var(--accent); }
 
 .session-row.is-past .badge.booked { opacity: 1; }
 
+/* Cancelled sessions stay in the list (so members see the cancellation) but
+   are visibly struck through and dimmed. */
+.session-row.is-cancelled { opacity: 0.55; }
+.session-row.is-cancelled h3 { text-decoration: line-through; }
+
+/* Mock FPS QR placeholder — real version generated server-side. */
+.fps-qr {
+  width: 148px; height: 148px; margin-top: 12px;
+  display: grid; place-items: center; text-align: center;
+  border: 1px dashed var(--line, #3a3f3a); border-radius: 12px;
+  color: var(--muted, #9aa39a); font-size: 12px;
+  background:
+    repeating-linear-gradient(45deg, transparent 0 6px, rgba(255,255,255,0.04) 6px 12px);
+}
+
 /* The next upcoming session on Home, highlighted in the club's neon accent. */
 .session-row.next {
   border: 1px solid var(--accent);
@@ -888,7 +912,92 @@ a.profile-row:hover .pr-text strong { color: var(--accent); }
 .applicant dt { color: var(--faint); font-weight: 700; }
 .applicant dd { margin: 0; color: var(--ink); }
 
-.role-select { width: auto; padding: 8px 10px; font-size: 12px; }
+.approval-group .card + .card { margin-top: 10px; }
+
+.applicant-awaiting {
+  background: transparent;
+  border-color: var(--line-soft);
+}
+
+.decision-error {
+  margin-top: 10px;
+  color: var(--danger);
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.member-filters { margin-top: 12px; }
+
+.admin-filter-group {
+  min-width: 0;
+  margin: 14px 0 0;
+  padding: 0;
+  border: 0;
+}
+
+.admin-filter-group legend {
+  margin-bottom: 6px;
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.admin-filter-chips {
+  display: flex;
+  gap: 8px;
+  max-width: 100%;
+  padding: 4px;
+  margin: -4px;
+  overflow-x: auto;
+  scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
+}
+
+.admin-filter-chips::-webkit-scrollbar { display: none; }
+
+.admin-filter-chips button {
+  flex: 0 0 auto;
+  min-height: 44px;
+  padding: 9px 14px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface-3);
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.2;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.admin-filter-chips button[aria-pressed="true"] {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--accent-ink);
+}
+
+.admin-filters-clear {
+  min-height: 44px;
+  margin-top: 10px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 700;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+
+.role-select { width: auto; min-height: 44px; padding: 10px; font-size: 12px; }
+
+.member-role-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
 
 .member-row {
   display: flex;
@@ -964,6 +1073,24 @@ a.profile-row:hover .pr-text strong { color: var(--accent); }
 }
 
 .back-link:hover { color: var(--accent); }
+
+.route-loader {
+  position: fixed;
+  top: 70px;
+  left: 50%;
+  z-index: 45;
+  transform: translateX(-50%);
+  padding: 8px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface-3);
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 700;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, .4);
+}
+
+.route-loader[hidden] { display: none; }
 
 /* ---- Toasts ----------------------------------------------------------- */
 
