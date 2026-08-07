@@ -36,10 +36,9 @@ The design review remains available at `http://127.0.0.1:4173/itc-mobile-design-
 
 - Zero dependencies, no build step. Plain ES modules so the codebase stays easy to refine; the production stack is still an open decision.
 - Auth, payments, and the database are simulated in `localStorage`. `app/js/store.js` is the single seam where a real backend/API would later connect.
-- Sign-in has no password: use a seeded email (`member@itc.hk`, `admin@itc.hk`, `owner@itc.hk`) or the one-tap demo profiles on the Account screen.
+- Local state starts empty. Apply through the membership flow to create a local pending profile, which can then sign in again by email (no password).
 - Checkout is a test payment — any card details work, no charge occurs.
-- Full loop to try: apply for membership → sign out → sign in as admin → approve in the queue → sign back in → book and pay for HYROX → see receipt in Account.
-- Reset everything from Account → "Reset demo data".
+- Administrative testing requires Supabase live mode or the historical `archive/demo` branch. The archive is for demonstration only and must not be used as a production source branch.
 - `app/smoke.mjs` is a headless regression check for the product rules (`node smoke.mjs` from `app/`).
 
 ### Deliberately not in the prototype

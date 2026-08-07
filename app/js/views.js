@@ -10,7 +10,6 @@ import {
   LEADERS,
   CULTURE,
   ANNOUNCEMENTS,
-  GIVING_CAMPAIGN,
   SHOP_PRODUCTS,
   findSession,
   sessionStarted,
@@ -561,13 +560,25 @@ export function resetGivingState() {
 
 export function viewGiving() {
   const user = store.currentUser();
+  const campaign = store.getActiveGivingCampaign();
+  if (!campaign) {
+    return `
+    <div class="kicker">Giving &amp; Fundraising</div>
+    <h1 class="display">Every step can give back.</h1>
+    <div class="card mt16"><div class="card-body">
+      <h3>No active campaign right now</h3>
+      <p class="hero-meta mt8">Check back soon for the next opportunity to support the ITC community.</p>
+    </div></div>
+    ${givingHistory(user)}`;
+  }
+
   const raised = store.campaignRaised();
-  const goal = GIVING_CAMPAIGN.goalHKD;
+  const goal = campaign.goalHKD;
   const pct = Math.min(100, Math.round((raised / goal) * 100));
 
   const flow =
     givingState.step === 2
-      ? givingFpsStep()
+      ? givingFpsStep(campaign)
       : givingState.step === 3
         ? givingThanksStep()
         : givingAmountStep(user);
@@ -577,8 +588,8 @@ export function viewGiving() {
     <h1 class="display">Every step can give back.</h1>
     <div class="card mt16"><div class="card-body">
       <span class="kicker">Current campaign</span>
-      <h3 class="mt8">${esc(GIVING_CAMPAIGN.title)}</h3>
-      <p class="hero-meta">${esc(GIVING_CAMPAIGN.subtitle)}</p>
+      <h3 class="mt8">${esc(campaign.title)}</h3>
+      <p class="hero-meta">${esc(campaign.subtitle)}</p>
       <div class="progress mt16"><i style="width:${pct}%"></i></div>
       <div class="progress-meta">
         <strong>${fmtMoney(raised)} raised</strong>
@@ -587,7 +598,7 @@ export function viewGiving() {
     </div></div>
     ${flow}
     <div class="section-head"><h2>Giving history</h2></div>
-    ${givingHistory(user)}`;
+    ${givingHistory(user, campaign)}`;
 }
 
 function givingAmountStep(user) {
@@ -623,15 +634,15 @@ function givingAmountStep(user) {
     </div></div>`;
 }
 
-function givingFpsStep() {
+function givingFpsStep(campaign) {
   return `
     <div class="card mt16"><div class="card-body">
       <span class="kicker">Step 2 · Complete the transfer</span>
       <h3 class="mt8">Pay ${fmtMoney(givingState.amount)} via FPS</h3>
       <div class="fps-qr" aria-hidden="true">FPS QR<br>placeholder</div>
       <div class="receipt-lines">
-        <div class="line"><span>FPS ID</span><strong class="mono">${esc(GIVING_CAMPAIGN.fpsId)}</strong></div>
-        <div class="line"><span>Payee</span><strong>${esc(GIVING_CAMPAIGN.fpsPayee)}</strong></div>
+        <div class="line"><span>FPS ID</span><strong class="mono">${esc(campaign.fpsId)}</strong></div>
+        <div class="line"><span>Payee</span><strong>${esc(campaign.fpsPayee)}</strong></div>
         <div class="line"><span>Amount</span><strong>${fmtMoney(givingState.amount)}</strong></div>
         <div class="line total"><span>Reference</span><strong class="mono">${esc(givingState.ref)}</strong></div>
       </div>
@@ -654,7 +665,7 @@ function givingThanksStep() {
     </div>`;
 }
 
-function givingHistory(user) {
+function givingHistory(user, campaign) {
   if (!user) {
     return `<div class="locked-note">🔒 Sign in to see your giving history.</div>`;
   }
@@ -671,7 +682,7 @@ function givingHistory(user) {
           <time>${new Date(d.createdAt).toLocaleDateString("en-HK", { day: "numeric", month: "short" })}<small>${esc(d.ref)}</small></time>
           <div>
             <h3>${fmtMoney(d.amount)}</h3>
-            <p>${esc(GIVING_CAMPAIGN.title)} · FPS${d.note ? ` · “${esc(d.note)}”` : ""}</p>
+            <p>${esc(campaign?.title || "Community gift")} · FPS${d.note ? ` · “${esc(d.note)}”` : ""}</p>
           </div>
           <div class="row-end">
             ${d.status === "confirmed" ? '<span class="badge free">Confirmed</span>' : '<span class="badge warn">Awaiting confirmation</span>'}
@@ -797,12 +808,7 @@ function accountVisitor() {
         <div id="signin-error"></div>
         <button class="btn mt16" type="submit">Sign in</button>
       </form>
-      <p class="muted small mt16">Prototype: there is no password — sign in with a seeded email, or use a one-tap demo profile.</p>
-      <div class="btn-row">
-        <button class="btn ghost sm" type="button" data-action="demo-signin" data-role="member">Demo · Continue as member (CM)</button>
-        <button class="btn ghost sm" type="button" data-action="demo-signin" data-role="admin">Demo · Continue as admin (Tina)</button>
-        <button class="btn ghost sm" type="button" data-action="demo-signin" data-role="superadmin">Demo · Continue as super admin (Arnold)</button>
-      </div>
+      <p class="muted small mt16">This local prototype has no password. Sign in with the email used for an application on this device.</p>
     </div></div>
     <div class="card mt16"><div class="card-body">
       <h3>Not a member yet?</h3>
@@ -899,7 +905,6 @@ function accountMember(user) {
 
     <div class="btn-row">
       <button class="btn ghost" type="button" data-action="signout">Sign out</button>
-      <button class="btn danger sm" type="button" data-action="reset-demo">Reset demo data</button>
     </div>`;
 }
 
@@ -1202,10 +1207,10 @@ export function viewCheckout(sessionId) {
       <div class="card"><div class="card-body">
         <h3>Payment</h3>
         <div class="field"><label for="cc-name">Name on card</label><input id="cc-name" name="cardName" autocomplete="cc-name" value="${esc(user.fullName)}" required></div>
-        <div class="field"><label for="cc-num">Card number</label><input id="cc-num" name="cardNumber" inputmode="numeric" autocomplete="cc-number" value="4242 4242 4242 4242" required></div>
+        <div class="field"><label for="cc-num">Card number</label><input id="cc-num" name="cardNumber" inputmode="numeric" autocomplete="cc-number" placeholder="•••• •••• •••• ••••" required></div>
         <div class="field-row">
-          <div class="field"><label for="cc-exp">Expiry</label><input id="cc-exp" name="cardExp" inputmode="numeric" placeholder="MM/YY" value="12/28" required></div>
-          <div class="field"><label for="cc-cvc">CVC</label><input id="cc-cvc" name="cardCvc" inputmode="numeric" value="424" required></div>
+          <div class="field"><label for="cc-exp">Expiry</label><input id="cc-exp" name="cardExp" inputmode="numeric" placeholder="MM/YY" required></div>
+          <div class="field"><label for="cc-cvc">CVC</label><input id="cc-cvc" name="cardCvc" inputmode="numeric" placeholder="•••" required></div>
         </div>
         <p class="muted small mt8">Test checkout — no real charge. Any card details work.</p>
       </div></div>
@@ -1406,7 +1411,6 @@ export function viewAdminActivity(id) {
         photo: "../assets/itc/main.webp",
         price: 250,
         capacity: 18,
-        baseBooked: 0,
         published: true,
       }
     : store.getActivity(id);
@@ -1455,8 +1459,6 @@ export function viewAdminActivity(id) {
           <div class="field"><label for="ac-price">Price (HKD, fixed per session)</label><input id="ac-price" name="price" type="number" min="0" value="${a.price ?? 250}"></div>
           <div class="field"><label for="ac-cap">Capacity</label><input id="ac-cap" name="capacity" type="number" min="1" value="${a.capacity ?? 18}"></div>
         </div>
-        <div class="field"><label for="ac-base">Simulated existing bookings</label><input id="ac-base" name="baseBooked" type="number" min="0" value="${a.baseBooked ?? 0}">
-          <div class="hint">Prototype only — stands in for other members’ bookings.</div></div>
       `)}
       <div class="field"><label for="ac-blurb">Description</label><textarea id="ac-blurb" name="blurb" rows="3">${esc(a.blurb)}</textarea></div>
       <div class="field"><label for="ac-note">Leader note (members only)</label><textarea id="ac-note" name="memberNote" rows="2">${esc(a.memberNote || "")}</textarea></div>

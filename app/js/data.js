@@ -77,7 +77,6 @@ export const SEED_ACTIVITIES = [
     memberNote: "Gym entry fee is included in the session price.",
     price: 180, // HKD
     capacity: 18, // placeholder
-    baseBooked: 9, // simulated demand from other members
     published: true,
   },
   {
@@ -96,211 +95,9 @@ export const SEED_ACTIVITIES = [
     memberNote: "Gym entry fee is included in the session price.",
     price: 180, // HKD
     capacity: 18, // placeholder
-    baseBooked: 14, // simulated demand from other members
     published: true,
   },
 ];
-
-// --- Seed users --------------------------------------------------------------
-// Roles: pending -> member -> admin -> superadmin.
-// Demo logins surface these in the Account screen.
-
-export const SEED_USERS = [
-  {
-    id: "u-super",
-    role: "superadmin",
-    status: "approved",
-    fullName: "Arnold Wong",
-    preferredName: "Arnold",
-    email: "owner@itc.hk",
-    phone: "+852 9000 0000",
-    ageConfirmed: true,
-    emergencyName: "ITC Ops",
-    emergencyPhone: "+852 9000 9999",
-    heard: "Founder",
-    appliedAt: daysAgo(120),
-    indemnityAcceptedAt: daysAgo(120),
-  },
-  {
-    id: "u-admin",
-    role: "admin",
-    status: "approved",
-    fullName: "Tina",
-    preferredName: "Tina",
-    email: "admin@itc.hk",
-    phone: "+852 9000 0002",
-    ageConfirmed: true,
-    emergencyName: "S. Lee",
-    emergencyPhone: "+852 9000 9002",
-    heard: "Founding member",
-    appliedAt: daysAgo(118),
-    indemnityAcceptedAt: daysAgo(118),
-  },
-  {
-    id: "u-member",
-    role: "member",
-    status: "approved",
-    fullName: "CM Chui",
-    preferredName: "CM",
-    email: "member@itc.hk",
-    phone: "+852 9000 0001",
-    ageConfirmed: true,
-    emergencyName: "K. Cheung",
-    emergencyPhone: "+852 9000 9001",
-    heard: "A friend runs with the club",
-    donorId: "CHUI-08879",
-    appliedAt: daysAgo(34),
-    indemnityAcceptedAt: daysAgo(34),
-  },
-  {
-    id: "u-pend-1",
-    role: "pending",
-    status: "pending",
-    fullName: "Marco Santos",
-    preferredName: "Marco",
-    email: "marco.santos@example.com",
-    phone: "+852 6111 2222",
-    ageConfirmed: true,
-    emergencyName: "L. Santos",
-    emergencyPhone: "+852 6333 4444",
-    heard: "Instagram",
-    appliedAt: daysAgo(2),
-    indemnityAcceptedAt: null,
-  },
-  {
-    id: "u-pend-2",
-    role: "pending",
-    status: "pending",
-    fullName: "Jenny Wu",
-    preferredName: "Jenny",
-    email: "jenny.wu@example.com",
-    phone: "+852 6555 6666",
-    ageConfirmed: true,
-    emergencyName: "P. Wu",
-    emergencyPhone: "+852 6777 8888",
-    heard: "Saw the club at Tamar Park",
-    appliedAt: daysAgo(1),
-    indemnityAcceptedAt: null,
-  },
-];
-
-// --- Seed bookings -----------------------------------------------------------
-// Snapshot fields keep the member area renderable even after the schedule
-// window rolls forward.
-
-export function seedBookings() {
-  const past = saturdayOnOrBefore(todayLocal());
-  const next = addDays(past, 7);
-  const act = SEED_ACTIVITIES.find((a) => a.id === "hyrox");
-  return [
-    {
-      id: "b-seed-past",
-      userId: "u-member",
-      sessionId: `hyrox-${isoDate(past)}`,
-      status: "attended",
-      createdAt: daysAgo(9),
-      snapshot: sessionSnapshot(act, past),
-    },
-    {
-      id: "b-seed-next",
-      userId: "u-member",
-      sessionId: `hyrox-${isoDate(next)}`,
-      status: "confirmed",
-      createdAt: daysAgo(3),
-      snapshot: sessionSnapshot(act, next),
-    },
-  ];
-}
-
-export function seedReceipts() {
-  const past = saturdayOnOrBefore(todayLocal());
-  const next = addDays(past, 7);
-  return [
-    {
-      id: "r-seed-past",
-      number: "ITC-2026-0041",
-      bookingId: "b-seed-past",
-      userId: "u-member",
-      amount: 180,
-      currency: "HKD",
-      cardLast4: "4242",
-      status: "paid",
-      issuedAt: daysAgo(9),
-      line: `ITC HYROX — ${fmtDate(past)} 11:15 AM`,
-    },
-    {
-      id: "r-seed-next",
-      number: "ITC-2026-0048",
-      bookingId: "b-seed-next",
-      userId: "u-member",
-      amount: 180,
-      currency: "HKD",
-      cardLast4: "4242",
-      status: "paid",
-      issuedAt: daysAgo(3),
-      line: `ITC HYROX — ${fmtDate(next)} 11:15 AM`,
-    },
-  ];
-}
-
-function sessionSnapshot(act, date) {
-  return {
-    name: act.name,
-    kind: act.kind,
-    dateISO: isoDate(date),
-    time: act.time,
-    durationMin: act.durationMin,
-    location: act.location,
-    price: act.price ?? null,
-  };
-}
-
-// --- Giving campaign -------------------------------------------------------------
-// The current donation campaign. FPS details and goal are placeholders for
-// review with ITC leadership; baseRaisedHKD stands in for gifts made outside
-// the app so the progress bar reflects the real campaign.
-
-export const GIVING_CAMPAIGN = {
-  id: "scm-2027",
-  title: "Standard Chartered Marathon 2027",
-  subtitle:
-    "Support our runners as ITC raises funds for community outreach through IECC.",
-  goalHKD: 50000,
-  baseRaisedHKD: 18450,
-  fpsId: "112 233 445", // placeholder FPS identifier
-  fpsPayee: "Island Training Club",
-};
-
-export function seedDonations() {
-  return [
-    {
-      id: "d-seed-1",
-      userId: "u-member",
-      name: "CM Chui",
-      amount: 500,
-      currency: "HKD",
-      campaignId: "scm-2027",
-      method: "FPS",
-      ref: "SCM27-9K2F4A",
-      note: "Run well, team!",
-      status: "confirmed",
-      createdAt: daysAgo(6),
-    },
-    {
-      id: "d-seed-2",
-      userId: "u-member",
-      name: "CM Chui",
-      amount: 200,
-      currency: "HKD",
-      campaignId: "scm-2027",
-      method: "FPS",
-      ref: "SCM27-7QW1XZ",
-      note: "",
-      status: "pending",
-      createdAt: daysAgo(1),
-    },
-  ];
-}
 
 // --- Shop products (preview mockup — not in the initial launch) --------------------
 // Prices are placeholders. Product shots are the concept imagery from the
@@ -343,12 +140,6 @@ export const ANNOUNCEMENTS = [
     title: "New Wednesday venue being scouted",
     body: "Leaders are trialling alternate spots for Wednesday Night Training. Watch the session page — venue updates land there first.",
     postedAt: daysAgo(6),
-  },
-  {
-    id: "ann-3",
-    title: "Marathon fundraiser passes first milestone",
-    body: "Thank you! The Standard Chartered Marathon 2027 campaign keeps climbing toward its HK$50,000 goal for community outreach. Gifts via FPS on the Giving tab.",
-    postedAt: daysAgo(9),
   },
 ];
 
