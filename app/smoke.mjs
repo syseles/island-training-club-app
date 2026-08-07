@@ -33,6 +33,23 @@ async function check(label, fn) {
   }
 }
 
+const primaryNavLabels = (html) =>
+  [...html.matchAll(/<span>([^<]+)<\/span>/g)].map((match) => match[1]);
+
+function assertPrimaryNav(user, expected, label) {
+  const html = views.navHTML("home", user);
+  const labels = primaryNavLabels(html);
+  if (JSON.stringify(labels) !== JSON.stringify(expected)) {
+    throw new Error(`${label} primary navigation labels were ${JSON.stringify(labels)}`);
+  }
+  if (labels.includes("Admin")) {
+    throw new Error(`${label} primary navigation must not include Admin`);
+  }
+  if (labels.includes("Giving") !== !!user) {
+    throw new Error(`Giving must appear only in signed-in primary navigation (${label})`);
+  }
+}
+
 store.load();
 const { existsSync, readFileSync } = await import("node:fs");
 const { resolve, dirname } = await import("node:path");
@@ -186,15 +203,27 @@ const paid = allUpcoming.find((s) => s.kind === "paid" && !data.sessionStarted(s
 const free = allUpcoming.find((s) => s.kind === "free");
 if (!paid || !free) throw new Error("expected both paid and free sessions in window");
 const localVisitorHome = views.viewHome();
-if (!localVisitorHome.includes("This week — open to all")) {
-  throw new Error("visitor Home must show the open-to-all heading");
+if (!localVisitorHome.includes("<h2>This week — open to all</h2>")) {
+  throw new Error("visitor Home must show the exact open-to-all h2");
 }
 if (localVisitorHome.includes("My Week")) {
   throw new Error("visitor Home must not show My Week");
 }
+const assertRenderedActivityLinksAreFree = (html, label) => {
+  const linkedIds = [...html.matchAll(/href="#\/activity\/([^"]+)"/g)].map((match) => match[1]);
+  if (!linkedIds.length) throw new Error(`${label} must render at least one activity link`);
+  for (const id of linkedIds) {
+    const session = allUpcoming.find((item) => item.id === id);
+    if (!session || session.kind !== "free") {
+      throw new Error(`${label} rendered a non-free activity link: ${id}`);
+    }
+  }
+};
+assertRenderedActivityLinksAreFree(localVisitorHome, "visitor Home");
 if (!localVisitorHome.includes(free.name) || localVisitorHome.includes(paid.name)) {
   throw new Error("visitor Home must show free sessions only");
 }
+assertPrimaryNav(null, ["Home", "Schedule", "Community", "Account"], "visitor");
 if (!localVisitorHome.includes('href="#/account">Sign in or join</a>')) {
   throw new Error("local signed-out Home must retain the Account sign-in link");
 }
@@ -404,6 +433,7 @@ const pendingHome = views.viewHome();
 if (!pendingHome.includes("My Week") || !pendingHome.includes(free.name) || pendingHome.includes(paid.name)) {
   throw new Error("pending Home must show My Week with free sessions only");
 }
+assertRenderedActivityLinksAreFree(pendingHome, "pending Home");
 const pendingCommunity = views.viewCommunity();
 if (!pendingCommunity.includes("You’re welcome here.")) {
   failures++;
@@ -429,9 +459,23 @@ for (const tab of ["approvals", "members", "activities", "giving", "payments"]) 
   }
 }
 console.log("ok  every Admin route exposes exactly one active tab");
-const adminPrimaryNav = views.navHTML("account", store.currentUser());
-if (adminPrimaryNav.includes('href="#/admin"') || adminPrimaryNav.includes("<span>Admin</span>")) {
-  throw new Error("Admin must not appear in primary navigation");
+const navFixtureUser = store.currentUser();
+const originalNavFixtureRole = navFixtureUser.role;
+try {
+  for (const [role, label] of [
+    ["member", "member"],
+    ["admin", "Admin"],
+    ["superadmin", "Super Admin"],
+  ]) {
+    navFixtureUser.role = role;
+    assertPrimaryNav(
+      navFixtureUser,
+      ["Home", "Schedule", "Community", "Giving", "Profile"],
+      label
+    );
+  }
+} finally {
+  navFixtureUser.role = originalNavFixtureRole;
 }
 const adminProfile = await views.viewAccount();
 if (!adminProfile.includes("Admin Tools") || !adminProfile.includes('href="#/admin"')) {
@@ -574,14 +618,41 @@ if (conf.receipt.method !== "PayMe") throw new Error("receipt should record the 
 if (!store.receiptForBooking(r1.id)) throw new Error("receipt should attach to the booking");
 console.log("ok  collector confirms -> booking confirmed + receipt (PayMe)");
 const booking = conf.booking, receipt = conf.receipt;
+const bookedActivityLink = `href="#/activity/${booking.sessionId}"`;
 const approvedHome = views.viewHome();
-if (!approvedHome.includes("My Week") || !approvedHome.includes(booking.snapshot.name)) {
-  throw new Error("approved Home must show booked sessions in My Week");
+if (!approvedHome.includes("My Week") || !approvedHome.includes(booking.snapshot.name)
+    || !approvedHome.includes(bookedActivityLink)) {
+  throw new Error("approved Home must show the confirmed future booking in My Week");
 }
 for (const session of allUpcoming.filter((item) => item.id !== booking.sessionId)) {
   if (approvedHome.includes(`href="#/activity/${session.id}"`)) {
     throw new Error("approved My Week must exclude unbooked sessions");
   }
+}
+for (const status of ["reserved", "deferred", "cancelled", "attended"]) {
+  try {
+    booking.status = status;
+    if (views.viewHome().includes(bookedActivityLink)) {
+      throw new Error(`approved My Week must exclude ${status} bookings`);
+    }
+  } finally {
+    booking.status = "confirmed";
+  }
+}
+const futureSnapshotDateISO = booking.snapshot.dateISO;
+const futureSnapshotStartTime = booking.snapshot.startTime;
+try {
+  booking.snapshot.dateISO = "2000-01-01";
+  booking.snapshot.startTime = "00:00";
+  if (views.viewHome().includes(bookedActivityLink)) {
+    throw new Error("approved My Week must exclude confirmed bookings whose snapshot has started");
+  }
+} finally {
+  booking.snapshot.dateISO = futureSnapshotDateISO;
+  booking.snapshot.startTime = futureSnapshotStartTime;
+}
+if (!views.viewHome().includes(bookedActivityLink)) {
+  throw new Error("confirmed future booking fixture must be restored after My Week mutations");
 }
 await check("booking confirmation", () => views.viewBooking(booking.id));
 await check("receipt", () => views.viewReceipt(receipt.id));
