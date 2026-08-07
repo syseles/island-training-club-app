@@ -1219,6 +1219,72 @@ a.profile-row:hover .pr-text strong { color: var(--accent); }
 
 /* ---- Community -------------------------------------------------------- */
 
+.community-feature {
+  margin-top: 24px;
+  padding: 20px;
+  border: 1px solid #34462b;
+  border-radius: var(--radius-lg);
+  background: linear-gradient(135deg, #17240f, var(--surface) 68%);
+}
+.community-feature h2 { margin: 8px 0 5px; font-size: 22px; line-height: 1.1; }
+.community-feature p,
+.community-announcement-preview p,
+.community-action-card p { margin: 0; color: var(--muted); font-size: 12px; }
+.community-feature-actions { display: flex; gap: 8px; margin-top: 18px; }
+.community-feature-actions .btn { text-decoration: none; }
+.community-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 26px 2px 10px;
+}
+.community-section-head h2 { margin: 0; font-size: 15px; }
+.community-section-head a { color: var(--accent); font-size: 10px; font-weight: 800; text-decoration: none; }
+.community-announcement-preview,
+.community-action-card {
+  display: block;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: inherit;
+  text-decoration: none;
+}
+.community-announcement-preview h3,
+.community-action-card h3 { margin: 6px 0 5px; }
+.community-announcement-preview:hover,
+.community-action-card:hover,
+.community-explore a:hover { border-color: var(--muted); }
+.community-action-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.community-action-icon {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  margin-bottom: 14px;
+  border-radius: 9px;
+  background: #1d2d16;
+  color: var(--accent);
+}
+.community-action-icon svg { width: 18px; height: 18px; }
+.community-explore { display: flex; flex-wrap: wrap; gap: 8px; }
+.community-explore a {
+  padding: 9px 13px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--ink);
+  font-size: 10px;
+  font-weight: 800;
+  text-decoration: none;
+}
+.community-pulse a:focus-visible,
+.community-pulse button:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+@media (max-width: 380px) {
+  .community-action-grid { grid-template-columns: 1fr; }
+  .community-feature-actions { align-items: stretch; flex-direction: column; }
+}
+
 .leader-card { display: grid; grid-template-columns: 86px 1fr; }
 .leader-card img { width: 86px; height: 100%; min-height: 110px; object-fit: cover; }
 .leader-card .card-body { padding: 13px 14px; }
@@ -1227,6 +1293,59 @@ a.profile-row:hover .pr-text strong { color: var(--accent); }
 .leader-card p { margin: 8px 0 0; font-size: 12px; color: var(--muted); }
 
 .stack { display: grid; gap: 12px; margin-top: 12px; }
+
+.anniversary-story { margin-top: 18px; }
+.anniversary-story .anniversary-hero {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-top: 22px;
+  padding: 20px;
+  border: 1px solid #34462b;
+  border-radius: var(--radius-lg);
+  background: linear-gradient(135deg, #17240f, var(--surface) 70%);
+}
+.anniversary-story .anniversary-hero > strong {
+  display: grid;
+  place-items: center;
+  flex: 0 0 58px;
+  width: 58px;
+  height: 58px;
+  border-radius: 50%;
+  background: var(--accent);
+  color: var(--accent-ink);
+  font-size: 25px;
+}
+.anniversary-story .anniversary-hero > strong span { margin-left: 2px; font-size: 10px; }
+.anniversary-story .anniversary-hero h2 { margin: 0; font-size: 19px; }
+.anniversary-story .anniversary-hero p { margin: 4px 0 0; color: var(--muted); font-size: 11px; }
+.anniversary-story .milestone-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 12px; }
+.anniversary-story .milestone {
+  min-width: 0;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+.anniversary-story .milestone:first-child { grid-column: 1 / -1; }
+.anniversary-story .milestone strong { display: block; color: var(--accent); font-size: 27px; line-height: 1; }
+.anniversary-story .milestone span { display: block; margin-top: 6px; font-size: 11px; font-weight: 800; }
+.anniversary-story .anniversary-message { margin: 22px 2px 0; color: var(--muted); line-height: 1.7; }
+.anniversary-story .anniversary-commitment {
+  margin: 18px 0 0;
+  padding: 17px;
+  border: 0;
+  border-left: 3px solid var(--accent);
+  background: var(--surface);
+  color: var(--ink);
+  font-size: 13px;
+  line-height: 1.65;
+}
+@media (max-width: 380px) {
+  .anniversary-story .milestone-grid { grid-template-columns: 1fr; }
+  .anniversary-story .milestone:first-child { grid-column: auto; }
+  .anniversary-story .anniversary-hero { align-items: flex-start; }
+}
 
 /* ---- Confirmation ----------------------------------------------------- */
 

@@ -98,6 +98,25 @@ for (const marker of [
 }
 console.log("ok  latest Notification domain markers coexist");
 
+const anniversary = data.ANNOUNCEMENTS[0];
+if (
+  data.ANNOUNCEMENTS.length !== 1 ||
+  anniversary?.title !== "Island Training Club turns 2" ||
+  anniversary?.milestones?.length !== 5
+) {
+  failures++;
+  console.error("FAIL announcement seeds should contain only the structured ITC anniversary");
+} else console.log("ok  announcement seeds contain only the ITC anniversary");
+if (
+  anniversary?.postedAt == null ||
+  new Date(anniversary.postedAt).getFullYear() !== 2026 ||
+  new Date(anniversary.postedAt).getMonth() !== 7 ||
+  new Date(anniversary.postedAt).getDate() !== 6
+) {
+  failures++;
+  console.error("FAIL announcement postedAt should resolve to 2026-08-06 local date");
+} else console.log("ok  announcement postedAt resolves to 2026-08-06 local date");
+
 // --- Visitor state ---
 store.signOut();
 const localVisitorHome = views.viewHome();
@@ -121,6 +140,36 @@ await check("activity paid (visitor)", () => views.viewActivity(paid.id));
 await check("activity free (visitor)", () => views.viewActivity(free.id));
 await check("community", () => views.viewCommunity());
 const commHtml = views.viewCommunity();
+if (!commHtml.includes("Find your place in the crew.")) {
+  failures++;
+  console.error("FAIL visitor Community heading is not personalized");
+} else console.log("ok  visitor Community heading is personalized");
+for (const required of [
+  "Next connection",
+  "Post-training dinner",
+  "Count me in",
+  "Latest from ITC",
+  "Island Training Club turns 2",
+  "Ways to connect",
+  "Explore",
+]) {
+  if (!commHtml.includes(required)) {
+    failures++;
+    console.error(`FAIL Community Pulse missing ${required}`);
+  }
+}
+if (!commHtml.includes('data-action="connect-interest"')) {
+  failures++;
+  console.error("FAIL Community Pulse meal CTA should use the existing interest action");
+}
+const coexistenceSurface = `${integratedViewSource}\n${localVisitorHome}\n${commHtml}`;
+for (const marker of ["Home", "notificationBellHTML", '#/giving', "community-pulse", "Payments / Ops"]) {
+  if (!coexistenceSurface.includes(marker)) {
+    failures++;
+    console.error(`FAIL combined domain coexistence missing ${marker}`);
+  }
+}
+console.log("ok  Home, Notification bell, Giving nav, Community pulse, and Payment Ops coexist");
 let commOk = true;
 for (const link of [
   "#/community/prayers",
@@ -135,11 +184,11 @@ for (const link of [
     console.error(`FAIL Community missing ${link} card`);
   }
 }
-if (commOk) console.log("ok  Community shows the five cards");
-if (!commHtml.includes("Mission, coaches and leadership")) {
+if (commOk) console.log("ok  Community shows the five destination links");
+if (!commHtml.includes('#/community/about')) {
   failures++;
-  console.error("FAIL Community About card missing its subtext");
-} else console.log("ok  About card sits at the bottom of Community");
+  console.error("FAIL Community Explore should still link to About ITC");
+} else console.log("ok  About ITC remains reachable from Community");
 if (commHtml.includes("Arnold Wong") || commHtml.includes("Our foundation")) {
   failures++;
   console.error("FAIL leaders/culture should live behind the About card");
@@ -148,6 +197,38 @@ await check("community > prayers", () => views.viewCommunity("prayers"));
 await check("community > fellowship", () => views.viewCommunity("fellowship"));
 await check("community > meals", () => views.viewCommunity("meals"));
 await check("community > announcements", () => views.viewCommunity("announcements"));
+const announcementHtml = views.viewCommunity("announcements");
+for (const required of [
+  "Island Training Club turns 2",
+  "620",
+  "members strong",
+  "14",
+  "committed leaders",
+  "unwavering vision",
+  "clear mission",
+  "God who made this all possible",
+  "ITC Leadership and Coaching Team",
+  "fitness, friendship, community and faith",
+]) {
+  if (!announcementHtml.includes(required)) {
+    failures++;
+    console.error(`FAIL anniversary story missing ${required}`);
+  }
+}
+const savedAnnouncements = [...data.ANNOUNCEMENTS];
+data.ANNOUNCEMENTS.splice(0);
+let emptyCommunity = "";
+let emptyAnnouncements = "";
+try {
+  emptyCommunity = views.viewCommunity();
+  emptyAnnouncements = views.viewCommunity("announcements");
+} finally {
+  data.ANNOUNCEMENTS.splice(0, data.ANNOUNCEMENTS.length, ...savedAnnouncements);
+}
+if (!emptyCommunity.includes("No announcements yet") || !emptyAnnouncements.includes("No announcements yet")) {
+  failures++;
+  console.error("FAIL Community announcement empty states should render safely");
+} else console.log("ok  Community announcement empty states render safely");
 await check("community > about", () => views.viewCommunity("about"));
 const commAbout = views.viewCommunity("about");
 if (!commAbout.includes("Arnold Wong") || !commAbout.includes("Our foundation")) {
@@ -162,7 +243,7 @@ for (const [section, title] of [
   ["prayers", "Prayers."],
   ["fellowship", "Fellowship."],
   ["meals", "Ad-Hoc Meals."],
-  ["announcements", "Announcements."],
+  ["announcements", "Island Training Club turns 2."],
   ["about", "More than a workout."],
 ]) {
   if (!views.viewCommunity(section).includes(title)) {
@@ -250,6 +331,11 @@ for (const [input, expect] of [
 }
 console.log("ok  donor ID format validation");
 await check("account (pending)", () => views.viewAccount());
+const pendingCommunity = views.viewCommunity();
+if (!pendingCommunity.includes("You’re welcome here.")) {
+  failures++;
+  console.error("FAIL pending Community heading is not personalized");
+} else console.log("ok  pending Community heading is personalized");
 // Use BFT (not Midtown) for the pending-user check — closed Midtown shows the
 // generic "Members only" gate, while a bookable BFT shows the "Booking locked"
 // message specifically for pending applicants.
@@ -275,6 +361,11 @@ console.log("ok  admin approved new applicant");
 const signIn = store.signIn("test@example.com");
 if (!signIn.ok || signIn.user.status !== "approved") throw new Error("approval did not take effect");
 await check("account (new member)", () => views.viewAccount());
+const approvedCommunity = views.viewCommunity();
+if (!approvedCommunity.includes("Connect and grow with us.")) {
+  failures++;
+  console.error("FAIL approved Community heading is not personalized");
+} else console.log("ok  approved Community heading is personalized");
 
 // Profile sections are tappable rows that open sub-pages; row faces carry
 // a one-line description, not live details
