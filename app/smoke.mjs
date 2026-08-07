@@ -1050,10 +1050,10 @@ console.log("ok  reset");
     failures++;
     console.error("FAIL v10 migration must clear session tied to a removed demo user");
   } else console.log("ok  v10 migration clears removed session");
-  if (migrated.version !== 10) {
+  if (migrated.version !== 13) {
     failures++;
-    console.error(`FAIL v10 migration must advance version to 10, got ${migrated.version}`);
-  } else console.log("ok  v10 migration advances version to 10");
+    console.error(`FAIL integrated migration must advance version to 13, got ${migrated.version}`);
+  } else console.log("ok  integrated migration advances genuine v9 state to v13");
 }
 
 // --- Install neutral fixtures for local authenticated paths (no demo seeds) ---
@@ -1103,6 +1103,101 @@ function installLocalFixtures({ withMemberBooking = false } = {}) {
   }
   mem.set("itc.prototype.v1", JSON.stringify(clean));
   store.load();
+}
+
+// --- Integrated Giving + shape-aware v13 contracts ---
+for (const marker of [
+  'case "giving"', 'case "giving-amount"', 'case "giving-confirm"',
+  'case "campaign-publish"', 'case "campaign-close"', 'case "form-campaign"',
+]) {
+  if (!integratedAppSource.includes(marker)) {
+    failures++;
+    console.error(`FAIL integrated Giving router missing ${marker}`);
+  }
+}
+for (const api of [
+  "updateMyDonorId", "campaigns", "activeGivingCampaign", "listGivingCampaigns",
+  "getActiveGivingCampaign", "saveGivingCampaign", "publishGivingCampaign",
+  "closeGivingCampaign", "campaignRaised", "donationsForUser", "recordDonation",
+]) {
+  if (typeof store[api] !== "function") {
+    failures++;
+    console.error(`FAIL integrated Giving store missing ${api}`);
+  }
+}
+
+// Exercise the approved-member amount/FPS/thanks/history path and role gates.
+const givingFixture = {
+  version: 13, sessionUserId: "giving-admin", activities: structuredClone(data.SEED_ACTIVITIES),
+  users: [
+    { id: "giving-admin", role: "admin", status: "approved", fullName: "Giving Admin", email: "giving-admin@example.test" },
+    { id: "giving-member", role: "member", status: "approved", fullName: "Giving Member", email: "giving-member@example.test" },
+    { id: "giving-pending", role: "pending", status: "pending", fullName: "Giving Pending", email: "giving-pending@example.test" },
+    { id: "giving-declined", role: "pending", status: "declined", fullName: "Giving Declined", email: "giving-declined@example.test" },
+  ],
+  bookings: [], receipts: [], campaigns: [], donations: [], prayers: [], notifications: [],
+  sessionOverrides: {}, queues: {}, duty: {},
+};
+mem.set("itc.prototype.v1", JSON.stringify(givingFixture));
+store.load();
+const givingCampaign = await store.saveGivingCampaign({
+  title: "Member campaign", description: "Support the community.", goalHKD: 1000,
+  fpsId: "1234567", fpsPayee: "Island Training Club",
+});
+await store.publishGivingCampaign(givingCampaign.id);
+store.signIn("giving-member@example.test");
+const memberGivingHtml = await views.viewGiving();
+if (!/form-giving|Give via FPS/.test(memberGivingHtml)) throw new Error("approved members must access Giving transfer controls");
+await store.updateMyDonorId("member-1234");
+if (store.currentUser().donorId !== "MEMBER-1234") throw new Error("Giving donor ID must normalize and persist");
+const gift = store.recordDonation({ userId: "giving-member", name: "Giving Member", amount: 250, ref: "GIVE-TEST", campaignId: givingCampaign.id });
+if (gift.status !== "pending" || store.campaignRaised(givingCampaign) !== 250 || !store.donationsForUser("giving-member").length) {
+  throw new Error("Giving amount/FPS/history persistence failed");
+}
+views.givingState.step = 3;
+views.givingState.name = "Giving Member";
+views.givingState.amount = 250;
+views.givingState.ref = "GIVE-TEST";
+views.givingState.campaignId = givingCampaign.id;
+if (!(await views.viewGiving()).includes("Thank you, Giving")) throw new Error("Giving thank-you step missing");
+for (const email of ["giving-pending@example.test", "giving-declined@example.test"]) {
+  store.signIn(email);
+  const locked = await views.viewGiving();
+  if (!locked.includes("approved ITC members") || locked.includes("FPS ID")) throw new Error(`${email} must be gated from Giving`);
+  try {
+    store.recordDonation({ userId: store.currentUser().id, name: "Blocked", amount: 10, ref: `BLOCKED-${email}` });
+    throw new Error(`${email} must not record gifts`);
+  } catch (err) {
+    if (!/Approved member access required/.test(err.message)) throw err;
+  }
+}
+store.signIn("giving-admin@example.test");
+await store.closeGivingCampaign(givingCampaign.id);
+if (await store.getActiveGivingCampaign()) throw new Error("closed campaigns must not remain active");
+console.log("ok  Giving access, donor ID, campaign, FPS, thanks, history, and close flow");
+
+const sourceSnapshots = [
+  { version: 9, prayers: [{ id: "p-real" }] },
+  { version: 10, queues: { real: { waitlist: ["real-user"], interest: [] } }, duty: { "2026-08-08": { userId: "real-user" } } },
+  { version: 11, notifications: [{ id: "n-real", userId: "real-user" }] },
+  { version: 12, campaigns: [{ id: "c-real", title: "Member campaign" }], donations: [{ id: "d-real", userId: "real-user" }] },
+];
+for (const fixture of sourceSnapshots) {
+  const snapshot = {
+    version: fixture.version,
+    sessionUserId: null,
+    users: [], activities: structuredClone(data.SEED_ACTIVITIES), bookings: [], receipts: [],
+    ...fixture,
+  };
+  mem.set("itc.prototype.v1", JSON.stringify(snapshot));
+  store.load();
+  const migrated = JSON.parse(mem.get("itc.prototype.v1"));
+  const serialized = JSON.stringify(migrated);
+  const suppliedIds = JSON.stringify(fixture).match(/[pcnd]-real|real-user/g) || [];
+  if (migrated.version !== 13 || suppliedIds.some((id) => !serialized.includes(id))) {
+    failures++;
+    console.error(`FAIL genuine v${fixture.version} fixture must reach v13 intact`);
+  } else console.log(`ok  genuine v${fixture.version} fixture reaches v13 intact`);
 }
 
 console.log(failures ? `\n${failures} FAILURE(S)` : "\nAll smoke tests passed.");

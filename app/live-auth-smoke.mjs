@@ -2,6 +2,11 @@
 // Run directly with: node app/live-auth-smoke.mjs
 
 import assert from "node:assert/strict";
+import { existsSync } from "node:fs";
+import { resolve, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const __dirnameSmoke = dirname(fileURLToPath(import.meta.url));
 
 const mem = new Map();
 globalThis.localStorage = {
@@ -1737,3 +1742,19 @@ console.log("ok  live OAuth session renders the signed-in home page");
 console.log("ok  live profile renders valid account metadata");
 console.log("ok  live indemnity renders from the application waiver state");
 console.log("ok  live approved/admin missing-application Profile sections render unavailable cards");
+
+// Giving integration must retain live Supabase ownership for campaigns and donor IDs.
+for (const relativePath of [
+  "../supabase/migrations/20260805000011_giving_campaigns.sql",
+  "../supabase/migrations/20260806000001_donor_id.sql",
+  "../supabase/tests/giving_campaigns_integration.sql",
+  "../supabase/tests/verify_giving_campaigns_safety.sh",
+]) {
+  if (!existsSync(resolve(__dirnameSmoke, relativePath))) {
+    throw new Error(`live Giving database contract missing ${relativePath}`);
+  }
+}
+if (typeof store.updateMyDonorId !== "function" || typeof store.getActiveGivingCampaign !== "function") {
+  throw new Error("live Giving profile/campaign APIs are missing");
+}
+console.log("ok  live Giving database and profile APIs coexist with Payment/Auth and Notifications");

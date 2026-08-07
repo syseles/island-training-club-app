@@ -38,6 +38,7 @@ const NAV_FOR = {
   schedule: "schedule",
   activity: "schedule",
   community: "community",
+  giving: "giving",
   notifications: "notifications",
   account: "account",
   apply: "account",
@@ -57,14 +58,17 @@ const controlBusy = new WeakSet();
 // --- Async render + busy + feedback helpers (canonical Auth baseline) ---
 
 async function withBusyControl(control, busyLabel, work, options = {}) {
-  if (!control || controlBusy.has(control)) return;
-  controlBusy.add(control);
+  const busyKey = options.busyKey || control;
+  if (!control || !busyKey || controlBusy.has(busyKey)) return;
+  controlBusy.add(busyKey);
+  const controls = [...new Set(options.controls || [control])];
+  const disabledStates = controls.map((item) => [item, Boolean(item.disabled)]);
   const label = control.textContent;
   const canReplaceLabel = options.replaceLabel ?? control.tagName !== "SELECT";
   const announceWithoutReplacing = options.announceWithoutReplacing === true;
   const hadAriaLabel = control.hasAttribute("aria-label");
   const ariaLabel = control.getAttribute("aria-label");
-  control.disabled = true;
+  controls.forEach((item) => { item.disabled = true; });
   control.setAttribute("aria-busy", "true");
   if (canReplaceLabel) control.textContent = busyLabel;
   if (announceWithoutReplacing) {
@@ -74,8 +78,8 @@ async function withBusyControl(control, busyLabel, work, options = {}) {
   try {
     return await work();
   } finally {
-    controlBusy.delete(control);
-    control.disabled = false;
+    controlBusy.delete(busyKey);
+    disabledStates.forEach(([item, disabled]) => { item.disabled = disabled; });
     control.removeAttribute("aria-busy");
     if (canReplaceLabel) control.textContent = label;
     if (announceWithoutReplacing) {
@@ -84,6 +88,42 @@ async function withBusyControl(control, busyLabel, work, options = {}) {
       control.classList.toggle("is-busy", false);
     }
   }
+}
+
+function campaignMutationControls(form, control = null) {
+  const controls = [...(form?.querySelectorAll?.("input, textarea, select, button") || [])];
+  if (control && !controls.includes(control)) controls.push(control);
+  return controls;
+}
+
+function withCampaignMutationControl(form, control, busyLabel, work) {
+  return withBusyControl(control, busyLabel, work, {
+    busyKey: form,
+    controls: campaignMutationControls(form, control),
+  });
+}
+
+function lockCampaignMutationControls(form) {
+  campaignMutationControls(form).forEach((control) => { control.disabled = true; });
+}
+
+function campaignFormPayload(form) {
+  const fd = new FormData(form);
+  return {
+    id: form.dataset.campaign || "",
+    title: fd.get("title"), description: fd.get("description"), goalHKD: fd.get("goalHKD"),
+    fpsId: fd.get("fpsId"), fpsPayee: fd.get("fpsPayee"),
+  };
+}
+
+function clearCampaignError(form) {
+  const host = form?.querySelector?.("#campaign-error");
+  if (host) { host.textContent = ""; host.className = ""; host.removeAttribute("role"); }
+}
+
+function showCampaignError(control, message) {
+  const host = control?.closest?.("form")?.querySelector?.("#campaign-error");
+  if (host) { host.textContent = message; host.className = "form-error"; host.setAttribute("role", "alert"); }
 }
 
 async function refreshAfterAdminMutation(successMessage) {
@@ -239,6 +279,9 @@ async function render(generation = renderGeneration) {
     case "community":
       out = views.viewCommunity(arg);
       break;
+    case "giving":
+      out = await views.viewGiving({ ownsGeneration: () => generation === renderGeneration });
+      break;
     case "account":
       out = await views.viewAccount(arg, arg2);
       break;
@@ -266,9 +309,11 @@ async function render(generation = renderGeneration) {
     case "admin":
       out = arg === "activity"
         ? await views.viewAdminActivity(arg2)
-        : arg === "users"
-          ? { redirect: "#/admin/members" }
-          : await views.viewAdmin(arg || "approvals");
+        : arg === "campaign"
+          ? await views.viewAdminCampaign(arg2)
+          : arg === "users"
+            ? { redirect: "#/admin/members" }
+            : await views.viewAdmin(arg || "approvals");
       break;
     default:
       out = views.viewNotFound();
@@ -530,6 +575,64 @@ document.addEventListener("click", async (e) => {
       toast(`Noted — a leader will reach out about ${el.dataset.topic}`);
       break;
 
+    case "giving-amount": {
+      const input = document.getElementById("give-amount");
+      if (input) input.value = el.dataset.amount;
+      el.closest(".chip-row")?.querySelectorAll(".chip")
+        .forEach((chip) => chip.classList.toggle("active", chip === el));
+      break;
+    }
+    case "giving-back":
+      views.givingState.step = 1;
+      await renderWithFeedback();
+      break;
+    case "giving-confirm": {
+      const g = views.givingState;
+      const user = store.currentUser();
+      try {
+        await withBusyControl(el, "Recording…", async () => {
+          store.recordDonation({ userId: user?.id, name: g.name, amount: g.amount, note: g.note, ref: g.ref, campaignId: g.campaignId });
+          g.step = 3;
+          toast("Gift recorded — awaiting confirmation");
+          await renderWithFeedback();
+        });
+      } catch (err) { toast(err.message || "Unable to record gift", true); }
+      break;
+    }
+    case "giving-reset":
+      views.resetGivingState();
+      await renderWithFeedback();
+      break;
+    case "campaign-publish": {
+      const form = el.closest?.("form");
+      if (!form || controlBusy.has(form) || !form.reportValidity()) break;
+      clearCampaignError(form);
+      const payload = campaignFormPayload(form);
+      const name = String(payload.title || "").trim() || "this campaign";
+      if (!window.confirm(`Publish “${name}”? Approved members will be notified.`)) break;
+      try {
+        await withCampaignMutationControl(form, el, "Publishing…", async () => {
+          const campaign = await store.saveGivingCampaign(payload);
+          await store.publishGivingCampaign(campaign.id);
+          await refreshAfterAdminMutation(`“${name}” published.`);
+        });
+      } catch (err) { showCampaignError(el, err.message); toast(err.message || "Unable to publish campaign", true); }
+      break;
+    }
+    case "campaign-close": {
+      const form = el.closest?.("form");
+      if (!form || controlBusy.has(form)) break;
+      const name = el.dataset.campaignName || "this campaign";
+      if (!window.confirm(`Close “${name}”? Closed campaigns cannot be edited or republished.`)) break;
+      try {
+        await withCampaignMutationControl(form, el, "Closing…", async () => {
+          await store.closeGivingCampaign(el.dataset.campaign);
+          await refreshAfterAdminMutation(`“${name}” closed.`);
+        });
+      } catch (err) { showCampaignError(el, err.message); toast(err.message || "Unable to close campaign", true); }
+      break;
+    }
+
     case "join-waitlist":
       try {
         const pos = store.joinWaitlist(store.currentUser().id, el.dataset.session);
@@ -596,7 +699,7 @@ document.addEventListener("click", async (e) => {
 
 // --- Form delegation ---------------------------------------------------------------------
 
-document.addEventListener("submit", (e) => {
+document.addEventListener("submit", async (e) => {
   const form = e.target;
   if (!(form instanceof HTMLFormElement)) return;
 
@@ -679,6 +782,22 @@ document.addEventListener("submit", (e) => {
       break;
     }
 
+    case "form-giving": {
+      e.preventDefault();
+      const fd = new FormData(form);
+      const amount = Math.round(Number(fd.get("amount")));
+      const name = String(fd.get("name") || "").trim();
+      const errEl = form.querySelector("#giving-error");
+      if (!amount || amount < 1) { errEl.innerHTML = `<div class="form-error">Enter an amount of at least HK$1.</div>`; return; }
+      if (!name) { errEl.innerHTML = `<div class="form-error">Add your name so a leader can match your transfer.</div>`; return; }
+      Object.assign(views.givingState, {
+        step: 2, amount, name, note: String(fd.get("note") || "").trim(),
+        ref: `GIVE-${Math.random().toString(36).slice(2, 8).toUpperCase()}`,
+      });
+      await renderWithFeedback();
+      break;
+    }
+
     case "form-checkout": {
       e.preventDefault();
       if (!form.reportValidity()) return;
@@ -715,13 +834,15 @@ document.addEventListener("submit", (e) => {
           `<div class="form-error">That Donor ID doesn’t look right — it needs a hyphen between your last name and the 4- or 5-digit number (e.g. CHUI-08879 or CHUI-8879). Please enter it again.</div>`;
         return;
       }
-      const saved = store.updateDonorId(user.id, raw);
-      if (!saved) {
+      if (!raw) {
         errEl.innerHTML = `<div class="form-error">Enter your Donor ID to save it.</div>`;
         return;
       }
-      toast("Donor ID saved");
-      render();
+      try {
+        await store.updateMyDonorId(raw);
+        toast("Donor ID saved");
+        await renderWithFeedback();
+      } catch (err) { toast(err.message || "Unable to save Donor ID", true); }
       break;
     }
 
@@ -798,6 +919,22 @@ document.addEventListener("submit", (e) => {
       store.confirmGymBooking(form.dataset.session, new FormData(form).get("note"));
       toast("Marked confirmed with the gym");
       render();
+      break;
+    }
+
+    case "form-campaign": {
+      e.preventDefault();
+      if (controlBusy.has(form) || !form.reportValidity()) return;
+      const control = form.querySelector('[type="submit"]');
+      clearCampaignError(form);
+      await withCampaignMutationControl(form, control, "Saving…", async () => {
+        try {
+          const campaign = await store.saveGivingCampaign(campaignFormPayload(form));
+          toast(form.dataset.campaign ? "Campaign saved." : "Campaign draft created.");
+          location.hash = `#/admin/campaign/${campaign.id}`;
+          await renderWithFeedback();
+        } catch (err) { showCampaignError(control, err.message); toast(err.message || "Unable to save campaign", true); }
+      });
       break;
     }
 

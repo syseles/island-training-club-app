@@ -156,6 +156,7 @@ const NAV_ITEMS = [
   { key: "home", label: "Home", icon: "home", href: "#/home" },
   { key: "schedule", label: "Schedule", icon: "calendar", href: "#/schedule" },
   { key: "community", label: "Community", icon: "people", href: "#/community" },
+  { key: "giving", label: "Giving", icon: "heart", href: "#/giving", roles: ["signed-in"] },
   { key: "account", label: "Account", icon: "user", href: "#/account" },
   { key: "admin", label: "Admin", icon: "shield", href: "#/admin", roles: ["admin", "superadmin"] },
 ];
@@ -467,6 +468,187 @@ function membersOnlyGate() {
     </div>`;
 }
 
+// --- Giving ---------------------------------------------------------------------------------
+// Mock FPS donation flow. FPS is a push payment from the donor's banking
+// app, so the flow is: choose an amount -> transfer with the shown reference
+// -> gift recorded as "awaiting confirmation" until a leader reconciles it.
+
+export const givingState = {
+  step: 1, // 1 = amount, 2 = FPS instructions, 3 = thank you
+  amount: 200,
+  name: "",
+  note: "",
+  ref: null,
+  campaignId: null,
+};
+
+export function resetGivingState() {
+  givingState.step = 1;
+  givingState.amount = 200;
+  givingState.name = "";
+  givingState.note = "";
+  givingState.ref = null;
+  givingState.campaignId = null;
+}
+
+function givingLocked(user) {
+  const declined = user?.status === "declined";
+  return `
+    <div class="kicker">Giving &amp; Fundraising</div>
+    <h1 class="display">Giving access.</h1>
+    <div class="card mt16"><div class="card-body">
+      <div class="locked-note">🔒 Giving is available to approved ITC members.</div>
+      <h3 class="mt16">${declined ? "Speak with a leader" : "Your application is under review"}</h3>
+      <p class="hero-meta">${declined
+        ? "Please contact an ITC leader if you would like to discuss your membership decision and Giving access."
+        : "Giving access will unlock after an ITC leader reviews and approves your membership application."}</p>
+      <div class="btn-row">
+        <a class="btn" href="#/account">View Profile</a>
+        <a class="btn ghost" href="#/schedule">View Schedule</a>
+      </div>
+    </div></div>`;
+}
+
+export async function viewGiving({
+  ownsGeneration = () => true,
+  activeCampaignLookup = () => store.getActiveGivingCampaign(),
+} = {}) {
+  const user = store.currentUser();
+  if (!user || user.status !== "approved") return givingLocked(user);
+
+  const campaign = await activeCampaignLookup();
+  const generationOwned = ownsGeneration();
+  const gifts = store.donationsForUser(user.id);
+  if (!campaign) {
+    if (generationOwned) resetGivingState();
+    return `
+      <div class="kicker">Giving &amp; Fundraising</div>
+      <h1 class="display">Every step can give back.</h1>
+      <div class="card mt16"><div class="card-body">
+        <h3>No active campaign right now</h3>
+        <p class="hero-meta mt8">Check back soon for the next opportunity to support the ITC community.</p>
+      </div></div>
+      ${gifts.length ? `<div class="section-head"><h2>Giving history</h2></div>${givingHistory(gifts)}` : ""}`;
+  }
+
+  if (generationOwned && givingState.campaignId !== campaign.id) {
+    resetGivingState();
+    givingState.campaignId = campaign.id;
+  }
+  const raised = store.campaignRaised(campaign);
+  const goal = Number(campaign.goalHKD) || 0;
+  const pct = goal > 0 ? Math.min(100, Math.round((raised / goal) * 100)) : 0;
+
+  const flow =
+    givingState.step === 2
+      ? givingFpsStep(campaign)
+      : givingState.step === 3
+        ? givingThanksStep()
+        : givingAmountStep(user);
+
+  return `
+    <div class="kicker">Giving &amp; Fundraising</div>
+    <h1 class="display">Every step can give back.</h1>
+    <div class="card mt16"><div class="card-body">
+      <span class="kicker">Current campaign</span>
+      <h3 class="mt8">${esc(campaign.title)}</h3>
+      <p class="hero-meta">${esc(campaign.description)}</p>
+      <div class="progress mt16"><i style="width:${pct}%"></i></div>
+      <div class="progress-meta">
+        <strong>${fmtMoney(raised)} raised</strong>
+        <span>${pct}% of ${fmtMoney(goal)} goal</span>
+      </div>
+    </div></div>
+    ${flow}
+    ${gifts.length ? `<div class="section-head"><h2>Giving history</h2></div>${givingHistory(gifts)}` : ""}`;
+}
+
+function givingAmountStep(user) {
+  return `
+    <div class="card mt16"><div class="card-body">
+      <h3>Give via FPS</h3>
+      <form id="form-giving" novalidate>
+        <div class="chip-row mt16">
+          ${[100, 200, 500, 1000]
+            .map(
+              (a) => `
+            <button type="button" class="chip${givingState.amount === a ? " active" : ""}"
+              data-action="giving-amount" data-amount="${a}">${fmtMoney(a)}</button>`
+            )
+            .join("")}
+        </div>
+        <div class="field">
+          <label for="give-amount">Amount (HKD)</label>
+          <input id="give-amount" name="amount" type="number" min="1" step="1" inputmode="numeric" value="${givingState.amount}" required>
+        </div>
+        <div class="field">
+          <label for="give-name">Your name</label>
+          <input id="give-name" name="name" autocomplete="name" value="${esc(givingState.name || user?.fullName || "")}" required>
+        </div>
+        <div class="field">
+          <label for="give-note">Message (optional)</label>
+          <input id="give-note" name="note" value="${esc(givingState.note)}" placeholder="e.g. Go ITC runners!">
+        </div>
+        <div id="giving-error"></div>
+        <button class="btn mt16" type="submit">Continue</button>
+        ${user ? "" : `<p class="muted small mt8 center">Tip: sign in first and this gift will appear in your giving history.</p>`}
+      </form>
+    </div></div>`;
+}
+
+function givingFpsStep(campaign) {
+  return `
+    <div class="card mt16"><div class="card-body">
+      <span class="kicker">Step 2 · Complete the transfer</span>
+      <h3 class="mt8">Pay ${fmtMoney(givingState.amount)} via FPS</h3>
+      <div class="fps-qr" aria-hidden="true">FPS QR<br>placeholder</div>
+      <div class="receipt-lines">
+        <div class="line"><span>FPS ID</span><strong class="mono">${esc(campaign.fpsId)}</strong></div>
+        <div class="line"><span>Payee</span><strong>${esc(campaign.fpsPayee)}</strong></div>
+        <div class="line"><span>Amount</span><strong>${fmtMoney(givingState.amount)}</strong></div>
+        <div class="line total"><span>Reference</span><strong class="mono">${esc(givingState.ref)}</strong></div>
+      </div>
+      <p class="muted small mt8">Open your banking app, choose FPS, and pay using the details above. Put the reference in the transfer remarks so a leader can match your gift.</p>
+      <div class="btn-row">
+        <button class="btn" type="button" data-action="giving-confirm">I’ve made the transfer</button>
+        <button class="btn ghost" type="button" data-action="giving-back">Back</button>
+      </div>
+      <p class="muted small mt8">Mock flow — no real payment. Gifts show as “Awaiting confirmation” until a leader reconciles the FPS transfer.</p>
+    </div></div>`;
+}
+
+function givingThanksStep() {
+  return `
+    <div class="confirm-mark">${ICONS.check}</div>
+    <h1 class="display sm center mt16">Thank you, ${esc(givingState.name.split(" ")[0] || "friend")}.</h1>
+    <p class="subcopy center mt8">Your gift of ${fmtMoney(givingState.amount)} is recorded — ref <span class="mono">${esc(givingState.ref)}</span>. It will show as confirmed once a leader reconciles the transfer.</p>
+    <div class="btn-row">
+      <button class="btn" type="button" data-action="giving-reset">Back to Giving</button>
+    </div>`;
+}
+
+function givingHistory(list) {
+  const campaignById = new Map(store.campaigns().map((campaign) => [campaign.id, campaign]));
+  return `
+    <div class="session-list">
+      ${list
+        .map(
+          (d) => `
+        <div class="session-row">
+          <time>${new Date(d.createdAt).toLocaleDateString("en-HK", { day: "numeric", month: "short" })}<small>${esc(d.ref)}</small></time>
+          <div>
+            <h3>${fmtMoney(d.amount)}</h3>
+            <p>${esc(campaignById.get(d.campaignId)?.title || d.campaignTitle || "Giving campaign")} · FPS${d.note ? ` · “${esc(d.note)}”` : ""}</p>
+          </div>
+          <div class="row-end">
+            ${d.status === "confirmed" ? '<span class="badge free">Confirmed</span>' : '<span class="badge warn">Awaiting confirmation</span>'}
+          </div>
+        </div>`
+        )
+        .join("")}
+    </div>`;
+}
+
 // --- Community -----------------------------------------------------------------
 // The Community tab is about connecting: prayer, fellowship, meals and news.
 // Leaders and culture copy lives under Profile > About Island Training Club.
@@ -658,7 +840,7 @@ export async function viewAccount(section, sub) {
     case "indemnity":
       return await accountIndemnity(user);
     case "donor":
-      return accountDonor(user);
+      return accountDonor(user, isLive() ? await store.fetchApplicationForUser(user) : null);
     case "payments":
       return accountPayments(user);
     case "privacy":
@@ -975,17 +1157,28 @@ async function accountIndemnity(user) {
     <p class="muted small mt16">Draft wording — the final indemnity will be confirmed with ITC leadership before launch.</p>`;
 }
 
-function accountDonor(user) {
+function accountDonor(user, application) {
+  const donorId = application?.donor_id || user.donorId || null;
+  const gifts = store.donationsForUser(user.id);
+  const totalGiven = gifts.reduce((sum, d) => sum + d.amount, 0);
   return `
     <a class="back-link" href="#/account">← Profile</a>
     <div class="kicker mt16">Profile · Donor Profile</div>
     <h1 class="display sm">Donor Profile.</h1>
     <div class="card mt16"><div class="card-body">
       <div class="receipt-lines" style="margin-top:0;border-top:0">
-        <div class="line"><span>Donor ID</span><strong>${user.donorId ? esc(user.donorId) : "Not provided"}</strong></div>
+        <div class="line"><span>Donor ID</span><strong>${donorId ? esc(donorId) : "Not provided"}</strong></div>
+        ${
+          gifts.length
+            ? `
+          <div class="line"><span>Total given</span><strong>${fmtMoney(totalGiven)}</strong></div>
+          <div class="line"><span>Gifts</span><strong>${gifts.length}</strong></div>
+          <div class="line"><span>Latest gift</span><strong>${new Date(gifts[0].createdAt).toLocaleDateString("en-HK", { day: "numeric", month: "short" })}</strong></div>`
+            : ""
+        }
       </div>
       ${
-        user.donorId
+        donorId
           ? ""
           : `
         <form id="form-donor-id" class="mt16" novalidate>
@@ -997,6 +1190,15 @@ function accountDonor(user) {
           <div id="donor-error"></div>
           <button class="btn ghost sm" type="submit">Save Donor ID</button>
         </form>`
+      }
+      ${
+        gifts.length
+          ? `
+        <p class="muted small mt16">FPS gifts stay pending until a leader reconciles them against the club account. Full history lives on the Giving tab.</p>
+        <a class="btn ghost sm mt16" href="#/giving">Open Giving &amp; Fundraising →</a>`
+          : `
+        <p class="hero-meta mt16">No gifts yet — every step can give back. Support the current campaign via FPS.</p>
+        <a class="btn ghost sm mt16" href="#/giving">Give via FPS →</a>`
       }
     </div></div>`;
 }
@@ -1365,6 +1567,7 @@ export async function viewAdmin(tab = "approvals") {
         ["approvals", "Approvals"],
         ["members", "Members"],
         ["activities", "Activities"],
+        ["giving", "Giving"],
         ["payments", "Payments / Ops"],
       ]
         .map(([key, label]) => `<a href="#/admin/${key}" class="${key === canonicalTab ? "active" : ""}"${key === canonicalTab ? ' aria-current="page"' : ""}>${label}</a>`)
@@ -1392,7 +1595,9 @@ export async function viewAdmin(tab = "approvals") {
       ? adminActivities()
       : tab === "members"
         ? adminMembers(user, memberUsers)
-        : (["payments", "ops"].includes(tab) ? adminOps(user) : adminApprovals(await store.listApprovalCandidates()));
+        : tab === "giving"
+          ? adminGiving(await store.listGivingCampaigns())
+          : (["payments", "ops"].includes(tab) ? adminOps(user) : adminApprovals(await store.listApprovalCandidates()));
 
   return `
     <div class="kicker">Admin</div>
@@ -1580,6 +1785,80 @@ function adminApprovals(pending) {
     section("Ready for review", ready, "No applications ready for review.", readyCard),
     section("Awaiting application", awaiting, "No members awaiting an application.", awaitingCard),
   ].join("");
+}
+
+function campaignStatusBadge(status) {
+  const className = status === "published" ? "free" : status === "draft" ? "warn" : "neutral";
+  return `<span class="badge ${className}">${esc(status)}</span>`;
+}
+
+function adminGiving(campaignList) {
+  const hasOpen = campaignList.some((campaign) => campaign.status !== "closed");
+  return `
+    <div class="section-head"><h2>Giving campaigns</h2></div>
+    ${campaignList.length
+      ? `<div class="campaign-list">${campaignList.map((campaign) => `
+        <a class="card campaign-row" href="#/admin/campaign/${esc(campaign.id)}">
+          <div class="card-body">
+            <div><h3>${esc(campaign.title)}</h3><p class="hero-meta">${fmtMoney(campaign.goalHKD)} goal</p></div>
+            ${campaignStatusBadge(campaign.status)}
+          </div>
+        </a>`).join("")}</div>`
+      : `<div class="empty">No Giving campaigns yet.</div>`}
+    ${hasOpen ? "" : `<a class="btn ghost mt16" href="#/admin/campaign/new">+ Create campaign</a>`}`;
+}
+
+export async function viewAdminCampaign(id) {
+  const user = store.currentUser();
+  if (!user || !isAdminRole(user.role)) return { redirect: "#/account" };
+  const campaignList = await store.listGivingCampaigns();
+  const isNew = id === "new";
+  const campaign = isNew
+    ? { id: "", title: "", description: "", goalHKD: "", fpsId: "", fpsPayee: "", status: "draft" }
+    : campaignList.find((item) => item.id === id);
+  if (!campaign) return viewNotFound("Giving campaign not found.");
+  if (isNew && campaignList.some((item) => item.status !== "closed")) {
+    return viewNotFound("Close the current Giving campaign before creating another.");
+  }
+  const closed = campaign.status === "closed";
+  const field = (id, name, label, value, options = "") => `
+    <div class="field"><label for="${id}">${label} *</label>
+      <input id="${id}" name="${name}" value="${esc(value)}" ${options} required ${closed ? "disabled" : ""}>
+    </div>`;
+  if (closed) {
+    return `
+      <a class="back-link" href="#/admin/giving">← Giving</a>
+      <div class="kicker mt16">Admin · Giving · Closed</div>
+      <h1 class="display sm">${esc(campaign.title)}.</h1>
+      <div class="card mt16"><div class="card-body">
+        ${campaignStatusBadge(campaign.status)}
+        <p class="hero-meta mt16">${esc(campaign.description)}</p>
+        <div class="receipt-lines">
+          <div class="line"><span>Goal</span><strong>${fmtMoney(campaign.goalHKD)}</strong></div>
+          <div class="line"><span>FPS ID</span><strong class="mono">${esc(campaign.fpsId)}</strong></div>
+          <div class="line"><span>FPS payee</span><strong>${esc(campaign.fpsPayee)}</strong></div>
+          <div class="line"><span>Closed</span><strong>${campaign.closedAt ? esc(fmtDay(campaign.closedAt)) : "Closed"}</strong></div>
+        </div>
+      </div></div>`;
+  }
+  return `
+    <a class="back-link" href="#/admin/giving">← Giving</a>
+    <div class="kicker mt16">Admin · Giving</div>
+    <h1 class="display sm">${isNew ? "New campaign." : "Edit campaign."}</h1>
+    ${isNew ? "" : `<div class="mt16">${campaignStatusBadge(campaign.status)}</div>`}
+    <form id="form-campaign" class="mt16" data-campaign="${esc(campaign.id)}" novalidate>
+      ${field("campaign-title", "title", "Campaign title", campaign.title)}
+      <div class="field"><label for="campaign-description">Description *</label>
+        <textarea id="campaign-description" name="description" rows="4" required>${esc(campaign.description)}</textarea>
+      </div>
+      ${field("campaign-goal", "goalHKD", "Goal (HKD)", campaign.goalHKD, 'type="number" min="1" step="1" inputmode="numeric"')}
+      ${field("campaign-fps-id", "fpsId", "FPS ID", campaign.fpsId)}
+      ${field("campaign-fps-payee", "fpsPayee", "FPS payee", campaign.fpsPayee)}
+      <div id="campaign-error" aria-live="polite"></div>
+      <button class="btn mt24" type="submit">${isNew ? "Create draft" : "Save changes"}</button>
+      ${!isNew && campaign.status === "draft" ? `<button class="btn ghost mt16" type="button" data-action="campaign-publish" data-campaign="${esc(campaign.id)}" data-campaign-name="${esc(campaign.title)}">Publish campaign</button>` : ""}
+      ${campaign.status === "published" ? `<button class="btn danger mt16" type="button" data-action="campaign-close" data-campaign="${esc(campaign.id)}" data-campaign-name="${esc(campaign.title)}">Close campaign</button>` : ""}
+    </form>`;
 }
 
 function adminActivities() {
