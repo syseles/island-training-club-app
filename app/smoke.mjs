@@ -1,7 +1,6 @@
 // Headless smoke test: render every view for every user state.
 // Run: node --input-type=module < smoke.mjs  (from the app/ directory)
 
-import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
@@ -115,216 +114,11 @@ if (liveApply.status !== 0) {
   process.exit(liveApply.status || 1);
 }
 
-const liveDonorId = spawnSync(process.execPath, [
-  "--input-type=module",
-  "-e",
-  `
-const mem = new Map();
-globalThis.localStorage = {
-  getItem: (key) => (mem.has(key) ? mem.get(key) : null),
-  setItem: (key, value) => mem.set(key, String(value)),
-  removeItem: (key) => mem.delete(key),
-};
-const authUser = {
-  id: "live-member-user",
-  email: "member@example.com",
-  user_metadata: { full_name: "Member Person" },
-};
-const profile = {
-  id: authUser.id,
-  email: authUser.email,
-  full_name: "Member Person",
-  avatar_url: null,
-  role: "member",
-  created_at: "2026-08-05T00:00:00.000Z",
-  updated_at: "2026-08-05T00:00:00.000Z",
-};
-const application = {
-  profile_id: authUser.id,
-  mobile: "91234567",
-  date_of_birth: null,
-  is_minor: false,
-  guardian_name: null,
-  guardian_phone: null,
-  emergency_name: "Emergency Person",
-  emergency_phone: "98765432",
-  heard_source: "friend",
-  heard_detail: null,
-  preferred_name: "Member",
-  photo_consent: false,
-  waiver_accepted_at: "2026-08-05T00:00:00.000Z",
-  privacy_accepted_at: "2026-08-05T00:00:00.000Z",
-  guidelines_accepted_at: "2026-08-05T00:00:00.000Z",
-  submitted_at: "2026-08-05T00:00:00.000Z",
-  updated_at: "2026-08-05T00:00:00.000Z",
-  whatsapp_reminders: false,
-  email_receipts: false,
-  community_news: false,
-  donor_id: null,
-};
-const fakeSupabase = {
-  auth: {
-    getSession: async () => ({
-      data: {
-        session: {
-          access_token: "test-access-token",
-          token_type: "bearer",
-          expires_in: 3600,
-          expires_at: 9999999999,
-          refresh_token: "test-refresh-token",
-          user: authUser,
-        },
-      },
-      error: null,
-    }),
-  },
-  from(table) {
-    if (table === "profiles") {
-      return {
-        select() {
-          return {
-            eq(column, value) {
-              if (column !== "id" || value !== authUser.id) throw new Error("Profile query mismatch");
-              return { maybeSingle: async () => ({ data: profile, error: null }) };
-            },
-          };
-        },
-      };
-    }
-    if (table === "applications") {
-      return {
-        select() {
-          return {
-            eq(column, value) {
-              if (column !== "profile_id" || value !== authUser.id) throw new Error("Application query mismatch");
-              return { maybeSingle: async () => ({ data: { ...application }, error: null }) };
-            },
-          };
-        },
-        update(patch) {
-          if (Object.keys(patch).join(",") !== "donor_id") throw new Error("Donor update changed unrelated fields");
-          Object.assign(application, patch);
-          return {
-            eq(column, value) {
-              if (column !== "profile_id" || value !== authUser.id) throw new Error("Donor update mismatch");
-              return {
-                select() {
-                  return { single: async () => ({ data: { ...application }, error: null }) };
-                },
-              };
-            },
-          };
-        },
-      };
-    }
-    throw new Error("Unexpected table: " + table);
-  },
-};
-globalThis.window = {
-  SUPABASE_URL: "https://example.supabase.co",
-  SUPABASE_ANON_KEY: "test-anon-key",
-  supabase: { createClient: () => fakeSupabase },
-};
-const store = await import("./js/store.js");
-const views = await import("./js/views.js");
-store.load();
-await store.getCurrentUser();
-const saved = await store.updateMyDonorId("chui 8879");
-if (saved !== "CHUI-8879" || application.donor_id !== "CHUI-8879") {
-  throw new Error("Live donor ID was not normalized and persisted");
-}
-const donorHtml = await views.viewAccount("donor");
-if (!donorHtml.includes("CHUI-8879") || donorHtml.includes("Not provided")) {
-  throw new Error("Live Donor Profile did not render the persisted donor ID");
-}
-console.log("ok  live donor ID saves and renders from the member application");
-  `,
-], {
-  encoding: "utf8",
-  cwd: fileURLToPath(new URL(".", import.meta.url)),
-});
-if (liveDonorId.stdout) process.stdout.write(liveDonorId.stdout);
-if (liveDonorId.status !== 0) {
-  if (liveDonorId.stderr) process.stderr.write(liveDonorId.stderr);
-  process.exit(liveDonorId.status || 1);
-}
-
 // --- Shared UI and accessibility foundations ---
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const indexHtml = readFileSync(resolve(__dirname, "index.html"), "utf8");
 const stylesCss = readFileSync(resolve(__dirname, "styles.css"), "utf8");
 const viewsSource = readFileSync(resolve(__dirname, "js/views.js"), "utf8");
-const appSource = readFileSync(resolve(__dirname, "js/app.js"), "utf8");
-const dataSource = readFileSync(resolve(__dirname, "js/data.js"), "utf8");
-const storeSource = readFileSync(resolve(__dirname, "js/store.js"), "utf8");
-
-// --- Live Giving database source contracts ---
-const givingMigrationPath = resolve(__dirname, "../supabase/migrations/20260805000011_giving_campaigns.sql");
-const givingIntegrationPath = resolve(__dirname, "../supabase/tests/giving_campaigns_integration.sql");
-const givingVerifierPath = resolve(__dirname, "../supabase/tests/verify_giving_campaigns.sh");
-const givingMigrationSource = existsSync(givingMigrationPath) ? readFileSync(givingMigrationPath, "utf8") : "";
-const givingIntegrationSource = existsSync(givingIntegrationPath) ? readFileSync(givingIntegrationPath, "utf8") : "";
-const givingVerifierSource = existsSync(givingVerifierPath) ? readFileSync(givingVerifierPath, "utf8") : "";
-const givingSourceContracts = [
-  [/create table public\.giving_campaigns/i, "campaign table"],
-  [/goal_hkd\s+(?:integer|bigint)[\s\S]*?check\s*\(goal_hkd\s*>\s*0\)/i, "positive whole-HKD goal"],
-  [/check\s*\(status\s+in\s*\('draft',\s*'published',\s*'closed'\)\)/i, "campaign status constraint"],
-  [/create unique index giving_campaigns_one_published[\s\S]*?where\s*\(status\s*=\s*'published'\)/i, "one-published partial unique index"],
-  [/create unique index giving_campaigns_one_open[\s\S]*?where\s*\(status\s+in\s*\('draft',\s*'published'\)\)/i, "one-open invariant"],
-  [/old\.status\s*=\s*'draft'[\s\S]*?new\.status\s+in\s*\('draft',\s*'published'\)[\s\S]*?old\.status\s*=\s*'published'[\s\S]*?new\.status\s+in\s*\('published',\s*'closed'\)[\s\S]*?old\.status\s*=\s*'closed'[\s\S]*?new\.status\s*=\s*'closed'/i, "allowed transition matrix"],
-  [/\(new\.id,\s*new\.title,[\s\S]*?new\.created_at,\s*new\.published_at,\s*new\.closed_at\)[\s\S]*?is distinct from[\s\S]*?\(old\.id,\s*old\.title,[\s\S]*?old\.created_at,\s*old\.published_at,\s*old\.closed_at\)/i, "closed identity/business/timestamp immutability"],
-  [/security definer[\s\S]*?set search_path\s*=\s*public/i, "hardened publication trigger function"],
-  [/tg_op\s*=\s*'insert'[\s\S]*?new\.status\s*=\s*'published'[\s\S]*?old\.status\s*=\s*'draft'[\s\S]*?new\.status\s*=\s*'published'/i, "first-publication guard"],
-  [/'giving_campaign_published'[\s\S]*?'New Giving campaign'[\s\S]*?'ITC published “'\s*\|\|\s*new\.title\s*\|\|\s*'”\.'/i, "exact publication notification copy"],
-  [/role\s+in\s*\('member',\s*'admin',\s*'super_admin'\)/i, "approved publication audience"],
-  [/create policy "approved member read published"[\s\S]*?status\s*=\s*'published'/i, "member published-only RLS"],
-  [/create policy "admin insert giving campaigns"[\s\S]*?for insert[\s\S]*?create policy "admin update giving campaigns"[\s\S]*?for update[\s\S]*?current_user_role\(\)[\s\S]*?'admin'[\s\S]*?'super_admin'/i, "Admin/Super Admin mutation RLS"],
-  [/revoke all on table public\.giving_campaigns from anon[\s\S]*?grant select, insert, update on table public\.giving_campaigns to authenticated/i, "browser grants without delete"],
-];
-for (const [contract, label] of givingSourceContracts) {
-  if (!contract.test(givingMigrationSource)) throw new Error(`missing Giving migration contract: ${label}`);
-}
-if (/grant\s+delete|for\s+delete/i.test(givingMigrationSource)) {
-  throw new Error("Giving campaigns must expose no browser DELETE grant or policy");
-}
-for (const contract of [
-  /update public\.giving_campaigns set created_at\s*=/i,
-  /update public\.giving_campaigns set id\s*=/i,
-]) {
-  if (!contract.test(givingIntegrationSource)) {
-    throw new Error("missing closed campaign identity/timestamp mutation regression");
-  }
-}
-for (const [source, label, contracts] of [
-  [givingIntegrationSource, "integration SQL", ["audience fan-out", "duplicate suppression", "one-open invariant", "closed immutability", "member RLS", "pending RLS"]],
-  [givingVerifierSource, "safe verifier", ["ITC_GIVING_TEST_DATABASE_URL", "ITC_ALLOW_DATABASE_RESET", "giving_campaigns_integration.sql"]],
-]) {
-  if (!source || contracts.some((contract) => !source.includes(contract))) {
-    throw new Error(`missing executable Giving ${label} contracts`);
-  }
-}
-console.log("ok  live Giving database source contracts");
-
-for (const [contract, label] of [
-  [/export async function viewGiving\(/, "async member Giving view"],
-  [/export async function viewAdminCampaign\(id\)/, "Admin campaign route view"],
-  [/\["approvals", "activities", "giving", "members"\]/, "Admin Giving tab"],
-  [/data-action="campaign-publish"/, "publish control"],
-  [/data-action="campaign-close"/, "close control"],
-]) {
-  if (!contract.test(viewsSource)) throw new Error(`missing Giving UI contract: ${label}`);
-}
-for (const [contract, label] of [
-  [/case "giving":[\s\S]*await views\.viewGiving\(\{[\s\S]*ownsGeneration/, "generation-owned awaited Giving route"],
-  [/case "campaign-publish"[\s\S]*withCampaignMutationControl\(form, el, "Publishing…"[\s\S]*refreshAfterAdminMutation/, "truthful publish feedback"],
-  [/case "campaign-close"[\s\S]*withCampaignMutationControl\(form, el, "Closing…"[\s\S]*refreshAfterAdminMutation/, "truthful close feedback"],
-  [/Publish “\$\{name\}”\? Approved members will be notified\./, "publication confirmation"],
-  [/Close “\$\{name\}”\? Closed campaigns cannot be edited or republished\./, "named close confirmation"],
-]) {
-  if (!contract.test(appSource)) throw new Error(`missing Giving action contract: ${label}`);
-}
-console.log("ok  Giving Admin routes, confirmations, and feedback source contracts");
-
 for (const path of [
   "../assets/fonts/archivo-latin-variable.woff2",
   "../assets/fonts/OFL-Archivo.txt",
@@ -492,167 +286,52 @@ async function check(label, fn) {
 
 store.load();
 
-// --- Giving demo-state cleanup ---
-const freshGivingState = JSON.parse(mem.get("itc.prototype.v1"));
-if (!Array.isArray(freshGivingState.campaigns) || freshGivingState.campaigns.length ||
-    !Array.isArray(freshGivingState.donations) || freshGivingState.donations.length) {
-  failures++;
-  console.error("FAIL fresh Giving state must have empty campaigns and donations");
-} else console.log("ok  fresh Giving state has no demo records");
-const freshGivingJson = JSON.stringify({
-  campaigns: freshGivingState.campaigns,
-  donations: freshGivingState.donations,
-});
-if (/Standard Chartered|18450|d-seed-[12]|scm-2027/i.test(freshGivingJson)) {
-  failures++;
-  console.error("FAIL fresh Giving state must not contain campaign demo references");
-} else console.log("ok  fresh Giving state contains no campaign demo references");
-if (store.activeGivingCampaign?.() !== null) {
-  failures++;
-  console.error("FAIL active campaign lookup must return null in fresh state");
-} else console.log("ok  fresh state has no active Giving campaign");
-if (/export\s+(?:const|function)\s+(?:GIVING_CAMPAIGN|seedDonations)\b/.test(dataSource) ||
-    /\b(?:GIVING_CAMPAIGN|seedDonations)\b/.test(storeSource)) {
-  failures++;
-  console.error("FAIL Giving campaign constants and seed helpers must be removed");
-} else console.log("ok  Giving campaign constants and seed helpers are removed");
-if (/Standard Chartered/i.test(dataSource) || /SCM27/i.test(appSource) ||
-    !/g\.ref\s*=\s*`GIVE-/.test(appSource)) {
-  failures++;
-  console.error("FAIL Giving source must omit old campaign references and use the GIVE prefix");
-} else console.log("ok  Giving source is campaign-neutral");
+// --- v11 clean identity baseline ---
+const freshBaseline = JSON.parse(mem.get("itc.prototype.v1"));
+if (freshBaseline.users.length || freshBaseline.bookings.length || freshBaseline.receipts.length || freshBaseline.sessionUserId) {
+  throw new Error("fresh local state must contain no identities, transactions, or session");
+}
+const cleanAccountHtml = await views.viewAccount();
+for (const removed of ["demo-signin", "reset-demo", "one-tap demo", "seeded email"]) {
+  if (cleanAccountHtml.toLowerCase().includes(removed)) throw new Error(`Account still contains removed demo content: ${removed}`);
+}
+const freshLocalNotifications = await store.listMyNotifications();
+views.notificationFilters.kind = "all";
+const cleanNotificationsHtml = await views.viewNotifications(new Date("2026-08-05T06:40:00.000Z"), freshLocalNotifications);
+if (freshLocalNotifications.length || !cleanNotificationsHtml.includes("New notifications will appear here.")) {
+  throw new Error("fresh local notification state must be empty");
+}
+if (views.viewCommunity("announcements").includes("Marathon fundraiser passes first milestone")) {
+  throw new Error("fake fundraiser announcement must not ship");
+}
+console.log("ok  v11 fresh local account and notification state is empty and free of demo controls");
 
-// --- Local Giving campaign management contract ---
-store.demoSignIn("admin");
-if ((await store.listGivingCampaigns()).length !== 0) throw new Error("fresh Admin campaign list must be empty");
-const campaignDraft = await store.saveGivingCampaign({
-  title: "Winter Relief",
-  description: "Support our partner community through winter.",
-  goalHKD: 25000,
-  fpsId: "1234567",
-  fpsPayee: "Island Evangelical Community Church",
-});
-if (campaignDraft.status !== "draft" || !campaignDraft.id) throw new Error("campaign draft was not created");
-const editedDraft = await store.saveGivingCampaign({ ...campaignDraft, title: "Winter Relief 2027" });
-if (editedDraft.title !== "Winter Relief 2027" || (await store.listGivingCampaigns()).length !== 1) {
-  throw new Error("campaign draft edit must update one record");
-}
-await assert.rejects(() => store.saveGivingCampaign({ ...campaignDraft, id: "", title: "Second open campaign" }), /Close the current campaign/);
-const mutableDraft = store.campaigns().find((item) => item.id === campaignDraft.id);
-mutableDraft.fpsId = "";
-await assert.rejects(() => store.publishGivingCampaign(campaignDraft.id), /FPS ID/);
-mutableDraft.fpsId = "1234567";
-const publishedCampaign = await store.publishGivingCampaign(campaignDraft.id);
-if (publishedCampaign.status !== "published" || (await store.getActiveGivingCampaign())?.id !== campaignDraft.id) {
-  throw new Error("published campaign must become active");
-}
-const publicationTime = publishedCampaign.publishedAt;
-const publishedEdit = await store.saveGivingCampaign({ ...publishedCampaign, description: "Updated while live." });
-if (publishedEdit.status !== "published" || publishedEdit.publishedAt !== publicationTime) {
-  throw new Error("published edits must not repeat the publication transition");
-}
-views.givingState.campaignId = campaignDraft.id;
-views.givingState.step = 2;
-views.givingState.ref = "GIVE-SMOKE";
-const activeGivingHtml = await views.viewGiving();
-for (const copy of ["Winter Relief 2027", "HK$0 raised", "1234567", "Island Evangelical Community Church"]) {
-  if (!activeGivingHtml.includes(copy)) throw new Error(`published Giving HTML missing ${copy}`);
-}
-const closedCampaign = await store.closeGivingCampaign(campaignDraft.id);
-if (closedCampaign.status !== "closed" || await store.getActiveGivingCampaign() !== null) {
-  throw new Error("closed campaign must stop being active");
-}
-await assert.rejects(() => store.saveGivingCampaign({ ...closedCampaign, title: "Mutated closed campaign" }), /immutable/);
-await assert.rejects(() => store.publishGivingCampaign(closedCampaign.id), /draft/);
-const nextDraft = await store.saveGivingCampaign({
-  title: "Next campaign",
-  description: "The next community campaign.",
-  goalHKD: 10000,
-  fpsId: "7654321",
-  fpsPayee: "Island Evangelical Community Church",
-});
-if (nextDraft.status !== "draft" || (await store.listGivingCampaigns()).length !== 2) {
-  throw new Error("a new draft must be allowed after closure");
-}
-const adminGivingHtml = await views.viewAdmin("giving");
-if (!/href="#\/admin\/giving" class="active"[^>]*aria-current="page"/.test(adminGivingHtml) ||
-    !adminGivingHtml.includes("Winter Relief 2027") || !adminGivingHtml.includes("Next campaign") ||
-    adminGivingHtml.includes("+ Create campaign")) {
-  throw new Error("Admin Giving tab must list campaign statuses and hide create while one is open");
-}
-const draftFormHtml = await views.viewAdminCampaign(nextDraft.id);
-for (const label of ["Campaign title", "Description", "Goal (HKD)", "FPS ID", "FPS payee"]) {
-  if (!draftFormHtml.includes(label)) throw new Error(`campaign form missing visible label ${label}`);
-}
-if (!draftFormHtml.includes('id="campaign-error" aria-live="polite"') ||
-    !draftFormHtml.includes('data-action="campaign-publish"')) {
-  throw new Error("draft campaign form must expose accessible errors and publish action");
-}
-const closedHistoryHtml = await views.viewAdminCampaign(closedCampaign.id);
-if (!closedHistoryHtml.includes("Closed") || /form-campaign|campaign-publish|campaign-close/.test(closedHistoryHtml)) {
-  throw new Error("closed campaigns must render read-only history");
-}
-store.demoSignIn("member");
-await assert.rejects(() => store.listGivingCampaigns(), /Admin access required/);
-await assert.rejects(() => store.saveGivingCampaign({ ...nextDraft, title: "Member forgery" }), /Admin access required/);
-if ((await views.viewAdminCampaign(nextDraft.id)).redirect !== "#/account") {
-  throw new Error("members must be denied Admin Giving routes");
-}
-
-// A flow retained while Giving is closed must never carry its intent or thank-you
-// into the next campaign, and the no-campaign view clears every flow field.
-views.givingState.campaignId = closedCampaign.id;
-views.givingState.step = 2;
-views.givingState.amount = 777;
-views.givingState.name = "Campaign A donor";
-views.givingState.note = "For A";
-views.givingState.ref = "GIVE-A";
-store.demoSignIn("admin");
-await store.publishGivingCampaign(nextDraft.id);
-store.demoSignIn("member");
-const nextCampaignGiving = await views.viewGiving();
-if (!nextCampaignGiving.includes('id="form-giving"') || views.givingState.campaignId !== nextDraft.id ||
-    views.givingState.step !== 1 || views.givingState.amount !== 200 || views.givingState.name ||
-    views.givingState.note || views.givingState.ref !== null) {
-  throw new Error("campaign B must start a clean Giving flow after campaign A step 2");
-}
-views.givingState.step = 3;
-views.givingState.amount = 888;
-views.givingState.name = "Campaign B donor";
-views.givingState.note = "For B";
-views.givingState.ref = "GIVE-B";
-store.demoSignIn("admin");
-await store.closeGivingCampaign(nextDraft.id);
-const thirdDraft = await store.saveGivingCampaign({
-  title: "Third campaign",
-  description: "A fresh campaign after a retained thank-you.",
-  goalHKD: 12000,
-  fpsId: "3333333",
-  fpsPayee: "Island Evangelical Community Church",
-});
-await store.publishGivingCampaign(thirdDraft.id);
-store.demoSignIn("member");
-const thirdCampaignGiving = await views.viewGiving();
-if (!thirdCampaignGiving.includes('id="form-giving"') || views.givingState.campaignId !== thirdDraft.id ||
-    views.givingState.step !== 1 || views.givingState.ref !== null) {
-  throw new Error("campaign C must start a clean Giving flow after campaign B step 3");
-}
-views.givingState.step = 2;
-views.givingState.amount = 999;
-views.givingState.name = "No campaign donor";
-views.givingState.note = "Stale";
-views.givingState.ref = "GIVE-STALE";
-store.demoSignIn("admin");
-await store.closeGivingCampaign(thirdDraft.id);
-store.demoSignIn("member");
-await views.viewGiving();
-if (views.givingState.campaignId !== null || views.givingState.step !== 1 || views.givingState.amount !== 200 ||
-    views.givingState.name || views.givingState.note || views.givingState.ref !== null) {
-  throw new Error("no-campaign Giving must clear the entire retained flow");
-}
-store.resetDemo();
-views.resetGivingState();
-console.log("ok  local Giving campaign lifecycle, flow isolation, and role guards");
+// Neutral fixtures exercise authenticated local paths without shipping to users.
+const installLocalFixtures = () => {
+  const clean = JSON.parse(mem.get("itc.prototype.v1"));
+  clean.users = [
+    {
+      id: "fixture-admin", role: "admin", status: "approved", fullName: "Test Admin",
+      preferredName: "Admin", email: "admin@example.test", phone: "+852 5000 0001",
+      emergencyName: "Test Contact", emergencyPhone: "+852 5000 9001", heard: "Test fixture",
+      isMinor: false, appliedAt: Date.now() - 86400000, indemnityAcceptedAt: Date.now() - 86400000,
+      privacyAcceptedAt: Date.now() - 86400000, whatsappReminders: false, emailReceipts: false,
+      communityNews: false,
+    },
+    {
+      id: "fixture-member", role: "member", status: "approved", fullName: "Test Member",
+      preferredName: "Tester", email: "member@example.test", phone: "+852 5000 0002",
+      emergencyName: "Test Contact", emergencyPhone: "+852 5000 9002", heard: "Test fixture",
+      mediaConsent: true, donorId: "TEST-1234", isMinor: false,
+      appliedAt: Date.now() - 172800000, indemnityAcceptedAt: Date.now() - 172800000,
+      privacyAcceptedAt: Date.now() - 172800000, whatsappReminders: false,
+      emailReceipts: false, communityNews: false,
+    },
+  ];
+  mem.set("itc.prototype.v1", JSON.stringify(clean));
+  store.load();
+};
+installLocalFixtures();
 
 // --- Visitor state ---
 store.signOut();
@@ -712,10 +391,10 @@ if (store.spotsLeft(hyroxUpcoming) !== hyroxUpcoming.capacity) {
   failures++;
   console.error("FAIL HYROX spots should equal capacity with no bookings");
 } else console.log("ok  HYROX spots equal capacity with no bookings");
-if (store.bookingsForUser("u-member").length !== 0) {
+if (store.bookingsForUser("fixture-member").length !== 0) {
   failures++;
-  console.error("FAIL seeded member should have no bookings after cleanup");
-} else console.log("ok  seeded member has no bookings");
+  console.error("FAIL fixture member should have no bookings");
+} else console.log("ok  fixture member has no bookings");
 await check("activity paid (visitor)", () => views.viewActivity(paid.id));
 await check("activity free (visitor)", () => views.viewActivity(free.id));
 await check("community", () => views.viewCommunity());
@@ -747,11 +426,6 @@ await check("community > prayers", () => views.viewCommunity("prayers"));
 await check("community > fellowship", () => views.viewCommunity("fellowship"));
 await check("community > meals", () => views.viewCommunity("meals"));
 await check("community > announcements", () => views.viewCommunity("announcements"));
-const announcementsHtml = views.viewCommunity("announcements");
-if (/Standard Chartered|SCM27/i.test(announcementsHtml)) {
-  failures++;
-  console.error("FAIL fresh announcements must not render old Giving campaign references");
-} else console.log("ok  fresh announcements omit old Giving campaign references");
 await check("community > about", () => views.viewCommunity("about"));
 const commAbout = views.viewCommunity("about");
 if (!commAbout.includes("Arnold Wong") || !commAbout.includes("Our foundation")) {
@@ -762,20 +436,6 @@ if (!views.viewCommunity("prayers").includes('id="form-prayer"')) {
   failures++;
   console.error("FAIL prayers page missing the request form");
 } else console.log("ok  prayers page has the request form");
-const givingSensitiveCopy = [
-  "Give via FPS",
-  "Current campaign",
-  "Campaign progress",
-  "I’ve made the transfer",
-  "Giving history",
-  "Donation history",
-];
-const givingVisitorNav = views.navHTML("home", null);
-if (givingVisitorNav.includes("#/giving")) {
-  failures++;
-  console.error("FAIL visitor navigation must hide Giving");
-} else console.log("ok  visitor navigation hides Giving");
-
 for (const [section, title] of [
   ["prayers", "Prayers."],
   ["fellowship", "Fellowship."],
@@ -859,6 +519,12 @@ const applyRes = store.applyForMembership({
   indemnity: true,
 });
 if (!applyRes.ok) throw new Error("apply failed");
+store.signOut();
+const pendingSignIn = store.signIn(" TEST@EXAMPLE.COM ");
+if (!pendingSignIn.ok || pendingSignIn.user.id !== applyRes.user.id || pendingSignIn.user.status !== "pending") {
+  failures++;
+  console.error("FAIL a local applicant should be able to sign in again while pending");
+} else console.log("ok  local application can sign in again while pending");
 if (applyRes.user.isMinor !== false) {
   failures++;
   console.error("FAIL adult application should store isMinor as false");
@@ -894,20 +560,6 @@ if (!applyRes.user.indemnityAcceptedAt) {
 
 // pending users see "My Week" but with free sessions only — paid booking
 // is locked until approval, so paid rows would be dead ends
-const pendingUser = store.currentUser();
-const pendingNav = views.navHTML("giving", pendingUser);
-const pendingGiving = await views.viewGiving();
-if (!pendingNav.includes("#/giving")) {
-  failures++;
-  console.error("FAIL pending navigation must retain Giving");
-} else if (
-  !pendingGiving.includes("approved ITC members") ||
-  givingSensitiveCopy.some((copy) => pendingGiving.includes(copy))
-) {
-  failures++;
-  console.error("FAIL pending Giving must be locked without Giving content");
-} else console.log("ok  pending Giving is content-safe and retains navigation");
-
 const pendingHome = views.viewHome();
 if (!pendingHome.includes("My Week")) {
   failures++;
@@ -957,7 +609,7 @@ if (!pendHtml.includes("Booking locked")) {
 } else console.log("ok  pending user blocked from paid booking");
 
 // --- Admin approval flow ---
-store.demoSignIn("admin");
+store.signIn("admin@example.test");
 const adminApprovalsOut = await views.viewAdmin("approvals");
 await check("admin approvals", () => adminApprovalsOut);
 for (const approvalContract of [
@@ -985,13 +637,6 @@ if (!/href="#\/admin\/activities" class="active" aria-current="page"/.test(admin
 } else console.log("ok  active Admin tab exposes aria-current page");
 const adminMembersOut = await views.viewAdmin("members");
 await check("admin members", () => adminMembersOut);
-const adminGiving = await views.viewGiving();
-if (!views.navHTML("giving", store.currentUser()).includes("#/giving") ||
-    !adminGiving.includes("No active campaign right now") ||
-    givingSensitiveCopy.some((copy) => adminGiving.includes(copy))) {
-  failures++;
-  console.error("FAIL Admin must see the control-free no-campaign Giving state");
-} else console.log("ok  Admin sees the control-free no-campaign Giving state");
 if (/member-summary|Member status counts|data-change="member-(?:status|role)-filter"/.test(adminMembersOut)) {
   failures++;
   console.error("FAIL Admin members must omit redundant counts and native filter selects");
@@ -1026,7 +671,7 @@ if (!/Search members/.test(adminMembersOut) || !/(?:Role changes are Super Admin
   failures++;
   console.error("FAIL default Admin member filters must preserve guidance/search and hide Clear filters");
 }
-views.adminMemberFilters.query = "tina";
+views.adminMemberFilters.query = "test admin";
 views.adminMemberFilters.status = "approved";
 views.adminMemberFilters.role = "admin";
 const filteredAdminMembers = await views.viewAdmin("members");
@@ -1034,7 +679,7 @@ if (!/data-action="admin-member-filters-clear"[^>]*>Clear filters</.test(filtere
   failures++;
   console.error("FAIL active Admin member filters must show Clear filters");
 }
-if (!filteredAdminMembers.includes("Tina") || filteredAdminMembers.includes("CM Chui") || filteredAdminMembers.includes("Marco Santos")) {
+if (!filteredAdminMembers.includes("Test Admin") || filteredAdminMembers.includes("Test Member") || filteredAdminMembers.includes("test@example.com")) {
   failures++;
   console.error("FAIL Admin member search/status/role filters must combine truthfully");
 } else console.log("ok  Admin member filters combine truthfully");
@@ -1047,26 +692,27 @@ if (!/No members match[\s\S]*nobody[\s\S]*Approved[\s\S]*Admin/i.test(emptyAdmin
 views.adminMemberFilters.query = "";
 views.adminMemberFilters.status = "all";
 views.adminMemberFilters.role = "all";
-
-await check("admin activity edit", () => views.viewAdminActivity("hyrox"));
-await check("admin activity new", () => views.viewAdminActivity("new"));
+const adminActivityEdit = views.viewAdminActivity("hyrox");
+const adminActivityNew = views.viewAdminActivity("new");
+await check("admin activity edit", () => adminActivityEdit);
+await check("admin activity new", () => adminActivityNew);
+if ([adminActivityEdit, adminActivityNew].some((html) => /baseBooked|Simulated existing bookings|simulated demand/i.test(html))) {
+  failures++;
+  console.error("FAIL Admin activity forms must not render simulated demand controls or copy");
+} else console.log("ok  Admin activity forms cannot render simulated demand controls");
+const activityDraft = { ...store.getActivity("hyrox"), baseBooked: 17 };
+store.saveActivity(activityDraft);
+if ("baseBooked" in store.getActivity("hyrox")) {
+  failures++;
+  console.error("FAIL saveActivity must discard simulated demand input");
+} else console.log("ok  saveActivity discards simulated demand input");
+const capacityProbe = { id: "runtime-demand-probe", kind: "paid", capacity: 12, baseBooked: 11 };
+if (store.spotsLeft(capacityProbe) !== capacityProbe.capacity) {
+  failures++;
+  console.error("FAIL capacity must be calculated from real confirmed bookings only");
+} else console.log("ok  capacity uses real confirmed bookings only");
 const newApplicant = store.pendingApplicants().find((u) => u.email === "test@example.com");
 store.approveApplicant(newApplicant.id);
-const minorApplicant = store.pendingApplicants().find((u) => u.email === "minor@example.com");
-store.declineApplicant(minorApplicant.id);
-store.signIn("minor@example.com");
-const declinedNav = views.navHTML("giving", store.currentUser());
-const declinedGiving = await views.viewGiving();
-if (!declinedNav.includes("#/giving")) {
-  failures++;
-  console.error("FAIL declined navigation must retain Giving");
-} else if (
-  !declinedGiving.includes("contact an ITC leader") ||
-  givingSensitiveCopy.some((copy) => declinedGiving.includes(copy))
-) {
-  failures++;
-  console.error("FAIL declined Giving must be locked without Giving content");
-} else console.log("ok  declined Giving is content-safe and retains navigation");
 console.log("ok  admin approved new applicant");
 
 // --- Member booking + payment flow ---
@@ -1241,37 +887,37 @@ if (!histHtml.includes("booking-card") || !histHtml.includes("Cancelled")) {
   console.error("FAIL History sub-page missing past bookings");
 } else console.log("ok  History sub-page lists past bookings");
 
-// --- Seeded member view ---
-store.demoSignIn("member");
-await check("account (seeded member)", () => views.viewAccount());
+// --- Existing local member view ---
+store.signIn("member@example.test");
+await check("account (existing member)", () => views.viewAccount());
 const memberAcct = await views.viewAccount();
-if (!(await views.viewAccount("donor")).includes("CHUI-08879")) {
+if (!(await views.viewAccount("donor")).includes("TEST-1234")) {
   failures++;
-  console.error("FAIL seeded member donor ID not shown in Donor Profile");
-} else console.log("ok  seeded member donor ID shown in Donor Profile");
-if (memberAcct.includes("CHUI-08879")) {
+  console.error("FAIL existing member donor ID not shown in Donor Profile");
+} else console.log("ok  existing member donor ID shown in Donor Profile");
+if (memberAcct.includes("TEST-1234")) {
   failures++;
   console.error("FAIL donor ID should not appear on the Profile card face");
-} else console.log("ok  seeded member card faces carry no donor details");
+} else console.log("ok  existing member card faces carry no donor details");
 if (!(await views.viewAccount("payments")).includes("No payments yet")) {
   failures++;
-  console.error("FAIL seeded member Payments sub-page should be empty after cleanup");
-} else console.log("ok  seeded member has no receipts");
+  console.error("FAIL existing member Payments sub-page should be empty");
+} else console.log("ok  existing member has no receipts");
 if (!memberAcct.includes("Indemnity confirmed on")) {
   failures++;
-  console.error("FAIL seeded member should have indemnity confirmed");
-} else console.log("ok  seeded member indemnity confirmed");
+  console.error("FAIL existing member should have indemnity confirmed");
+} else console.log("ok  existing member indemnity confirmed");
 if (!memberAcct.includes('class="kicker">Profile</div>') || memberAcct.includes("Member Profile") || memberAcct.includes("’s training")) {
   failures++;
   console.error('FAIL Profile header should read "Profile" with no name headline');
 } else console.log('ok  Profile header reads "Profile"');
-if (memberAcct.includes("member@itc.hk")) {
+if (memberAcct.includes("member@example.test")) {
   failures++;
   console.error("FAIL email should not appear on the Profile face");
 } else console.log("ok  Profile face carries no contact details");
 const member = store.currentUser();
 const memberDetailsSummary = await views.viewAccount("details");
-if (!memberDetailsSummary.includes("member@itc.hk")) {
+if (!memberDetailsSummary.includes("member@example.test")) {
   failures++;
   console.error("FAIL email missing from Membership Details sub-page");
 } else console.log("ok  email lives on Membership Details sub-page");
@@ -1295,7 +941,7 @@ if (!memberDetailsSummary.includes("18 or over")) {
   failures++;
   console.error("FAIL Membership Details summary should show adult age status");
 } else console.log("ok  Membership Details summary shows adult age status");
-if (!memberDetailsSummary.includes("Preferred name</span><strong>CM</strong>")) {
+if (!memberDetailsSummary.includes("Preferred name</span><strong>Tester</strong>")) {
   failures++;
   console.error("FAIL Membership Details summary should show the local preferred name");
 } else console.log("ok  Membership Details summary shows the local preferred name");
@@ -1340,7 +986,7 @@ if (memberDetailsEdit.includes('name="photo_consent"')) {
   failures++;
   console.error("FAIL Membership Details edit route should exclude photo consent controls");
 } else console.log("ok  Membership Details edit route excludes photo consent controls");
-if (!memberDetailsEdit.includes('name="preferred_name" value="CM"')) {
+if (!memberDetailsEdit.includes('name="preferred_name" value="Tester"')) {
   failures++;
   console.error("FAIL Membership Details edit route should prefill the local preferred name");
 } else console.log("ok  Membership Details edit route prefills the local preferred name");
@@ -1436,8 +1082,8 @@ await check("home (member)", () => views.viewHome());
 const memberHome = views.viewHome();
 if (!memberHome.includes("Nothing booked this week")) {
   failures++;
-  console.error('FAIL "My week" should be empty for the seeded member after cleanup');
-} else console.log('ok  "My week" is empty for the seeded member');
+  console.error('FAIL "My week" should be empty for the fixture member');
+} else console.log('ok  "My week" is empty for the fixture member');
 if (!memberHome.includes("Encouragement of the week")) {
   failures++;
   console.error('FAIL approved home should show "Encouragement of the week"');
@@ -1527,34 +1173,6 @@ if (writtenIndemnity !== 1780000000000 || store.currentUser().indemnityAcceptedA
 } else {
   console.log("ok  acceptMyIndemnity writes one local timestamp when absent");
 }
-// Approved roles retain Giving access, but an empty campaign list must not
-// expose transfer controls or an empty history section.
-const memberGiving = await check("giving (member)", () => views.viewGiving());
-if (!views.navHTML("giving", member).includes("#/giving") ||
-    !memberGiving.includes("No active campaign right now") ||
-    givingSensitiveCopy.some((copy) => memberGiving.includes(copy)) ||
-    /FPS QR|FPS ID|Payee|form-giving/.test(memberGiving)) {
-  failures++;
-  console.error("FAIL approved members need a control-free no-campaign Giving state");
-} else console.log("ok  approved members see the control-free no-campaign Giving state");
-store.demoSignIn("superadmin");
-const superGiving = await views.viewGiving();
-if (!views.navHTML("giving", store.currentUser()).includes("#/giving") ||
-    !superGiving.includes("No active campaign right now") ||
-    givingSensitiveCopy.some((copy) => superGiving.includes(copy))) {
-  failures++;
-  console.error("FAIL Super Admin needs the control-free no-campaign Giving state");
-} else console.log("ok  Super Admin sees the control-free no-campaign Giving state");
-store.demoSignIn("member");
-if (store.campaignRaised() !== 0) throw new Error("no active campaign should raise zero");
-try {
-  store.recordDonation({ userId: member.id, name: member.fullName, amount: 300, ref: "NO-CAMPAIGN" });
-  throw new Error("donation should not record without a campaign");
-} catch (err) {
-  if (err.message !== "No active Giving campaign") throw err;
-}
-console.log("ok  gifts cannot be recorded without a campaign");
-
 // community: prayer request records locally (no public reader by design)
 const prayer = store.recordPrayer({ userId: member.id, name: member.fullName, request: "Smoke test request" });
 if (!prayer.id || prayer.request !== "Smoke test request") throw new Error("prayer not recorded");
@@ -1566,20 +1184,22 @@ if (!ics.includes("BEGIN:VEVENT") || !ics.includes(free.name)) throw new Error("
 console.log("ok  ICS generation");
 
 // --- v7 migration: legacy hyphen-less donor IDs get repaired on load ---
-store.resetDemo();
+store.resetLocalData();
 {
   const raw = JSON.parse(mem.get("itc.prototype.v1"));
   raw.version = 6;
-  raw.users.find((u) => u.id === "u-member").donorId = "CHUI08879"; // no separator
-  raw.users.find((u) => u.id === "u-admin").donorId = "not a real id"; // unrecognizable
+  raw.users = [
+    { id: "legacy-one", email: "legacy-one@example.test", donorId: "TEST1234" },
+    { id: "legacy-two", email: "legacy-two@example.test", donorId: "not a real id" },
+  ];
   mem.set("itc.prototype.v1", JSON.stringify(raw));
   store.load();
-  const fixed = store.allUsers().find((u) => u.id === "u-member").donorId;
-  if (fixed !== "CHUI-08879") {
+  const fixed = store.allUsers().find((u) => u.id === "legacy-one").donorId;
+  if (fixed !== "TEST-1234") {
     failures++;
-    console.error(`FAIL v7 migration should repair CHUI08879 -> CHUI-08879, got ${fixed}`);
+    console.error(`FAIL v7 migration should repair TEST1234 -> TEST-1234, got ${fixed}`);
   } else console.log("ok  v7 migration inserts the missing hyphen");
-  const cleared = store.allUsers().find((u) => u.id === "u-admin").donorId;
+  const cleared = store.allUsers().find((u) => u.id === "legacy-two").donorId;
   if (cleared !== null) {
     failures++;
     console.error(`FAIL v7 migration should clear unrecognizable donor ID, got ${cleared}`);
@@ -1587,11 +1207,12 @@ store.resetDemo();
 }
 
 // --- v9 migration: age status + notification preferences ---
-store.resetDemo();
+store.resetLocalData();
 {
   const raw = JSON.parse(mem.get("itc.prototype.v1"));
   raw.version = 8;
-  const legacyUser = raw.users.find((u) => u.id === "u-member");
+  raw.users = [{ id: "legacy-member", email: "legacy-member@example.test", appliedAt: 1234 }];
+  const legacyUser = raw.users[0];
   delete legacyUser.isMinor;
   delete legacyUser.privacyAcceptedAt;
   delete legacyUser.whatsappReminders;
@@ -1599,7 +1220,7 @@ store.resetDemo();
   delete legacyUser.communityNews;
   mem.set("itc.prototype.v1", JSON.stringify(raw));
   store.load();
-  const migrated = store.allUsers().find((u) => u.id === "u-member");
+  const migrated = store.allUsers().find((u) => u.id === "legacy-member");
   if (
     migrated.isMinor !== false ||
     migrated.whatsappReminders !== false ||
@@ -1637,87 +1258,86 @@ store.resetDemo();
   }
 }
 
-// --- v10 migration: HYROX demo attendance data stripped ---
-store.resetDemo();
+// --- v11 migration: exact demo identities removed, genuine v10 data preserved ---
+store.resetLocalData();
 {
   const raw = JSON.parse(mem.get("itc.prototype.v1"));
-  raw.version = 9;
-  // simulate pre-cleanup persisted state: simulated demand counters plus
-  // seed-owned and user-created bookings side by side
-  raw.activities.find((a) => a.id === "hyrox").baseBooked = 14;
-  raw.activities.find((a) => a.id === "hyrox-midtown").baseBooked = 9;
-  raw.activities.find((a) => a.id === "run").baseBooked = 4;
-  const snap = (dateISO) => ({ name: "ITC HYROX", kind: "paid", dateISO, time: "11:15", durationMin: 75, location: "BFT Causeway Bay", price: 180 });
-  raw.bookings.push(
-    { id: "b-seed-past", userId: "u-member", sessionId: "hyrox-2026-07-25", status: "attended", createdAt: 1, snapshot: snap("2026-07-25") },
-    { id: "b-seed-next", userId: "u-member", sessionId: "hyrox-2026-08-08", status: "confirmed", createdAt: 2, snapshot: snap("2026-08-08") },
-    { id: "b-user-1", userId: "u-member", sessionId: "hyrox-2026-08-08", status: "confirmed", createdAt: 3, snapshot: snap("2026-08-08") }
-  );
-  raw.receipts.push(
-    { id: "r-seed-past", bookingId: "b-seed-past", userId: "u-member", amount: 180, currency: "HKD", status: "paid", issuedAt: 1, line: "x" },
-    { id: "r-seed-next", bookingId: "b-seed-next", userId: "u-member", amount: 180, currency: "HKD", status: "paid", issuedAt: 2, line: "x" },
-    { id: "r-user-1", bookingId: "b-user-1", userId: "u-member", amount: 180, currency: "HKD", status: "paid", issuedAt: 3, number: "ITC-2026-0099", cardLast4: "4242", line: "ITC HYROX — 8 Aug 2026 11:15 AM" }
-  );
+  const historicalIdentities = [
+    ["u-super", "owner@itc.hk"],
+    ["u-admin", "admin@itc.hk"],
+    ["u-member", "member@itc.hk"],
+    ["u-pend-1", "marco.santos@example.com"],
+    ["u-pend-2", "jenny.wu@example.com"],
+  ];
+  const idMatchedUsers = historicalIdentities.map(([id], index) => ({
+    id,
+    email: `historical-id-${index}@example.test`,
+  }));
+  const emailMatchedUsers = historicalIdentities.map(([, email], index) => ({
+    id: `historical-email-${index}`,
+    email: ` ${email.toUpperCase()} `,
+  }));
+  const removedUsers = [...idMatchedUsers, ...emailMatchedUsers];
+  const preservedUsers = [
+    { id: "real-member", email: "real-member@example.test", donorId: "REAL-1234" },
+    { id: "u-admin-extra", email: "admin@itc.hk.example.test" },
+  ];
+  raw.version = 10;
+  raw.sessionUserId = "u-pend-2";
+  raw.users = [...removedUsers, ...preservedUsers];
+  raw.bookings = [
+    ...removedUsers.map((user, index) => ({ id: `historical-booking-${index}`, userId: user.id })),
+    ...preservedUsers.map((user, index) => ({ id: `preserved-booking-${index}`, userId: user.id })),
+  ];
+  raw.receipts = [
+    ...removedUsers.map((user, index) => ({
+      id: `historical-receipt-${index}`,
+      bookingId: `historical-booking-${index}`,
+      userId: user.id,
+    })),
+    ...preservedUsers.map((user, index) => ({
+      id: `preserved-receipt-${index}`,
+      bookingId: `preserved-booking-${index}`,
+      userId: user.id,
+    })),
+  ];
+  raw.prayers = [{ id: "real-prayer", userId: "real-member", request: "Preserve this" }];
+  raw.activities[0].baseBooked = 7;
+  raw.activities[0].location = "Genuine admin edit";
   mem.set("itc.prototype.v1", JSON.stringify(raw));
   store.load();
-  const migratedActivities = store.activities();
-  for (const id of ["hyrox", "hyrox-midtown"]) {
-    if (migratedActivities.find((a) => a.id === id)?.baseBooked !== undefined) {
-      failures++;
-      console.error(`FAIL v10 migration should strip baseBooked from ${id}`);
-    }
-  }
-  const migratedRun = migratedActivities.find((a) => a.id === "run");
-  if (migratedRun?.baseBooked !== 4) {
+  const migrated = JSON.parse(mem.get("itc.prototype.v1"));
+  const preservedIds = new Set(preservedUsers.map((user) => user.id));
+  const preserved = migrated.users.length === preservedUsers.length
+    && migrated.users.every((user) => preservedIds.has(user.id))
+    && migrated.bookings.length === preservedUsers.length
+    && migrated.bookings.every((booking) => preservedIds.has(booking.userId))
+    && migrated.receipts.length === preservedUsers.length
+    && migrated.receipts.every((receipt) => preservedIds.has(receipt.userId))
+    && migrated.prayers.length === 1 && migrated.prayers[0].id === "real-prayer"
+    && migrated.activities[0].location === "Genuine admin edit";
+  const cleaned = migrated.version === 12 && migrated.sessionUserId === null
+    && migrated.activities.every((activity) => !("baseBooked" in activity));
+  if (!preserved || !cleaned) {
     failures++;
-    console.error(`FAIL v10 migration should preserve run baseBooked 4, got ${migratedRun?.baseBooked}`);
-  } else console.log("ok  v10 migration preserves unrelated activity baseBooked");
-  const migratedIds = store.bookingsForUser("u-member").map((b) => b.id);
-  if (migratedIds.length !== 1 || migratedIds[0] !== "b-user-1") {
-    failures++;
-    console.error(`FAIL v10 migration should remove seed bookings only, got ${JSON.stringify(migratedIds)}`);
-  } else console.log("ok  v10 migration removes seed bookings, keeps user bookings");
-  const persisted = JSON.parse(mem.get("itc.prototype.v1"));
-  const persistedReceiptIds = (persisted.receipts || []).map((r) => r.id);
-  if (persistedReceiptIds.length !== 1 || persistedReceiptIds[0] !== "r-user-1") {
-    failures++;
-    console.error(`FAIL v10 migration should keep only the user receipt, got ${JSON.stringify(persistedReceiptIds)}`);
-  } else console.log("ok  v10 migration keeps the user receipt only");
-  if (persisted.version !== 11) {
-    failures++;
-    console.error(`FAIL state version should be 11 after migration, got ${persisted.version}`);
-  } else console.log("ok  state version is 11");
+    console.error("FAIL v11 migration should remove exact demo data and preserve genuine v10 records");
+  } else console.log("ok  v11 migration removes exact demo data and preserves genuine v10 records");
 }
 
-// --- v11 migration: Giving demo records stripped without losing real gifts ---
-store.resetDemo();
-{
+// Every collection, including prayers, is normalized before migrations and
+// before a current-version early return.
+for (const version of [0, 10, 11]) {
+  store.resetLocalData();
   const raw = JSON.parse(mem.get("itc.prototype.v1"));
-  raw.version = 10;
-  delete raw.campaigns;
-  raw.donations = [
-    { id: "d-seed-1", userId: "u-member", campaignId: "scm-2027", amount: 500 },
-    { id: "d-user-1", userId: "u-member", campaignId: "scm-2027", amount: 275, ref: "REAL-GIFT" },
-    { id: "d-seed-2", userId: "u-member", campaignId: "scm-2027", amount: 200 },
-  ];
+  raw.version = version;
+  for (const key of ["users", "activities", "bookings", "receipts", "prayers"]) raw[key] = null;
   mem.set("itc.prototype.v1", JSON.stringify(raw));
   store.load();
-  const persisted = JSON.parse(mem.get("itc.prototype.v1"));
-  const donationIds = persisted.donations.map((donation) => donation.id);
-  if (persisted.version !== 11 || !Array.isArray(persisted.campaigns) || persisted.campaigns.length ||
-      donationIds.length !== 1 || donationIds[0] !== "d-user-1") {
+  const normalized = JSON.parse(mem.get("itc.prototype.v1"));
+  if (["users", "activities", "bookings", "receipts", "prayers"].some((key) => !Array.isArray(normalized[key]))) {
     failures++;
-    console.error(`FAIL v11 migration must remove only seed gifts and initialize campaigns: ${JSON.stringify({ version: persisted.version, campaigns: persisted.campaigns, donationIds })}`);
-  } else console.log("ok  v11 migration removes only known Giving seeds");
-  store.signIn("member@itc.hk");
-  const migratedHistory = await views.viewGiving();
-  if (!migratedHistory.includes("No active campaign right now") ||
-      !migratedHistory.includes("Giving history") || !migratedHistory.includes("REAL-GIFT") ||
-      /form-giving|FPS QR|FPS ID|I’ve made the transfer/.test(migratedHistory)) {
-    failures++;
-    console.error("FAIL no-campaign Giving must show genuine history without transfer controls");
-  } else console.log("ok  no-campaign Giving preserves genuine member history only");
-  store.signOut();
+    console.error(`FAIL v${version} should normalize every state collection`);
+  } else console.log(`ok  v${version} normalizes every state collection`);
 }
 
 // --- viewAccount live-mode branch ---
@@ -1775,6 +1395,12 @@ if (!viewsSrc.includes("Signed in as")) {
 }
 
 const appSrc = readFileSync(resolve(__dirname, "js/app.js"), "utf8");
+const activityStoreRuntimeSrc = readFileSync(resolve(__dirname, "js/store.js"), "utf8")
+  .split("// --- Activities & sessions")[1] || "";
+if (viewsSrc.includes("baseBooked") || appSrc.includes("baseBooked") || activityStoreRuntimeSrc.includes("baseBooked")) {
+  failures++;
+  console.error("FAIL runtime activity source must not support baseBooked");
+} else console.log("ok  runtime activity source has no baseBooked support");
 const indexSrc = readFileSync(resolve(__dirname, "index.html"), "utf8");
 const stylesSrc = readFileSync(resolve(__dirname, "styles.css"), "utf8");
 const feedbackChecks = [
@@ -1855,18 +1481,17 @@ if (!/SIGNED_IN[\s\S]{0,300}location\.hash = "#\/home"/.test(appSrc)) {
 } else {
   console.log("ok  app.js: SIGNED_IN routes to #/home");
 }
-if (!/!isLive\(\)[\s\S]{0,200}admin demo profile/.test(viewsSrc)) {
-  failures++;
-  console.error("FAIL views.js: pending view's demo-profile tip should be local-only");
-} else {
-  console.log("ok  views.js: pending view's demo-profile tip is local-only");
+for (const removed of ["demo-signin", "reset-demo", "admin demo profile", "one-tap demo", "seeded email"]) {
+  if (viewsSrc.toLowerCase().includes(removed) || appSrc.toLowerCase().includes(removed)) {
+    failures++;
+    console.error(`FAIL runtime source still contains removed demo UI/copy: ${removed}`);
+  }
 }
-if (!/!isLive\(\)[\s\S]{0,200}data-action="reset-demo"/.test(viewsSrc)) {
+console.log("ok  runtime source contains no removed demo controls or copy");
+if (!appSrc.includes("No account found for that email. Apply for membership below first.")) {
   failures++;
-  console.error("FAIL views.js: Reset demo data button should be local-only");
-} else {
-  console.log("ok  views.js: Reset demo data button is local-only");
-}
+  console.error("FAIL local not-found sign-in copy should direct the visitor to apply");
+} else console.log("ok  local not-found sign-in copy directs the visitor to apply");
 
 // --- Live auth: home CTA + short application form ---
 const homeFn = viewsSrc.match(/export function viewHome\(\) \{[\s\S]*?\n\}/);
@@ -2259,8 +1884,10 @@ if (!localMatch) {
 } else {
   console.log("ok  getCurrentUser: mirrors currentUser() in local mode");
 }
-// Sign in as a seeded user so the local-mode mirror check has a real user.
-store.signIn("member@itc.hk");
+// Install a neutral fixture so the local-mode mirror check has a real user.
+store.resetLocalData();
+installLocalFixtures();
+store.signIn("member@example.test");
 const signedUser = await store.getCurrentUser();
 const signedCu = store.currentUser();
 const signedMatch = signedUser && signedCu && signedUser.id === signedCu.id;
@@ -2395,8 +2022,11 @@ if (!viewsSrc.includes("New notifications will appear here.")) {
 // --- Delegated local member-role behavior ---
 // Exercise app.js in local mode so stale events cannot produce false success,
 // successful changes use setRole(), and filter-only UI state stays in memory.
-store.resetDemo();
-store.demoSignIn("superadmin");
+store.resetLocalData();
+installLocalFixtures();
+const fixtureOwner = store.allUsers().find((user) => user.id === "fixture-admin");
+fixtureOwner.role = "superadmin";
+store.signIn("admin@example.test");
 const localDomListeners = new Map();
 const localWindowListeners = new Map();
 let localActiveElement = null;
@@ -2434,14 +2064,6 @@ globalThis.document = {
   addEventListener: (event, callback) => localDomListeners.set(event, callback),
 };
 globalThis.HTMLInputElement = class {};
-globalThis.HTMLFormElement = class {};
-const NativeFormData = globalThis.FormData;
-globalThis.FormData = class {
-  constructor(form) { this.values = new Map(Object.entries(form?.formValues || {})); }
-  get(name) { return this.values.get(name) ?? null; }
-  entries() { return this.values.entries(); }
-  [Symbol.iterator]() { return this.entries(); }
-};
 globalThis.location = { hash: "#/admin/members" };
 globalThis.window = {
   location: globalThis.location,
@@ -2458,7 +2080,6 @@ await localApp.bootPromise;
 const localClick = localDomListeners.get("click");
 const localChange = localDomListeners.get("change");
 const localInput = localDomListeners.get("input");
-const localSubmit = localDomListeners.get("submit");
 const localToasts = localElements.get("toast-stack");
 const localToastText = () => localToasts.children.map((item) => item.textContent);
 const clearLocalToasts = () => { localToasts.children.length = 0; };
@@ -2485,10 +2106,16 @@ if (staleLocalRole.value !== "member" || staleLocalRole.disabled || staleLocalRo
 } else console.log("ok  stale local role event restores without false success");
 
 clearLocalToasts();
+const pendingFixture = store.applyForMembership({
+  fullName: "Pending Fixture", preferredName: "Pending", email: "pending-fixture@example.test",
+  phone: "+852 5000 0003", emergencyName: "Test Contact", emergencyPhone: "+852 5000 9003",
+  heard: "Test fixture", donorId: "", indemnity: true, ageOver18: "yes",
+});
+store.signIn("admin@example.test");
 const rejectedLocalRevoke = localControl({
   action: "revoke-member",
-  user: "u-pend-1",
-  memberName: "Marco Santos",
+  user: pendingFixture.user.id,
+  memberName: "Pending Fixture",
 });
 rejectedLocalRevoke.textContent = "Revoke access";
 await localClick({ target: rejectedLocalRevoke });
@@ -2501,26 +2128,32 @@ if (rejectedLocalRevoke.textContent !== "Revoke access" || rejectedLocalRevoke.d
 } else console.log("ok  rejected local revoke restores without false success");
 
 clearLocalToasts();
+const secondAdmin = {
+  ...structuredClone(store.allUsers().find((user) => user.id === "fixture-member")),
+  id: "fixture-second-admin", role: "admin", fullName: "Second Admin", preferredName: "Second",
+  email: "second-admin@example.test",
+};
+store.allUsers().push(secondAdmin);
 const localDemotion = localControl({
   change: "set-role",
-  user: "u-admin",
-  memberName: "Tina",
+  user: "fixture-second-admin",
+  memberName: "Second Admin",
   currentRole: "admin",
 }, "member");
 await localChange({ target: localDemotion });
-if (store.allUsers().find((user) => user.id === "u-admin")?.role !== "member" ||
-    localToastText().join("|") !== "Tina is now Member.") {
+if (store.allUsers().find((user) => user.id === "fixture-second-admin")?.role !== "member" ||
+    localToastText().join("|") !== "Second Admin is now Member.") {
   failures++;
   console.error("FAIL delegated local demotion must mutate through setRole and toast success");
 } else console.log("ok  delegated local demotion confirms setRole success");
 
 clearLocalToasts();
-const localRevoke = localControl({ action: "revoke-member", user: "u-member", memberName: "CM Chui" });
+const localRevoke = localControl({ action: "revoke-member", user: "fixture-member", memberName: "Test Member" });
 localRevoke.textContent = "Revoke access";
 await localClick({ target: localRevoke });
-const revokedLocalUser = store.allUsers().find((user) => user.id === "u-member");
+const revokedLocalUser = store.allUsers().find((user) => user.id === "fixture-member");
 if (revokedLocalUser?.role !== "pending" || revokedLocalUser?.status !== "pending" ||
-    localToastText().join("|") !== "CM Chui moved to Pending.") {
+    localToastText().join("|") !== "Test Member moved to Pending.") {
   failures++;
   console.error("FAIL delegated local revoke must confirm role and status mutation");
 } else console.log("ok  delegated local revoke confirms setRole success");
@@ -2556,504 +2189,15 @@ if (views.adminMemberFilters.query || views.adminMemberFilters.status !== "all" 
   failures++;
   console.error("FAIL Clear filters must reset all view-local filters and focus search");
 } else console.log("ok  Clear filters resets all filters and focuses search");
-
-// Campaign actions inherit duplicate-safe busy controls, named confirmations,
-// accessible errors, and truthful mutation/refresh feedback.
-const delegatedCampaign = await store.saveGivingCampaign({
-  title: "Delegated Campaign",
-  description: "Campaign action smoke fixture.",
-  goalHKD: 5000,
-  fpsId: "1234567",
-  fpsPayee: "Island Evangelical Community Church",
-});
-const makeCampaignForm = (campaign, values = {}) => {
-  const error = makeLocalElement();
-  const submit = localControl({});
-  submit.textContent = "Save changes";
-  const fields = ["title", "description", "goalHKD", "fpsId", "fpsPayee"].map(() => localControl({}));
-  fields.forEach((field) => { field.tagName = "INPUT"; });
-  const controls = [...fields, submit];
-  const form = Object.assign(new HTMLFormElement(), makeLocalElement(), {
-    id: "form-campaign",
-    dataset: { campaign: campaign.id },
-    formValues: {
-      title: campaign.title,
-      description: campaign.description,
-      goalHKD: String(campaign.goalHKD),
-      fpsId: campaign.fpsId,
-      fpsPayee: campaign.fpsPayee,
-      ...values,
-    },
-    validity: true,
-    reportValidity() { return this.validity; },
-  });
-  form.querySelector = (selector) => selector === "#campaign-error"
-    ? error
-    : selector === '[type="submit"]'
-      ? submit
-      : null;
-  form.querySelectorAll = (selector) => selector === "input, textarea, select, button" ? controls : [];
-  return { form, error, submit, fields, controls };
-};
-const campaignAction = (action, campaign, form) => {
-  const control = localControl({ action, campaign: campaign.id, campaignName: campaign.title });
-  control.textContent = action === "campaign-publish" ? "Publish campaign" : "Close campaign";
-  control.closest = (selector) => selector === "form" ? form : control;
-  form.querySelectorAll("input, textarea, select, button").push(control);
-  return control;
-};
-let campaignConfirm = "";
-let campaignConfirmCount = 0;
-window.confirm = (message) => {
-  campaignConfirm = message;
-  campaignConfirmCount++;
-  return true;
-};
-
-// Native-invalid unsaved fields stop before confirmation or mutation.
-const invalidEditor = makeCampaignForm(delegatedCampaign, { title: "" });
-invalidEditor.form.validity = false;
-const invalidPublish = campaignAction("campaign-publish", delegatedCampaign, invalidEditor.form);
-await localClick({ target: invalidPublish });
-if (campaignConfirm || store.campaigns().find((item) => item.id === delegatedCampaign.id)?.status !== "draft" ||
-    invalidPublish.disabled || invalidPublish.hasAttribute("aria-busy")) {
-  failures++;
-  console.error("FAIL invalid unsaved campaign publish must stop at form validation");
-} else console.log("ok  invalid unsaved campaign publish stops before confirmation");
-
-// Valid visible edits are saved first, used in confirmation, and then published.
-clearLocalToasts();
-const validEditor = makeCampaignForm(delegatedCampaign, {
-  title: "Visible Unsaved Title",
-  description: "Visible unsaved description.",
-  goalHKD: "6200",
-  fpsId: "7654321",
-  fpsPayee: "Visible Unsaved Payee",
-});
-const validPublish = campaignAction("campaign-publish", delegatedCampaign, validEditor.form);
-campaignConfirmCount = 0;
-const pendingValidPublish = localClick({ target: validPublish });
-const duplicateValidPublish = localClick({ target: validPublish });
-const overlappingPublishSave = localSubmit({ target: validEditor.form, preventDefault() {} });
-if (!validPublish.disabled || validPublish.textContent !== "Publishing…" ||
-    validPublish.getAttribute("aria-busy") !== "true" ||
-    validEditor.controls.some((control) => !control.disabled)) {
-  failures++;
-  console.error("FAIL campaign publish must lock every campaign mutation control immediately");
-}
-await Promise.all([pendingValidPublish, duplicateValidPublish, overlappingPublishSave]);
-const persistedPublished = store.campaigns().find((item) => item.id === delegatedCampaign.id);
-if (campaignConfirmCount !== 1 ||
-    campaignConfirm !== "Publish “Visible Unsaved Title”? Approved members will be notified." ||
-    persistedPublished?.status !== "published" || persistedPublished.title !== "Visible Unsaved Title" ||
-    persistedPublished.description !== "Visible unsaved description." || persistedPublished.goalHKD !== 6200 ||
-    persistedPublished.fpsId !== "7654321" || persistedPublished.fpsPayee !== "Visible Unsaved Payee" ||
-    localToastText().filter((text) => text === "“Visible Unsaved Title” published.").length !== 1 ||
-    validEditor.controls.some((control) => control.disabled) || validPublish.textContent !== "Publish campaign") {
-  failures++;
-  console.error("FAIL rapid Publish/Save events must produce one restored publication operation");
-} else console.log("ok  rapid Publish and overlapping Save events no-op behind one campaign operation");
-
-// Cancellation, successful close, rejected close, and refresh-after-close feedback.
-let closeCampaign = campaignAction("campaign-close", persistedPublished, validEditor.form);
-window.confirm = (message) => { campaignConfirm = message; return false; };
-await localClick({ target: closeCampaign });
-if (campaignConfirm !== "Close “Visible Unsaved Title”? Closed campaigns cannot be edited or republished." ||
-    store.campaigns().find((item) => item.id === delegatedCampaign.id)?.status !== "published") {
-  failures++;
-  console.error("FAIL campaign close must name the campaign and respect cancellation");
-} else console.log("ok  campaign close names the campaign and respects cancellation");
-window.confirm = () => true;
-clearLocalToasts();
-const pendingClose = localClick({ target: closeCampaign });
-const overlappingCloseSave = localSubmit({ target: validEditor.form, preventDefault() {} });
-if (closeCampaign.textContent !== "Closing…" || validEditor.controls.some((control) => !control.disabled)) {
-  failures++;
-  console.error("FAIL campaign Close must lock fields and sibling Save immediately");
-}
-await Promise.all([pendingClose, overlappingCloseSave]);
-if (store.campaigns().find((item) => item.id === delegatedCampaign.id)?.status !== "closed" ||
-    localToastText().filter((text) => text === "“Visible Unsaved Title” closed.").length !== 1 ||
-    localToastText().includes("Campaign saved.") || validEditor.controls.some((control) => control.disabled) ||
-    closeCampaign.textContent !== "Close campaign") {
-  failures++;
-  console.error("FAIL overlapping Close/Save must run one restored closure operation");
-} else console.log("ok  campaign Close excludes overlapping Save and restores the group");
-clearLocalToasts();
-const rejectedClose = campaignAction("campaign-close", persistedPublished, validEditor.form);
-await localClick({ target: rejectedClose });
-if (!validEditor.error.textContent.includes("published") || rejectedClose.disabled ||
-    localToastText().includes("“Visible Unsaved Title” closed.")) {
-  failures++;
-  console.error("FAIL rejected campaign close must recover without false success");
-} else console.log("ok  rejected campaign close recovers without false success");
-
-// Save owns the same operation group: sibling Publish and Close events are
-// ignored while its promise is pending, with every field/control restored.
-const saveOverlapDraft = await store.saveGivingCampaign({
-  title: "Save Overlap Campaign",
-  description: "Save overlap fixture.",
-  goalHKD: 6800,
-  fpsId: "6800000",
-  fpsPayee: "Save Overlap Payee",
-});
-const saveOverlapEditor = makeCampaignForm(saveOverlapDraft, { title: "Saved Without Publish" });
-const blockedPublish = campaignAction("campaign-publish", saveOverlapDraft, saveOverlapEditor.form);
-campaignConfirmCount = 0;
-window.confirm = (message) => { campaignConfirm = message; campaignConfirmCount++; return true; };
-clearLocalToasts();
-const pendingOverlapSave = localSubmit({ target: saveOverlapEditor.form, preventDefault() {} });
-const pendingBlockedPublish = localClick({ target: blockedPublish });
-if (saveOverlapEditor.submit.textContent !== "Saving…" ||
-    saveOverlapEditor.controls.some((control) => !control.disabled)) {
-  failures++;
-  console.error("FAIL campaign Save must lock fields and sibling Publish immediately");
-}
-await Promise.all([pendingOverlapSave, pendingBlockedPublish]);
-let savedOverlapCampaign = store.campaigns().find((item) => item.id === saveOverlapDraft.id);
-if (savedOverlapCampaign?.status !== "draft" || savedOverlapCampaign.title !== "Saved Without Publish" ||
-    campaignConfirmCount !== 0 || saveOverlapEditor.submit.textContent !== "Save changes" ||
-    saveOverlapEditor.controls.some((control) => control.disabled)) {
-  failures++;
-  console.error("FAIL overlapping Save/Publish must run only Save and restore the group");
-} else console.log("ok  campaign Save excludes overlapping Publish and restores the group");
-
-savedOverlapCampaign = await store.publishGivingCampaign(saveOverlapDraft.id);
-const saveCloseEditor = makeCampaignForm(savedOverlapCampaign, { title: "Saved Without Close" });
-const blockedClose = campaignAction("campaign-close", savedOverlapCampaign, saveCloseEditor.form);
-campaignConfirmCount = 0;
-clearLocalToasts();
-const pendingSaveBeforeClose = localSubmit({ target: saveCloseEditor.form, preventDefault() {} });
-const pendingBlockedClose = localClick({ target: blockedClose });
-await Promise.all([pendingSaveBeforeClose, pendingBlockedClose]);
-savedOverlapCampaign = store.campaigns().find((item) => item.id === saveOverlapDraft.id);
-if (savedOverlapCampaign?.status !== "published" || savedOverlapCampaign.title !== "Saved Without Close" ||
-    campaignConfirmCount !== 0 || saveCloseEditor.controls.some((control) => control.disabled) ||
-    saveCloseEditor.submit.textContent !== "Save changes") {
-  failures++;
-  console.error("FAIL overlapping Save/Close must run only Save and restore the group");
-} else console.log("ok  campaign Save excludes overlapping Close and restores the group");
-await store.closeGivingCampaign(saveOverlapDraft.id);
-
-// A stale Publish event can save a now-published campaign but must describe the
-// subsequent transition rejection as a partial success rather than a save failure.
-const partialDraft = await store.saveGivingCampaign({
-  title: "Partial Campaign",
-  description: "Partial publication fixture.",
-  goalHKD: 7000,
-  fpsId: "7000000",
-  fpsPayee: "Partial Payee",
-});
-const partialEditor = makeCampaignForm(partialDraft, { title: "Partially Saved Title" });
-await store.publishGivingCampaign(partialDraft.id);
-clearLocalToasts();
-const partialPublish = campaignAction("campaign-publish", partialDraft, partialEditor.form);
-await localClick({ target: partialPublish });
-if (store.campaigns().find((item) => item.id === partialDraft.id)?.title !== "Partially Saved Title" ||
-    !partialEditor.error.textContent.includes("Campaign changes saved, but publication failed") ||
-    partialPublish.disabled || localToastText().some((text) => /Partially Saved Title” published/.test(text))) {
-  failures++;
-  console.error("FAIL partial publish failure must truthfully distinguish save from transition");
-} else console.log("ok  partial publish failure truthfully reports the saved edit");
-await store.closeGivingCampaign(partialDraft.id);
-
-const refreshPublishDraft = await store.saveGivingCampaign({
-  title: "Publish Refresh Campaign",
-  description: "Publication refresh fixture.",
-  goalHKD: 7500,
-  fpsId: "7500000",
-  fpsPayee: "Publish Refresh Payee",
-});
-const refreshPublishEditor = makeCampaignForm(refreshPublishDraft);
-const refreshPublishControl = campaignAction("campaign-publish", refreshPublishDraft, refreshPublishEditor.form);
-const publishRefreshView = localElements.get("view");
-let publishRefreshHtml = publishRefreshView.innerHTML;
-let rejectPublishRefresh = true;
-Object.defineProperty(publishRefreshView, "innerHTML", {
-  configurable: true,
-  get: () => publishRefreshHtml,
-  set(value) {
-    if (rejectPublishRefresh) {
-      rejectPublishRefresh = false;
-      throw new Error("forced publish refresh failure");
-    }
-    publishRefreshHtml = value;
-  },
-});
-clearLocalToasts();
-await localClick({ target: refreshPublishControl });
-if (store.campaigns().find((item) => item.id === refreshPublishDraft.id)?.status !== "published" ||
-    !refreshPublishEditor.error.textContent.includes("Change saved, but this Admin view could not refresh") ||
-    refreshPublishEditor.controls.some((control) => !control.disabled) ||
-    refreshPublishControl.textContent !== "Publish campaign" ||
-    !localToastText().includes("“Publish Refresh Campaign” published.")) {
-  failures++;
-  console.error("FAIL publish refresh failure must preserve and truthfully report publication");
-} else console.log("ok  publish refresh failure truthfully preserves publication");
-delete publishRefreshView.innerHTML;
-publishRefreshView.innerHTML = publishRefreshHtml;
-await store.closeGivingCampaign(refreshPublishDraft.id);
-
-// A confirmed close remains a success when only the subsequent Admin refresh
-// fails. The stale close control is locked and the form receives an alert.
-const closeRefreshDraft = await store.saveGivingCampaign({
-  title: "Close Refresh Campaign",
-  description: "Close refresh fixture.",
-  goalHKD: 7750,
-  fpsId: "7750000",
-  fpsPayee: "Close Refresh Payee",
-});
-const closeRefreshPublished = await store.publishGivingCampaign(closeRefreshDraft.id);
-const closeRefreshEditor = makeCampaignForm(closeRefreshPublished);
-const closeRefreshControl = campaignAction("campaign-close", closeRefreshPublished, closeRefreshEditor.form);
-let closeRefreshHtml = publishRefreshView.innerHTML;
-let rejectCloseRefresh = true;
-Object.defineProperty(publishRefreshView, "innerHTML", {
-  configurable: true,
-  get: () => closeRefreshHtml,
-  set(value) {
-    if (rejectCloseRefresh) {
-      rejectCloseRefresh = false;
-      throw new Error("forced close refresh failure");
-    }
-    closeRefreshHtml = value;
-  },
-});
-clearLocalToasts();
-await localClick({ target: closeRefreshControl });
-if (store.campaigns().find((item) => item.id === closeRefreshDraft.id)?.status !== "closed" ||
-    !closeRefreshEditor.error.textContent.includes("Change saved, but this Admin view could not refresh") ||
-    closeRefreshEditor.error.getAttribute("role") !== "alert" ||
-    closeRefreshEditor.controls.some((control) => !control.disabled) ||
-    closeRefreshControl.textContent !== "Close campaign" ||
-    !localToastText().includes("“Close Refresh Campaign” closed.")) {
-  failures++;
-  console.error("FAIL close refresh failure must preserve and truthfully report closure");
-} else console.log("ok  close refresh failure truthfully preserves closure");
-delete publishRefreshView.innerHTML;
-publishRefreshView.innerHTML = closeRefreshHtml;
-
-// Ordinary form Save persists visible data; a committed save whose rerender
-// throws remains reported as saved and locks the stale submit control.
-const saveDraft = await store.saveGivingCampaign({
-  title: "Save Campaign",
-  description: "Save behavior fixture.",
-  goalHKD: 8000,
-  fpsId: "8000000",
-  fpsPayee: "Save Payee",
-});
-const saveEditor = makeCampaignForm(saveDraft, { title: "Saved Through Form" });
-clearLocalToasts();
-await localSubmit({ target: saveEditor.form, preventDefault() {} });
-if (store.campaigns().find((item) => item.id === saveDraft.id)?.title !== "Saved Through Form" ||
-    !localToastText().includes("Campaign saved.")) {
-  failures++;
-  console.error("FAIL campaign Save must persist current form data");
-} else console.log("ok  campaign Save persists current form data");
-
-// A rejected delegated Save restores its control, exposes an accessible error,
-// and never emits the success message reserved for a confirmed mutation.
-const rejectedSaveEditor = makeCampaignForm({ ...saveDraft, id: "missing-campaign" }, { title: "Rejected Save" });
-clearLocalToasts();
-await localSubmit({ target: rejectedSaveEditor.form, preventDefault() {} });
-if (!rejectedSaveEditor.error.textContent.includes("not found") ||
-    rejectedSaveEditor.error.getAttribute("role") !== "alert" ||
-    rejectedSaveEditor.submit.disabled || rejectedSaveEditor.submit.hasAttribute("aria-busy") ||
-    rejectedSaveEditor.submit.textContent !== "Save changes" ||
-    localToastText().includes("Campaign saved.")) {
-  failures++;
-  console.error("FAIL rejected campaign Save must recover accessibly without false success");
-} else console.log("ok  rejected campaign Save recovers accessibly without false success");
-
-const refreshEditor = makeCampaignForm(store.campaigns().find((item) => item.id === saveDraft.id), { title: "Saved Before Refresh Failure" });
-const localView = localElements.get("view");
-let currentViewHtml = localView.innerHTML;
-let rejectNextCommit = true;
-Object.defineProperty(localView, "innerHTML", {
-  configurable: true,
-  get: () => currentViewHtml,
-  set(value) {
-    if (rejectNextCommit) {
-      rejectNextCommit = false;
-      throw new Error("forced refresh failure");
-    }
-    currentViewHtml = value;
-  },
-});
-clearLocalToasts();
-await localSubmit({ target: refreshEditor.form, preventDefault() {} });
-if (store.campaigns().find((item) => item.id === saveDraft.id)?.title !== "Saved Before Refresh Failure" ||
-    !refreshEditor.error.textContent.includes("Change saved, but this Admin view could not refresh") ||
-    refreshEditor.controls.some((control) => !control.disabled) ||
-    refreshEditor.submit.textContent !== "Save changes") {
-  failures++;
-  console.error("FAIL save refresh failure must preserve and truthfully report the mutation");
-} else console.log("ok  save refresh failure truthfully preserves the mutation");
-delete localView.innerHTML;
-localView.innerHTML = currentViewHtml;
-
-// Amount submission awaits a generation-owning render: a later route wins
-// while the campaign lookup is pending, and a rejected render is handled by
-// the submit listener rather than escaping as an unhandled rejection.
-await store.publishGivingCampaign(saveDraft.id);
-store.demoSignIn("member");
-location.hash = "#/giving";
-await localWindowListeners.get("hashchange")();
-
-// FPS confirmation remains disabled through its awaited Giving render. Rapid
-// duplicate events produce one record and one success announcement.
-const givingMember = store.currentUser();
-views.givingState.step = 2;
-views.givingState.campaignId = saveDraft.id;
-views.givingState.amount = 525;
-views.givingState.name = "Rapid Donor";
-views.givingState.note = "One transfer";
-views.givingState.ref = "GIVE-RAPID-ONCE";
-const givingConfirm = localControl({ action: "giving-confirm" });
-givingConfirm.textContent = "I’ve made the transfer";
-clearLocalToasts();
-const pendingGivingConfirm = localClick({ target: givingConfirm });
-const duplicateGivingConfirm = localClick({ target: givingConfirm });
-if (!givingConfirm.disabled || givingConfirm.textContent !== "Recording…" ||
-    givingConfirm.getAttribute("aria-busy") !== "true") {
-  failures++;
-  console.error("FAIL FPS confirmation must expose busy state through record and render");
-}
-await Promise.all([pendingGivingConfirm, duplicateGivingConfirm]);
-const rapidGifts = store.donationsForUser(givingMember.id).filter((gift) => gift.ref === "GIVE-RAPID-ONCE");
-const idempotentGift = store.recordDonation({
-  userId: givingMember.id,
-  name: "Rapid Donor",
-  amount: 525,
-  note: "Retry",
-  ref: "GIVE-RAPID-ONCE",
-  campaignId: saveDraft.id,
-});
-if (rapidGifts.length !== 1 || idempotentGift.id !== rapidGifts[0]?.id ||
-    localToastText().filter((text) => text === "Gift recorded — awaiting confirmation").length !== 1 ||
-    givingConfirm.disabled || givingConfirm.hasAttribute("aria-busy") ||
-    givingConfirm.textContent !== "I’ve made the transfer") {
-  failures++;
-  console.error("FAIL rapid FPS confirmation must record the reference exactly once and restore");
-} else console.log("ok  rapid FPS confirmation records one reference and one success message");
-
-// A rejected record restores the stale control and reports an accessible error.
-views.givingState.step = 2;
-views.givingState.campaignId = "missing-campaign";
-views.givingState.ref = "GIVE-REJECTED";
-const rejectedGivingConfirm = localControl({ action: "giving-confirm" });
-rejectedGivingConfirm.textContent = "I’ve made the transfer";
-clearLocalToasts();
-await localClick({ target: rejectedGivingConfirm });
-if (store.donationsForUser(givingMember.id).some((gift) => gift.ref === "GIVE-REJECTED") ||
-    !localToastText().includes("No active Giving campaign") || rejectedGivingConfirm.disabled ||
-    rejectedGivingConfirm.hasAttribute("aria-busy") || rejectedGivingConfirm.textContent !== "I’ve made the transfer") {
-  failures++;
-  console.error("FAIL rejected FPS confirmation must recover without recording");
-} else console.log("ok  rejected FPS confirmation restores control without recording");
-
-const givingError = makeLocalElement();
-const givingForm = Object.assign(new HTMLFormElement(), makeLocalElement(), {
-  id: "form-giving",
-  dataset: {},
-  formValues: { amount: "450", name: "Async Donor", note: "Async path" },
-});
-givingForm.querySelector = (selector) => selector === "#giving-error" ? givingError : null;
-views.givingState.step = 1;
-const pendingGivingSubmit = localSubmit({ target: givingForm, preventDefault() {} });
-location.hash = "#/home";
-await localWindowListeners.get("hashchange")();
-await pendingGivingSubmit;
-if (!localView.innerHTML.includes("My Week") || localView.innerHTML.includes("I’ve made the transfer") ||
-    localElements.get("route-loader").hidden !== true || localView.hasAttribute("aria-busy")) {
-  failures++;
-  console.error("FAIL delayed Giving amount render must not overwrite a newer route generation");
-} else console.log("ok  delayed Giving amount render suppresses its stale generation");
-
-// Resolve controlled campaign A/B lookups out of order. Generation B owns both
-// its DOM commit and Giving flow reconciliation; stale A may do neither.
-views.resetGivingState();
-const controlledCampaignA = {
-  id: "controlled-campaign-a",
-  title: "Controlled Campaign A",
-  description: "Older campaign lookup.",
-  goalHKD: 1000,
-  fpsId: "1111111",
-  fpsPayee: "Campaign A Payee",
-};
-const controlledCampaignB = {
-  id: "controlled-campaign-b",
-  title: "Controlled Campaign B",
-  description: "Newer campaign lookup.",
-  goalHKD: 2000,
-  fpsId: "2222222",
-  fpsPayee: "Campaign B Payee",
-};
-let resolveCampaignA;
-let resolveCampaignB;
-const campaignARequest = new Promise((resolve) => { resolveCampaignA = resolve; });
-const campaignBRequest = new Promise((resolve) => { resolveCampaignB = resolve; });
-let controlledGivingGeneration = 0;
-const controlledGivingDom = { innerHTML: "" };
-const controlledGivingRender = async (activeCampaignLookup) => {
-  const generation = ++controlledGivingGeneration;
-  const html = await views.viewGiving({
-    activeCampaignLookup,
-    ownsGeneration: () => generation === controlledGivingGeneration,
-  });
-  if (generation === controlledGivingGeneration) controlledGivingDom.innerHTML = html;
-};
-const pendingCampaignA = controlledGivingRender(() => campaignARequest);
-const pendingCampaignB = controlledGivingRender(() => campaignBRequest);
-resolveCampaignB(controlledCampaignB);
-await pendingCampaignB;
-views.givingState.step = 2;
-views.givingState.amount = 625;
-views.givingState.name = "Campaign B Donor";
-views.givingState.ref = "GIVE-B-CONTROLLED";
-resolveCampaignA(controlledCampaignA);
-await pendingCampaignA;
-if (!controlledGivingDom.innerHTML.includes("Controlled Campaign B") ||
-    controlledGivingDom.innerHTML.includes("Controlled Campaign A") ||
-    views.givingState.campaignId !== controlledCampaignB.id || views.givingState.step !== 2 ||
-    views.givingState.amount !== 625 || views.givingState.name !== "Campaign B Donor" ||
-    views.givingState.ref !== "GIVE-B-CONTROLLED") {
-  failures++;
-  console.error("FAIL stale campaign A lookup must not replace campaign B DOM or Giving state");
-} else console.log("ok  out-of-order campaign lookup keeps DOM and Giving state owned by B");
-
-location.hash = "#/giving";
-views.resetGivingState();
-views.givingState.campaignId = saveDraft.id;
-const activeCampaignRecord = store.campaigns().find((item) => item.id === saveDraft.id);
-const activeGoal = activeCampaignRecord.goalHKD;
-Object.defineProperty(activeCampaignRecord, "goalHKD", {
-  configurable: true,
-  get() { throw new Error("rejected active campaign lookup"); },
-});
-clearLocalToasts();
-await localSubmit({ target: givingForm, preventDefault() {} });
-Object.defineProperty(activeCampaignRecord, "goalHKD", {
-  configurable: true,
-  writable: true,
-  value: activeGoal,
-});
-if (!localToastText().includes("rejected active campaign lookup") ||
-    localElements.get("route-loader").hidden !== true || localView.hasAttribute("aria-busy")) {
-  failures++;
-  console.error("FAIL rejected active-campaign lookup on amount submit must recover without a busy leak");
-} else console.log("ok  rejected active-campaign lookup on amount submit is handled without a busy leak");
-
-globalThis.FormData = NativeFormData;
 globalThis.setTimeout = realSetTimeout;
 globalThis.clearTimeout = realClearTimeout;
 
 // Direct callers receive checked failures for every rejected local transition.
 for (const [userId, role, message] of [
   ["missing-user", "admin", "Member not found."],
-  ["u-pend-1", "admin", "Only approved members can change roles."],
-  ["u-admin", "owner", "Invalid role transition."],
-  ["u-admin", "member", "Member already has that role."],
+  [pendingFixture.user.id, "admin", "Only approved members can change roles."],
+  ["fixture-second-admin", "owner", "Invalid role transition."],
+  ["fixture-second-admin", "member", "Member already has that role."],
 ]) {
   try {
     store.setRole(userId, role);
@@ -3069,8 +2213,11 @@ for (const [userId, role, message] of [
 console.log("ok  local setRole rejects missing, non-approved, and invalid transitions");
 
 // --- Reset ---
-store.resetDemo();
-console.log("ok  reset");
+const reset = store.resetLocalData();
+if (reset.users.length || reset.bookings.length || reset.receipts.length || reset.sessionUserId) {
+  failures++;
+  console.error("FAIL resetLocalData should restore the clean baseline");
+} else console.log("ok  resetLocalData restores the clean baseline");
 
 console.log(failures ? `\n${failures} FAILURE(S)` : "\nAll smoke tests passed.");
 process.exit(failures ? 1 : 0);

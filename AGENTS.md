@@ -62,22 +62,18 @@ node app/smoke.mjs
 
 All tests must pass before declaring done. The smoke suite covers the product rules (free vs paid, booking, donor ID, indemnity, Profile sub-pages, leader approval, localStorage migrations). It runs in milliseconds; no excuses.
 
-## Demo accounts
+## Local state and administrative testing
 
-Sign-in is frictionless (no password). Use these emails or one-tap demo profiles on the Account screen:
+Local state starts empty. Applying through the membership flow creates a pending profile on the current device, which can sign in again by email without a password.
 
-- `member@itc.hk` — approved member
-- `admin@itc.hk` — admin (approves applications)
-- `owner@itc.hk` — super admin (changes roles)
-
-The full loop to try: apply → sign out → sign in as admin → approve → sign back in → book HYROX → see receipt.
+Administrative testing requires Supabase live mode or the historical `archive/demo` branch. The archive is for demonstration only and must not be used as a production source branch.
 
 ## The Store.js seam
 
 `app/js/store.js` is the only place that touches `localStorage`. Two non-obvious rules:
 
 1. **Never delete `state` keys without a migration.** Persisted state has a `version` field; bump `STATE_VERSION` and add a migration step in `migrate()` instead of removing data outright.
-2. **Seed data is read-only.** Admin edits live in `state`, not in `SEED_*` constants. Resetting demo data must rebuild `state` from the seeds.
+2. **Seed data is read-only.** Admin edits live in `state`, not in `SEED_*` constants. Resetting local data must rebuild `state` from the seeds.
 
 ## Things deliberately NOT in the prototype
 
