@@ -367,7 +367,7 @@ document.addEventListener("submit", (e) => {
       g.amount = amount;
       g.name = name;
       g.note = String(fd.get("note") || "").trim();
-      g.ref = `SCM27-${Math.random().toString(36).slice(2, 8).toUpperCase()}`;
+      g.ref = `GIFT-${Math.random().toString(36).slice(2, 8).toUpperCase()}`;
       render();
       break;
     }

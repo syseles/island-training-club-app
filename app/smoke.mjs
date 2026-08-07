@@ -436,11 +436,11 @@ const donation = store.recordDonation({
   name: member.fullName,
   amount: 300,
   note: "smoke",
-  ref: "SCM27-SMOKE1",
+  ref: "GIFT-SMOKE1",
 });
 if (donation.status !== "pending") throw new Error("FPS gift should start pending");
 if (store.campaignRaised() !== raisedBefore + 300) throw new Error("campaign total did not increase");
-if (!store.donationsForUser(member.id).some((d) => d.ref === "SCM27-SMOKE1")) {
+if (!store.donationsForUser(member.id).some((d) => d.ref === "GIFT-SMOKE1")) {
   throw new Error("donation missing from giving history");
 }
 check("giving history with new gift", () => views.viewGiving());
