@@ -1,10 +1,27 @@
 # Live Auth — Operational Runbook
 
-This runbook covers the day-to-day operations of the live Supabase Auth,
-identity, notifications, Admin, and approval workflow used by
-`feature/auth-identity` and the integrated `feature/payment-system` prototype.
-Payment operational records remain device-local in `localStorage` and are keyed
-by the authenticated Supabase profile UUID; they are not stored in Supabase.
+This runbook covers the combined Testing candidate's live Supabase Auth,
+identity, notifications, Giving, Admin, and approval workflows.
+
+## Candidate ownership and surfaces
+
+- **Supabase owns:** identity, roles, applications, notifications, Giving
+  campaigns, and donor profiles.
+- **`localStorage` owns:** Payment operations and Community prototype
+  interactions. Reservations, bookings, queues, collector duty, payout details,
+  confirmations, receipts, and prototype donation records remain device-local
+  and are keyed by the authenticated Supabase profile UUID.
+- **Navigation:** Notification bell plus a signed-in-only Giving tab.
+- **Admin tabs:** Approvals, Members, Activities, Giving, and Payments / Ops.
+  Each Admin route exposes exactly one active tab.
+- **State compatibility:** the current local state is v13; v9, v10, v11, and
+  v12 persisted snapshots are accepted and migrated while preserving genuine
+  records.
+
+Pending and declined profiles can browse public surfaces but cannot render or
+invoke Payment reservation, queue, or pay controls, and cannot use Giving
+transfer controls. Signing out clears the Supabase session but preserves the
+UUID-owned device-local Payment records.
 
 ## Vercel env vars
 
@@ -25,10 +42,11 @@ The prototype requests the callback with:
 ```
 
 In Supabase Dashboard → Authentication → URL Configuration → Redirect URLs,
-add the exact deployed `feature/payment-system` URL ending in `/app/`. Preview
-and production domains are different origins, so add every deployed URL that
-will be tested. A missing or mismatched trailing `/app/` path causes Google to
-return to an unapproved URL.
+add the exact deployed Testing candidate URL ending in `/app/`. Preview and
+production domains are different origins, so add every deployed URL that will
+be tested. The callback must remain the exact origin plus deployed pathname;
+a missing or mismatched trailing `/app/` path causes Google to return to an
+unapproved URL.
 
 For local OAuth testing, also add `http://127.0.0.1:4173/app/` (and the exact
 `localhost` form separately if you use it).

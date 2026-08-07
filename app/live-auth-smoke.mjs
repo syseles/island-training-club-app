@@ -671,22 +671,41 @@ if (!pendingAccount.includes("Yes")) {
 }
 const gatedPaidSession = store.upcomingSessions(14).find((session) => session.kind === "paid" && !store.isMidtown(session));
 if (!gatedPaidSession) throw new Error("Live access checks need an upcoming paid session");
-for (const status of ["pending", "declined"]) {
-  store.currentUser().role = status;
-  store.currentUser().status = status;
-  const gatedHtml = views.viewActivity(gatedPaidSession.id);
-  for (const forbidden of ["Reserve spot", "Join waitlist", "Join interest", "I’ve paid"]) {
-    if (gatedHtml.includes(forbidden)) {
-      throw new Error(`${status} live profiles must not see Payment control: ${forbidden}`);
-    }
-  }
-}
 store.currentUser().role = "super_admin";
 store.currentUser().status = "approved";
 const uuidBooking = store.reserveSession(authUser.id, gatedPaidSession, Date.now());
 if (uuidBooking.userId !== authUser.id) {
   throw new Error("Payment records must use the authenticated Supabase profile UUID");
 }
+for (const status of ["pending", "declined"]) {
+  store.currentUser().role = status;
+  store.currentUser().status = status;
+  const gatedSurfaces = [
+    views.viewActivity(gatedPaidSession.id),
+    views.viewCheckout(gatedPaidSession.id),
+    views.viewPay(uuidBooking.id),
+    await views.viewGiving(),
+  ];
+  const renderedControls = gatedSurfaces
+    .filter((surface) => typeof surface === "string")
+    .join("\n");
+  for (const forbidden of [
+    'id="form-reserve"',
+    'data-action="join-waitlist"',
+    'data-action="join-interest"',
+    'id="form-mark-paid"',
+    'id="form-giving"',
+    'data-action="giving-amount"',
+    'data-action="giving-confirm"',
+  ]) {
+    if (renderedControls.includes(forbidden)) {
+      throw new Error(`${status} live profiles must not render gated control: ${forbidden}`);
+    }
+  }
+}
+store.currentUser().role = "super_admin";
+store.currentUser().status = "approved";
+console.log("ok  pending and declined live profiles cannot render Payment or Giving controls");
 const detailsSummary = await views.viewAccount("details");
 for (const label of [
   "Full name",

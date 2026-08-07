@@ -1462,7 +1462,7 @@ export function viewCheckout(sessionId) {
 export function viewPay(bookingId) {
   const b = store.getBooking(bookingId);
   const user = store.currentUser();
-  if (!b || !user || b.userId !== user.id) return viewNotFound("Booking not found.");
+  if (!b || !user || user.status !== "approved" || b.userId !== user.id) return viewNotFound("Booking not found.");
   if (b.status !== "reserved" || b.paymentMarkedAt)
     return { redirect: `#/booking/${b.id}` };
   const s = b.snapshot;
