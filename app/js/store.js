@@ -73,6 +73,15 @@ export function load() {
   return state;
 }
 
+function normalizeReceiptCounter() {
+  if (Number.isInteger(state.receiptCounter) && state.receiptCounter >= 0) return;
+  const highestIssued = state.receipts.reduce((highest, receipt) => {
+    const match = String(receipt?.number || "").match(/-(\d+)$/);
+    return match ? Math.max(highest, Number(match[1])) : highest;
+  }, -1);
+  state.receiptCounter = Math.max(49, highestIssued + 1);
+}
+
 // One-time, versioned migrations for persisted state that predates a
 // seed-data revision. Each step runs once per version so admin edits made
 // afterwards are not reverted on the next load.
@@ -101,6 +110,7 @@ function migrate() {
       fpsPhone: String(user.fpsPhone ?? "").trim(),
     };
   }
+  normalizeReceiptCounter();
 
   const v = state.version || 0;
   if (v >= STATE_VERSION) return;
@@ -641,7 +651,10 @@ export function setMidtownOpen(sessionId, open, now = Date.now()) {
 }
 
 function receiptNumber() {
-  return `ITC-${new Date().getFullYear()}-${String(state.receiptCounter++).padStart(4, "0")}`;
+  normalizeReceiptCounter();
+  const counter = state.receiptCounter;
+  state.receiptCounter += 1;
+  return `ITC-${new Date().getFullYear()}-${String(counter).padStart(4, "0")}`;
 }
 
 function snapshotFor(session) {

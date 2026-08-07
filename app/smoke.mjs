@@ -1484,5 +1484,54 @@ for (const fixture of sourceSnapshots) {
   } else console.log(`ok  genuine v${fixture.version} fixture reaches v13 intact`);
 }
 
+for (const invalidCounter of [null, -1, 1.5, "broken"]) {
+  mem.set("itc.prototype.v1", JSON.stringify({
+    version: 13,
+    activities: structuredClone(data.SEED_ACTIVITIES),
+    users: [], bookings: [], receipts: [],
+    receiptCounter: invalidCounter,
+  }));
+  store.load();
+  const repairedCounter = JSON.parse(mem.get("itc.prototype.v1")).receiptCounter;
+  if (!Number.isInteger(repairedCounter) || repairedCounter < 0) {
+    throw new Error(`v13 must normalize invalid receiptCounter ${JSON.stringify(invalidCounter)}`);
+  }
+}
+console.log("ok  v13 normalizes invalid receiptCounter shapes");
+
+// Migration acceptance must prove resulting behavior, not only retained IDs.
+// This v12 snapshot deliberately omits receiptCounter, then exercises the real
+// reserve -> mark paid -> Admin confirm path that issues a receipt.
+const receiptMigrationFixture = {
+  version: 12,
+  sessionUserId: "receipt-member",
+  activities: structuredClone(data.SEED_ACTIVITIES),
+  users: [
+    { id: "receipt-admin", role: "admin", status: "approved", fullName: "Receipt Admin", email: "receipt-admin@example.test" },
+    { id: "receipt-member", role: "member", status: "approved", fullName: "Receipt Member", email: "receipt-member@example.test" },
+  ],
+  bookings: [], receipts: [], campaigns: [], donations: [], prayers: [], notifications: [],
+  sessionOverrides: {}, queues: {}, duty: {},
+};
+mem.set("itc.prototype.v1", JSON.stringify(receiptMigrationFixture));
+store.load();
+const receiptSession = store.upcomingSessions(14).find(
+  (session) => session.kind === "paid" && !data.sessionStarted(session) && !store.isMidtown(session)
+);
+if (!receiptSession) throw new Error("post-migration receipt check needs an upcoming paid session");
+const migratedReservation = store.reserveSession("receipt-member", receiptSession, Date.now());
+store.markBookingPaid(migratedReservation.id, "FPS", "MIGRATED-RECEIPT", Date.now());
+store.signIn("receipt-admin@example.test");
+const migratedConfirmation = store.confirmBookingPayment(migratedReservation.id, "receipt-admin", Date.now());
+const migratedReceiptState = JSON.parse(mem.get("itc.prototype.v1"));
+if (!migratedConfirmation?.receipt
+    || !/^ITC-\d{4}-\d{4,}$/.test(migratedConfirmation.receipt.number)
+    || migratedConfirmation.receipt.number.includes("NaN")
+    || !Number.isInteger(migratedReceiptState.receiptCounter)
+    || migratedReceiptState.receiptCounter < 0) {
+  throw new Error("post-migration receipt issuance must use a valid normalized counter");
+}
+console.log("ok  v13 migration normalizes receiptCounter before real receipt issuance");
+
 console.log(failures ? `\n${failures} FAILURE(S)` : "\nAll smoke tests passed.");
 process.exit(failures ? 1 : 0);
