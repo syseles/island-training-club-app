@@ -680,10 +680,24 @@ if (uuidBooking.userId !== authUser.id) {
 for (const status of ["pending", "declined"]) {
   store.currentUser().role = status;
   store.currentUser().status = status;
-  const gatedHtml = views.viewActivity(gatedPaidSession.id);
-  for (const forbidden of ["Reserve spot", "Join waitlist", "Join interest", "I’ve paid"]) {
-    if (gatedHtml.includes(forbidden)) {
-      throw new Error(`${status} live profiles must not see Payment control: ${forbidden}`);
+  const gatedSurfaces = [
+    views.viewActivity(gatedPaidSession.id),
+    views.viewCheckout(gatedPaidSession.id),
+    await views.viewGiving(),
+  ];
+  const renderedControls = gatedSurfaces
+    .filter((surface) => typeof surface === "string")
+    .join("\n");
+  for (const forbidden of [
+    'id="form-reserve"',
+    'data-action="join-waitlist"',
+    'data-action="join-interest"',
+    'id="form-giving"',
+    'data-action="giving-amount"',
+    'data-action="giving-confirm"',
+  ]) {
+    if (renderedControls.includes(forbidden)) {
+      throw new Error(`${status} live profiles must not render gated control: ${forbidden}`);
     }
   }
   const directPayHtml = views.viewPay(uuidBooking.id);
@@ -691,7 +705,7 @@ for (const status of ["pending", "declined"]) {
     throw new Error(`${status} live profiles must not render the direct-pay route`);
   }
 }
-console.log("ok  pending and declined live profiles cannot render the direct-pay route");
+console.log("ok  pending and declined live profiles cannot render Payment or Giving controls");
 store.currentUser().role = "super_admin";
 store.currentUser().status = "approved";
 const detailsSummary = await views.viewAccount("details");

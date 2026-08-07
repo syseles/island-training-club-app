@@ -64,6 +64,19 @@ console.log("ok  integration source-tip provenance is explicit");
 
 const integratedViewSource = readFileSync(resolve(__dirnameSmoke, "js/views.js"), "utf8");
 const integratedAppSource = readFileSync(resolve(__dirnameSmoke, "js/app.js"), "utf8");
+const combinedRuntimeSource = `${integratedViewSource}\n${integratedAppSource}`;
+for (const marker of [
+  "Continue with Google",
+  "notification-filter",
+  "Giving &amp; Fundraising",
+  "ITC Anniversary",
+  "Payments / Ops",
+]) {
+  if (!combinedRuntimeSource.includes(marker)) {
+    throw new Error(`testing integration missing ${marker}`);
+  }
+}
+console.log("ok  final cross-domain runtime markers coexist");
 for (const marker of [
   "Continue with Google",
   "Membership Details",
@@ -348,9 +361,14 @@ if (!pendHtml.includes("Booking locked")) {
 
 // --- Admin approval flow ---
 installLocalFixtures(); store.signIn("admin@example.test");
-await check("admin approvals", () => views.viewAdmin("approvals"));
-await check("admin activities", () => views.viewAdmin("activities"));
-await check("admin members", () => views.viewAdmin("members"));
+for (const tab of ["approvals", "members", "activities", "giving", "payments"]) {
+  const adminHtml = await check(`admin ${tab}`, () => views.viewAdmin(tab));
+  const activeTabs = adminHtml.match(/<a[^>]*aria-current="page"[^>]*>/g) || [];
+  if (activeTabs.length !== 1 || !activeTabs[0].includes(`href="#/admin/${tab}"`)) {
+    throw new Error(`Admin ${tab} must expose exactly one matching active tab`);
+  }
+}
+console.log("ok  every Admin route exposes exactly one active tab");
 await check("admin activity edit", () => views.viewAdminActivity("hyrox"));
 await check("admin activity new", () => views.viewAdminActivity("new"));
 const newApplicant = store.pendingApplicants().find((u) => u.email === "test@example.com");
