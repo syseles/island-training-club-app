@@ -131,6 +131,17 @@ for (const marker of ['case "pay"', 'case "form-reserve"', 'case "form-mark-paid
   }
 }
 console.log("ok  Payment reserve and mark-paid routes remain delegated");
+for (const marker of ['case "release-reservation"', 'case "defer-to"', 'case "copy-fps"']) {
+  if (!integratedAppSource.includes(marker)) {
+    throw new Error(`integrated Payment router missing ${marker}`);
+  }
+}
+for (const retiredAction of ['case "demo-signin"', 'case "reset-demo"']) {
+  if (integratedAppSource.includes(retiredAction)) {
+    throw new Error(`retired runtime action remains: ${retiredAction}`);
+  }
+}
+console.log("ok  rendered Payment controls are delegated and retired actions are absent");
 for (const marker of [
   "notificationBellHTML",
   "notification-filter",
@@ -531,7 +542,9 @@ const tinaNotes = store.notificationsFor("fixture-admin");
 if (!tinaNotes.some((n) => n.kind === "payment-marked"))
   throw new Error("collector should be notified of a marked payment");
 console.log("ok  member marks paid -> collector notified");
-const conf = store.confirmBookingPayment(r1.id, "fixture-admin");
+store.signIn("admin@example.test");
+const conf = store.confirmBookingPayment(r1.id);
+store.signIn(signIn.user.email);
 if (conf.booking.status !== "confirmed") throw new Error("collector confirm should confirm");
 if (conf.receipt.method !== "PayMe") throw new Error("receipt should record the method");
 if (!store.receiptForBooking(r1.id)) throw new Error("receipt should attach to the booking");
@@ -769,7 +782,6 @@ installLocalFixtures(); store.signIn("member@example.test");
   held.payDeadlineAt = Date.now() - 1000;
   localStorage.setItem("itc.prototype.v1", JSON.stringify(st2));
   store.load();
-  store.sweepCheckpoints();
   if (store.getBooking(fill.id).status !== "expired") throw new Error("overdue reservation should expire");
   const promoted = store.userReservationFor("fixture-admin", sess.id);
   if (!promoted) throw new Error("freed spot should cascade to waitlist #1");
@@ -813,7 +825,7 @@ installLocalFixtures();
   const bBft = store.reserveSession("fixture-member", sat);
   const bMid = store.reserveSession("fixture-member", mid);
   store.markBookingPaid(bBft.id, "FPS", "");
-  store.confirmBookingPayment(bBft.id, "fixture-admin");
+  store.confirmBookingPayment(bBft.id);
   if (store.getBooking(bMid.id).status !== "cancelled")
     throw new Error("paying for BFT should release the Midtown reservation");
   const promotedMid = store.notificationsFor("fixture-member");
@@ -831,7 +843,7 @@ installLocalFixtures();
   let threw = null;
   try { store.joinWaitlist("fixture-member", sess.id); } catch (e) { threw = e; }
   if (!threw) throw new Error("joinWaitlist should reject a member who already holds the session");
-  store.cancelBooking(b.id);
+  store.releaseReservation(b.id);
   console.log("ok  queue join rejects already-booked members");
 }
 
@@ -870,7 +882,9 @@ installLocalFixtures(); store.signIn("member@example.test");
   );
   const b = store.reserveSession("fixture-member", sess);
   store.markBookingPaid(b.id, "PayMe", "");
-  store.confirmBookingPayment(b.id, "fixture-admin");
+  store.signIn("admin@example.test");
+  store.confirmBookingPayment(b.id);
+  store.signIn("member@example.test");
   const targets = store.deferTargetsFor(store.getBooking(b.id));
   if (!targets.length) throw new Error("expected future defer targets");
   if (targets.some((t) => t.id === sess.id)) throw new Error("own session is not a defer target");
@@ -890,8 +904,9 @@ installLocalFixtures(); store.signIn("member@example.test");
   );
   const b = store.reserveSession("fixture-member", sess);
   store.markBookingPaid(b.id, "FPS", "");
-  store.confirmBookingPayment(b.id, "fixture-admin");
   store.signIn("admin@example.test");
+  store.confirmBookingPayment(b.id);
+
   store.joinWaitlist("fixture-admin", sess.id);
   store.cancelSessionWeek(sess.id, "HYROX race weekend — no session");
   const after = store.getSession(sess.id);
@@ -1027,7 +1042,9 @@ store.signIn("member@example.test");
   if (!awaiting.includes("being confirmed"))
     throw new Error("booking should show awaiting confirmation");
   console.log("ok  booking shows awaiting-confirmation state");
-  store.confirmBookingPayment(b.id, "fixture-admin");
+  store.signIn("admin@example.test");
+  store.confirmBookingPayment(b.id);
+  store.signIn("member@example.test");
   const conf = views.viewBooking(b.id);
   if (!conf.includes('data-action="defer-to"'))
     throw new Error("confirmed booking should offer defer targets");
@@ -1060,7 +1077,7 @@ store.signIn("member@example.test");
   if (!ops.toLowerCase().includes("duty"))
     throw new Error("ops should include the duty card");
   console.log("ok  ops has finalize-with-gym (WhatsApp) + duty cards");
-  const conf = store.confirmBookingPayment(b.id, "fixture-admin");
+  const conf = store.confirmBookingPayment(b.id);
   if (!conf) throw new Error("collector confirm failed from ops flow");
   console.log("ok  collector confirms payment from ops");
 }
@@ -1329,7 +1346,7 @@ const assertPaymentImpersonationRejected = (label, mutate) => {
     mutate();
     throw new Error(`${label} Payment impersonation should be rejected`);
   } catch (err) {
-    if (!/Approved actor access required|Payment mutation not authorized/.test(err.message)) throw err;
+    if (!/Approved actor access required|Approved Admin access required|Payment mutation not authorized/.test(err.message)) throw err;
   }
 };
 for (const actor of [
@@ -1377,6 +1394,16 @@ store.signIn("giving-member@example.test");
 if (!store.markBookingPaid(approvedReservation.id, "FPS", "APPROVED-PAYMENT")) {
   throw new Error("approved booking owner should retain self-service payment access");
 }
+try {
+  store.confirmBookingPayment(approvedReservation.id);
+  throw new Error("approved booking owner must not self-confirm payment");
+} catch (err) {
+  if (!/Approved Admin access required/.test(err.message)) throw err;
+}
+if (store.getBooking(approvedReservation.id).status !== "reserved"
+    || store.receiptForBooking(approvedReservation.id)) {
+  throw new Error("rejected self-confirmation must not issue a receipt");
+}
 for (const actor of [
   { label: "pending", email: "giving-pending@example.test" },
   { label: "declined", email: "giving-declined@example.test" },
@@ -1387,16 +1414,86 @@ for (const actor of [
   else store.signOut();
   assertPaymentImpersonationRejected(
     `${actor.label} confirmation`,
-    () => store.confirmBookingPayment(approvedReservation.id, actor.email ? store.currentUser().id : "giving-admin")
+    () => store.confirmBookingPayment(approvedReservation.id)
   );
 }
 store.signIn("giving-admin@example.test");
-if (!store.confirmBookingPayment(approvedReservation.id, "giving-admin")) {
+const authorizedConfirmation = store.confirmBookingPayment(
+  approvedReservation.id, Date.now(), "arbitrary-collector-id"
+);
+if (!authorizedConfirmation) {
   throw new Error("Admin should confirm payment for an approved affected profile");
+}
+if (authorizedConfirmation.booking.confirmedBy !== "giving-admin") {
+  throw new Error("payment confirmation must derive confirmedBy from the authenticated Admin");
+}
+const deferTarget = store.deferTargetsFor(authorizedConfirmation.booking)[0];
+if (!deferTarget) throw new Error("authorization regression needs a deferral target");
+store.signIn("giving-other@example.test");
+for (const mutate of [
+  () => store.deferBooking(approvedReservation.id, deferTarget.id),
+  () => store.cancelBooking(approvedReservation.id),
+  () => store.setSessionTime(paymentGateSession.id, "11:00"),
+  () => store.setSessionNotice(paymentGateSession.id, "Unauthorized note"),
+  () => store.setVenueTBC(paymentGateSession.id, true),
+  () => store.setMidtownOpen(paymentGateSession.id, true),
+  () => store.setDuty("giving-other", paymentGateSession.dateISO),
+  () => store.updateCollectorPayouts("giving-other", { paymeLink: "bad", fpsPhone: "bad" }),
+  () => store.confirmGymBooking(paymentGateSession.id, "Unauthorized"),
+]) {
+  try {
+    mutate();
+    throw new Error("non-Admin cross-user/operational Payment mutation should be rejected");
+  } catch (err) {
+    if (!/Approved Admin access required|Payment mutation not authorized/.test(err.message)) throw err;
+  }
+}
+store.signIn("giving-member@example.test");
+try {
+  store.cancelBooking(approvedReservation.id);
+  throw new Error("booking owner must not use the Admin cancellation/refund seam");
+} catch (err) {
+  if (!/Approved Admin access required/.test(err.message)) throw err;
+}
+const movedByOwner = store.deferBooking(approvedReservation.id, deferTarget.id);
+if (movedByOwner.userId !== "giving-member" || movedByOwner.status !== "confirmed") {
+  throw new Error("approved booking owner should be able to defer their booking");
+}
+const releaseSession = store.upcomingSessions(28).find((session) =>
+  session.kind === "paid" && !data.sessionStarted(session) && !store.isMidtown(session)
+  && session.id !== movedByOwner.sessionId
+);
+if (!releaseSession) throw new Error("authorization regression needs a release session");
+const ownerReservation = store.reserveSession("giving-member", releaseSession);
+store.signIn("giving-other@example.test");
+try {
+  store.releaseReservation(ownerReservation.id);
+  throw new Error("non-owner member must not release another member's reservation");
+} catch (err) {
+  if (!/Payment mutation not authorized/.test(err.message)) throw err;
+}
+store.signIn("giving-member@example.test");
+if (!store.releaseReservation(ownerReservation.id)
+    || store.getBooking(ownerReservation.id).status !== "cancelled") {
+  throw new Error("approved booking owner should be able to release their reservation");
+}
+store.signIn("giving-admin@example.test");
+if (!store.cancelBooking(movedByOwner.id)
+    || store.receiptForBooking(movedByOwner.id)?.status !== "refunded") {
+  throw new Error("Admin cancellation should cancel and refund a confirmed booking");
+}
+store.setSessionTime(paymentGateSession.id, "11:00");
+store.setSessionNotice(paymentGateSession.id, "Admin note");
+store.setVenueTBC(paymentGateSession.id, true);
+store.confirmGymBooking(paymentGateSession.id, "Confirmed by Admin", Date.now());
+const administeredSession = store.getSession(paymentGateSession.id);
+if (administeredSession.time !== "11:00" || !administeredSession.notice
+    || !administeredSession.venueTBC || !administeredSession.gymConfirmedAt) {
+  throw new Error("approved Admin should retain weekly session operations");
 }
 store.leaveWaitlist("giving-member", "authz-waitlist-session");
 store.leaveInterest("giving-member", "authz-interest-session");
-console.log("ok  Payment store seams require approved authorized actors and retain self/Admin operations");
+console.log("ok  Payment seams enforce self-service/Admin boundaries and derive confirmation identity");
 
 const givingCampaign = await store.saveGivingCampaign({
   title: "Member campaign", description: "Support the community.", goalHKD: 1000,
@@ -1536,7 +1633,7 @@ if (!receiptSession) throw new Error("post-migration receipt check needs an upco
 const migratedReservation = store.reserveSession("receipt-member", receiptSession, Date.now());
 store.markBookingPaid(migratedReservation.id, "FPS", "MIGRATED-RECEIPT", Date.now());
 store.signIn("receipt-admin@example.test");
-const migratedConfirmation = store.confirmBookingPayment(migratedReservation.id, "receipt-admin", Date.now());
+const migratedConfirmation = store.confirmBookingPayment(migratedReservation.id, Date.now());
 const migratedReceiptState = JSON.parse(mem.get("itc.prototype.v1"));
 if (!migratedConfirmation?.receipt
     || !/^ITC-\d{4}-\d{4,}$/.test(migratedConfirmation.receipt.number)

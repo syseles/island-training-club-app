@@ -540,10 +540,6 @@ document.addEventListener("click", async (e) => {
       break;
     }
 
-    case "demo-signin":
-      // Retired; preserved as a no-op for legacy deployments.
-      break;
-
     case "signout": {
       try {
         await withBusyControl(el, "Signing out…", async () => {
@@ -558,15 +554,34 @@ document.addEventListener("click", async (e) => {
       break;
     }
 
-    case "reset-demo":
-      // Retired; local install starts empty.
-      break;
-
     case "cancel-booking":
       if (confirm("Cancel this booking? A full refund will be issued (prototype rule).")) {
-        store.cancelBooking(el.dataset.booking);
-        toast("Booking cancelled — refund issued");
-        render();
+        try {
+          store.cancelBooking(el.dataset.booking);
+          toast("Booking cancelled — refund issued");
+          render();
+        } catch (err) { toast(err.message || "Unable to cancel booking", true); }
+      }
+      break;
+
+    case "release-reservation":
+      if (confirm("Release this reservation? Your spot may go to the waitlist.")) {
+        try {
+          const released = store.releaseReservation(el.dataset.booking);
+          toast(released ? "Reservation released" : "Nothing to release", !released);
+          render();
+        } catch (err) { toast(err.message || "Unable to release reservation", true); }
+      }
+      break;
+
+    case "defer-to":
+      if (confirm("Move this booking to the selected session?")) {
+        try {
+          const moved = store.deferBooking(el.dataset.booking, el.dataset.session);
+          toast("Booking moved — payment carried over");
+          location.hash = `#/booking/${moved.id}`;
+          render();
+        } catch (err) { toast(err.message || "Unable to move booking", true); }
       }
       break;
 
@@ -668,7 +683,7 @@ document.addEventListener("click", async (e) => {
       break;
 
     case "confirm-payment": {
-      const res = store.confirmBookingPayment(el.dataset.booking, store.currentUser().id);
+      const res = store.confirmBookingPayment(el.dataset.booking);
       toast(res ? "Payment confirmed — member notified" : "Nothing to confirm", !res);
       render();
       break;
@@ -686,9 +701,18 @@ document.addEventListener("click", async (e) => {
       render();
       break;
 
+    case "copy-fps":
+      if (el.dataset.phone && navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(el.dataset.phone);
+        toast("FPS number copied");
+      } else {
+        toast("Copy unsupported on this device");
+      }
+      break;
+
     case "copy-gym":
       if (navigator.clipboard?.writeText) {
-        navigator.clipboard.writeText(el.dataset.msg);
+        await navigator.clipboard.writeText(el.dataset.msg);
         toast("Gym message copied");
       } else {
         toast("Copy unsupported on this device");

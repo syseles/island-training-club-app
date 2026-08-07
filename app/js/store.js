@@ -493,6 +493,7 @@ export function getActivity(id) {
 }
 
 export function saveActivity(draft) {
+  requirePaymentAdminActor();
   const existing = state.activities.find((a) => a.id === draft.id);
   const record = {
     ...draft,
@@ -517,6 +518,7 @@ export function allUsers() {
 }
 
 export async function listPaymentUsers() {
+  requirePaymentAdminActor();
   if (!isLive() || !supabase) return state.users;
   const profiles = await listProfiles();
   livePaymentDirectory = new Map(
@@ -557,6 +559,14 @@ export function attendeesFor(session) {
 }
 
 // --- Booking & payment ------------------------------------------------------------
+// Exported mutation policy at this backend seam:
+// - Member self-service (or Admin on the owner's behalf): reserve, mark paid,
+//   release, defer, and queue join/leave.
+// - Admin operations: confirm/cancel payments, activity and weekly-session
+//   administration, duty assignment, payout editing, and gym confirmation.
+// - Automatic maintenance only: checkpoint expiry, queue promotion/cascade,
+//   and operational notifications stay private so callers cannot bypass the
+//   actor-authorized exports above.
 
 export function userBookingFor(userId, sessionId) {
   return state.bookings.find(
@@ -588,7 +598,7 @@ export function receiptForBooking(bookingId) {
   return state.receipts.find((r) => r.bookingId === bookingId) ?? null;
 }
 
-export function notify(userId, kind, body, link) {
+function notify(userId, kind, body, link) {
   state.notifications.push({ id: uid("n"), userId, kind, body, link, read: false, createdAt: Date.now() });
 }
 
@@ -629,11 +639,12 @@ export function midtownOpenFor(sessionOrId) {
 // who said "wait for Midtown" — converts to reserved spots in join order;
 // anyone past capacity becomes the Midtown waitlist, order preserved.
 export function setMidtownOpen(sessionId, open, now = Date.now()) {
+  requirePaymentAdminActor();
   const o = (state.sessionOverrides[sessionId] ||= {});
   o.midtownOpen = open;
   if (open) {
     const session = getSession(sessionId);
-    const q = queueFor(sessionId);
+    const q = paymentQueueFor(sessionId);
     while (session && spotsLeft(session) > 0 && q.interest.length) {
       const { userId } = q.interest.shift();
       try {
@@ -733,13 +744,14 @@ export function markBookingPaid(bookingId, method, ref, now = Date.now()) {
 
 // Collector confirms the money arrived. Payment = commitment: any other
 // venue hold the member had for the same Saturday is released.
-export function confirmBookingPayment(bookingId, collectorId, now = Date.now()) {
+export function confirmBookingPayment(bookingId, now = Date.now()) {
   const b = getBooking(bookingId);
   if (!b || b.status !== "reserved" || !b.paymentMarkedAt) return null;
-  requireAuthorizedPaymentOwner(b.userId);
+  const actor = requirePaymentAdminActor();
+  requireApprovedPaymentOwner(b.userId);
   b.status = "confirmed";
   b.paidAt = now;
-  b.confirmedBy = collectorId;
+  b.confirmedBy = actor.id;
   const receipt = {
     id: uid("r"),
     number: receiptNumber(),
@@ -768,7 +780,7 @@ export function confirmBookingPayment(bookingId, collectorId, now = Date.now()) 
       `#/booking/${b.id}`);
     cascadeSession(other.sessionId, now);
   }
-  const q = queueFor(otherVenueId);
+  const q = paymentQueueFor(otherVenueId);
   const wasQueued =
     q.waitlist.some((e) => e.userId === b.userId) || q.interest.some((e) => e.userId === b.userId);
   q.waitlist = q.waitlist.filter((e) => e.userId !== b.userId);
@@ -785,9 +797,20 @@ export function confirmBookingPayment(bookingId, collectorId, now = Date.now()) 
   return { booking: b, receipt };
 }
 
-// Cancellation/refund policy is unresolved in the brief; the prototype issues
-// an automatic refund and frees the place.
+// Releasing an unpaid reservation is member self-service; confirmed booking
+// cancellation/refund remains an Admin operation while policy is unresolved.
+export function releaseReservation(bookingId, now = Date.now()) {
+  const booking = getBooking(bookingId);
+  if (!booking || booking.status !== "reserved" || booking.paymentMarkedAt) return null;
+  requireAuthorizedPaymentOwner(booking.userId);
+  booking.status = "cancelled";
+  cascadeSession(booking.sessionId, now);
+  save();
+  return booking;
+}
+
 export function cancelBooking(bookingId) {
+  requirePaymentAdminActor();
   const booking = getBooking(bookingId);
   if (!booking || booking.status !== "confirmed") return null;
   booking.status = "cancelled";
@@ -798,17 +821,24 @@ export function cancelBooking(bookingId) {
 }
 
 // --- Checkpoint sweep & cascade --------------------------------------------
-// Deterministic: called on load and every render with now = Date.now();
-// tests call it with manipulated deadlines. No timers anywhere.
+// Deterministic: called internally on load with now = Date.now(). No timers.
 
-export function queueFor(sessionId) {
+function paymentQueueFor(sessionId) {
   if (!state.queues[sessionId]) {
     state.queues[sessionId] = { waitlist: [], interest: [] };
   }
   return state.queues[sessionId];
 }
 
-export function sweepCheckpoints(now = Date.now()) {
+export function queueFor(sessionId) {
+  const queue = paymentQueueFor(sessionId);
+  return {
+    waitlist: queue.waitlist.map((entry) => typeof entry === "string" ? entry : { ...entry }),
+    interest: queue.interest.map((entry) => typeof entry === "string" ? entry : { ...entry }),
+  };
+}
+
+function sweepCheckpoints(now = Date.now()) {
   let dirty = false;
   for (const b of state.bookings) {
     if (b.status !== "reserved") continue;
@@ -835,11 +865,11 @@ export function sweepCheckpoints(now = Date.now()) {
   if (dirty) save();
 }
 
-export function cascadeSession(sessionId, now = Date.now()) {
+function cascadeSession(sessionId, now = Date.now()) {
   const session = getSession(sessionId);
   if (!session || session.cancelled) return;
   if (isMidtown(session) && !midtownOpenFor(session)) return;
-  const q = queueFor(sessionId);
+  const q = paymentQueueFor(sessionId);
   while (spotsLeft(session) > 0 && q.waitlist.length) {
     const { userId } = q.waitlist.shift();
     try {
@@ -860,7 +890,7 @@ function joinQueue(userId, sessionId, kind) {
   requireAuthorizedPaymentOwner(userId);
   if (userBookingFor(userId, sessionId) || userReservationFor(userId, sessionId))
     throw new Error("Already booked");
-  const q = queueFor(sessionId);
+  const q = paymentQueueFor(sessionId);
   for (const list of [q.waitlist, q.interest]) {
     if (list.some((e) => e.userId === userId)) throw new Error("Already in a queue for this session");
   }
@@ -871,13 +901,13 @@ function joinQueue(userId, sessionId, kind) {
 
 function leaveQueue(userId, sessionId, kind) {
   requireAuthorizedPaymentOwner(userId);
-  const q = queueFor(sessionId);
+  const q = paymentQueueFor(sessionId);
   q[kind] = q[kind].filter((e) => e.userId !== userId);
   save();
 }
 
 function queuePosition(userId, sessionId, kind) {
-  const idx = queueFor(sessionId)[kind].findIndex((e) => e.userId === userId);
+  const idx = paymentQueueFor(sessionId)[kind].findIndex((e) => e.userId === userId);
   return idx === -1 ? null : idx + 1;
 }
 
@@ -904,6 +934,8 @@ function decorateSession(s) {
   if (o.venueTBC) { out.venueTBC = true; out.location = "TBC"; }
   if (o.notice) out.notice = o.notice;
   if (o.midtownOpen) out.midtownOpen = true;
+  if (o.gymConfirmedAt) out.gymConfirmedAt = o.gymConfirmedAt;
+  if (o.gymNote) out.gymNote = o.gymNote;
   return out;
 }
 
@@ -955,6 +987,10 @@ export function collectorFor(sessionId) {
       const assigned = paymentUserById(slot.userId);
       if (assigned && assigned.status === "approved" && PAYMENT_ADMIN_ROLES.has(assigned.role)) {
         return withPayouts(assigned);
+      }
+      const payouts = state.paymentPayouts[slot.userId];
+      if (payouts) {
+        return { id: slot.userId, fullName: "On-duty collector", preferredName: null, ...payouts };
       }
     }
   }
@@ -1012,6 +1048,7 @@ export function deferBooking(bookingId, targetSessionId, now = Date.now()) {
   const b = getBooking(bookingId);
   if (!b || (b.status !== "reserved" && b.status !== "confirmed"))
     throw new Error("Booking cannot be deferred");
+  requireAuthorizedPaymentOwner(b.userId);
   const src = getSession(b.sessionId);
   if (src && sessionStarted(src)) throw new Error("Session has already started");
   const target = getSession(targetSessionId);
@@ -1060,6 +1097,7 @@ export function deferBooking(bookingId, targetSessionId, now = Date.now()) {
 // --- Per-week session admin --------------------------------------------------
 
 export function cancelSessionWeek(sessionId, reason, now = Date.now()) {
+  requirePaymentAdminActor();
   const o = (state.sessionOverrides[sessionId] ||= {});
   o.cancelled = String(reason || "").trim() || "No session this week";
   const venueActivityId = sessionId.replace(/-\d{4}-\d{2}-\d{2}$/, "");
@@ -1081,7 +1119,7 @@ export function cancelSessionWeek(sessionId, reason, now = Date.now()) {
         "#/schedule");
     }
   }
-  const q = queueFor(sessionId);
+  const q = paymentQueueFor(sessionId);
   for (const entry of [...q.waitlist, ...q.interest]) {
     notify(entry.userId, "session-cancelled",
       `ITC HYROX · ${fmtDate(sessionDateOf(sessionId))} was cancelled (${o.cancelled}) — the waitlist was dissolved.`,
@@ -1093,18 +1131,30 @@ export function cancelSessionWeek(sessionId, reason, now = Date.now()) {
 }
 
 export function setSessionTime(sessionId, time) {
+  requirePaymentAdminActor();
   (state.sessionOverrides[sessionId] ||= {}).time = time;
   save();
 }
 
 export function setVenueTBC(sessionId, on) {
+  requirePaymentAdminActor();
   (state.sessionOverrides[sessionId] ||= {}).venueTBC = !!on;
   save();
 }
 
 export function setSessionNotice(sessionId, text) {
+  requirePaymentAdminActor();
   (state.sessionOverrides[sessionId] ||= {}).notice = String(text || "").trim() || undefined;
   save();
+}
+
+export function confirmGymBooking(sessionId, note, now = Date.now()) {
+  requirePaymentAdminActor();
+  const override = (state.sessionOverrides[sessionId] ||= {});
+  override.gymConfirmedAt = now;
+  override.gymNote = String(note || "").trim() || undefined;
+  save();
+  return override;
 }
 
 // --- Giving (FPS donations) -----------------------------------------------------

@@ -738,6 +738,51 @@ if (!liveOpsHtml.includes("https://payme.example/live-admin")
     || !liveOpsHtml.includes("LIVE-MEMBER-REF")) {
   throw new Error("Live Payment Ops details must survive a local state reload");
 }
+
+// Exercise the member-facing route after the real auth transition clears the
+// in-memory Admin directory. UUID-keyed duty and payout operations must remain
+// usable without persisting or reloading an editable identity directory.
+const memberPaySession = store.upcomingSessions(28).find((session) =>
+  session.kind === "paid" && !store.isMidtown(session)
+  && session.id !== gatedPaidSession.id
+);
+if (!memberPaySession) throw new Error("Live payout transition needs another paid session");
+const memberPayBooking = store.reserveSession("approved-member", memberPaySession, Date.now());
+store.setDuty(authUser.id, memberPaySession.dateISO);
+const signOutForMember = store.signOutLive();
+releaseSignOut({ error: null });
+await signOutForMember;
+Object.assign(authUser, {
+  id: "approved-member",
+  email: "micah.member@example.com",
+  user_metadata: { full_name: "Micah Member", avatar_url: "" },
+});
+Object.assign(profile, {
+  id: "approved-member", email: "micah.member@example.com",
+  full_name: "Micah Member", avatar_url: "", role: "member",
+});
+await store.getCurrentUser();
+store.load();
+const memberPayHtml = views.viewPay(memberPayBooking.id);
+for (const marker of ["On-duty collector", "https://payme.example/live-admin", "+852 6999 0000", 'data-action="copy-fps"']) {
+  if (typeof memberPayHtml !== "string" || !memberPayHtml.includes(marker)) {
+    throw new Error(`Member payout route after auth transition missing ${marker}`);
+  }
+}
+if (JSON.parse(mem.get("itc.prototype.v1")).users.length !== 0) {
+  throw new Error("Member payout resolution must not persist a duplicate identity directory");
+}
+Object.assign(authUser, {
+  id: "live-user-1", email: "runner@example.com",
+  user_metadata: { full_name: "Riley Runner", avatar_url: "https://example.com/avatar.jpg" },
+});
+Object.assign(profile, {
+  id: "live-user-1", email: "runner@example.com", full_name: "Riley Runner",
+  avatar_url: "https://example.com/avatar.jpg", role: "super_admin",
+});
+await store.getCurrentUser();
+await store.listPaymentUsers();
+console.log("ok  live member payout survives Admin sign-out, member sign-in, and local reload");
 console.log("ok  live Admin composes Supabase members with UUID-keyed local Payment Ops");
 
 const detailsSummary = await views.viewAccount("details");
@@ -1538,6 +1583,48 @@ for (const [errorType, setError] of [
 const click = domListeners.get("click");
 const change = domListeners.get("change");
 
+// Rendered Payment controls must reach their store seams through delegated
+// handling, mutate state, and route to the moved booking.
+const routingSessions = store.upcomingSessions(28).filter((session) =>
+  session.kind === "paid" && !store.isMidtown(session)
+  && !store.userReservationFor(authUser.id, session.id)
+  && !store.userBookingFor(authUser.id, session.id)
+);
+if (routingSessions.length < 2) throw new Error("Payment routing regression needs two sessions");
+const routedReleaseBooking = store.reserveSession(authUser.id, routingSessions[0], Date.now());
+const routedDeferBooking = store.reserveSession(authUser.id, routingSessions[1], Date.now());
+store.markBookingPaid(routedDeferBooking.id, "FPS", "ROUTING", Date.now());
+store.confirmBookingPayment(routedDeferBooking.id, Date.now());
+const routedDeferTarget = store.deferTargetsFor(routedDeferBooking)[0];
+if (!routedDeferTarget) throw new Error("Payment routing regression needs a defer target");
+window.confirm = () => true;
+globalThis.confirm = window.confirm;
+const releaseControl = makeElement();
+releaseControl.dataset = { action: "release-reservation", booking: routedReleaseBooking.id };
+releaseControl.closest = () => releaseControl;
+await click({ target: releaseControl, preventDefault() {} });
+assert.equal(store.getBooking(routedReleaseBooking.id).status, "cancelled");
+const deferControl = makeElement();
+deferControl.dataset = { action: "defer-to", booking: routedDeferBooking.id, session: routedDeferTarget.id };
+deferControl.closest = () => deferControl;
+await click({ target: deferControl, preventDefault() {} });
+const routedMovedBooking = store.bookingsForUser(authUser.id).find((booking) =>
+  booking.deferredFrom === routedDeferBooking.id
+);
+assert.ok(routedMovedBooking, "defer-to must create the moved booking");
+assert.equal(location.hash, `#/booking/${routedMovedBooking.id}`);
+let copiedFps = null;
+Object.defineProperty(globalThis.navigator, "clipboard", {
+  configurable: true,
+  value: { writeText: async (value) => { copiedFps = value; } },
+});
+const fpsControl = makeElement();
+fpsControl.dataset = { action: "copy-fps", phone: "+852 6999 0000" };
+fpsControl.closest = () => fpsControl;
+await click({ target: fpsControl, preventDefault() {} });
+assert.equal(copiedFps, "+852 6999 0000");
+console.log("ok  delegated release, deferral, and FPS copy controls execute prototype behavior");
+
 // Legacy member-management URLs canonicalize instead of rendering the removed
 // row/avatar implementation.
 location.hash = "#/admin/users";
@@ -1690,12 +1777,13 @@ signOutControl.textContent = "Sign out";
 signOutControl.dataset = { action: "signout" };
 signOutControl.closest = () => signOutControl;
 toastStack.children.length = 0;
+const signOutCallsBeforeDelegatedTest = signOutCalls;
 const firstSignOut = click({ target: signOutControl });
 assert.equal(signOutControl.disabled, true);
 assert.equal(signOutControl.textContent, "Signing out…");
 assert.equal(signOutControl.getAttribute("aria-busy"), "true");
 const duplicateSignOut = click({ target: signOutControl });
-assert.equal(signOutCalls, 1, "pending sign-out must prevent a duplicate store action");
+assert.equal(signOutCalls, signOutCallsBeforeDelegatedTest + 1, "pending sign-out must prevent a duplicate store action");
 releaseSignOut({ error: new Error("Sign-out unavailable") });
 await Promise.all([firstSignOut, duplicateSignOut]);
 assert.equal(signOutControl.disabled, false);
