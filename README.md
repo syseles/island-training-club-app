@@ -43,6 +43,7 @@ The design review remains available at `http://127.0.0.1:4173/references/itc-mob
 - With Supabase configured, a new Google profile remains `pending` until its application is submitted and an Admin approves it. Pending and declined profiles cannot use Payment or Giving controls.
 - Without Supabase configuration, local state starts empty. Apply through the membership flow to create a local pending profile, which can then sign in again by email (no password).
 - `app/js/store.js` remains the backend seam across both ownership domains until a production backend is selected.
+- Static Vercel deployment has no env-injection/build step. Live Supabase browser configuration is set explicitly in `app/index.html`; deployment steps and credential boundaries are documented in `docs/runbooks/live-auth.md`.
 - Administrative testing requires Supabase live mode or the historical `archive/demo` branch. The archive is demonstration-only and must not be used as a production source branch.
 - `app/smoke.mjs` is a headless regression check for the product rules (`node smoke.mjs` from `app/`).
 

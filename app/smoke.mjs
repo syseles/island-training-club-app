@@ -70,6 +70,20 @@ for (const marker of ["trusted SQL", "known profile UUID", "role_changes", "Init
 }
 console.log("ok  fresh OAuth bootstrap is pending-only with an audited trusted procedure");
 
+const appIndexSource = readFileSync(resolve(__dirnameSmoke, "index.html"), "utf8");
+if (!appIndexSource.includes("window.SUPABASE_URL") || !appIndexSource.includes("window.SUPABASE_ANON_KEY")) {
+  throw new Error("static Supabase configuration seam must remain explicit in app/index.html");
+}
+if (/## Vercel env vars|Vercel project settings[^\n]*Environment Variables/i.test(liveAuthRunbookSource)) {
+  throw new Error("runbook must not claim Vercel env vars inject into static HTML");
+}
+for (const marker of ["static no-build deployment", "app/index.html", "does not inject", "service_role", "deployment-specific values"]) {
+  if (!liveAuthRunbookSource.includes(marker)) {
+    throw new Error(`static deployment procedure missing ${marker}`);
+  }
+}
+console.log("ok  static Vercel documentation matches the app/index.html configuration seam");
+
 const integrationSourceTips = {
   payment: "720dc732944dac692334e885db2d9418d024d9bc",
   notification: "5842839e08f5e486f4b9e175232acec3cb347eb2",

@@ -23,15 +23,42 @@ invoke Payment reservation, queue, or pay controls, and cannot use Giving
 transfer controls. Signing out clears the Supabase session but preserves the
 UUID-owned device-local Payment records.
 
-## Vercel env vars
+## Static Vercel configuration
 
-Set in the Vercel project settings → Environment Variables:
+This is a **static no-build deployment**. Vercel serves `app/index.html` as
+committed and **does not inject** project environment variables into its inline
+script. Setting `SUPABASE_URL` or `SUPABASE_ANON_KEY` in Vercel project settings
+alone has no effect on this prototype.
 
-- `SUPABASE_URL` — the project URL (e.g. `https://xyz.supabase.co`).
-- `SUPABASE_ANON_KEY` — the project's anon key, safe to ship to the browser.
+The actual configuration seam is the inline script in `app/index.html`:
 
-After updating env vars, redeploy. The placeholder values in `app/index.html`
-are only used when no env vars are injected.
+```js
+window.SUPABASE_URL = "...";
+window.SUPABASE_ANON_KEY = "...";
+```
+
+Use this safe deployment process:
+
+1. Choose the target Supabase project and apply the ordered migrations. Verify
+   RLS and the pending-only profile bootstrap before connecting a public URL.
+2. Obtain that project's URL and browser-safe anon/publishable key. Never put a
+   `service_role` key, database password, or other secret in HTML, Git, Vercel
+   output, or browser storage.
+3. Edit only those two assignments in `app/index.html` with the
+   **deployment-specific values**. An anon key is public by design; RLS is the
+   security boundary. Do not duplicate the values in this runbook.
+4. Configure every exact OAuth redirect URL as described below, including the
+   deployed `/app/` path.
+5. Serve the candidate locally, inspect `window.SUPABASE_URL` in the browser,
+   sign in to the intended project, and run the smoke suites before committing
+   and deploying that exact revision.
+6. After Vercel deploys, inspect the served page and repeat a sign-in check on
+   the deployed origin. To switch projects, update `app/index.html`, review the
+   diff for anon values only, and redeploy; changing Vercel env vars is not a
+   substitute.
+
+For localStorage-only operation, set both assignments to empty strings in a
+local, uncommitted copy.
 
 ## Google OAuth redirect URL
 
