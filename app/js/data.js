@@ -141,12 +141,6 @@ export const ANNOUNCEMENTS = [
     body: "Leaders are trialling alternate spots for Wednesday Night Training. Watch the session page — venue updates land there first.",
     postedAt: daysAgo(6),
   },
-  {
-    id: "ann-3",
-    title: "Marathon fundraiser passes first milestone",
-    body: "Thank you! The Standard Chartered Marathon 2027 milestone was reached for community outreach.",
-    postedAt: daysAgo(9),
-  },
 ];
 
 // --- Leaders & culture (draft community content) ------------------------------

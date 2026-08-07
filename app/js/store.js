@@ -324,7 +324,6 @@ export function saveActivity(draft) {
     ...draft,
     price: draft.kind === "paid" ? Number(draft.price) || 0 : undefined,
     capacity: draft.kind === "paid" ? Number(draft.capacity) || 0 : undefined,
-    baseBooked: draft.kind === "paid" ? Number(draft.baseBooked) || 0 : undefined,
     durationMin: Number(draft.durationMin) || 60,
     weekday: Number(draft.weekday),
   };
@@ -351,18 +350,11 @@ export function activeBookingsForSession(sessionId) {
 
 export function spotsLeft(session) {
   if (session.kind !== "paid") return null;
-  const taken = (session.baseBooked || 0) + activeBookingsForSession(session.id).length;
-  return Math.max(0, session.capacity - taken);
+  return Math.max(0, session.capacity - activeBookingsForSession(session.id).length);
 }
 
 export function attendeesFor(session) {
-  // Simulated member list: seed bookings plus any local bookings.
-  const pool = [
-    "Jason M.", "Natalie C.", "Marco S.", "Jenny W.", "Kelvin T.",
-    "Chris P.", "Wing L.", "Sam H.", "Rachel N.", "Tom Y.",
-    "Grace F.", "Ben K.", "Michelle O.", "Alex Z.",
-  ];
-  const names = pool.slice(0, Math.min(session.baseBooked || 0, pool.length));
+  const names = [];
   for (const b of activeBookingsForSession(session.id)) {
     const u = state.users.find((x) => x.id === b.userId);
     if (u) names.unshift(`${u.preferredName || u.fullName} ${u.fullName.split(" ").pop()[0]}.`);
