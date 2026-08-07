@@ -296,10 +296,22 @@ for (const removed of ["demo-signin", "reset-demo", "one-tap demo", "seeded emai
 }
 const freshLocalNotifications = await store.listMyNotifications();
 views.notificationFilters.kind = "all";
-const cleanNotificationsHtml = await views.viewNotifications(new Date("2026-08-05T06:40:00.000Z"), freshLocalNotifications);
-if (freshLocalNotifications.length || !cleanNotificationsHtml.includes("New notifications will appear here.")) {
-  throw new Error("fresh local notification state must be empty");
+const notificationTestNow = new Date("2026-08-05T06:40:00.000Z");
+const cleanNotificationsHtml = await views.viewNotifications(notificationTestNow, freshLocalNotifications);
+if (freshLocalNotifications.length || !cleanNotificationsHtml.includes("No any notifications.")) {
+  throw new Error("fresh local notification state must use the All-filter empty copy");
 }
+if (cleanNotificationsHtml.includes("New notifications will appear here.")
+  || /<section class="card notification-section"/.test(cleanNotificationsHtml)) {
+  throw new Error("fresh local notification empty state must render as plain text without inbox guidance or card chrome");
+}
+views.notificationFilters.kind = "club";
+const cleanClubNotificationsHtml = await views.viewNotifications(notificationTestNow, freshLocalNotifications);
+if (!cleanClubNotificationsHtml.includes("No Club updates notifications.")
+  || /<section class="card notification-section"/.test(cleanClubNotificationsHtml)) {
+  throw new Error("filtered notification empty state must retain its category copy without card chrome");
+}
+views.notificationFilters.kind = "all";
 if (views.viewCommunity("announcements").includes("Marathon fundraiser passes first milestone")) {
   throw new Error("fake fundraiser announcement must not ship");
 }
@@ -2011,11 +2023,11 @@ if (!viewsSrc.includes("export function notificationBellHTML")) {
 } else {
   console.log("ok  views.js: exports notificationBellHTML");
 }
-if (!viewsSrc.includes("New notifications will appear here.")) {
+if (viewsSrc.includes("New notifications will appear here.")) {
   failures++;
-  console.error("FAIL views.js: an entirely empty inbox must explain where future notifications appear");
+  console.error("FAIL views.js: entirely empty inbox must not render persistent guidance copy");
 } else {
-  console.log("ok  views.js: entirely empty inbox has approved explanatory copy");
+  console.log("ok  views.js: entirely empty inbox omits persistent guidance copy");
 }
 
 // --- Delegated local member-role behavior ---

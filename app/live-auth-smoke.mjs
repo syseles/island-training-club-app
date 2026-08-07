@@ -593,14 +593,19 @@ assert.doesNotMatch(memberClubNotificationsHtml, /Application &lt;submitted&gt;|
 const emptyClubNotificationsHtml = await views.viewNotifications(notificationNow);
 assert.match(emptyClubNotificationsHtml, /No Club updates notifications\./,
   "The active filter empty state must name its filter");
+assert.doesNotMatch(emptyClubNotificationsHtml, /<section class="card notification-section"/,
+  "Filtered empty states must render without card chrome");
 const emptyMemberNotificationsHtml = await views.viewNotifications(notificationNow, []);
-assert.match(emptyMemberNotificationsHtml, /New notifications will appear here\./);
+assert.doesNotMatch(emptyMemberNotificationsHtml, /New notifications will appear here\./);
 assert.match(emptyMemberNotificationsHtml, /No Club updates notifications\./);
+assert.doesNotMatch(emptyMemberNotificationsHtml, /<section class="card notification-section"/);
 renderedUser.role = "super_admin";
 views.notificationFilters.kind = "all";
 const emptyAdminNotificationsHtml = await views.viewNotifications(notificationNow, []);
-assert.match(emptyAdminNotificationsHtml, /New notifications will appear here\./);
-assert.match(emptyAdminNotificationsHtml, /No notifications in All\./);
+assert.doesNotMatch(emptyAdminNotificationsHtml, /New notifications will appear here\./);
+assert.match(emptyAdminNotificationsHtml, /No any notifications\./);
+assert.doesNotMatch(emptyAdminNotificationsHtml, /<section class="card notification-section"/,
+  "All-filter empty states must render without card chrome");
 const liveApplication = await store.getMyApplication();
 if (!liveApplication || liveApplication.waiver_accepted_at !== "2026-08-05T01:00:00.000Z") {
   throw new Error("waiver missing");
