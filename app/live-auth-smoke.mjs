@@ -671,6 +671,12 @@ if (!pendingAccount.includes("Yes")) {
 }
 const gatedPaidSession = store.upcomingSessions(14).find((session) => session.kind === "paid" && !store.isMidtown(session));
 if (!gatedPaidSession) throw new Error("Live access checks need an upcoming paid session");
+store.currentUser().role = "super_admin";
+store.currentUser().status = "approved";
+const uuidBooking = store.reserveSession(authUser.id, gatedPaidSession, Date.now());
+if (uuidBooking.userId !== authUser.id) {
+  throw new Error("Payment records must use the authenticated Supabase profile UUID");
+}
 for (const status of ["pending", "declined"]) {
   store.currentUser().role = status;
   store.currentUser().status = status;
@@ -680,13 +686,14 @@ for (const status of ["pending", "declined"]) {
       throw new Error(`${status} live profiles must not see Payment control: ${forbidden}`);
     }
   }
+  const directPayHtml = views.viewPay(uuidBooking.id);
+  if (typeof directPayHtml !== "string" || !directPayHtml.includes("Booking not found.")) {
+    throw new Error(`${status} live profiles must not render the direct-pay route`);
+  }
 }
+console.log("ok  pending and declined live profiles cannot render the direct-pay route");
 store.currentUser().role = "super_admin";
 store.currentUser().status = "approved";
-const uuidBooking = store.reserveSession(authUser.id, gatedPaidSession, Date.now());
-if (uuidBooking.userId !== authUser.id) {
-  throw new Error("Payment records must use the authenticated Supabase profile UUID");
-}
 const detailsSummary = await views.viewAccount("details");
 for (const label of [
   "Full name",
