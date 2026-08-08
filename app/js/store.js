@@ -24,6 +24,9 @@ import {
 import { supabase, isLive } from "./config.js";
 
 const STORAGE_KEY = "itc.prototype.v1";
+const APPLY_DEVICE_KEY = "itc.device.id";
+const APPLY_DRAFT_KEY = "itc.apply.draft.v1";
+const APPLY_DRAFT_VERSION = 1;
 const STATE_VERSION = 13;
 
 // Live-mode (Supabase) session cache. Avoids hammering the DB on every
@@ -375,6 +378,66 @@ export function signIn(email) {
 export function signOut() {
   state.sessionUserId = null;
   save();
+}
+
+// --- Membership application drafts --------------------------------------------
+
+export function getApplyDeviceId() {
+  try {
+    let id = localStorage.getItem(APPLY_DEVICE_KEY);
+    if (!id) {
+      id = globalThis.crypto?.randomUUID?.() || uid("device");
+      localStorage.setItem(APPLY_DEVICE_KEY, id);
+    }
+    return id;
+  } catch {
+    return null;
+  }
+}
+
+export function getApplyDraft() {
+  try {
+    const raw = localStorage.getItem(APPLY_DRAFT_KEY);
+    if (!raw) return null;
+    const draft = JSON.parse(raw);
+    const deviceId = getApplyDeviceId();
+    const valid = draft?.version === APPLY_DRAFT_VERSION
+      && draft?.deviceId === deviceId
+      && Number.isFinite(draft?.savedAt)
+      && draft?.fields
+      && typeof draft.fields === "object"
+      && !Array.isArray(draft.fields);
+    if (!valid) {
+      localStorage.removeItem(APPLY_DRAFT_KEY);
+      return null;
+    }
+    return draft;
+  } catch {
+    try { localStorage.removeItem(APPLY_DRAFT_KEY); } catch {}
+    return null;
+  }
+}
+
+export function saveApplyDraft({ fields = {} } = {}) {
+  try {
+    const deviceId = getApplyDeviceId();
+    if (!deviceId) return null;
+    const existing = getApplyDraft();
+    const draft = {
+      version: APPLY_DRAFT_VERSION,
+      deviceId,
+      savedAt: Date.now(),
+      fields: { ...(existing?.fields || {}), ...fields },
+    };
+    localStorage.setItem(APPLY_DRAFT_KEY, JSON.stringify(draft));
+    return draft;
+  } catch {
+    return null;
+  }
+}
+
+export function clearApplyDraft() {
+  try { localStorage.removeItem(APPLY_DRAFT_KEY); } catch {}
 }
 
 // --- Signup / approval ---------------------------------------------------------

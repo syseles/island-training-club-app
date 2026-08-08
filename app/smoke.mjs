@@ -419,6 +419,43 @@ if (!applyRes.user.indemnityAcceptedAt) {
   console.error("FAIL indemnity acceptance not recorded at application");
 } else console.log("ok  indemnity acceptance recorded at application");
 
+// --- Application draft persistence ---
+{
+  localStorage.removeItem("itc.device.id");
+  localStorage.removeItem("itc.apply.draft.v1");
+
+  if (store.getApplyDraft() !== null) {
+    throw new Error("fresh application draft should be null");
+  }
+
+  const first = store.saveApplyDraft({ fields: { mobile: "+852 6123 4567" } });
+  if (!first?.deviceId || first.version !== 1 || first.fields.mobile !== "+852 6123 4567") {
+    throw new Error("application draft should persist its device, version and fields");
+  }
+
+  const merged = store.saveApplyDraft({ fields: { preferred_name: "Jiffriy" } });
+  if (merged.fields.mobile !== "+852 6123 4567" || merged.fields.preferred_name !== "Jiffriy") {
+    throw new Error("application draft saves should merge fields");
+  }
+
+  localStorage.setItem("itc.apply.draft.v1", JSON.stringify({
+    version: 99,
+    deviceId: first.deviceId,
+    savedAt: Date.now(),
+    fields: { mobile: "stale" },
+  }));
+  if (store.getApplyDraft() !== null || localStorage.getItem("itc.apply.draft.v1") !== null) {
+    throw new Error("incompatible application draft should be discarded");
+  }
+
+  store.saveApplyDraft({ fields: { mobile: "+852 6999 0000" } });
+  store.clearApplyDraft();
+  if (store.getApplyDraft() !== null) {
+    throw new Error("clearApplyDraft should remove the application draft");
+  }
+  console.log("ok  application drafts persist, merge, version and clear");
+}
+
 // donor ID format: last name, hyphen, then 4 or 5 digits (CHUI-08879 / CHUI-8879);
 // dash variants and spaces as the separator normalize to a plain hyphen
 for (const [input, expect] of [
