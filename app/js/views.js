@@ -185,6 +185,18 @@ export function notificationBellHTML(unreadCount = 0, active = false) {
 // Views
 // ============================================================================
 
+function visitorDraftActions() {
+  if (!store.getApplyDraft()) return "";
+  return `
+    <div class="banner mt16" data-draft-resume>
+      <p><strong>Continue your application</strong><br><span class="muted small">Your unfinished form is saved on this device.</span></p>
+      <div class="actions">
+        <a class="btn sm" href="#/apply">Continue your application</a>
+        <button class="btn ghost sm" type="button" data-action="discard-draft">Discard</button>
+      </div>
+    </div>`;
+}
+
 export function viewHome() {
   const user = store.currentUser();
   // Same 14-day window bookings are made in — a confirmed booking can never
@@ -220,6 +232,7 @@ export function viewHome() {
       <span class="kicker">New to ITC?</span>
       <h3 class="mt8">Everyone is welcome</h3>
       <p class="hero-meta">Free activities are open to all — just show up. Membership is free too; sign in and an ITC leader approves every application before paid booking unlocks.</p>
+      ${visitorDraftActions()}
       ${isLive()
         ? `<button class="btn mt16" type="button" data-action="sign-in-google">Continue with Google</button>`
         : `<a class="btn mt16" href="#/account">Sign in or join</a>`}
@@ -954,6 +967,7 @@ function accountVisitor() {
       <div class="kicker">Account</div>
       <h1 class="display">Sign in</h1>
       <p class="subcopy mt8">Use your Google account to sign in to Island Training Club. New here? You'll be guided through a short application after sign-in.</p>
+      ${visitorDraftActions()}
       <div class="card mt24"><div class="card-body">
         <button class="btn mt16" type="button" data-action="sign-in-google">Continue with Google</button>
         <p class="muted small mt16">By continuing, you agree to be added to the ITC community roster. An ITC leader will review your application before you can book sessions.</p>
@@ -963,6 +977,7 @@ function accountVisitor() {
     <div class="kicker">Account</div>
     <h1 class="display">Join the club.</h1>
     <p class="subcopy mt8">Membership is free. An ITC leader approves every application — approval unlocks paid booking and member content.</p>
+    ${visitorDraftActions()}
     <div class="card mt24"><div class="card-body">
       <h3>Sign in</h3>
       <form id="form-signin" novalidate>

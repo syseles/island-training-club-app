@@ -456,6 +456,27 @@ if (!applyRes.user.indemnityAcceptedAt) {
   console.log("ok  application drafts persist, merge, version and clear");
 }
 
+{
+  store.signOut();
+  store.clearApplyDraft();
+  const homeWithoutDraft = views.viewHome();
+  if (homeWithoutDraft.includes("Continue your application")) {
+    throw new Error("fresh visitor home should not advertise a draft");
+  }
+
+  store.saveApplyDraft({ fields: { mobile: "+852 6123 4567" } });
+  const homeWithDraft = views.viewHome();
+  const accountWithDraft = await views.viewAccount();
+  for (const [label, html] of [["home", homeWithDraft], ["account", accountWithDraft]]) {
+    if (!html.includes("Continue your application") || !html.includes('data-action="discard-draft"')) {
+      throw new Error(`${label} should expose Continue + Discard for a saved draft`);
+    }
+  }
+  store.clearApplyDraft();
+  store.signIn("test@example.com");
+  console.log("ok  visitor Home and Account surface resumable drafts");
+}
+
 // donor ID format: last name, hyphen, then 4 or 5 digits (CHUI-08879 / CHUI-8879);
 // dash variants and spaces as the separator normalize to a plain hyphen
 for (const [input, expect] of [
