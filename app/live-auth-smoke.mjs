@@ -458,7 +458,25 @@ assert.match(liveApplyHtml, /name="age_over_18"/);
 assert.match(liveApplyHtml, /name="waiver"/);
 assert.doesNotMatch(liveApplyHtml, /name="email"/);
 
-store.saveApplyDraft({ fields: { mobile: "+852 6123 4567" } });
+store.saveApplyDraft({ fields: {
+  mobile: "+852 6123 4567",
+  age_over_18: "yes",
+  emergency_name: "Taylor Coach",
+  emergency_phone: "+852 6777 8888",
+  heard_source: "friend",
+  preferred_name: "Riley",
+  photo_consent: true,
+  waiver: true,
+  privacy: true,
+  guidelines: true,
+} });
+const draftApplyHtml = await views.viewApply();
+assert.match(draftApplyHtml, /data-draft-resume/);
+assert.match(draftApplyHtml, /value="\+852 6123 4567"/);
+assert.match(draftApplyHtml, /name="age_over_18" value="yes" checked/);
+assert.match(draftApplyHtml, /data-action="save-draft"/);
+assert.match(draftApplyHtml, /data-action="discard-draft"/);
+
 await store.saveMyApplication({
   mobile: "+852 6123 4567",
   age_over_18: "yes",

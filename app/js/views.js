@@ -1383,7 +1383,7 @@ export async function viewApplyLive() {
         <p class="muted">Your application was submitted on ${fmtDate(existing.submitted_at)}. An admin will review it shortly.</p>
       </section>`;
   }
-  return applyFormHtml(cu);
+  return applyFormHtml(cu, store.getApplyDraft());
 }
 
 function heardSourceLabel(value) {
@@ -1426,30 +1426,48 @@ function applySelect(name, label, options, required, value = "") {
     </label>`;
 }
 
-function applyFormHtml(cu) {
+function applyFormHtml(cu, draft) {
   const displayName = cu?.profile?.full_name || cu?.email || "";
+  const fields = draft?.fields || {};
+  const savedAge = fields.age_over_18 === "no"
+    ? true
+    : fields.age_over_18 === "yes"
+      ? false
+      : undefined;
+  const checked = (name) => fields[name] ? "checked" : "";
+  const savedTime = draft
+    ? new Date(draft.savedAt).toLocaleTimeString("en-HK", { hour: "numeric", minute: "2-digit" })
+    : "";
   return `
     <section class="card">
       <p class="kicker">Application</p>
       <h2 class="display">Tell us about you</h2>
       <p class="muted">Signed in as <strong>${esc(displayName)}</strong>${cu?.email ? ` · ${esc(cu.email)}` : ""}. We collect this so the team can approve your application and reach you in an emergency.</p>
-      <form data-form="apply" class="form-grid">
-        ${applyField("text", "mobile", "Mobile / WhatsApp number", true)}
-        ${ageStatusField()}
-        <div data-minor-only hidden>
-          ${applyField("text", "guardian_name", "Guardian name", false)}
-          ${applyField("text", "guardian_phone", "Guardian phone", false)}
+      ${draft ? `<div class="banner mt16" data-draft-resume>
+        <p>Resumed from your draft saved at <strong>${esc(savedTime)}</strong>.</p>
+        <button class="btn ghost sm" type="button" data-action="discard-draft">Discard draft</button>
+      </div>` : ""}
+      <form data-form="apply" class="form-grid mt16">
+        ${applyField("text", "mobile", "Mobile / WhatsApp number", true, fields.mobile)}
+        ${ageStatusField(savedAge)}
+        <div data-minor-only ${savedAge === true ? "" : "hidden"}>
+          ${applyField("text", "guardian_name", "Guardian name", savedAge === true, fields.guardian_name)}
+          ${applyField("text", "guardian_phone", "Guardian phone", savedAge === true, fields.guardian_phone)}
         </div>
-        ${applyField("text", "emergency_name", "Emergency contact name", true)}
-        ${applyField("text", "emergency_phone", "Emergency contact phone", true)}
-        ${applySelect("heard_source", "How did you hear about ITC?", ["friend", "family", "search", "social", "event", "other"], true)}
-        ${applyField("text", "heard_detail", "Detail (optional)", false)}
-        ${applyField("text", "preferred_name", "Preferred name (optional)", false)}
-        <label class="check"><input type="checkbox" name="photo_consent"> I consent to photos/videos of me being used on ITC channels. (Optional)</label>
-        <label class="check"><input type="checkbox" name="waiver" required> I accept the participation waiver. (⏳ text pending ITC review)</label>
-        <label class="check"><input type="checkbox" name="privacy" required> I accept the privacy policy. (⏳ text pending ITC review)</label>
-        <label class="check"><input type="checkbox" name="guidelines" required> I accept the community guidelines. (⏳ text pending ITC review)</label>
+        ${applyField("text", "emergency_name", "Emergency contact name", true, fields.emergency_name)}
+        ${applyField("text", "emergency_phone", "Emergency contact phone", true, fields.emergency_phone)}
+        ${applySelect("heard_source", "How did you hear about ITC?", ["friend", "family", "search", "social", "event", "other"], true, fields.heard_source)}
+        ${applyField("text", "heard_detail", "Detail (optional)", false, fields.heard_detail)}
+        ${applyField("text", "preferred_name", "Preferred name (optional)", false, fields.preferred_name)}
+        <label class="check"><input type="checkbox" name="photo_consent" ${checked("photo_consent")}> I consent to photos/videos of me being used on ITC channels. (Optional)</label>
+        <label class="check"><input type="checkbox" name="waiver" ${checked("waiver")} required> I accept the participation waiver. (⏳ text pending ITC review)</label>
+        <label class="check"><input type="checkbox" name="privacy" ${checked("privacy")} required> I accept the privacy policy. (⏳ text pending ITC review)</label>
+        <label class="check"><input type="checkbox" name="guidelines" ${checked("guidelines")} required> I accept the community guidelines. (⏳ text pending ITC review)</label>
         <button class="btn btn-primary" type="submit">Submit application</button>
+        <div class="draft-controls mt16">
+          <button class="btn ghost sm" type="button" data-action="save-draft">Save draft now</button>
+          <span class="muted small" data-draft-status aria-live="polite">${draft ? `Saved at ${esc(savedTime)}` : ""}</span>
+        </div>
       </form>
     </section>`;
 }
