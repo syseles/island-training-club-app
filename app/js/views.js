@@ -1619,6 +1619,25 @@ export function viewNotFound(msg = "Page not found.") {
 
 // --- Admin --------------------------------------------------------------------------------------
 
+// PostgREST emits PGRST205 when a query names a table the deployed schema
+// cache has not seen. The store stays authoritative — it throws the error —
+// so the Admin views can render an honest "setup required" panel rather than
+// a fake campaign list.
+const isGivingSchemaMissing = (error) => error?.code === "PGRST205";
+
+function adminGivingSetupRequired() {
+  return `
+    <div class="section-head"><h2>Giving setup required</h2></div>
+    <div class="card"><div class="card-body">
+      <p class="hero-meta">Campaign management becomes available after the Giving schema migrations are applied to the deployed Supabase project.</p>
+      <div class="receipt-lines mt16">
+        <div class="line"><span>1</span><strong class="mono">20260805000011_giving_campaigns.sql</strong></div>
+        <div class="line"><span>2</span><strong class="mono">20260806000001_donor_id.sql</strong></div>
+      </div>
+      <p class="muted small mt16">After installation, return here to create and publish the first real campaign.</p>
+    </div></div>`;
+}
+
 export async function viewAdmin(tab = "approvals") {
   const user = store.currentUser();
   if (!user || !isAdminRole(user.role)) {
@@ -1645,14 +1664,18 @@ export async function viewAdmin(tab = "approvals") {
     memberUsers = (await store.listPaymentUsers())
       .sort((a, b) => a.fullName.localeCompare(b.fullName));
   }
-  const body =
-    tab === "activities"
-      ? adminActivities()
-      : tab === "members"
-        ? adminMembers(user, memberUsers)
-        : tab === "giving"
-          ? adminGiving(await store.listGivingCampaigns())
-          : (["payments", "ops"].includes(tab) ? adminOps(user, memberUsers) : adminApprovals(await store.listApprovalCandidates()));
+  let body;
+  if (tab === "activities") body = adminActivities();
+  else if (tab === "members") body = adminMembers(user, memberUsers);
+  else if (tab === "giving") {
+    try {
+      body = adminGiving(await store.listGivingCampaigns());
+    } catch (error) {
+      if (!isGivingSchemaMissing(error)) throw error;
+      body = adminGivingSetupRequired();
+    }
+  } else if (["payments", "ops"].includes(tab)) body = adminOps(user, memberUsers);
+  else body = adminApprovals(await store.listApprovalCandidates());
 
   return `
     <div class="kicker">Admin</div>
@@ -1865,7 +1888,13 @@ function adminGiving(campaignList) {
 export async function viewAdminCampaign(id) {
   const user = store.currentUser();
   if (!user || !isAdminRole(user.role)) return { redirect: "#/account" };
-  const campaignList = await store.listGivingCampaigns();
+  let campaignList;
+  try {
+    campaignList = await store.listGivingCampaigns();
+  } catch (error) {
+    if (!isGivingSchemaMissing(error)) throw error;
+    return adminGivingSetupRequired();
+  }
   const isNew = id === "new";
   const campaign = isNew
     ? { id: "", title: "", description: "", goalHKD: "", fpsId: "", fpsPayee: "", status: "draft" }
