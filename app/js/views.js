@@ -1414,11 +1414,11 @@ function heardSourceLabel(value) {
 
 function ageStatusField(isMinor) {
   return `
-    <fieldset class="field age-status">
-      <legend>Are you 18 or over? *</legend>
+    <div class="field age-status">
+      <span class="field-label">Are you 18 or over? *</span>
       <label><input type="radio" name="age_over_18" value="yes" ${isMinor === false ? "checked" : ""} required> Yes</label>
       <label><input type="radio" name="age_over_18" value="no" ${isMinor === true ? "checked" : ""} required> No</label>
-    </fieldset>`;
+    </div>`;
 }
 
 function applyField(type, name, label, required, value = "") {
@@ -1454,7 +1454,7 @@ function applyFormHtml(cu, draft) {
     ? new Date(draft.savedAt).toLocaleTimeString("en-HK", { hour: "numeric", minute: "2-digit" })
     : "";
   return `
-    <section class="card">
+    <section>
       <p class="kicker">Application</p>
       <h2 class="display">Tell us about you</h2>
       <p class="muted">Signed in as <strong>${esc(displayName)}</strong>${cu?.email ? ` · ${esc(cu.email)}` : ""}. We collect this so the team can approve your application and reach you in an emergency.</p>
