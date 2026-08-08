@@ -692,6 +692,43 @@ if (!/No members match[\s\S]*nobody[\s\S]*Approved[\s\S]*Admin/i.test(emptyAdmin
 views.adminMemberFilters.query = "";
 views.adminMemberFilters.status = "all";
 views.adminMemberFilters.role = "all";
+
+// --- Admin Giving (local mode) ---
+// Empty local state still surfaces an actionable Create campaign link.
+const localEmptyGivingHtml = await views.viewAdmin("giving");
+if (!localEmptyGivingHtml.includes("No Giving campaigns yet.") ||
+    !localEmptyGivingHtml.includes("+ Create campaign")) {
+  failures++;
+  console.error("FAIL local empty Admin Giving must show empty state and Create campaign link");
+} else console.log("ok  local empty Admin Giving shows empty state and Create campaign link");
+
+// Closed campaigns remain visible while the open-campaign guard lets a
+// successor be drafted.
+const closedCampaign = {
+  id: "closed-fixture-1",
+  title: "Closed Local Campaign",
+  description: "A previously closed local Giving campaign.",
+  goalHKD: 12000,
+  fpsId: "1111111",
+  fpsPayee: "Island Evangelical Community Church",
+  status: "closed",
+  creatorProfileId: "fixture-admin",
+  createdAt: "2026-07-01T00:00:00.000Z",
+  updatedAt: "2026-07-15T00:00:00.000Z",
+  publishedAt: "2026-07-02T00:00:00.000Z",
+  closedAt: "2026-07-15T00:00:00.000Z",
+};
+store.campaigns().push(structuredClone(closedCampaign));
+const localClosedGivingHtml = await views.viewAdmin("giving");
+if (!localClosedGivingHtml.includes("Closed Local Campaign") ||
+    !localClosedGivingHtml.includes("closed") ||
+    !localClosedGivingHtml.includes("+ Create campaign")) {
+  failures++;
+  console.error("FAIL local closed Admin Giving must keep history visible and unlock Create campaign");
+} else console.log("ok  local closed Admin Giving keeps history visible and unlocks Create campaign");
+// Restore baseline so other tests do not observe this fixture campaign.
+store.campaigns().pop();
+
 const adminActivityEdit = views.viewAdminActivity("hyrox");
 const adminActivityNew = views.viewAdminActivity("new");
 await check("admin activity edit", () => adminActivityEdit);

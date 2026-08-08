@@ -138,6 +138,7 @@ const profileUpdates = [];
 const givingCampaignRows = [];
 const givingCampaignMutations = [];
 let givingCampaignMutationResult = "row";
+let givingCampaignListError = null;
 let givingCampaignReadError = null;
 let applicationReadError = null;
 let applicationReadGate = null;
@@ -338,7 +339,10 @@ const fakeSupabase = {
           if (column !== "created_at" || options?.ascending !== false) {
             throw new Error("Giving campaign list must be newest first");
           }
-          return Promise.resolve({ data: structuredClone(rows), error: givingCampaignReadError });
+          return Promise.resolve({
+            data: givingCampaignListError ? null : structuredClone(givingCampaignRows),
+            error: givingCampaignListError,
+          });
         },
         eq(column, value) {
           if (column !== "status" || value !== "published") throw new Error("Unexpected Giving active filter");
@@ -619,6 +623,28 @@ assert.match(noMembersHtml, /Admin/);
 views.adminMemberFilters.query = "";
 views.adminMemberFilters.status = "all";
 views.adminMemberFilters.role = "all";
+
+// Admin Giving falls back to a clear "setup required" panel when the deployed
+// Supabase project is missing the giving_campaigns table. Other errors must
+// still surface to the caller.
+givingCampaignListError = {
+  code: "PGRST205",
+  message: "Could not find the table 'public.giving_campaigns' in the schema cache",
+};
+const setupHtml = await views.viewAdmin("giving");
+assert.match(setupHtml, /Giving setup required/);
+assert.match(setupHtml, /20260805000011_giving_campaigns\.sql/);
+assert.match(setupHtml, /20260806000001_donor_id\.sql/);
+for (const forbidden of ["+ Create campaign", "form-campaign", "campaign-row", "Publish campaign", "Close campaign"]) {
+  assert.doesNotMatch(setupHtml, new RegExp(forbidden.replace(/[+]/g, "\\+")));
+}
+const setupDetailHtml = await views.viewAdminCampaign("new");
+assert.match(setupDetailHtml, /Giving setup required/);
+
+givingCampaignListError = { code: "42501", message: "permission denied" };
+await assert.rejects(() => views.viewAdmin("giving"), (error) => error?.message === "permission denied");
+givingCampaignListError = null;
+
 await store.decideApplication(submitted.id, "declined");
 if (!profileUpdates.some((update) =>
   update.id === submitted.id && update.role === "declined" && update.expectedRole === "pending"
