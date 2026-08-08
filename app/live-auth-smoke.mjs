@@ -159,6 +159,7 @@ let profileUpdateGate = null;
 let activeGivingCampaignRow = null;
 let activeGivingCampaignError = null;
 let givingCampaignListError = null;
+let givingCampaignRows = [];
 let authStateChangeHandler = null;
 let authCallbackLocked = false;
 let oauthCalls = 0;
@@ -347,7 +348,7 @@ const fakeSupabase = {
                 throw new Error("Giving campaign list must be newest first");
               }
               return Promise.resolve({
-                data: givingCampaignListError ? null : [],
+                data: givingCampaignListError ? null : givingCampaignRows,
                 error: givingCampaignListError,
               });
             },
@@ -534,10 +535,43 @@ for (const forbidden of ["+ Create campaign", "form-campaign", "campaign-row", "
 }
 const setupDetailHtml = await views.viewAdminCampaign("new");
 assert.match(setupDetailHtml, /Giving setup required/);
+assert.match(setupDetailHtml, /20260805000011_giving_campaigns\.sql/);
+assert.match(setupDetailHtml, /20260806000001_donor_id\.sql/);
+for (const forbidden of ["+ Create campaign", "form-campaign", "campaign-row", "Publish campaign", "Close campaign"]) {
+  assert.doesNotMatch(setupDetailHtml, new RegExp(forbidden.replace(/[+]/g, "\\+")));
+}
 
 givingCampaignListError = { code: "42501", message: "permission denied" };
 await assert.rejects(() => views.viewAdmin("giving"), (error) => error?.message === "permission denied");
+await assert.rejects(() => views.viewAdminCampaign("new"), (error) => error?.message === "permission denied");
 givingCampaignListError = null;
+
+// Live Admin list/render: present a closed campaign row so the fake proves
+// Supabase query normalization + closed-history rendering end-to-end, then
+// restore the rows so downstream tests do not observe the fixture.
+const originalGivingCampaignRows = givingCampaignRows;
+givingCampaignRows = [{
+  id: "live-closed-1",
+  title: "Live Closed Campaign",
+  description: "A previously closed live Giving campaign.",
+  goal_hkd: 12345,
+  fps_id: "9876543",
+  fps_payee: "Island Evangelical Community Church",
+  status: "closed",
+  creator_profile_id: "live-admin",
+  created_at: "2026-07-01T00:00:00.000Z",
+  updated_at: "2026-07-15T00:00:00.000Z",
+  published_at: "2026-07-02T00:00:00.000Z",
+  closed_at: "2026-07-15T00:00:00.000Z",
+}];
+try {
+  const liveGivingHtml = await views.viewAdmin("giving");
+  assert.match(liveGivingHtml, /Live Closed Campaign/);
+  assert.match(liveGivingHtml, /<span class="badge neutral">closed<\/span>/);
+  assert.match(liveGivingHtml, /\+ Create campaign/);
+} finally {
+  givingCampaignRows = originalGivingCampaignRows;
+}
 
 await store.decideApplication(submitted.id, "declined");
 if (!profileUpdates.some((update) =>
