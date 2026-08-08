@@ -2,7 +2,7 @@
 // Run directly with: node app/live-auth-smoke.mjs
 
 import assert from "node:assert/strict";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -394,6 +394,10 @@ const fakeSupabase = {
             },
           };
         },
+        upsert(row) {
+          applicationRows.set(row.profile_id, structuredClone(row));
+          return Promise.resolve({ data: structuredClone(row), error: null });
+        },
         update(patch) {
           return {
             eq(column, value) {
@@ -432,10 +436,74 @@ const store = await import("./js/store.js");
 const views = await import("./js/views.js");
 store.load();
 
+const appSource = readFileSync(resolve(__dirnameSmoke, "js/app.js"), "utf8");
+assert.match(appSource, /form\.dataset\.form === "apply"/);
+assert.match(appSource, /await store\.saveMyApplication\(payload\)/);
+assert.match(appSource, /t\.name !== "age_over_18"/);
+assert.match(appSource, /const APPLY_DRAFT_DEBOUNCE_MS = 500/);
+assert.match(appSource, /case "save-draft"/);
+assert.match(appSource, /case "discard-draft"/);
+assert.match(appSource, /store\.saveApplyDraft/);
+assert.match(appSource, /store\.clearApplyDraft/);
+
 const signedOutHome = views.viewHome();
 assert.match(signedOutHome, /data-action="sign-in-google"[^>]*>Continue with Google</);
 assert.doesNotMatch(signedOutHome, /href="#\/account"[^>]*>Sign in or join</);
+store.saveApplyDraft({ fields: { mobile: "+852 6123 4567" } });
+const signedOutAccount = await views.viewAccount();
+assert.match(signedOutAccount, /Continue your application/);
+assert.match(signedOutAccount, /data-action="discard-draft"/);
+assert.match(signedOutAccount, /data-action="sign-in-google"/);
+store.clearApplyDraft();
 
+await store.getCurrentUser();
+const originalProfileForApply = structuredClone(profile);
+const originalApplicationForApply = structuredClone(applicationRows.get(authUser.id));
+Object.assign(profile, { role: "pending" });
+applicationRows.delete(authUser.id);
+await store.getCurrentUser();
+const liveApplyHtml = await views.viewApply();
+assert.match(liveApplyHtml, /data-form="apply"/);
+assert.match(liveApplyHtml, /name="mobile"/);
+assert.match(liveApplyHtml, /name="age_over_18"/);
+assert.match(liveApplyHtml, /name="waiver"/);
+assert.doesNotMatch(liveApplyHtml, /name="email"/);
+
+store.saveApplyDraft({ fields: {
+  mobile: "+852 6123 4567",
+  age_over_18: "yes",
+  emergency_name: "Taylor Coach",
+  emergency_phone: "+852 6777 8888",
+  heard_source: "friend",
+  preferred_name: "Riley",
+  photo_consent: true,
+  waiver: true,
+  privacy: true,
+  guidelines: true,
+} });
+const draftApplyHtml = await views.viewApply();
+assert.match(draftApplyHtml, /data-draft-resume/);
+assert.match(draftApplyHtml, /value="\+852 6123 4567"/);
+assert.match(draftApplyHtml, /name="age_over_18" value="yes" checked/);
+assert.match(draftApplyHtml, /data-action="save-draft"/);
+assert.match(draftApplyHtml, /data-action="discard-draft"/);
+
+await store.saveMyApplication({
+  mobile: "+852 6123 4567",
+  age_over_18: "yes",
+  guardian_name: "",
+  guardian_phone: "",
+  emergency_name: "Taylor Coach",
+  emergency_phone: "+852 6777 8888",
+  heard_source: "friend",
+  heard_detail: "",
+  preferred_name: "Riley",
+  photo_consent: false,
+});
+assert.equal(store.getApplyDraft(), null, "successful live submit must clear its draft");
+
+Object.assign(profile, originalProfileForApply);
+if (originalApplicationForApply) applicationRows.set(authUser.id, originalApplicationForApply);
 await store.getCurrentUser();
 const queue = await store.listApprovalCandidates();
 const submitted = queue.find((item) => item.id === "pending-submitted");

@@ -54,6 +54,8 @@ let renderGeneration = 0;
 let notificationRouteRows = null;
 let pendingNotificationRouteRequest = null;
 const controlBusy = new WeakSet();
+const APPLY_DRAFT_DEBOUNCE_MS = 500;
+let applyDraftTimer = null;
 
 // --- Async render + busy + feedback helpers (canonical Auth baseline) ---
 
@@ -354,6 +356,57 @@ document.addEventListener("input", async (e) => {
   }
 });
 
+// --- Apply/details forms: toggle minor-only fields when age status changes --------
+
+document.addEventListener("change", (e) => {
+  const t = e.target;
+  if (!(t instanceof HTMLInputElement) || t.name !== "age_over_18") return;
+  const form = t.closest("form");
+  if (!form || (!["apply", "membership-details"].includes(form.dataset.form) && form.id !== "form-apply")) return;
+  const block = form.querySelector("[data-minor-only]");
+  if (!block) return;
+  const isMinor = t.value === "no";
+  block.hidden = !isMinor;
+  block.querySelectorAll("input").forEach((input) => {
+    input.required = isMinor;
+    if (!isMinor) input.value = "";
+  });
+});
+
+function collectApplyDraftFields(form) {
+  const fields = {};
+  for (const [name, value] of new FormData(form).entries()) fields[name] = value;
+  form.querySelectorAll('input[type="checkbox"][name]').forEach((input) => {
+    fields[input.name] = input.checked;
+  });
+  return fields;
+}
+
+function updateApplyDraftStatus(form, draft) {
+  const status = form.querySelector("[data-draft-status]");
+  if (!status || !draft) return;
+  const time = new Date(draft.savedAt).toLocaleTimeString("en-HK", {
+    hour: "numeric",
+    minute: "2-digit",
+  });
+  status.textContent = `Saved at ${time}`;
+}
+
+function saveApplyDraftForm(form) {
+  const draft = store.saveApplyDraft({ fields: collectApplyDraftFields(form) });
+  updateApplyDraftStatus(form, draft);
+  return draft;
+}
+
+const scheduleApplyDraftSave = (e) => {
+  const form = e.target?.closest?.('form[data-form="apply"]');
+  if (!form) return;
+  clearTimeout(applyDraftTimer);
+  applyDraftTimer = setTimeout(() => saveApplyDraftForm(form), APPLY_DRAFT_DEBOUNCE_MS);
+};
+document.addEventListener("input", scheduleApplyDraftSave);
+document.addEventListener("change", scheduleApplyDraftSave);
+
 // --- ICS download -------------------------------------------------------------------
 
 function downloadICS(session) {
@@ -405,6 +458,20 @@ document.addEventListener("click", async (e) => {
       views.adminMemberFilters.role = "all";
       await renderWithFeedback();
       document.getElementById("member-search")?.focus();
+      break;
+    case "save-draft": {
+      const form = el.closest('form[data-form="apply"]');
+      if (!form) break;
+      clearTimeout(applyDraftTimer);
+      const draft = saveApplyDraftForm(form);
+      toast(draft ? "Draft saved on this device" : "Unable to save draft", !draft);
+      break;
+    }
+    case "discard-draft":
+      clearTimeout(applyDraftTimer);
+      store.clearApplyDraft();
+      toast("Application draft discarded");
+      await renderWithFeedback();
       break;
     case "sign-in-google":
       try {
@@ -726,6 +793,26 @@ document.addEventListener("click", async (e) => {
 document.addEventListener("submit", async (e) => {
   const form = e.target;
   if (!(form instanceof HTMLFormElement)) return;
+
+  if (form.dataset.form === "apply") {
+    e.preventDefault();
+    if (!form.reportValidity()) return;
+    const control = form.querySelector('[type="submit"]');
+    await withBusyControl(control, "Submitting…", async () => {
+      const fd = new FormData(form);
+      const payload = Object.fromEntries(fd.entries());
+      payload.photo_consent = !!fd.get("photo_consent");
+      try {
+        await store.saveMyApplication(payload);
+        toast(form.dataset.toast || "Application submitted.");
+        location.hash = "#/home";
+        await renderWithFeedback();
+      } catch (err) {
+        toast(err.message || "Submit failed", true);
+      }
+    });
+    return;
+  }
 
   switch (form.id) {
     case "form-signin": {

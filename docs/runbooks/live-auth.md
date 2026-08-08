@@ -238,6 +238,15 @@ join public.profiles p on p.id = rc.profile_id
 order by rc.created_at desc;
 ```
 
+## Application drafts and approval states
+
+- Google OAuth creates `public.profiles(role = 'pending')`. Until an `applications` row exists, Admin shows the profile under **Awaiting application** and approval controls remain locked.
+- The live membership form calls `saveMyApplication()` and upserts `public.applications`. Successful submission moves the profile to **Ready for review**.
+- Unfinished forms auto-save every 500 ms to `itc.apply.draft.v1` on that browser only. Drafts are not uploaded to Supabase and do not appear to administrators.
+- Home, Account, and Apply expose Continue / Discard controls while a local draft exists.
+- A successful Supabase submission or explicit Discard removes the local draft. Sign-out does not remove it.
+- To reset a tester's draft without deleting their Supabase identity, run `localStorage.removeItem('itc.apply.draft.v1')` in that browser's console.
+
 ## Inspect pending applications
 
 ```sql

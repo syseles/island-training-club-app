@@ -185,6 +185,18 @@ export function notificationBellHTML(unreadCount = 0, active = false) {
 // Views
 // ============================================================================
 
+function visitorDraftActions() {
+  if (!store.getApplyDraft()) return "";
+  return `
+    <div class="banner mt16" data-draft-resume>
+      <p><strong>Continue your application</strong><br><span class="muted small">Your unfinished form is saved on this device.</span></p>
+      <div class="actions">
+        <a class="btn sm" href="#/apply">Continue your application</a>
+        <button class="btn ghost sm" type="button" data-action="discard-draft">Discard</button>
+      </div>
+    </div>`;
+}
+
 export function viewHome() {
   const user = store.currentUser();
   // Same 14-day window bookings are made in — a confirmed booking can never
@@ -220,6 +232,7 @@ export function viewHome() {
       <span class="kicker">New to ITC?</span>
       <h3 class="mt8">Everyone is welcome</h3>
       <p class="hero-meta">Free activities are open to all — just show up. Membership is free too; sign in and an ITC leader approves every application before paid booking unlocks.</p>
+      ${visitorDraftActions()}
       ${isLive()
         ? `<button class="btn mt16" type="button" data-action="sign-in-google">Continue with Google</button>`
         : `<a class="btn mt16" href="#/account">Sign in or join</a>`}
@@ -862,6 +875,8 @@ export async function viewAccount(section, sub) {
   }
   if (sub && section === "details") section = "details/edit";
   if (sub && section === "privacy") section = "privacy/edit";
+  const user = store.currentUser();
+  if (!user) return accountVisitor();
   // Live mode: when no live application exists, render an unavailable card so
   // the Profile surface doesn't pretend to have data it can't actually show.
   if (isLive()) {
@@ -890,8 +905,6 @@ export async function viewAccount(section, sub) {
       }
     }
   }
-  const user = store.currentUser();
-  if (!user) return accountVisitor();
   if (user.status === "pending") return await accountPending(user);
   if (user.status === "declined") return accountDeclined(user);
   switch (section) {
@@ -954,6 +967,7 @@ function accountVisitor() {
       <div class="kicker">Account</div>
       <h1 class="display">Sign in</h1>
       <p class="subcopy mt8">Use your Google account to sign in to Island Training Club. New here? You'll be guided through a short application after sign-in.</p>
+      ${visitorDraftActions()}
       <div class="card mt24"><div class="card-body">
         <button class="btn mt16" type="button" data-action="sign-in-google">Continue with Google</button>
         <p class="muted small mt16">By continuing, you agree to be added to the ITC community roster. An ITC leader will review your application before you can book sessions.</p>
@@ -963,6 +977,7 @@ function accountVisitor() {
     <div class="kicker">Account</div>
     <h1 class="display">Join the club.</h1>
     <p class="subcopy mt8">Membership is free. An ITC leader approves every application — approval unlocks paid booking and member content.</p>
+    ${visitorDraftActions()}
     <div class="card mt24"><div class="card-body">
       <h3>Sign in</h3>
       <form id="form-signin" novalidate>
@@ -1368,7 +1383,116 @@ function accountHistory(user) {
 
 // --- Apply ---------------------------------------------------------------------------------
 
+export async function viewApplyLive() {
+  const cu = await store.getCurrentUser();
+  if (!cu) return { redirect: "#/account" };
+  if (cu.role !== "pending") {
+    return `<section class="card"><p class="muted">Your application has already been processed.</p></section>`;
+  }
+  const existing = await store.getMyApplication();
+  if (existing) {
+    return `
+      <section class="card">
+        <p class="kicker">Application</p>
+        <h2 class="display">Awaiting review</h2>
+        <p class="muted">Your application was submitted on ${fmtDate(existing.submitted_at)}. An admin will review it shortly.</p>
+      </section>`;
+  }
+  return applyFormHtml(cu, store.getApplyDraft());
+}
+
+function heardSourceLabel(value) {
+  return {
+    friend: "Friend",
+    family: "Family",
+    search: "Search",
+    social: "Social media",
+    event: "Event",
+    other: "Other",
+  }[value] || String(value || "");
+}
+
+function ageStatusField(isMinor) {
+  return `
+    <fieldset class="field age-status">
+      <legend>Are you 18 or over? *</legend>
+      <label><input type="radio" name="age_over_18" value="yes" ${isMinor === false ? "checked" : ""} required> Yes</label>
+      <label><input type="radio" name="age_over_18" value="no" ${isMinor === true ? "checked" : ""} required> No</label>
+    </fieldset>`;
+}
+
+function applyField(type, name, label, required, value = "") {
+  return `
+    <label class="field">
+      <span class="field-label">${esc(label)}${required ? " *" : ""}</span>
+      <input type="${type}" name="${name}" value="${esc(value || "")}" ${required ? "required" : ""}>
+    </label>`;
+}
+
+function applySelect(name, label, options, required, value = "") {
+  const selectOptions = value && !options.includes(value) ? [value, ...options] : options;
+  return `
+    <label class="field">
+      <span class="field-label">${esc(label)}${required ? " *" : ""}</span>
+      <select name="${name}" ${required ? "required" : ""}>
+        ${required ? "" : `<option value="">—</option>`}
+        ${selectOptions.map((option) => `<option value="${option}" ${option === value ? "selected" : ""}>${esc(heardSourceLabel(option))}</option>`).join("")}
+      </select>
+    </label>`;
+}
+
+function applyFormHtml(cu, draft) {
+  const displayName = cu?.profile?.full_name || cu?.email || "";
+  const fields = draft?.fields || {};
+  const savedAge = fields.age_over_18 === "no"
+    ? true
+    : fields.age_over_18 === "yes"
+      ? false
+      : undefined;
+  const checked = (name) => fields[name] ? "checked" : "";
+  const savedTime = draft
+    ? new Date(draft.savedAt).toLocaleTimeString("en-HK", { hour: "numeric", minute: "2-digit" })
+    : "";
+  return `
+    <section class="card">
+      <p class="kicker">Application</p>
+      <h2 class="display">Tell us about you</h2>
+      <p class="muted">Signed in as <strong>${esc(displayName)}</strong>${cu?.email ? ` · ${esc(cu.email)}` : ""}. We collect this so the team can approve your application and reach you in an emergency.</p>
+      ${draft ? `<div class="banner mt16" data-draft-resume>
+        <p>Resumed from your draft saved at <strong>${esc(savedTime)}</strong>.</p>
+        <button class="btn ghost sm" type="button" data-action="discard-draft">Discard draft</button>
+      </div>` : ""}
+      <form data-form="apply" class="form-grid mt16">
+        ${applyField("text", "mobile", "Mobile / WhatsApp number", true, fields.mobile)}
+        ${ageStatusField(savedAge)}
+        <div data-minor-only ${savedAge === true ? "" : "hidden"}>
+          ${applyField("text", "guardian_name", "Guardian name", savedAge === true, fields.guardian_name)}
+          ${applyField("text", "guardian_phone", "Guardian phone", savedAge === true, fields.guardian_phone)}
+        </div>
+        ${applyField("text", "emergency_name", "Emergency contact name", true, fields.emergency_name)}
+        ${applyField("text", "emergency_phone", "Emergency contact phone", true, fields.emergency_phone)}
+        ${applySelect("heard_source", "How did you hear about ITC?", ["friend", "family", "search", "social", "event", "other"], true, fields.heard_source)}
+        ${applyField("text", "heard_detail", "Detail (optional)", false, fields.heard_detail)}
+        ${applyField("text", "preferred_name", "Preferred name (optional)", false, fields.preferred_name)}
+        <label class="check"><input type="checkbox" name="photo_consent" ${checked("photo_consent")}> I consent to photos/videos of me being used on ITC channels. (Optional)</label>
+        <label class="check"><input type="checkbox" name="waiver" ${checked("waiver")} required> I accept the participation waiver. (⏳ text pending ITC review)</label>
+        <label class="check"><input type="checkbox" name="privacy" ${checked("privacy")} required> I accept the privacy policy. (⏳ text pending ITC review)</label>
+        <label class="check"><input type="checkbox" name="guidelines" ${checked("guidelines")} required> I accept the community guidelines. (⏳ text pending ITC review)</label>
+        <button class="btn btn-primary" type="submit">Submit application</button>
+        <div class="draft-controls mt16">
+          <button class="btn ghost sm" type="button" data-action="save-draft">Save draft now</button>
+          <span class="muted small" data-draft-status aria-live="polite">${draft ? `Saved at ${esc(savedTime)}` : ""}</span>
+        </div>
+      </form>
+    </section>`;
+}
+
 export function viewApply() {
+  if (isLive()) return viewApplyLive();
+  return viewApplyLocal();
+}
+
+function viewApplyLocal() {
   return `
     <a class="back-link" href="#/account">← Account</a>
     <div class="kicker mt16">Membership application</div>
