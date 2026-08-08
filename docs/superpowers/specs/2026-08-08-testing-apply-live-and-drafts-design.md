@@ -44,14 +44,14 @@ The local-mode fallback (`applyForMembership()` and `case "form-apply"`) stays i
 **Storage (localStorage only, per agreed design):**
 
 - `itc.device.id` — a `crypto.randomUUID()` generated on first visit, persisted forever. One per browser profile.
-- `itc.apply.draft.v1` — JSON value `{ version: 1, savedAt: <ms>, fields: { ...all form fields... } }`.
+- `itc.apply.draft.v1` — JSON value `{ version: 1, deviceId: <itc.device.id>, savedAt: <ms>, fields: { ...all form fields... } }`.
 
 The draft's internal `version` field handles its own evolution. On read, a version mismatch makes `getApplyDraft()` return `null` and silently discard the stale entry — protects against form-schema drift across deploys.
 
 **Store helpers (in `app/js/store.js`):**
 
 ```js
-getApplyDraft()          // null | { version, savedAt, fields }
+getApplyDraft()          // null | { version, deviceId, savedAt, fields }
 saveApplyDraft(partial)  // merges partial.fields into the draft, bumps savedAt
 clearApplyDraft()        // removes the localStorage entry
 ```
