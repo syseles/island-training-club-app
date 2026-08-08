@@ -721,7 +721,7 @@ const closedCampaign = {
 store.campaigns().push(structuredClone(closedCampaign));
 const localClosedGivingHtml = await views.viewAdmin("giving");
 if (!localClosedGivingHtml.includes("Closed Local Campaign") ||
-    !localClosedGivingHtml.includes("closed") ||
+    !localClosedGivingHtml.includes('<span class="badge neutral">closed</span>') ||
     !localClosedGivingHtml.includes("+ Create campaign")) {
   failures++;
   console.error("FAIL local closed Admin Giving must keep history visible and unlock Create campaign");
