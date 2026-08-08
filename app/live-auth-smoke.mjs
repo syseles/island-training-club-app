@@ -440,6 +440,11 @@ const appSource = readFileSync(resolve(__dirnameSmoke, "js/app.js"), "utf8");
 assert.match(appSource, /form\.dataset\.form === "apply"/);
 assert.match(appSource, /await store\.saveMyApplication\(payload\)/);
 assert.match(appSource, /t\.name !== "age_over_18"/);
+assert.match(appSource, /const APPLY_DRAFT_DEBOUNCE_MS = 500/);
+assert.match(appSource, /case "save-draft"/);
+assert.match(appSource, /case "discard-draft"/);
+assert.match(appSource, /store\.saveApplyDraft/);
+assert.match(appSource, /store\.clearApplyDraft/);
 
 const signedOutHome = views.viewHome();
 assert.match(signedOutHome, /data-action="sign-in-google"[^>]*>Continue with Google</);
