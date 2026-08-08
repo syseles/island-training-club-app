@@ -449,6 +449,12 @@ assert.match(appSource, /store\.clearApplyDraft/);
 const signedOutHome = views.viewHome();
 assert.match(signedOutHome, /data-action="sign-in-google"[^>]*>Continue with Google</);
 assert.doesNotMatch(signedOutHome, /href="#\/account"[^>]*>Sign in or join</);
+store.saveApplyDraft({ fields: { mobile: "+852 6123 4567" } });
+const signedOutAccount = await views.viewAccount();
+assert.match(signedOutAccount, /Continue your application/);
+assert.match(signedOutAccount, /data-action="discard-draft"/);
+assert.match(signedOutAccount, /data-action="sign-in-google"/);
+store.clearApplyDraft();
 
 await store.getCurrentUser();
 const originalProfileForApply = structuredClone(profile);

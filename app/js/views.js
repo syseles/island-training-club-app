@@ -875,6 +875,8 @@ export async function viewAccount(section, sub) {
   }
   if (sub && section === "details") section = "details/edit";
   if (sub && section === "privacy") section = "privacy/edit";
+  const user = store.currentUser();
+  if (!user) return accountVisitor();
   // Live mode: when no live application exists, render an unavailable card so
   // the Profile surface doesn't pretend to have data it can't actually show.
   if (isLive()) {
@@ -903,8 +905,6 @@ export async function viewAccount(section, sub) {
       }
     }
   }
-  const user = store.currentUser();
-  if (!user) return accountVisitor();
   if (user.status === "pending") return await accountPending(user);
   if (user.status === "declined") return accountDeclined(user);
   switch (section) {
