@@ -437,6 +437,20 @@ assert.match(signedOutHome, /data-action="sign-in-google"[^>]*>Continue with Goo
 assert.doesNotMatch(signedOutHome, /href="#\/account"[^>]*>Sign in or join</);
 
 await store.getCurrentUser();
+const originalProfileForApply = structuredClone(profile);
+const originalApplicationForApply = structuredClone(applicationRows.get(authUser.id));
+Object.assign(profile, { role: "pending" });
+applicationRows.delete(authUser.id);
+await store.getCurrentUser();
+const liveApplyHtml = await views.viewApply();
+assert.match(liveApplyHtml, /data-form="apply"/);
+assert.match(liveApplyHtml, /name="mobile"/);
+assert.match(liveApplyHtml, /name="age_over_18"/);
+assert.match(liveApplyHtml, /name="waiver"/);
+assert.doesNotMatch(liveApplyHtml, /name="email"/);
+Object.assign(profile, originalProfileForApply);
+if (originalApplicationForApply) applicationRows.set(authUser.id, originalApplicationForApply);
+await store.getCurrentUser();
 const queue = await store.listApprovalCandidates();
 const submitted = queue.find((item) => item.id === "pending-submitted");
 const incomplete = queue.find((item) => item.id === "pending-incomplete");
