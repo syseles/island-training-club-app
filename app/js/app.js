@@ -354,6 +354,23 @@ document.addEventListener("input", async (e) => {
   }
 });
 
+// --- Apply/details forms: toggle minor-only fields when age status changes --------
+
+document.addEventListener("change", (e) => {
+  const t = e.target;
+  if (!(t instanceof HTMLInputElement) || t.name !== "age_over_18") return;
+  const form = t.closest("form");
+  if (!form || (!["apply", "membership-details"].includes(form.dataset.form) && form.id !== "form-apply")) return;
+  const block = form.querySelector("[data-minor-only]");
+  if (!block) return;
+  const isMinor = t.value === "no";
+  block.hidden = !isMinor;
+  block.querySelectorAll("input").forEach((input) => {
+    input.required = isMinor;
+    if (!isMinor) input.value = "";
+  });
+});
+
 // --- ICS download -------------------------------------------------------------------
 
 function downloadICS(session) {
@@ -726,6 +743,26 @@ document.addEventListener("click", async (e) => {
 document.addEventListener("submit", async (e) => {
   const form = e.target;
   if (!(form instanceof HTMLFormElement)) return;
+
+  if (form.dataset.form === "apply") {
+    e.preventDefault();
+    if (!form.reportValidity()) return;
+    const control = form.querySelector('[type="submit"]');
+    await withBusyControl(control, "Submitting…", async () => {
+      const fd = new FormData(form);
+      const payload = Object.fromEntries(fd.entries());
+      payload.photo_consent = !!fd.get("photo_consent");
+      try {
+        await store.saveMyApplication(payload);
+        toast(form.dataset.toast || "Application submitted.");
+        location.hash = "#/home";
+        await renderWithFeedback();
+      } catch (err) {
+        toast(err.message || "Submit failed", true);
+      }
+    });
+    return;
+  }
 
   switch (form.id) {
     case "form-signin": {

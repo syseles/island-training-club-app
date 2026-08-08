@@ -1708,6 +1708,7 @@ export async function saveMyApplication(form) {
   };
   const { error } = await supabase.from("applications").upsert(row);
   if (error) throw error;
+  clearApplyDraft();
 }
 
 export async function updateMyMembershipDetails(form) {
