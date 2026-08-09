@@ -479,7 +479,7 @@ begin
   values
     (v_uid, p_target_session_id, 'confirmed', now(), v_tgt.session_date::timestamptz,
      now(), v_src.payment_method, v_src.payment_reference, now(),
-     v_src.confirmed_by, v_tgt)
+     v_src.confirmed_by, to_jsonb(v_tgt))
   returning * into v_new_booking;
 
   update public.operational_bookings

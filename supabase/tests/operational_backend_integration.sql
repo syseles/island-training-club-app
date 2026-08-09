@@ -220,6 +220,8 @@ declare
   v_role text;
   v_status text;
 begin
+  -- Generate additional sessions to cover later dates.
+  perform ensure_operational_sessions(date '2026-08-01', 12);
   -- Member reserves and marks payment.
   perform set_config('request.jwt.claim.sub', 'bb000000-0000-0000-0000-00000000b001', true);
   set local role authenticated;
@@ -235,9 +237,12 @@ begin
 
   -- Member defers to a later session.
   perform set_config('request.jwt.claim.sub', 'bb000000-0000-0000-0000-00000000b001', true);
-  select id into v_target_session from public.operational_sessions where id = 'hyrox-2026-09-05';
-  select id into v_new_booking
-    from defer_operational_booking(v_pending_book, 'hyrox-2026-09-05');
+  begin
+    select id into v_new_booking
+      from defer_operational_booking(v_pending_book, 'hyrox-2026-09-05');
+  exception when no_data_found then
+    v_new_booking := null;
+  end;
   perform pg_temp.op_assert(v_new_booking is not null, 'deferral created new booking');
 
   -- Source booking is marked deferred.
@@ -268,7 +273,10 @@ begin
   -- Generate a fresh session.
   perform ensure_operational_sessions(date '2026-08-01', 10);
 
-  -- Three members fill the session.
+  -- Tighten capacity so two reservations fill the session.
+  update public.operational_sessions set capacity = 2 where id = v_session_id;
+
+  -- Two members fill the single slot.
   perform set_config('request.jwt.claim.sub', 'bb000000-0000-0000-0000-00000000b001', true);
   set local role authenticated;
   select id into v_pending from reserve_operational_session(v_session_id);
@@ -285,14 +293,8 @@ begin
   perform set_config('request.jwt.claim.sub', 'bb000000-0000-0000-0000-00000000b001', true);
   select id into v_interest_id from join_operational_queue('hyrox-midtown-2026-10-03', 'interest');
 
-  -- Force the session to be marked open so member waiting lists have something to wait for
-  update public.operational_sessions set is_open = true where id = v_session_id;
-
-  -- Member reserves as the person who will be deferred.
-  perform set_config('request.jwt.claim.sub', 'bb000000-0000-0000-0000-00000000b001', true);
-  update public.operational_bookings set status = 'cancelled' where id = v_pending;
-
-  -- Admin cancels the session.
+  -- Admin cancels the session — the unpaid reservation will be cancelled
+  -- by the RPC itself, so no direct update is needed here.
   perform set_config('request.jwt.claim.sub', 'aa000000-0000-0000-0000-00000000a001', true);
   perform cancel_operational_session(v_session_id, 'Storm warning');
 
@@ -312,8 +314,12 @@ begin
    where session_id = v_session_id and status = 'dissolved';
   perform pg_temp.op_assert(v_dissolved_count = 1, 'waitlist is dissolved');
 
-  select cancel_reason into v_status from public.operational_sessions where id = v_session_id;
-  perform pg_temp.op_assert(v_status = 'Storm warning', 'cancel reason stored');
+  declare
+    v_cancel_reason text;
+  begin
+    select cancel_reason into v_cancel_reason from public.operational_sessions where id = v_session_id;
+    perform pg_temp.op_assert(v_cancel_reason = 'Storm warning', 'cancel reason stored');
+  end;
 
   reset role;
 end $$;
@@ -324,16 +330,16 @@ declare
   v_pending uuid;
   v_target_id text;
 begin
-  perform ensure_operational_sessions(date '2026-08-01', 12);
+  perform ensure_operational_sessions(date '2026-08-01', 16);
   -- member reserves; admin cancels session; cancellation defers to no target.
   perform set_config('request.jwt.claim.sub', 'bb000000-0000-0000-0000-00000000b001', true);
   set local role authenticated;
-  select id into v_pending from reserve_operational_session('hyrox-2026-11-21');
+  select id into v_pending from reserve_operational_session('hyrox-2026-11-14');
   perform mark_operational_payment(v_pending, 'payme', 'REF-200');
   perform set_config('request.jwt.claim.sub', 'aa000000-0000-0000-0000-00000000a001', true);
   perform approve_operational_payment(v_pending);
   -- Cancel without future targets: confirmed booking becomes cancelled.
-  perform cancel_operational_session('hyrox-2026-11-21', 'Venue flooded');
+  perform cancel_operational_session('hyrox-2026-11-14', 'Venue flooded');
   select status into v_target_id from public.operational_bookings where id = v_pending;
   perform pg_temp.op_assert(v_target_id = 'cancelled', 'confirmed booking cancelled when no deferral target');
   reset role;
