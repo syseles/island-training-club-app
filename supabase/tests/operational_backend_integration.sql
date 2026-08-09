@@ -407,3 +407,42 @@ begin
 end $$;
 
 rollback;
+
+-- =====================================================================
+-- Seed: 15 August 2026 cancelled sessions (post-migration assertions)
+-- =====================================================================
+
+do $$
+declare
+  v_hyrox_reason text;
+  v_midtown_reason text;
+  v_hyrox_source text;
+  v_midtown_source text;
+  v_published_count integer;
+begin
+  select cancel_reason, cancelled_source
+    into v_hyrox_reason, v_hyrox_source
+    from public.operational_sessions where id = 'hyrox-2026-08-15';
+  perform pg_temp.op_assert(v_hyrox_reason = 'HYROX race weekend', 'hyrox 15 August cancel reason');
+  perform pg_temp.op_assert(v_hyrox_source = 'system', 'hyrox 15 August source label');
+
+  select cancel_reason, cancelled_source
+    into v_midtown_reason, v_midtown_source
+    from public.operational_sessions where id = 'hyrox-midtown-2026-08-15';
+  perform pg_temp.op_assert(v_midtown_reason = 'HYROX race weekend', 'midtown 15 August cancel reason');
+  perform pg_temp.op_assert(v_midtown_source = 'system', 'midtown 15 August source label');
+
+  select count(*) into v_published_count
+    from pg_publication_tables
+   where pubname = 'supabase_realtime'
+     and schemaname = 'public'
+     and tablename in (
+       'operational_sessions',
+       'operational_bookings',
+       'operational_queue_entries',
+       'operational_receipts',
+       'collector_assignments',
+       'collector_payout_profiles'
+     );
+  perform pg_temp.op_assert(v_published_count = 6, 'all operational tables published to realtime');
+end $$;
