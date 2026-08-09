@@ -107,7 +107,8 @@ One authoritative row per venue/date.
 | `venue_tbc` | boolean | default false |
 | `notice` | text nullable | non-cancellation notice |
 | `cancelled_at` | timestamptz nullable | cancellation state |
-| `cancelled_by` | uuid nullable FK profiles | administrator |
+| `cancelled_by` | uuid nullable FK profiles | administrator; null only for system seed |
+| `cancelled_source` | text nullable check | `admin` or `system` |
 | `cancel_reason` | text nullable | required when cancelled |
 | `gym_confirmed_at` | timestamptz nullable | finalization state |
 | `gym_confirmed_by` | uuid nullable FK profiles | administrator |
@@ -117,7 +118,8 @@ One authoritative row per venue/date.
 
 Constraints:
 
-- `cancelled_at` and nonblank `cancel_reason` must appear together.
+- `cancelled_at`, `cancelled_source`, and nonblank `cancel_reason` must appear together.
+- `cancelled_source = 'admin'` requires `cancelled_by`; `cancelled_source = 'system'` requires `cancelled_by` to be null.
 - Cancelled sessions cannot be opened or gym-confirmed.
 - `gym_confirmed_at` and `gym_confirmed_by` must appear together.
 - Session ID must match activity/date.
@@ -334,6 +336,8 @@ The migration inserts activity templates and generates the initial rolling sessi
 hyrox-2026-08-15
 hyrox-midtown-2026-08-15
 cancelled_at = migration timestamp
+cancelled_source = system
+cancelled_by = null
 cancel_reason = HYROX race weekend
 ```
 
