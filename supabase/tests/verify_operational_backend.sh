@@ -115,6 +115,16 @@ for migration in "$repo_root"/supabase/migrations/*.sql; do
   "${psql_cmd[@]}" -f "$migration" >/dev/null
 done
 
+# Disposable-database grants: the in-tree migrations do not grant on the
+# auth schema or auth helpers because live Supabase ships these
+# automatically. The disposable target needs them so the integration tests
+# can read through RLS as the `authenticated` role.
+"${psql_cmd[@]}" -c "grant usage on schema auth to authenticated;" >/dev/null
+"${psql_cmd[@]}" -c "grant execute on function auth.uid() to authenticated;" >/dev/null
+"${psql_cmd[@]}" -c "grant execute on function auth.jwt() to authenticated;" >/dev/null
+"${psql_cmd[@]}" -c "grant execute on function auth.role() to authenticated;" >/dev/null
+"${psql_cmd[@]}" -c "grant execute on function auth.email() to authenticated;" >/dev/null
+
 echo "Running preserved admin notification integration checks"
 "${psql_cmd[@]}" -f "$repo_root/supabase/tests/admin_notifications_integration.sql" >/dev/null
 echo "Running Giving integration checks"
