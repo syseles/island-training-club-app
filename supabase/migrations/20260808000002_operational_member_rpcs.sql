@@ -67,7 +67,7 @@ begin
 end;
 $$;
 
-grant execute on function public.ensure_operational_sessions(date, integer) to authenticated;
+grant execute on function public.ensure_operational_sessions(date, integer) to anon, authenticated;
 
 -- =====================================================================
 -- Reservation
