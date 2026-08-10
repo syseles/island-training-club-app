@@ -7,6 +7,8 @@
 
 import * as store from "./store.js";
 import { isLive } from "./config.js";
+import * as liveOps from "./operations.js";
+import { sessionCancellationCopy } from "./operations.js";
 import {
   LEADERS,
   CULTURE,
@@ -106,7 +108,7 @@ function sessionRow(s, { past, showDate = true, highlight } = {}) {
   }
   const sub = [
     showDate ? `${esc(fmtDate(s.date))} · ${esc(s.location)}` : esc(s.location),
-    s.cancelled ? esc(s.cancelReason) : "",
+    s.cancelled ? esc(sessionCancellationCopy(s)) : "",
     s.venueTBC && !s.cancelled ? "Venue TBC" : "",
     s.notice ? esc(s.notice) : "",
   ].filter(Boolean).join(" · ");
@@ -303,8 +305,21 @@ export function viewSchedule() {
   if (!scheduleState.selected) {
     scheduleState.selected = scheduleState.weekOffset === 0 ? isoDate(t) : isoDate(monday);
   }
-  const weekSessions = sessionsInRange(store.activities(), monday, 7)
-    .map((s) => store.getSession(s.id));
+  const sourceActivities = isLive()
+    ? liveOps.listLiveSessions().map((s) => ({
+        id: s.activityId,
+        weekday: 6,
+        price: s.price,
+        capacity: s.capacity,
+        kind: s.kind,
+        name: s.name,
+        venue: s.location,
+        published: true,
+      }))
+    : store.activities();
+  const weekSessions = sessionsInRange(sourceActivities, monday, 7)
+    .map((s) => isLive() ? liveOps.getLiveSession(s.id) : store.getSession(s.id))
+    .filter(Boolean);
   const dayNames = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
   const cells = Array.from({ length: 7 }, (_, i) => {
@@ -366,7 +381,7 @@ export function viewActivity(sessionId) {
     actionBlock = `
       <div class="banner warn mt16">
         <span class="kicker">Cancelled</span>
-        <p>${esc(s.cancelReason)}. Paid bookings were moved to the next available session — check your account.</p>
+        <p>${esc(sessionCancellationCopy(s))}. Paid bookings were moved to the next available session — check your account.</p>
       </div>`;
   } else if (past) {
     actionBlock = `<div class="banner mt16"><p>This session has already happened. See you at the next one.</p></div>`;
@@ -1878,7 +1893,7 @@ function adminOps(viewer, memberUsers) {
       <div class="card mt16 ${override.cancelled ? "is-cancelled" : ""}"><div class="card-body">
         <div class="kicker dim" style="margin-top:0">${esc(fmtDate(s.dateISO))} · ${fmtTime(s.time)}</div>
         <h3 class="mt8">${esc(s.location)}${isMid ? " (Midtown)" : " (BFT)"}</h3>
-        ${override.cancelled ? `<p class="badge danger">Cancelled — ${esc(override.cancelReason)}</p>` : ""}
+        ${override.cancelled ? `<p class="badge danger">${esc(sessionCancellationCopy(override))}</p>` : ""}
         ${isMid && !open && !override.cancelled ? `<p class="badge neutral">Not open</p>` : ""}
         <p class="muted small mt8">${confirmed.length} confirmed in-app · ${atRisk.length} awaiting payment · cap ${s.capacity}</p>
         ${!override.cancelled ? `

@@ -22,6 +22,7 @@ import {
   donorIdProblem,
 } from "./data.js";
 import { supabase, isLive } from "./config.js";
+import * as liveOps from "./operations.js";
 
 const STORAGE_KEY = "itc.prototype.v1";
 const APPLY_DEVICE_KEY = "itc.device.id";
@@ -74,6 +75,13 @@ export function load() {
   sweepCheckpoints();
   save();
   return state;
+}
+
+export async function hydrateLiveOperations() {
+  if (!isLive()) return null;
+  await liveOps.hydrateOperationalState();
+  await liveOps.startOperationalRealtime();
+  return liveOps.operationalStateStatus();
 }
 
 function normalizeReceiptCounter() {
@@ -595,6 +603,10 @@ export async function listPaymentUsers() {
 }
 
 export function pendingPaymentBookings() {
+  if (isLive()) {
+    const list = liveOps.livePendingBookings();
+    return list.slice().sort((a, b) => (a.dateISO || "").localeCompare(b.dateISO || ""));
+  }
   requirePaymentAdminActor();
   return state.bookings
     .filter((booking) => booking.status === "reserved" && booking.paymentMarkedAt)
@@ -602,12 +614,20 @@ export function pendingPaymentBookings() {
 }
 
 export function activeBookingsForSession(sessionId) {
+  if (isLive()) {
+    return liveOps.liveConfirmedBookingsForSession(sessionId);
+  }
   return state.bookings.filter(
     (b) => b.sessionId === sessionId && b.status === "confirmed"
   );
 }
 
 export function spotsLeft(session) {
+  if (!session) return null;
+  if (isLive()) {
+    if (session.kind !== "paid") return null;
+    return Math.max(0, session.capacity - liveOps.liveHeldBookingsForSession(session.id).length);
+  }
   if (session.kind !== "paid") return null;
   return Math.max(0, session.capacity - heldBookingsForSession(session.id).length);
 }
@@ -632,32 +652,48 @@ export function attendeesFor(session) {
 //   actor-authorized exports above.
 
 export function userBookingFor(userId, sessionId) {
+  if (isLive()) {
+    return liveOps.liveBookingsForUser(userId).find(
+      (b) => b.sessionId === sessionId && b.status === "confirmed"
+    ) || null;
+  }
   return state.bookings.find(
     (b) => b.userId === userId && b.sessionId === sessionId && b.status === "confirmed"
   );
 }
 
 export function bookingsForUser(userId) {
+  if (isLive()) {
+    return liveOps.liveBookingsForUser(userId).slice().sort(
+      (a, b) => (b.dateISO || "").localeCompare(a.dateISO || "")
+    );
+  }
   return state.bookings
     .filter((b) => b.userId === userId)
     .sort((a, b) => b.snapshot.dateISO.localeCompare(a.snapshot.dateISO));
 }
 
 export function receiptsForUser(userId) {
+  if (isLive()) {
+    return liveOps.liveReceiptsForUser(userId);
+  }
   return state.receipts
     .filter((r) => r.userId === userId)
     .sort((a, b) => b.issuedAt - a.issuedAt);
 }
 
 export function getBooking(id) {
+  if (isLive()) return liveOps.liveBookingById(id);
   return state.bookings.find((b) => b.id === id) ?? null;
 }
 
 export function getReceipt(id) {
+  if (isLive()) return liveOps.liveReceiptById(id);
   return state.receipts.find((r) => r.id === id) ?? null;
 }
 
 export function receiptForBooking(bookingId) {
+  if (isLive()) return liveOps.liveReceiptForBooking(bookingId);
   return state.receipts.find((r) => r.bookingId === bookingId) ?? null;
 }
 
@@ -672,12 +708,18 @@ export function notificationsFor(userId) {
 }
 
 export function heldBookingsForSession(sessionId) {
+  if (isLive()) return liveOps.liveHeldBookingsForSession(sessionId);
   return state.bookings.filter(
     (b) => b.sessionId === sessionId && (b.status === "reserved" || b.status === "confirmed")
   );
 }
 
 export function userReservationFor(userId, sessionId) {
+  if (isLive()) {
+    return liveOps.liveBookingsForUser(userId).find(
+      (b) => b.sessionId === sessionId && b.status === "reserved"
+    ) || null;
+  }
   return state.bookings.find(
     (b) => b.userId === userId && b.sessionId === sessionId && b.status === "reserved"
   ) ?? null;
@@ -695,6 +737,10 @@ export function isMidtown(sessionOrId) {
 
 export function midtownOpenFor(sessionOrId) {
   const id = typeof sessionOrId === "string" ? sessionOrId : sessionOrId.id;
+  if (isLive()) {
+    const live = liveOps.getLiveSession(id);
+    if (live) return !!live.isOpen;
+  }
   return !!state.sessionOverrides[id]?.midtownOpen;
 }
 
@@ -702,6 +748,9 @@ export function midtownOpenFor(sessionOrId) {
 // who said "wait for Midtown" — converts to reserved spots in join order;
 // anyone past capacity becomes the Midtown waitlist, order preserved.
 export function setMidtownOpen(sessionId, open, now = Date.now()) {
+  if (isLive()) {
+    return liveOps.liveSetMidtownOpen(sessionId, open);
+  }
   requirePaymentAdminActor();
   const o = (state.sessionOverrides[sessionId] ||= {});
   o.midtownOpen = open;
@@ -743,6 +792,10 @@ function snapshotFor(session) {
 // Reserve a spot without paying. The spot is held until the next payment
 // checkpoint (Thu 6 PM, then Fri 2 PM, then a 2-hour last-minute window).
 export function reserveSession(userId, sessionOrId, now = Date.now()) {
+  if (isLive()) {
+    const sessionId = typeof sessionOrId === "string" ? sessionOrId : sessionOrId?.id;
+    return liveOps.liveReserveSession(sessionId);
+  }
   requireAuthorizedPaymentOwner(userId);
   return reserveApprovedSession(userId, sessionOrId, now);
 }
@@ -790,6 +843,10 @@ function reserveApprovedSession(userId, sessionOrId, now = Date.now()) {
 // Member taps "I've paid" after sending PayMe/FPS. Lands in the on-duty
 // collector's pending list; the spot stays held until they confirm.
 export function markBookingPaid(bookingId, method, ref, now = Date.now()) {
+  if (isLive()) {
+    const normalized = method === "FPS" ? "fps" : "payme";
+    return liveOps.liveMarkBookingPaid(bookingId, normalized, ref);
+  }
   const b = getBooking(bookingId);
   if (!b || b.status !== "reserved" || b.paymentMarkedAt) return null;
   requireAuthorizedPaymentOwner(b.userId);
@@ -813,6 +870,9 @@ export function markBookingPaid(bookingId, method, ref, now = Date.now()) {
 // Collector confirms the money arrived. Payment = commitment: any other
 // venue hold the member had for the same Saturday is released.
 export function confirmBookingPayment(bookingId, now = Date.now()) {
+  if (isLive()) {
+    return liveOps.liveApproveBookingPayment(bookingId);
+  }
   const b = getBooking(bookingId);
   if (!b || b.status !== "reserved" || !b.paymentMarkedAt) return null;
   const actor = requirePaymentAdminActor();
@@ -892,6 +952,13 @@ export function cancelBooking(bookingId) {
 // Deterministic: called internally on load with now = Date.now(). No timers.
 
 function paymentQueueFor(sessionId) {
+  if (isLive()) {
+    const queue = liveOps.liveQueueForSession(sessionId);
+    return {
+      waitlist: queue.waitlist.map((q) => ({ userId: q.userId, joinedAt: q.joinedAt })),
+      interest: queue.interest.map((q) => ({ userId: q.userId, joinedAt: q.joinedAt })),
+    };
+  }
   if (!state.queues[sessionId]) {
     state.queues[sessionId] = { waitlist: [], interest: [] };
   }
@@ -979,15 +1046,58 @@ function queuePosition(userId, sessionId, kind) {
   return idx === -1 ? null : idx + 1;
 }
 
-export function joinWaitlist(userId, sessionId) { return joinQueue(userId, sessionId, "waitlist"); }
-export function leaveWaitlist(userId, sessionId) { leaveQueue(userId, sessionId, "waitlist"); }
-export function waitlistPosition(userId, sessionId) { return queuePosition(userId, sessionId, "waitlist"); }
-export function joinInterest(userId, sessionId) { return joinQueue(userId, sessionId, "interest"); }
-export function leaveInterest(userId, sessionId) { leaveQueue(userId, sessionId, "interest"); }
-export function interestPosition(userId, sessionId) { return queuePosition(userId, sessionId, "interest"); }
+export function joinWaitlist(userId, sessionId) {
+  if (isLive()) {
+    return liveOps.liveJoinQueue(sessionId, "waitlist");
+  }
+  return joinQueue(userId, sessionId, "waitlist");
+}
+export function leaveWaitlist(userId, sessionId) {
+  if (isLive()) {
+    const session = liveOps.getLiveSession(sessionId);
+    const entry = (session && liveOps.liveQueueForSession(sessionId).waitlist.find((q) => q.userId === userId))
+      || null;
+    if (entry) return liveOps.liveLeaveQueue(entry.id);
+    return null;
+  }
+  return leaveQueue(userId, sessionId, "waitlist");
+}
+export function waitlistPosition(userId, sessionId) {
+  if (isLive()) {
+    const queue = liveOps.liveQueueForSession(sessionId).waitlist;
+    const idx = queue.findIndex((q) => q.userId === userId);
+    return idx === -1 ? null : idx + 1;
+  }
+  return queuePosition(userId, sessionId, "waitlist");
+}
+export function joinInterest(userId, sessionId) {
+  if (isLive()) {
+    return liveOps.liveJoinQueue(sessionId, "interest");
+  }
+  return joinQueue(userId, sessionId, "interest");
+}
+export function leaveInterest(userId, sessionId) {
+  if (isLive()) {
+    const entry = liveOps.liveQueueForSession(sessionId).interest.find((q) => q.userId === userId);
+    if (entry) return liveOps.liveLeaveQueue(entry.id);
+    return null;
+  }
+  return leaveQueue(userId, sessionId, "interest");
+}
+export function interestPosition(userId, sessionId) {
+  if (isLive()) {
+    const queue = liveOps.liveQueueForSession(sessionId).interest;
+    const idx = queue.findIndex((q) => q.userId === userId);
+    return idx === -1 ? null : idx + 1;
+  }
+  return queuePosition(userId, sessionId, "interest");
+}
 
 // Session template + per-week override (cancelled, time, venueTBC, notice...).
 export function getSession(sessionId) {
+  if (isLive()) {
+    return liveOps.getLiveSession(sessionId);
+  }
   const s = findSession(state.activities, sessionId);
   if (!s) return null;
   return decorateSession(s);
@@ -1010,6 +1120,18 @@ function decorateSession(s) {
 // --- Next relevant activity (home) ---------------------------------------------------
 
 export function upcomingSessions(days = 14) {
+  if (isLive()) {
+    const today = todayLocal().getTime();
+    return liveOps.listLiveSessions()
+      .filter((s) => parseISO(s.dateISO).getTime() >= today)
+      .sort((a, b) => a.dateISO.localeCompare(b.dateISO))
+      .slice(0, days * 2)
+      .map((s) => ({
+        ...s,
+        spots: spotsLeft(s),
+        past: false,
+      }));
+  }
   const today = todayLocal();
   return sessionsInRange(state.activities, today, days).map((s) => ({
     ...s,
@@ -1048,6 +1170,22 @@ export function collectorFor(sessionId) {
   // Resolve identity from Supabase's in-memory directory in live mode and
   // compose only UUID-keyed payout operations from local persistence.
   const withPayouts = (user) => user ? { ...user, ...(state.paymentPayouts[user.id] || {}) } : null;
+  if (isLive()) {
+    const dateISO = sessionDateOf(sessionId);
+    if (dateISO) {
+      const slot = liveOps.liveAssigneeForWeek(dateISO);
+      if (slot) {
+        const payouts = liveOps.livePayoutFor(slot.userId);
+        const directory = livePaymentDirectory.get(slot.userId);
+        const assigned = directory || (payouts ? { id: slot.userId, fullName: "On-duty collector", preferredName: null } : null);
+        if (assigned) return payouts ? { ...assigned, ...payouts } : assigned;
+      }
+    }
+    const candidates = [...livePaymentDirectory.values()];
+    return withPayouts(candidates.find((user) =>
+      user.status === "approved" && PAYMENT_ADMIN_ROLES.has(user.role)
+    ) ?? null);
+  }
   const session = findSession(state.activities, sessionId);
   if (session) {
     const slot = state.duty?.[isoDate(session.date)];
@@ -1062,17 +1200,25 @@ export function collectorFor(sessionId) {
       }
     }
   }
-  const candidates = isLive() ? [...livePaymentDirectory.values()] : state.users;
+  const candidates = state.users;
   return withPayouts(candidates.find((user) =>
     user.status === "approved" && PAYMENT_ADMIN_ROLES.has(user.role)
   ) ?? null);
 }
 
 export function dutyFor(sessionId) {
+  if (isLive()) {
+    const dateISO = sessionDateOf(sessionId);
+    if (!dateISO) return null;
+    return liveOps.liveAssigneeForWeek(dateISO);
+  }
   return state.duty[sessionDateOf(sessionId)] ?? null;
 }
 
 export function setDuty(userId, saturdayISO) {
+  if (isLive()) {
+    return liveOps.liveSetCollector(saturdayISO, userId);
+  }
   requirePaymentAdminActor();
   const target = paymentUserById(userId);
   if (!target || target.status !== "approved" || !PAYMENT_ADMIN_ROLES.has(target.role)) return null;
@@ -1082,10 +1228,24 @@ export function setDuty(userId, saturdayISO) {
 }
 
 export function collectorPayoutsFor(userId) {
+  if (isLive()) {
+    const live = liveOps.livePayoutFor(userId);
+    if (live) return { paymeLink: live.paymeLink || "", fpsPhone: live.fpsPhone || "" };
+    return { paymeLink: "", fpsPhone: "" };
+  }
   return { paymeLink: "", fpsPhone: "", ...(state.paymentPayouts[userId] || {}) };
 }
 
 export function updateCollectorPayouts(userId, { paymeLink, fpsPhone }) {
+  if (isLive()) {
+    const live = liveOps.liveUpdatePayout(userId, paymeLink, fpsPhone);
+    state.paymentPayouts[userId] = {
+      paymeLink: String(paymeLink ?? "").trim(),
+      fpsPhone: String(fpsPhone ?? "").trim(),
+    };
+    save();
+    return live;
+  }
   requirePaymentAdminActor();
   const target = paymentUserById(userId);
   if (!target || target.status !== "approved" || !PAYMENT_ADMIN_ROLES.has(target.role)) return null;
@@ -1101,7 +1261,16 @@ export function updateCollectorPayouts(userId, { paymeLink, fpsPhone }) {
 
 export function deferTargetsFor(booking) {
   const from = parseISO(booking.snapshot.dateISO);
-  return sessionsInRange(state.activities, from, 28)
+  if (isLive()) {
+    const sources = liveOps.listLiveSessions();
+    return sources
+      .filter((s) => s.dateISO > booking.snapshot.dateISO && !s.cancelled)
+      .filter((s) => !sessionStarted(s))
+      .filter((s) => !(isMidtown(s) && !midtownOpenFor(s)))
+      .filter((s) => spotsLeft(s) > 0);
+  }
+  const sourceSessions = state.activities;
+  return sessionsInRange(sourceSessions, from, 28)
     .map((s) => getSession(s.id))
     .filter(
       (s) =>
@@ -1113,6 +1282,9 @@ export function deferTargetsFor(booking) {
 }
 
 export function deferBooking(bookingId, targetSessionId, now = Date.now()) {
+  if (isLive()) {
+    return liveOps.liveDeferBooking(bookingId, targetSessionId);
+  }
   const b = getBooking(bookingId);
   if (!b || (b.status !== "reserved" && b.status !== "confirmed"))
     throw new Error("Booking cannot be deferred");
@@ -1165,6 +1337,9 @@ export function deferBooking(bookingId, targetSessionId, now = Date.now()) {
 // --- Per-week session admin --------------------------------------------------
 
 export function cancelSessionWeek(sessionId, reason, now = Date.now()) {
+  if (isLive()) {
+    return liveOps.liveCancelSession(sessionId, reason);
+  }
   requirePaymentAdminActor();
   const o = (state.sessionOverrides[sessionId] ||= {});
   o.cancelled = String(reason || "").trim() || "No session this week";
@@ -1199,24 +1374,36 @@ export function cancelSessionWeek(sessionId, reason, now = Date.now()) {
 }
 
 export function setSessionTime(sessionId, time) {
+  if (isLive()) {
+    return liveOps.liveSetSessionTime(sessionId, time);
+  }
   requirePaymentAdminActor();
   (state.sessionOverrides[sessionId] ||= {}).time = time;
   save();
 }
 
 export function setVenueTBC(sessionId, on) {
+  if (isLive()) {
+    return liveOps.liveSetVenueTBC(sessionId, !!on);
+  }
   requirePaymentAdminActor();
   (state.sessionOverrides[sessionId] ||= {}).venueTBC = !!on;
   save();
 }
 
 export function setSessionNotice(sessionId, text) {
+  if (isLive()) {
+    return liveOps.liveSetSessionNotice(sessionId, text);
+  }
   requirePaymentAdminActor();
   (state.sessionOverrides[sessionId] ||= {}).notice = String(text || "").trim() || undefined;
   save();
 }
 
 export function confirmGymBooking(sessionId, note, now = Date.now()) {
+  if (isLive()) {
+    return liveOps.liveFinalizeGym(sessionId, note);
+  }
   requirePaymentAdminActor();
   const override = (state.sessionOverrides[sessionId] ||= {});
   override.gymConfirmedAt = now;

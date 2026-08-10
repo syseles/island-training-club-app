@@ -160,6 +160,18 @@ let activeGivingCampaignRow = null;
 let activeGivingCampaignError = null;
 let givingCampaignListError = null;
 let givingCampaignRows = [];
+let operationalRpcHandler = null;
+let operationalAuthSubOverride = null;
+const operationalRpcCalls = [];
+const operationalSubscriptions = [];
+const operationalTableRows = {
+  operational_sessions: [],
+  operational_bookings: [],
+  operational_queue_entries: [],
+  operational_receipts: [],
+  collector_assignments: [],
+  collector_payout_profiles: [],
+};
 let authStateChangeHandler = null;
 let authCallbackLocked = false;
 let oauthCalls = 0;
@@ -422,7 +434,43 @@ const fakeSupabase = {
         },
       };
     }
+    if (table in operationalTableRows) {
+      const rows = operationalTableRows[table];
+      const thenable = () => Promise.resolve({ data: rows.slice(), error: null });
+      const chain = {
+        order: thenable,
+        gte: () => chain,
+        or: () => chain,
+        eq: () => chain,
+        neq: () => chain,
+        in: () => chain,
+        is: () => chain,
+        match: () => chain,
+        then(resolve, reject) {
+          return Promise.resolve({ data: rows.slice(), error: null }).then(resolve, reject);
+        },
+      };
+      return { select: () => chain };
+    }
     throw new Error(`Unexpected table: ${table}`);
+  },
+  rpc(name, args) {
+    if (operationalRpcHandler) return operationalRpcHandler(name, args);
+    return Promise.resolve({ data: null, error: null });
+  },
+  channel(name) {
+    const channel = {
+      name,
+      handlers: [],
+      on(_event, _filter, handler) { channel.handlers.push(handler); return channel; },
+      subscribe() { operationalSubscriptions.push(channel); return channel; },
+    };
+    return channel;
+  },
+  removeChannel(ch) {
+    const idx = operationalSubscriptions.indexOf(ch);
+    if (idx >= 0) operationalSubscriptions.splice(idx, 1);
+    return Promise.resolve();
   },
 };
 
@@ -432,9 +480,210 @@ globalThis.window = {
   supabase: { createClient: () => fakeSupabase },
 };
 
+// Seed operational fake tables with at least one upcoming paid session so
+// scheduled live-mode views can render.
+const today = new Date();
+const seededCancelled = new Set(["hyrox-2026-08-15", "hyrox-midtown-2026-08-15"]);
+for (let i = 0; i < 4; i++) {
+  const d = new Date(today.getTime() + (7 + i * 7) * 24 * 60 * 60 * 1000);
+  const iso = d.toISOString().slice(0, 10);
+  operationalTableRows.operational_sessions.push({
+    id: `hyrox-${iso}`,
+    activity_id: "hyrox",
+    session_date: iso,
+    start_time: "11:15:00",
+    duration_minutes: 60,
+    venue: "BFT Causeway Bay",
+    capacity: 20,
+    price_hkd: 180,
+    is_open: true,
+    venue_tbc: false,
+    notice: null,
+    cancelled_at: null,
+    cancelled_by: null,
+    cancelled_source: null,
+    cancel_reason: null,
+    gym_confirmed_at: null,
+    gym_confirmed_by: null,
+    gym_note: null,
+    created_at: today.toISOString(),
+    updated_at: today.toISOString(),
+  });
+  operationalTableRows.operational_sessions.push({
+    id: `hyrox-midtown-${iso}`,
+    activity_id: "hyrox-midtown",
+    session_date: iso,
+    start_time: "11:00:00",
+    duration_minutes: 60,
+    venue: "Midtown 28",
+    capacity: 12,
+    price_hkd: 180,
+    is_open: false,
+    venue_tbc: false,
+    notice: null,
+    cancelled_at: null,
+    cancelled_by: null,
+    cancelled_source: null,
+    cancel_reason: null,
+    gym_confirmed_at: null,
+    gym_confirmed_by: null,
+    gym_note: null,
+    created_at: today.toISOString(),
+    updated_at: today.toISOString(),
+  });
+}
+
+// Seed the 15 August 2026 cancelled sessions with system provenance.
+const aug15Iso = "2026-08-15";
+operationalTableRows.operational_sessions.push({
+  id: "hyrox-2026-08-15",
+  activity_id: "hyrox",
+  session_date: aug15Iso,
+  start_time: "11:15:00",
+  duration_minutes: 60,
+  venue: "BFT Causeway Bay",
+  capacity: 20,
+  price_hkd: 180,
+  is_open: true,
+  venue_tbc: false,
+  notice: null,
+  cancelled_at: today.toISOString(),
+  cancelled_by: null,
+  cancelled_source: "system",
+  cancel_reason: "HYROX race weekend",
+  gym_confirmed_at: null,
+  gym_confirmed_by: null,
+  gym_note: null,
+  created_at: today.toISOString(),
+  updated_at: today.toISOString(),
+});
+operationalTableRows.operational_sessions.push({
+  id: "hyrox-midtown-2026-08-15",
+  activity_id: "hyrox-midtown",
+  session_date: aug15Iso,
+  start_time: "11:00:00",
+  duration_minutes: 60,
+  venue: "Midtown 28",
+  capacity: 12,
+  price_hkd: 180,
+  is_open: false,
+  venue_tbc: false,
+  notice: null,
+  cancelled_at: today.toISOString(),
+  cancelled_by: null,
+  cancelled_source: "system",
+  cancel_reason: "HYROX race weekend",
+  gym_confirmed_at: null,
+  gym_confirmed_by: null,
+  gym_note: null,
+  created_at: today.toISOString(),
+  updated_at: today.toISOString(),
+});
+
+operationalRpcHandler = (name, args) => {
+  operationalRpcCalls.push({ name, args: structuredClone(args) });
+  const override = operationalAuthSubOverride;
+  operationalAuthSubOverride = null;
+  const now = new Date().toISOString();
+  const actingProfile = override || authUser.id;
+  if (name === "reserve_operational_session") {
+    const id = "b-" + (operationalTableRows.operational_bookings.length + 1);
+    const booking = {
+      id,
+      profile_id: actingProfile,
+      session_id: args.p_session_id,
+      status: "reserved",
+      reserved_at: now,
+      pay_deadline_at: now,
+      payment_marked_at: null,
+      payment_method: null,
+      payment_reference: null,
+      paid_at: null,
+      confirmed_by: null,
+      snapshot: {
+        name: "ITC HYROX",
+        session_date: "2026-08-22",
+        start_time: "11:15:00",
+        venue: "BFT Causeway Bay",
+        price_hkd: 180,
+      },
+    };
+    operationalTableRows.operational_bookings.push(booking);
+    return Promise.resolve({ data: booking, error: null });
+  }
+  if (name === "mark_operational_payment") {
+    const row = operationalTableRows.operational_bookings.find((b) => b.id === args.p_booking_id);
+    if (row) {
+      row.payment_marked_at = now;
+      row.payment_method = args.p_method;
+      row.payment_reference = args.p_reference || null;
+    }
+    return Promise.resolve({ data: row || null, error: null });
+  }
+  if (name === "set_collector_assignment") {
+    const idx = operationalTableRows.collector_assignments.findIndex((row) => row.week_start === args.p_week_start);
+    const row = {
+      week_start: args.p_week_start,
+      collector_profile_id: args.p_profile_id,
+      assigned_by: actingProfile,
+      assigned_at: now,
+    };
+    if (idx >= 0) operationalTableRows.collector_assignments[idx] = row;
+    else operationalTableRows.collector_assignments.push(row);
+    return Promise.resolve({ data: row, error: null });
+  }
+  if (name === "update_collector_payout_profile") {
+    const idx = operationalTableRows.collector_payout_profiles.findIndex((row) => row.profile_id === args.p_profile_id);
+    const row = {
+      profile_id: args.p_profile_id,
+      payme_link: args.p_payme_link || null,
+      fps_phone: args.p_fps_phone || null,
+    };
+    if (idx >= 0) operationalTableRows.collector_payout_profiles[idx] = row;
+    else operationalTableRows.collector_payout_profiles.push(row);
+    return Promise.resolve({ data: row, error: null });
+  }
+  if (name === "defer_operational_booking") {
+    const source = operationalTableRows.operational_bookings.find((b) => b.id === args.p_booking_id);
+    if (!source) return Promise.resolve({ data: null, error: { message: "Booking not found." } });
+    const target = operationalTableRows.operational_sessions.find((s) => s.id === args.p_target_session_id);
+    if (!target) return Promise.resolve({ data: null, error: { message: "Target session not found." } });
+    const newBooking = {
+      id: "b-def-" + (operationalTableRows.operational_bookings.length + 1),
+      profile_id: source.profile_id,
+      session_id: target.id,
+      status: "confirmed",
+      reserved_at: now,
+      pay_deadline_at: now,
+      payment_marked_at: source.payment_marked_at,
+      payment_method: source.payment_method,
+      payment_reference: source.payment_reference,
+      paid_at: source.paid_at,
+      confirmed_by: source.confirmed_by,
+      deferred_from_booking_id: source.id,
+      snapshot: { ...target, session_date: target.session_date, price_hkd: target.price_hkd, venue: target.venue },
+    };
+    operationalTableRows.operational_bookings.push(newBooking);
+    source.status = "deferred";
+    source.deferred_to_booking_id = newBooking.id;
+    return Promise.resolve({ data: newBooking, error: null });
+  }
+  if (name === "finalize_operational_gym") {
+    const session = operationalTableRows.operational_sessions.find((s) => s.id === args.p_session_id);
+    if (!session) return Promise.resolve({ data: null, error: { message: "Session not found." } });
+    session.gym_confirmed_at = now;
+    session.gym_confirmed_by = actingProfile;
+    session.gym_note = args.p_note || null;
+    return Promise.resolve({ data: session, error: null });
+  }
+  return Promise.resolve({ data: null, error: null });
+};
+
 const store = await import("./js/store.js");
 const views = await import("./js/views.js");
+const operations = await import("./js/operations.js");
 store.load();
+await store.hydrateLiveOperations();
 
 const appSource = readFileSync(resolve(__dirnameSmoke, "js/app.js"), "utf8");
 assert.match(appSource, /form\.dataset\.form === "apply"/);
@@ -814,7 +1063,7 @@ const gatedPaidSession = store.upcomingSessions(14).find((session) => session.ki
 if (!gatedPaidSession) throw new Error("Live access checks need an upcoming paid session");
 store.currentUser().role = "super_admin";
 store.currentUser().status = "approved";
-const uuidBooking = store.reserveSession(authUser.id, gatedPaidSession, Date.now());
+const uuidBooking = await store.reserveSession(authUser.id, gatedPaidSession, Date.now());
 if (uuidBooking.userId !== authUser.id) {
   throw new Error("Payment records must use the authenticated Supabase profile UUID");
 }
@@ -853,12 +1102,14 @@ store.currentUser().status = "approved";
 // A live Admin must compose the Supabase UUID directory with device-local
 // Payment operations without copying editable identity records into storage.
 await views.viewAdmin("payments");
-const memberUuidBooking = store.reserveSession("approved-member", gatedPaidSession, Date.now());
-if (!store.markBookingPaid(memberUuidBooking.id, "FPS", "LIVE-MEMBER-REF", Date.now())) {
+operationalAuthSubOverride = "approved-member";
+const memberUuidBooking = await store.reserveSession("approved-member", gatedPaidSession, Date.now());
+operationalAuthSubOverride = null;
+if (!await store.markBookingPaid(memberUuidBooking.id, "FPS", "LIVE-MEMBER-REF", Date.now())) {
   throw new Error("Live member UUID booking must enter pending Payment Ops");
 }
 store.setDuty(authUser.id, gatedPaidSession.dateISO);
-store.updateCollectorPayouts(authUser.id, {
+await store.updateCollectorPayouts(authUser.id, {
   paymeLink: "https://payme.example/live-admin",
   fpsPhone: "+852 6999 0000",
 });
@@ -888,11 +1139,8 @@ const memberPaySession = store.upcomingSessions(28).find((session) =>
   && session.id !== gatedPaidSession.id
 );
 if (!memberPaySession) throw new Error("Live payout transition needs another paid session");
-const memberPayBooking = store.reserveSession("approved-member", memberPaySession, Date.now());
-store.setDuty(authUser.id, memberPaySession.dateISO);
-const signOutForMember = store.signOutLive();
-releaseSignOut({ error: null });
-await signOutForMember;
+// Reassign the fake auth context so the live RPC captures the member UUID
+// (the test asserts the member-facing payout route after sign-out).
 Object.assign(authUser, {
   id: "approved-member",
   email: "micah.member@example.com",
@@ -902,6 +1150,13 @@ Object.assign(profile, {
   id: "approved-member", email: "micah.member@example.com",
   full_name: "Micah Member", avatar_url: "", role: "member",
 });
+operationalAuthSubOverride = "approved-member";
+const memberPayBooking = await store.reserveSession("approved-member", memberPaySession, Date.now());
+operationalAuthSubOverride = null;
+await store.setDuty("live-user-1", memberPaySession.dateISO);
+const signOutForMember = store.signOutLive();
+releaseSignOut({ error: null });
+await signOutForMember;
 await store.getCurrentUser();
 store.load();
 const memberPayHtml = views.viewPay(memberPayBooking.id);
@@ -1732,15 +1987,16 @@ const change = domListeners.get("change");
 // Rendered Payment controls must reach their store seams through delegated
 // handling, mutate state, and route to the moved booking.
 const routingSessions = store.upcomingSessions(28).filter((session) =>
-  session.kind === "paid" && !store.isMidtown(session)
+  session.kind === "paid" && !store.isMidtown(session) && !session.cancelled
   && !store.userReservationFor(authUser.id, session.id)
   && !store.userBookingFor(authUser.id, session.id)
 );
 if (routingSessions.length < 2) throw new Error("Payment routing regression needs two sessions");
-const routedReleaseBooking = store.reserveSession(authUser.id, routingSessions[0], Date.now());
-const routedDeferBooking = store.reserveSession(authUser.id, routingSessions[1], Date.now());
-store.markBookingPaid(routedDeferBooking.id, "FPS", "ROUTING", Date.now());
-store.confirmBookingPayment(routedDeferBooking.id, Date.now());
+const routedReleaseBooking = await store.reserveSession(authUser.id, routingSessions[0], Date.now());
+const routedDeferBooking = await store.reserveSession(authUser.id, routingSessions[1], Date.now());
+const routedDeferMarked = await store.markBookingPaid(routedDeferBooking.id, "FPS", "ROUTING", Date.now());
+if (!routedDeferMarked) throw new Error("Live deferral routing must mark payment");
+await store.confirmBookingPayment(routedDeferBooking.id, Date.now());
 const routedDeferTarget = store.deferTargetsFor(routedDeferBooking)[0];
 if (!routedDeferTarget) throw new Error("Payment routing regression needs a defer target");
 window.confirm = () => true;
@@ -1757,7 +2013,7 @@ await click({ target: deferControl, preventDefault() {} });
 const routedMovedBooking = store.bookingsForUser(authUser.id).find((booking) =>
   booking.deferredFrom === routedDeferBooking.id
 );
-assert.ok(routedMovedBooking, "defer-to must create the moved booking");
+if (!routedMovedBooking) throw new Error("defer-to must create the moved booking");
 assert.equal(location.hash, `#/booking/${routedMovedBooking.id}`);
 let copiedFps = null;
 Object.defineProperty(globalThis.navigator, "clipboard", {
@@ -2146,3 +2402,36 @@ if (typeof store.updateMyDonorId !== "function" || typeof store.getActiveGivingC
   throw new Error("live Giving profile/campaign APIs are missing");
 }
 console.log("ok  live Giving database and profile APIs coexist with Payment/Auth and Notifications");
+
+// Cancellation copy must read exactly 'Session cancelled by ITC — <reason>'
+// across schedule, activity, and admin ops surfaces.
+const seededCancellation = await store.getSession("hyrox-2026-08-15");
+if (!seededCancellation || !seededCancellation.cancelled) {
+  throw new Error("15 August 2026 session should be server-cancelled on hydration");
+}
+if (seededCancellation.cancelReason !== "HYROX race weekend") {
+  throw new Error("15 August 2026 cancel reason must be 'HYROX race weekend'");
+}
+const copy = operations.sessionCancellationCopy(seededCancellation);
+if (copy !== "Session cancelled by ITC — HYROX race weekend") {
+  throw new Error(`Cancellation copy must be canonical: ${copy}`);
+}
+// Check the schedule by navigating to the week containing 15 August 2026 and
+// selecting that day so the cancelled session renders through the schedule row.
+let scheduleHtml = "";
+for (let offset = 0; offset < 4; offset += 1) {
+  views.scheduleState.weekOffset = offset;
+  views.scheduleState.selected = null;
+  scheduleHtml += views.viewSchedule();
+}
+views.scheduleState.weekOffset = 1;
+views.scheduleState.selected = "2026-08-15";
+scheduleHtml += views.viewSchedule();
+if (!scheduleHtml.includes("Session cancelled by ITC — HYROX race weekend")) {
+  throw new Error("Schedule must render the canonical cancellation copy");
+}
+const activityHtml = views.viewActivity("hyrox-2026-08-15");
+if (!activityHtml.includes("Session cancelled by ITC — HYROX race weekend")) {
+  throw new Error("Activity view must render the canonical cancellation copy");
+}
+console.log("ok  live cancellation copy renders 'Session cancelled by ITC — <reason>' everywhere");

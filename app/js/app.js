@@ -644,7 +644,7 @@ document.addEventListener("click", async (e) => {
     case "defer-to":
       if (confirm("Move this booking to the selected session?")) {
         try {
-          const moved = store.deferBooking(el.dataset.booking, el.dataset.session);
+          const moved = await store.deferBooking(el.dataset.booking, el.dataset.session);
           toast("Booking moved — payment carried over");
           location.hash = `#/booking/${moved.id}`;
           render();
@@ -1001,9 +1001,13 @@ document.addEventListener("submit", async (e) => {
 
     case "form-gym-note": {
       e.preventDefault();
-      store.confirmGymBooking(form.dataset.session, new FormData(form).get("note"));
-      toast("Marked confirmed with the gym");
-      render();
+      try {
+        await store.confirmGymBooking(form.dataset.session, new FormData(form).get("note"));
+        toast("Marked confirmed with the gym");
+        render();
+      } catch (err) {
+        toast(err.message || "Unable to record gym confirmation", true);
+      }
       break;
     }
 
