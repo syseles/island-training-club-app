@@ -315,8 +315,10 @@ grant select on table public.operational_sessions to anon, authenticated;
 grant select on table public.operational_bookings to anon, authenticated;
 grant select on table public.operational_queue_entries to anon, authenticated;
 grant select on table public.operational_receipts to anon, authenticated;
-grant select, insert, update on table public.collector_assignments to authenticated;
-grant select, insert, update on table public.collector_payout_profiles to authenticated;
+grant select on table public.collector_assignments to anon, authenticated;
+grant select on table public.collector_payout_profiles to anon, authenticated;
+grant insert, update on table public.collector_assignments to authenticated;
+grant insert, update on table public.collector_payout_profiles to authenticated;
 
 -- =====================================================================
 -- Activity templates seed
