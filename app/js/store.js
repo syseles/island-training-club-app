@@ -1134,7 +1134,7 @@ function decorateSession(s) {
 export function upcomingSessions(days = 14) {
   if (isLive()) {
     const today = todayLocal().getTime();
-    return liveOps.listLiveSessions()
+    const livePaid = liveOps.listLiveSessions()
       .filter((s) => parseISO(s.dateISO).getTime() >= today)
       .sort((a, b) => a.dateISO.localeCompare(b.dateISO))
       .slice(0, days * 2)
@@ -1143,6 +1143,16 @@ export function upcomingSessions(days = 14) {
         spots: spotsLeft(s),
         past: false,
       }));
+    const freeSessions = sessionsInRange(
+      state.activities.filter((a) => a.kind === "free"),
+      todayLocal(),
+      days
+    ).map((s) => ({
+      ...s,
+      spots: spotsLeft(s),
+      past: false,
+    }));
+    return [...freeSessions, ...livePaid];
   }
   const today = todayLocal();
   return sessionsInRange(state.activities, today, days).map((s) => ({
