@@ -6,12 +6,17 @@
 // ==========================================================================
 
 import * as store from "./store.js";
+import { isLive } from "./config.js";
+import * as liveOps from "./operations.js";
+import { sessionCancellationCopy } from "./operations.js";
 import {
   LEADERS,
   CULTURE,
+  ANNOUNCEMENTS,
   findSession,
   sessionStarted,
   sessionsInRange,
+  parseISO,
   mondayOf,
   addDays,
   todayLocal,
@@ -21,7 +26,29 @@ import {
   fmtTime,
   fmtMoney,
   initials,
+  weeklyVerse,
+  notificationRelativeTime,
+  notificationHktTime,
+  notificationDestination,
+  notificationCategory,
 } from "./data.js";
+
+// Auth roles are normalized: live Supabase returns "super_admin"; the
+// prototype internally uses "superadmin". The helpers below bridge both.
+const isAdminRole = (role) => ["admin", "superadmin", "super_admin"].includes(role);
+const isSuperRole = (role) => ["superadmin", "super_admin"].includes(role);
+const normalizeRole = (role) => (role === "super_admin" ? "superadmin" : role);
+const normalizedRole = (role) => (role === "super_admin" ? "superadmin" : role);
+const roleLabel = (role) => role === "superadmin" || role === "super_admin"
+  ? "Super Admin"
+  : role === "admin" ? "Admin"
+  : role === "declined" ? "Declined"
+  : role === "pending" ? "Pending"
+  : "Member";
+
+// Toggling member filters must only affect the in-memory view state, never
+// the persisted store. Tests reset this explicitly where required.
+export const adminMemberFilters = { query: "", status: "all", role: "all" };
 
 const esc = (s) =>
   String(s ?? "").replace(/[&<>"']/g, (c) => ({
@@ -54,23 +81,45 @@ function spotsLabel(s) {
   return `<span class="spots">${spots} spot${spots === 1 ? "" : "s"} left</span>`;
 }
 
+const fmtDeadline = (ts) =>
+  new Date(ts).toLocaleString("en-HK", { weekday: "short", hour: "numeric", minute: "2-digit" });
+
 function sessionRow(s, { past, showDate = true, highlight } = {}) {
   // A session the signed-in member has already booked shows a "Booked"
   // badge instead of price/spots, so Home, Schedule and the booking itself
-  // all tell the same story.
+  // all tell the same story. Per-week overrides (cancelled, time, venue
+  // TBC, notice, Midtown open/closed) surface here so the Schedule tab
+  // mirrors the detail page.
   const user = store.currentUser();
   const booked = user ? store.userBookingFor(user.id, s.id) : null;
-  const end = booked
-    ? `<span class="badge free booked">Booked</span>`
-    : s.kind === "free"
-      ? `<span class="badge free">Free</span><span class="spots">Just show up</span>`
-      : `${store.spotsLeft(s) > 0 ? `<span class="badge paid">${fmtMoney(s.price)}</span>` : ""}${spotsLabel(s)}`;
+  const reserved = user ? store.userReservationFor(user.id, s.id) : null;
+  const midtownClosed = s.kind === "paid" && store.isMidtown(s) && !store.midtownOpenFor(s);
+  let end;
+  if (s.cancelled) {
+    end = `<span class="badge danger">Cancelled</span>`;
+  } else if (booked) {
+    end = `<span class="badge free booked">Booked</span>`;
+  } else if (reserved) {
+    end = `<span class="badge warn">Pay by ${fmtDeadline(reserved.payDeadlineAt)}</span>`;
+  } else if (s.kind === "free") {
+    end = `<span class="badge free">Free</span><span class="spots">Just show up</span>`;
+  } else if (midtownClosed) {
+    end = `<span class="badge neutral">Not yet open</span>`;
+  } else {
+    end = `${store.spotsLeft(s) > 0 ? `<span class="badge paid">${fmtMoney(s.price)}</span>` : ""}${spotsLabel(s)}`;
+  }
+  const sub = [
+    showDate ? `${esc(fmtDate(s.date))} · ${esc(s.location)}` : esc(s.location),
+    s.cancelled ? esc(sessionCancellationCopy(s)) : "",
+    s.venueTBC && !s.cancelled ? "Venue TBC" : "",
+    s.notice ? esc(s.notice) : "",
+  ].filter(Boolean).join(" · ");
   return `
-    <a class="session-row${past ? " is-past" : ""}${highlight ? " next" : ""}" href="#/activity/${s.id}">
+    <a class="session-row${past ? " is-past" : ""}${highlight ? " next" : ""}${s.cancelled ? " is-cancelled" : ""}" href="#/activity/${s.id}">
       <time>${fmtTime(s.time)}</time>
       <div>
         <h3>${esc(s.name)}</h3>
-        <p>${showDate ? `${esc(fmtDate(s.date))} · ${esc(s.location)}` : esc(s.location)}</p>
+        <p>${sub}</p>
       </div>
       <div class="row-end">${end}</div>
     </a>`;
@@ -111,13 +160,13 @@ const NAV_ITEMS = [
   { key: "home", label: "Home", icon: "home", href: "#/home" },
   { key: "schedule", label: "Schedule", icon: "calendar", href: "#/schedule" },
   { key: "community", label: "Community", icon: "people", href: "#/community" },
+  { key: "giving", label: "Giving", icon: "heart", href: "#/giving", roles: ["signed-in"] },
   { key: "account", label: "Account", icon: "user", href: "#/account" },
-  { key: "admin", label: "Admin", icon: "shield", href: "#/admin", roles: ["admin", "superadmin"] },
 ];
 
 export function navHTML(routeKey, user) {
-  const isAdmin = user && ["admin", "superadmin"].includes(user.role);
-  return NAV_ITEMS.filter((i) => !i.roles || isAdmin)
+  const isSignedIn = !!user;
+  return NAV_ITEMS.filter((i) => !i.roles || (i.roles.includes("signed-in") && isSignedIn))
     .map(
       (i) => `
       <a href="${i.href}" class="${i.key === routeKey ? "active" : ""}" ${i.key === routeKey ? 'aria-current="page"' : ""}>
@@ -131,30 +180,62 @@ export function avatarHTML(user) {
   return user ? initials(user.fullName) : ICONS.user;
 }
 
+export function notificationBellHTML(unreadCount = 0, active = false) {
+  const visibleCount = unreadCount > 99 ? "99+" : String(unreadCount);
+  return `${ICONS.bell}${unreadCount ? `<span class="notification-badge" aria-hidden="true">${visibleCount}</span>` : ""}`;
+}
+
 // ============================================================================
 // Views
 // ============================================================================
+
+function visitorDraftActions() {
+  if (!store.getApplyDraft()) return "";
+  return `
+    <div class="banner mt16" data-draft-resume>
+      <p><strong>Continue your application</strong><br><span class="muted small">Your unfinished form is saved on this device.</span></p>
+      <div class="actions">
+        <a class="btn sm" href="#/apply">Continue your application</a>
+        <button class="btn ghost sm" type="button" data-action="discard-draft">Discard</button>
+      </div>
+    </div>`;
+}
 
 export function viewHome() {
   const user = store.currentUser();
   // Same 14-day window bookings are made in — a confirmed booking can never
   // fall out of "My week" (e.g. next Saturday's booking seen on Sat evening).
   const upcoming = store.upcomingSessions(14);
+  const weekStart = mondayOf(todayLocal());
+  const weekEnd = addDays(weekStart, 6);
+  const inThisWeek = (s) => {
+    const iso = s.dateISO || (s.snapshot && s.snapshot.dateISO);
+    if (!iso) return false;
+    const t = parseISO(iso).getTime();
+    return t >= weekStart.getTime() && t <= weekEnd.getTime();
+  };
   const name = user ? esc(user.preferredName || user.fullName.split(" ")[0]) : null;
 
-  // "My week" shows a signed-in member only the sessions they've booked
-  // (free ones included); the full week stays discoverable via Schedule.
-  let rows = upcoming.slice(0, 3);
-  let emptyMsg = "No upcoming sessions — check back soon.";
-  if (user && user.status === "approved") {
+  let rows;
+  let emptyMsg;
+  let weekHeading;
+  if (!user) {
+    rows = upcoming.filter((session) => session.kind === "free" && inThisWeek(session));
+    emptyMsg = "No open sessions this week — check back soon.";
+    weekHeading = "This week — open to all";
+  } else if (user.status !== "approved") {
+    rows = upcoming.filter((session) => session.kind === "free" && inThisWeek(session));
+    emptyMsg = "No open sessions this week — check back soon.";
+    weekHeading = "My Week";
+  } else {
     const bookedIds = new Set(
-      store
-        .bookingsForUser(user.id)
-        .filter((b) => b.status === "confirmed" && !sessionStarted(b.snapshot))
-        .map((b) => b.sessionId)
+      store.bookingsForUser(user.id)
+        .filter((booking) => booking.status === "confirmed" && !sessionStarted(booking.snapshot))
+        .map((booking) => booking.sessionId)
     );
-    rows = upcoming.filter((s) => bookedIds.has(s.id));
+    rows = upcoming.filter((session) => bookedIds.has(session.id));
     emptyMsg = `Nothing booked this week yet. <a href="#/schedule" style="color:var(--accent)">Find a session →</a>`;
+    weekHeading = "My Week";
   }
 
   const guest = !user
@@ -162,21 +243,31 @@ export function viewHome() {
     <div class="card mt24"><div class="card-body">
       <span class="kicker">New to ITC?</span>
       <h3 class="mt8">Everyone is welcome</h3>
-      <p class="hero-meta">Free activities are open to all — just show up. Membership is free too; an ITC leader approves every application before paid booking unlocks.</p>
-      <div class="btn-row two">
-        <a class="btn" href="#/apply">Apply to join</a>
-        <a class="btn ghost" href="#/account">Sign in</a>
-      </div>
+      <p class="hero-meta">Free activities are open to all — just show up. Membership is free too; sign in and an ITC leader approves every application before paid booking unlocks.</p>
+      ${visitorDraftActions()}
+      ${isLive()
+        ? `<button class="btn mt16" type="button" data-action="sign-in-google">Continue with Google</button>`
+        : `<a class="btn mt16" href="#/account">Sign in or join</a>`}
+      <p class="muted small mt8">New here? You'll be guided through a short application after sign-in.</p>
     </div></div>`
     : "";
+
+  const verse = weeklyVerse();
+  const encouragement = `
+    <div class="card mt16"><div class="card-body">
+      <span class="kicker">Encouragement of the week</span>
+      <p class="verse-text">“${esc(verse.text)}”</p>
+      <p class="hero-meta">${esc(verse.ref)}</p>
+    </div></div>`;
 
   return `
     <div class="kicker">${esc(fmtDateLong(todayLocal()))} · Hong Kong</div>
     <h1 class="display">${name ? `Good to see you, ${name}.` : "Train together."}</h1>
     ${user && user.status === "pending" ? pendingBanner() : ""}
+    ${user ? encouragement : ""}
     ${guest}
     <div class="section-head">
-      <h2>My Week</h2>
+      <h2>${weekHeading}</h2>
       <a href="#/schedule">See more →</a>
     </div>
     <div class="session-list">
@@ -233,7 +324,36 @@ export function viewSchedule() {
   if (!scheduleState.selected) {
     scheduleState.selected = scheduleState.weekOffset === 0 ? isoDate(t) : isoDate(monday);
   }
-  const weekSessions = sessionsInRange(store.activities(), monday, 7);
+  let sourceActivities;
+  if (isLive()) {
+    const liveTemplates = liveOps.liveActivityTemplates();
+    const templateActivities = liveTemplates.map((tpl) => ({
+      id: tpl.activity_id,
+      weekday: tpl.weekday,
+      price: tpl.price_hkd,
+      capacity: tpl.capacity,
+      kind: "paid",
+      name: tpl.name,
+      venue: tpl.venue,
+      durationMin: tpl.duration_minutes,
+      start_time: tpl.start_time,
+      category: "HYROX",
+      published: true,
+    }));
+    const freeActivities = store.activities().filter((a) => a.kind === "free");
+    sourceActivities = [...templateActivities, ...freeActivities];
+  } else {
+    sourceActivities = store.activities();
+  }
+  const weekSessions = sessionsInRange(sourceActivities, monday, 7)
+    .map((s) => {
+      if (isLive()) {
+        if (s.kind === "free") return store.getSession(s.id);
+        return liveOps.getLiveSession(s.id);
+      }
+      return store.getSession(s.id);
+    })
+    .filter(Boolean);
   const dayNames = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
   const cells = Array.from({ length: 7 }, (_, i) => {
@@ -277,7 +397,7 @@ export function viewSchedule() {
 // --- Activity detail ------------------------------------------------------------------
 
 export function viewActivity(sessionId) {
-  const s = findSession(store.activities(), sessionId);
+  const s = store.getSession(sessionId);
   if (!s) return viewNotFound("That session doesn’t exist.");
 
   const user = store.currentUser();
@@ -285,9 +405,19 @@ export function viewActivity(sessionId) {
   const past = sessionStarted(s);
   const spots = store.spotsLeft(s);
   const booking = user ? store.userBookingFor(user.id, s.id) : null;
+  const reservation = user ? store.userReservationFor(user.id, s.id) : null;
+  const midtownClosed = s.kind === "paid" && store.isMidtown(s) && !store.midtownOpenFor(s);
+  const collector = store.collectorFor(s.id);
+  const collectorName = collector ? (collector.preferredName || collector.fullName) : "the on-duty collector";
 
   let actionBlock = "";
-  if (past) {
+  if (s.cancelled) {
+    actionBlock = `
+      <div class="banner warn mt16">
+        <span class="kicker">Cancelled</span>
+        <p>${esc(sessionCancellationCopy(s))}. Paid bookings were moved to the next available session — check your account.</p>
+      </div>`;
+  } else if (past) {
     actionBlock = `<div class="banner mt16"><p>This session has already happened. See you at the next one.</p></div>`;
   } else if (s.kind === "free") {
     // Product rule: free activities never show booking, capacity or checkout.
@@ -300,6 +430,23 @@ export function viewActivity(sessionId) {
         <button class="btn" type="button" data-action="ics" data-session="${s.id}">Add to calendar</button>
         ${s.mapsQuery ? `<a class="btn ghost" href="${mapsHref(s)}" target="_blank" rel="noopener">Get directions</a>` : ""}
       </div>`;
+  } else if (midtownClosed) {
+    const pos = user ? store.interestPosition(user.id, s.id) : null;
+    actionBlock = isMember
+      ? pos
+        ? `
+        <div class="banner mt16">
+          <span class="kicker">Waiting for Midtown</span>
+          <p>You’re #${pos} in line. When the collector opens this session, the first ${s.capacity} in line get spots automatically.</p>
+        </div>
+        <div class="btn-row"><button class="btn ghost" type="button" data-action="leave-interest" data-session="${s.id}">Leave the list</button></div>`
+        : `
+        <div class="banner mt16">
+          <span class="kicker">Midtown not open yet</span>
+          <p>BFT fills first — the collector opens Midtown when demand justifies it. Join the list and you’ll auto-convert in order.</p>
+        </div>
+        <div class="btn-row"><button class="btn" type="button" data-action="join-interest" data-session="${s.id}">Wait for Midtown</button></div>`
+      : membersOnlyGate();
   } else if (booking) {
     actionBlock = `
       <div class="banner mt16">
@@ -325,15 +472,7 @@ export function viewActivity(sessionId) {
     actionBlock = `
       <div class="banner mt16"><p>Your application wasn’t approved. Contact an ITC leader if you think this is a mistake.</p></div>`;
   } else {
-    actionBlock = `
-      <div class="banner mt16">
-        <span class="kicker">Members only</span>
-        <p>This is a paid member session. Apply for free membership — a leader approves every application — then book and pay here.</p>
-      </div>
-      <div class="btn-row two">
-        <a class="btn" href="#/apply">Apply to join</a>
-        <a class="btn ghost" href="#/account">Sign in</a>
-      </div>`;
+    actionBlock = membersOnlyGate();
   }
 
   const metaPaid =
@@ -380,6 +519,202 @@ function mapsHref(s) {
   return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(q)}`;
 }
 
+function membersOnlyGate() {
+  return `
+    <div class="banner mt16">
+      <span class="kicker">Members only</span>
+      <p>This is a paid member session. Apply for free membership — a leader approves every application — then book and pay here.</p>
+    </div>
+    <div class="btn-row two">
+      <a class="btn" href="#/apply">Apply to join</a>
+      <a class="btn ghost" href="#/account">Sign in</a>
+    </div>`;
+}
+
+// --- Giving ---------------------------------------------------------------------------------
+// Mock FPS donation flow. FPS is a push payment from the donor's banking
+// app, so the flow is: choose an amount -> transfer with the shown reference
+// -> gift recorded as "awaiting confirmation" until a leader reconciles it.
+
+export const givingState = {
+  step: 1, // 1 = amount, 2 = FPS instructions, 3 = thank you
+  amount: 200,
+  name: "",
+  note: "",
+  ref: null,
+  campaignId: null,
+};
+
+export function resetGivingState() {
+  givingState.step = 1;
+  givingState.amount = 200;
+  givingState.name = "";
+  givingState.note = "";
+  givingState.ref = null;
+  givingState.campaignId = null;
+}
+
+function givingLocked(user) {
+  const declined = user?.status === "declined";
+  return `
+    <div class="kicker">Giving &amp; Fundraising</div>
+    <h1 class="display">Giving access.</h1>
+    <div class="card mt16"><div class="card-body">
+      <div class="locked-note">🔒 Giving is available to approved ITC members.</div>
+      <h3 class="mt16">${declined ? "Speak with a leader" : "Your application is under review"}</h3>
+      <p class="hero-meta">${declined
+        ? "Please contact an ITC leader if you would like to discuss your membership decision and Giving access."
+        : "Giving access will unlock after an ITC leader reviews and approves your membership application."}</p>
+      <div class="btn-row">
+        <a class="btn" href="#/account">View Profile</a>
+        <a class="btn ghost" href="#/schedule">View Schedule</a>
+      </div>
+    </div></div>`;
+}
+
+export async function viewGiving({
+  ownsGeneration = () => true,
+  activeCampaignLookup = (options) => store.getActiveGivingCampaign(options),
+} = {}) {
+  const user = store.currentUser();
+  if (!user || user.status !== "approved") return givingLocked(user);
+
+  // The lookup receives the same ownership token as the view so stale route
+  // completion cannot mutate store-level live campaign state before the DOM
+  // generation guard runs.
+  const campaign = await activeCampaignLookup({ ownsGeneration });
+  const generationOwned = ownsGeneration();
+  const gifts = store.donationsForUser(user.id);
+  if (!campaign) {
+    if (generationOwned) resetGivingState();
+    return `
+      <div class="kicker">Giving &amp; Fundraising</div>
+      <h1 class="display">Every step can give back.</h1>
+      <div class="card mt16"><div class="card-body">
+        <h3>No active Giving campaign at the moment</h3>
+        <p class="hero-meta mt8">Check back soon for the next opportunity to support the ITC community.</p>
+      </div></div>
+      ${gifts.length ? `<div class="section-head"><h2>Giving history</h2></div>${givingHistory(gifts)}` : ""}`;
+  }
+
+  if (generationOwned && givingState.campaignId !== campaign.id) {
+    resetGivingState();
+    givingState.campaignId = campaign.id;
+  }
+  const raised = store.campaignRaised(campaign);
+  const goal = Number(campaign.goalHKD) || 0;
+  const pct = goal > 0 ? Math.min(100, Math.round((raised / goal) * 100)) : 0;
+
+  const flow =
+    givingState.step === 2
+      ? givingFpsStep(campaign)
+      : givingState.step === 3
+        ? givingThanksStep()
+        : givingAmountStep(user);
+
+  return `
+    <div class="kicker">Giving &amp; Fundraising</div>
+    <h1 class="display">Every step can give back.</h1>
+    <div class="card mt16"><div class="card-body">
+      <span class="kicker">Current campaign</span>
+      <h3 class="mt8">${esc(campaign.title)}</h3>
+      <p class="hero-meta">${esc(campaign.description)}</p>
+      <div class="progress mt16"><i style="width:${pct}%"></i></div>
+      <div class="progress-meta">
+        <strong>${fmtMoney(raised)} raised</strong>
+        <span>${pct}% of ${fmtMoney(goal)} goal</span>
+      </div>
+    </div></div>
+    ${flow}
+    ${gifts.length ? `<div class="section-head"><h2>Giving history</h2></div>${givingHistory(gifts)}` : ""}`;
+}
+
+function givingAmountStep(user) {
+  return `
+    <div class="card mt16"><div class="card-body">
+      <h3>Give via FPS</h3>
+      <form id="form-giving" novalidate>
+        <div class="chip-row mt16">
+          ${[100, 200, 500, 1000]
+            .map(
+              (a) => `
+            <button type="button" class="chip${givingState.amount === a ? " active" : ""}"
+              data-action="giving-amount" data-amount="${a}">${fmtMoney(a)}</button>`
+            )
+            .join("")}
+        </div>
+        <div class="field">
+          <label for="give-amount">Amount (HKD)</label>
+          <input id="give-amount" name="amount" type="number" min="1" step="1" inputmode="numeric" value="${givingState.amount}" required>
+        </div>
+        <div class="field">
+          <label for="give-name">Your name</label>
+          <input id="give-name" name="name" autocomplete="name" value="${esc(givingState.name || user?.fullName || "")}" required>
+        </div>
+        <div class="field">
+          <label for="give-note">Message (optional)</label>
+          <input id="give-note" name="note" value="${esc(givingState.note)}" placeholder="e.g. Go ITC runners!">
+        </div>
+        <div id="giving-error"></div>
+        <button class="btn mt16" type="submit">Continue</button>
+        ${user ? "" : `<p class="muted small mt8 center">Tip: sign in first and this gift will appear in your giving history.</p>`}
+      </form>
+    </div></div>`;
+}
+
+function givingFpsStep(campaign) {
+  return `
+    <div class="card mt16"><div class="card-body">
+      <span class="kicker">Step 2 · Complete the transfer</span>
+      <h3 class="mt8">Pay ${fmtMoney(givingState.amount)} via FPS</h3>
+      <div class="fps-qr" aria-hidden="true">FPS QR<br>placeholder</div>
+      <div class="receipt-lines">
+        <div class="line"><span>FPS ID</span><strong class="mono">${esc(campaign.fpsId)}</strong></div>
+        <div class="line"><span>Payee</span><strong>${esc(campaign.fpsPayee)}</strong></div>
+        <div class="line"><span>Amount</span><strong>${fmtMoney(givingState.amount)}</strong></div>
+        <div class="line total"><span>Reference</span><strong class="mono">${esc(givingState.ref)}</strong></div>
+      </div>
+      <p class="muted small mt8">Open your banking app, choose FPS, and pay using the details above. Put the reference in the transfer remarks so a leader can match your gift.</p>
+      <div class="btn-row">
+        <button class="btn" type="button" data-action="giving-confirm">I’ve made the transfer</button>
+        <button class="btn ghost" type="button" data-action="giving-back">Back</button>
+      </div>
+      <p class="muted small mt8">Mock flow — no real payment. Gifts show as “Awaiting confirmation” until a leader reconciles the FPS transfer.</p>
+    </div></div>`;
+}
+
+function givingThanksStep() {
+  return `
+    <div class="confirm-mark">${ICONS.check}</div>
+    <h1 class="display sm center mt16">Thank you, ${esc(givingState.name.split(" ")[0] || "friend")}.</h1>
+    <p class="subcopy center mt8">Your gift of ${fmtMoney(givingState.amount)} is recorded — ref <span class="mono">${esc(givingState.ref)}</span>. It will show as confirmed once a leader reconciles the transfer.</p>
+    <div class="btn-row">
+      <button class="btn" type="button" data-action="giving-reset">Back to Giving</button>
+    </div>`;
+}
+
+function givingHistory(list) {
+  const campaignById = new Map(store.campaigns().map((campaign) => [campaign.id, campaign]));
+  return `
+    <div class="session-list">
+      ${list
+        .map(
+          (d) => `
+        <div class="session-row">
+          <time>${new Date(d.createdAt).toLocaleDateString("en-HK", { day: "numeric", month: "short" })}<small>${esc(d.ref)}</small></time>
+          <div>
+            <h3>${fmtMoney(d.amount)}</h3>
+            <p>${esc(campaignById.get(d.campaignId)?.title || d.campaignTitle || "Giving campaign")} · FPS${d.note ? ` · “${esc(d.note)}”` : ""}</p>
+          </div>
+          <div class="row-end">
+            ${d.status === "confirmed" ? '<span class="badge free">Confirmed</span>' : '<span class="badge warn">Awaiting confirmation</span>'}
+          </div>
+        </div>`
+        )
+        .join("")}
+    </div>`;
+}
+
 // --- Community -----------------------------------------------------------------
 // The Community tab is about connecting: prayer, fellowship, meals and news.
 // Leaders and culture copy lives under Profile > About Island Training Club.
@@ -403,17 +738,64 @@ export function viewCommunity(section) {
   }
 }
 
+function communityHeading(user) {
+  if (!user) return "Find your place in the crew.";
+  if (user.status === "pending") return "You’re welcome here.";
+  if (user.status === "approved") return "Connect and grow with us.";
+  return "Find your place in the crew.";
+}
+
 function communityHome() {
+  const user = store.currentUser();
+  const announcement = ANNOUNCEMENTS[0];
   return `
-    <div class="kicker">Community</div>
-    <h1 class="display">Connect and grow with us.</h1>
-    <p class="subcopy mt8">Island Training Club is a Hong Kong training community with a Christian foundation — open to everyone. Training is the doorway; here are the ways to go deeper.</p>
-    <div class="link-cards">
-      ${linkCard("#/community/prayers", "Prayers", "Ask for prayer, or pray with us")}
-      ${linkCard("#/community/fellowship", "Fellowship", "Small groups and community life")}
-      ${linkCard("#/community/meals", "Ad-Hoc Meals", "Share a meal with us after sessions")}
-      ${linkCard("#/community/announcements", "Announcements", "News from the church and the community")}
-      ${linkCard("#/community/about", "About Island Training Club", "Mission, coaches and leadership")}
+    <div class="community-pulse">
+      <div class="kicker">Community</div>
+      <h1 class="display">${esc(communityHeading(user))}</h1>
+      <p class="subcopy mt8">Island Training Club is a Hong Kong training community with a Christian foundation — open to everyone. Training is the doorway; find your next way to connect.</p>
+
+      <section class="community-feature" aria-labelledby="next-connection-title">
+        <span class="kicker">Next connection</span>
+        <h2 id="next-connection-title">Post-training dinner</h2>
+        <p>Date and venue are announced in the session WhatsApp group a few days ahead.</p>
+        <div class="community-feature-actions">
+          <button class="btn sm" type="button" data-action="connect-interest" data-topic="the next ad-hoc meal">Count me in</button>
+          <a class="btn ghost sm" href="#/community/meals">View details</a>
+        </div>
+      </section>
+
+      <div class="community-section-head">
+        <h2>Latest from ITC</h2>
+        <a href="#/community/announcements">All announcements →</a>
+      </div>
+      ${announcement ? `
+        <a class="community-announcement-preview" href="#/community/announcements">
+          <span class="kicker dim">${esc(fmtDay(announcement.postedAt))} · ITC Anniversary</span>
+          <h3>${esc(announcement.title)}</h3>
+          <p>${esc(announcement.lead)}</p>
+        </a>` : `
+        <div class="community-announcement-preview empty">No announcements yet.</div>`}
+
+      <div class="community-section-head"><h2>Ways to connect</h2></div>
+      <div class="community-action-grid">
+        <a class="community-action-card" href="#/community/prayers">
+          <span class="community-action-icon">${ICONS.heart}</span>
+          <h3>Prayer</h3>
+          <p>Share privately with our leaders.</p>
+        </a>
+        <a class="community-action-card" href="#/community/fellowship">
+          <span class="community-action-icon">${ICONS.people}</span>
+          <h3>Fellowship</h3>
+          <p>Small groups and community life.</p>
+        </a>
+      </div>
+
+      <div class="community-section-head"><h2>Explore</h2></div>
+      <nav class="community-explore" aria-label="Explore the ITC community">
+        <a href="#/community/meals">Meals</a>
+        <a href="#/community/announcements">Announcements</a>
+        <a href="#/community/about">About ITC</a>
+      </nav>
     </div>`;
 }
 
@@ -505,32 +887,92 @@ function communityMeals() {
 }
 
 function communityAnnouncements() {
+  const announcement = ANNOUNCEMENTS[0];
+  if (!announcement) {
+    return `
+      <a class="back-link" href="#/community">← Community</a>
+      <div class="kicker mt16">Community · Announcements</div>
+      <h1 class="display sm">Announcements.</h1>
+      <div class="empty mt16">No announcements yet.</div>`;
+  }
   return `
     <a class="back-link" href="#/community">← Community</a>
-    <div class="kicker mt16">Community · Announcements</div>
-    <h1 class="display sm">Announcements.</h1>
-    <p class="subcopy mt8">News from the church and the community.</p>
-    <div class="empty mt16">No announcements yet. Updates from ITC leadership will appear here.</div>`;
+    <article class="anniversary-story">
+    <article class="anniversary-story">
+      <div class="kicker">${esc(fmtDay(announcement.postedAt))} · ITC Anniversary</div>
+      <h1 class="display sm">${esc(announcement.title)}.</h1>
+      <p class="subcopy mt8">${esc(announcement.lead)}</p>
+      <div class="anniversary-hero">
+        <strong aria-label="2 years">2<span>yrs</span></strong>
+        <div><h2>Look what God has built.</h2><p>One community, growing stronger together.</p></div>
+      </div>
+      <div class="milestone-grid">
+        ${announcement.milestones.map((item) => `
+          <div class="milestone">
+            <strong>${esc(item.value)}</strong>
+            <span>${esc(item.label)}</span>
+          </div>`).join("")}
+      </div>
+      <p class="anniversary-message">${esc(announcement.body)}</p>
+      <blockquote class="anniversary-commitment">${esc(announcement.commitment)}</blockquote>
+    </article>`;
 }
 
-export function viewAccount(section) {
+export async function viewAccount(section, sub) {
+  if (!sub && typeof section === "string" && section.includes("/")) {
+    [section, sub] = section.split("/");
+  }
+  if (sub && section === "details") section = "details/edit";
+  if (sub && section === "privacy") section = "privacy/edit";
   const user = store.currentUser();
   if (!user) return accountVisitor();
-  if (user.status === "pending") return accountPending(user);
+  // Live mode: when no live application exists, render an unavailable card so
+  // the Profile surface doesn't pretend to have data it can't actually show.
+  if (isLive()) {
+    const allowedWithoutApp = ["details/edit", "privacy/edit"];
+    const path = `${section || "home"}${sub ? `/${sub}` : ""}`;
+    if (!allowedWithoutApp.includes(path)) {
+      try {
+        const app = await store.fetchApplicationForUser(store.currentUser());
+        if (!app) {
+          const sectionTitle = {
+            details: "Membership Details",
+            indemnity: "Indemnity",
+            privacy: "Privacy &amp; Notifications",
+          }[section] || "Profile";
+          return `
+            <a class="back-link" href="#/home">← Home</a>
+            <div class="kicker mt16">Profile · ${sectionTitle}</div>
+            <h1 class="display sm">${sectionTitle}.</h1>
+            <div class="card mt16"><div class="card-body">
+              <h3>Application details unavailable</h3>
+              <p class="muted small">Your membership application isn't linked to this profile yet. ITC leaders will sync the records and the data will appear here within a working day.</p>
+            </div></div>`;
+        }
+      } catch (err) {
+        console.error("Failed to load live application for account", err);
+      }
+    }
+  }
+  if (user.status === "pending") return await accountPending(user);
   if (user.status === "declined") return accountDeclined(user);
   switch (section) {
     case undefined:
-      return accountMember(user);
+      return await accountMember(user);
     case "details":
-      return accountDetails(user);
+      return await accountDetails(user);
+    case "details/edit":
+      return await accountDetailsEdit(user);
     case "indemnity":
-      return accountIndemnity(user);
+      return await accountIndemnity(user);
     case "donor":
-      return accountDonor(user);
+      return accountDonor(user, isLive() ? await store.fetchApplicationForUser(user) : null);
     case "payments":
       return accountPayments(user);
     case "privacy":
-      return accountPrivacy(user);
+      return await accountPrivacy(user);
+    case "privacy/edit":
+      return await accountPrivacyEdit(user);
     case "history":
       return accountHistory(user);
     default:
@@ -538,11 +980,53 @@ export function viewAccount(section) {
   }
 }
 
+
+async function hydrateLiveUser(user) {
+  if (!isLive()) return user;
+  try {
+    const app = await store.fetchApplicationForUser(user);
+    if (!app) return user;
+    return {
+      ...user,
+      phone: app.mobile ?? user.phone ?? "",
+      emergencyName: app.emergency_name ?? user.emergencyName ?? "",
+      emergencyPhone: app.emergency_phone ?? user.emergencyPhone ?? "",
+      preferredName: (Object.prototype.hasOwnProperty.call(app, "preferred_name")) ? (app.preferred_name || "") : user.preferredName,
+      heard: app.heard_source ?? user.heard ?? "",
+      isMinor: app.is_minor !== undefined ? !!app.is_minor : user.isMinor,
+      guardianName: app.guardian_name ?? user.guardianName ?? "",
+      guardianPhone: app.guardian_phone ?? user.guardianPhone ?? "",
+      mediaConsent: app.photo_consent !== undefined ? !!app.photo_consent : user.mediaConsent,
+      whatsappReminders: app.whatsapp_reminders !== undefined ? !!app.whatsapp_reminders : user.whatsappReminders,
+      emailReceipts: app.email_receipts !== undefined ? !!app.email_receipts : user.emailReceipts,
+      communityNews: app.community_news !== undefined ? !!app.community_news : user.communityNews,
+      indemnityAcceptedAt: app.waiver_accepted_at ?? user.indemnityAcceptedAt,
+      privacyAcceptedAt: app.privacy_accepted_at ?? user.privacyAcceptedAt,
+      appliedAt: app.submitted_at ?? user.appliedAt,
+    };
+  } catch (err) {
+    console.error("Failed to hydrate live user", err);
+    return user;
+  }
+}
+
 function accountVisitor() {
+  if (isLive()) {
+    return `
+      <div class="kicker">Account</div>
+      <h1 class="display">Sign in</h1>
+      <p class="subcopy mt8">Use your Google account to sign in to Island Training Club. New here? You'll be guided through a short application after sign-in.</p>
+      ${visitorDraftActions()}
+      <div class="card mt24"><div class="card-body">
+        <button class="btn mt16" type="button" data-action="sign-in-google">Continue with Google</button>
+        <p class="muted small mt16">By continuing, you agree to be added to the ITC community roster. An ITC leader will review your application before you can book sessions.</p>
+      </div></div>`;
+  }
   return `
     <div class="kicker">Account</div>
     <h1 class="display">Join the club.</h1>
     <p class="subcopy mt8">Membership is free. An ITC leader approves every application — approval unlocks paid booking and member content.</p>
+    ${visitorDraftActions()}
     <div class="card mt24"><div class="card-body">
       <h3>Sign in</h3>
       <form id="form-signin" novalidate>
@@ -553,7 +1037,8 @@ function accountVisitor() {
         <div id="signin-error"></div>
         <button class="btn mt16" type="submit">Sign in</button>
       </form>
-      <p class="muted small mt16">Prototype: there is no password — sign in with the email used for your local membership application.</p>
+<<<<<<< HEAD
+      <p class="muted small mt16">This local prototype has no password. Sign in with the email used for an application on this device.</p>
     </div></div>
     <div class="card mt16"><div class="card-body">
       <h3>Not a member yet?</h3>
@@ -562,21 +1047,22 @@ function accountVisitor() {
     </div></div>`;
 }
 
-function accountPending(user) {
+async function accountPending(user) {
+  const hydrated = await hydrateLiveUser(user);
   return `
     <div class="kicker">Profile · ${esc(user.email)}</div>
-    <h1 class="display">Thanks, ${esc(user.preferredName || user.fullName.split(" ")[0])}.</h1>
+    <h1 class="display">Thanks, ${esc(hydrated.preferredName || user.fullName.split(" ")[0])}.</h1>
     ${pendingBanner()}
     <div class="card mt16"><div class="card-body">
       <h3>Your application</h3>
       <div class="receipt-lines">
         <div class="line"><span>Name</span><strong>${esc(user.fullName)}</strong></div>
-        <div class="line"><span>Phone</span><strong>${esc(user.phone)}</strong></div>
-        <div class="line"><span>Emergency contact</span><strong>${esc(user.emergencyName)} · ${esc(user.emergencyPhone)}</strong></div>
-        <div class="line"><span>Heard about ITC</span><strong>${esc(user.heard)}</strong></div>
+        <div class="line"><span>Phone</span><strong>${esc(hydrated.phone)}</strong></div>
+        <div class="line"><span>Emergency contact</span><strong>${esc(hydrated.emergencyName)} · ${esc(hydrated.emergencyPhone)}</strong></div>
+        <div class="line"><span>Heard about ITC</span><strong>${esc(hydrated.heard)}</strong></div>
         ${user.donorId ? `<div class="line"><span>Donor ID</span><strong>${esc(user.donorId)}</strong></div>` : ""}
-        <div class="line"><span>Indemnity</span><strong>${user.indemnityAcceptedAt ? "Accepted" : "—"}</strong></div>
-        <div class="line"><span>Photo consent</span><strong>${user.mediaConsent ? "Yes" : "No"}</strong></div>
+        <div class="line"><span>Indemnity</span><strong>${hydrated.indemnityAcceptedAt ? "Accepted" : "—"}</strong></div>
+        <div class="line"><span>Photo consent</span><strong>${hydrated.mediaConsent ? "Yes" : "No"}</strong></div>
       </div>
     </div></div>
     <div class="btn-row">
@@ -599,14 +1085,17 @@ function accountDeclined(user) {
     </div>`;
 }
 
-function accountMember(user) {
-  const isAdmin = ["admin", "superadmin"].includes(user.role);
+async function accountMember(user) {
+  const hydrated = await hydrateLiveUser(user);
+  const normalized = normalizeRole(hydrated.role);
+  if (user.role !== normalized) user.role = normalized;
+  const isAdmin = isAdminRole(normalized);
 
   const roleLabel = {
     member: "Active member",
     admin: "Admin",
     superadmin: "Super admin",
-  }[user.role];
+  }[normalized];
 
   const bookings = store.bookingsForUser(user.id).filter((b) => b.status !== "cancelled");
   const attended = bookings.filter((b) => b.status === "attended").length;
@@ -620,7 +1109,7 @@ function accountMember(user) {
         <div class="ph-id">
           <div class="ph-role">${roleLabel}</div>
           <h1>${esc(user.fullName)}</h1>
-          <p>Member since ${fmtMonthYear(user.appliedAt)}</p>
+          <p>Member since ${fmtMonthYear(hydrated.appliedAt)}</p>
         </div>
       </div>
       <div class="ph-stats">
@@ -636,8 +1125,8 @@ function accountMember(user) {
         "#/account/indemnity",
         ICONS.check,
         "Indemnity",
-        user.indemnityAcceptedAt ? `Indemnity confirmed on ${fmtDay(user.indemnityAcceptedAt)}` : "To be accepted",
-        { cls: user.indemnityAcceptedAt ? "ok" : "todo" }
+        hydrated.indemnityAcceptedAt ? `Indemnity confirmed on ${fmtDay(hydrated.indemnityAcceptedAt)}` : "To be accepted",
+        { cls: hydrated.indemnityAcceptedAt ? "ok" : "todo" }
       )}
       ${profileRow("#/account/donor", ICONS.heart, "Donor Profile", "Donor ID and e-receipt details")}
       ${profileRow("#/account/payments", ICONS.dollar, "Payments & Receipts", "Bookings, donations and orders")}
@@ -664,7 +1153,54 @@ function profileRow(href, icon, title, status, { cls = "" } = {}) {
     </a>`;
 }
 
-function accountDetails(user) {
+async function accountDetailsEdit(user) {
+  const hydrated = await hydrateLiveUser(user);
+  return `
+    <a class="back-link" href="#/account/details">← Membership Details</a>
+    <div class="kicker mt16">Profile · Membership Details · Edit</div>
+    <h1 class="display sm">Membership Details.</h1>
+    <form id="form-membership-details" data-form="membership-details" class="card mt16"><div class="card-body">
+      <div class="line"><span>Full name</span><strong>${esc(user.fullName)}</strong></div>
+      <div class="line"><span>Email</span><strong>${esc(user.email)}</strong></div>
+      <div class="field">
+        <label for="md-preferred_name">Preferred name</label>
+        <input id="md-preferred_name" name="preferred_name" value="${esc(hydrated.preferredName || "")}">
+      </div>
+      <div class="field">
+        <label for="md-mobile">Mobile / WhatsApp *</label>
+        <input id="md-mobile" name="mobile" type="tel" autocomplete="tel" value="${esc(hydrated.phone || "")}" required>
+      </div>
+      <div class="field">
+        <label>Age</label>
+        <label class="check"><input type="radio" name="age_over_18" value="yes" ${!hydrated.isMinor ? "checked" : ""}> 18 or over</label>
+        <label class="check"><input type="radio" name="age_over_18" value="no" ${hydrated.isMinor ? "checked" : ""}> Under 18</label>
+      </div>
+      <div data-minor-only ${hydrated.isMinor ? "" : "hidden"}>
+        <div class="field"><label for="md-guardian-name">Guardian name</label><input id="md-guardian-name" name="guardian_name" value="${esc(hydrated.guardianName || "")}"></div>
+        <div class="field"><label for="md-guardian-phone">Guardian phone</label><input id="md-guardian-phone" name="guardian_phone" type="tel" value="${esc(hydrated.guardianPhone || "")}"></div>
+      </div>
+      <div class="field">
+        <label for="md-emergency_name">Emergency contact name *</label>
+        <input id="md-emergency_name" name="emergency_name" value="${esc(hydrated.emergencyName || "")}" required>
+      </div>
+      <div class="field">
+        <label for="md-emergency_phone">Emergency contact phone *</label>
+        <input id="md-emergency_phone" name="emergency_phone" type="tel" value="${esc(hydrated.emergencyPhone || "")}" required>
+      </div>
+      <div class="field">
+        <label for="md-heard">How you heard about ITC</label>
+        <input id="md-heard" name="heard_source" value="${esc(hydrated.heard || "")}">
+      </div>
+      <div class="actions">
+        <button class="btn" type="submit">Save changes</button>
+        <a class="btn ghost" href="#/account/details">Cancel</a>
+      </div>
+    </div></form>`;
+}
+
+async function accountDetails(user) {
+  const hydrated = await hydrateLiveUser(user);
+  const ageStatus = hydrated.isMinor ? "Under 18" : "18 or over";
   return `
     <a class="back-link" href="#/account">← Profile</a>
     <div class="kicker mt16">Profile · Membership Details</div>
@@ -672,11 +1208,15 @@ function accountDetails(user) {
     <div class="card mt16"><div class="card-body">
       <div class="receipt-lines" style="margin-top:0;border-top:0">
         <div class="line"><span>Full name</span><strong>${esc(user.fullName)}</strong></div>
-        <div class="line"><span>Preferred name</span><strong>${esc(user.preferredName)}</strong></div>
+        <div class="line"><span>Preferred name</span><strong>${hydrated.preferredName ? esc(hydrated.preferredName) : "Not provided"}</strong></div>
         <div class="line"><span>Email</span><strong>${esc(user.email)}</strong></div>
-        <div class="line"><span>Member since</span><strong>${fmtDay(user.appliedAt)}</strong></div>
-        <div class="line"><span>Phone / WhatsApp</span><strong>${esc(user.phone)}</strong></div>
-        <div class="line"><span>Emergency contact</span><strong>${esc(user.emergencyName)} · ${esc(user.emergencyPhone)}</strong></div>
+        <div class="line"><span>Member since</span><strong>${fmtDay(hydrated.appliedAt)}</strong></div>
+        <div class="line"><span>Mobile / WhatsApp number</span><strong>${esc(hydrated.phone)}</strong></div>
+        <div class="line"><span>Age status</span><strong>${ageStatus}</strong></div>
+        <div class="line"><span>Emergency contact name</span><strong>${esc(hydrated.emergencyName)}</strong></div>
+        <div class="line"><span>Emergency contact phone</span><strong>${esc(hydrated.emergencyPhone)}</strong></div>
+        <div class="line"><span>How you heard about ITC</span><strong>${esc(hydrated.heard || "—")}</strong></div>
+        <a class="btn ghost sm mt16" href="#/account/details/edit">Edit membership details</a>
       </div>
       <p class="muted small mt16">Profile editing is stubbed in the prototype — fields come from the application form.</p>
     </div></div>`;
@@ -702,8 +1242,9 @@ function linkCard(href, title, status, { sub = "", cls = "" } = {}) {
 // Draft indemnity wording — final text to be confirmed with ITC leadership
 // before launch. The apply form captures acceptance at join time; this page
 // catches members who joined before that requirement existed.
-function accountIndemnity(user) {
-  const at = user.indemnityAcceptedAt;
+async function accountIndemnity(user) {
+  const hydrated = await hydrateLiveUser(user);
+  const at = hydrated.indemnityAcceptedAt;
   return `
     <a class="back-link" href="#/account">← Profile</a>
     <div class="kicker mt16">Profile · Indemnity</div>
@@ -745,17 +1286,28 @@ function accountIndemnity(user) {
     <p class="muted small mt16">Draft wording — the final indemnity will be confirmed with ITC leadership before launch.</p>`;
 }
 
-function accountDonor(user) {
+function accountDonor(user, application) {
+  const donorId = application?.donor_id || user.donorId || null;
+  const gifts = store.donationsForUser(user.id);
+  const totalGiven = gifts.reduce((sum, d) => sum + d.amount, 0);
   return `
     <a class="back-link" href="#/account">← Profile</a>
     <div class="kicker mt16">Profile · Donor Profile</div>
     <h1 class="display sm">Donor Profile.</h1>
     <div class="card mt16"><div class="card-body">
       <div class="receipt-lines" style="margin-top:0;border-top:0">
-        <div class="line"><span>Donor ID</span><strong>${user.donorId ? esc(user.donorId) : "Not provided"}</strong></div>
+        <div class="line"><span>Donor ID</span><strong>${donorId ? esc(donorId) : "Not provided"}</strong></div>
+        ${
+          gifts.length
+            ? `
+          <div class="line"><span>Total given</span><strong>${fmtMoney(totalGiven)}</strong></div>
+          <div class="line"><span>Gifts</span><strong>${gifts.length}</strong></div>
+          <div class="line"><span>Latest gift</span><strong>${new Date(gifts[0].createdAt).toLocaleDateString("en-HK", { day: "numeric", month: "short" })}</strong></div>`
+            : ""
+        }
       </div>
       ${
-        user.donorId
+        donorId
           ? ""
           : `
         <form id="form-donor-id" class="mt16" novalidate>
@@ -767,6 +1319,15 @@ function accountDonor(user) {
           <div id="donor-error"></div>
           <button class="btn ghost sm" type="submit">Save Donor ID</button>
         </form>`
+      }
+      ${
+        gifts.length
+          ? `
+        <p class="muted small mt16">FPS gifts stay pending until a leader reconciles them against the club account. Full history lives on the Giving tab.</p>
+        <a class="btn ghost sm mt16" href="#/giving">Open Giving &amp; Fundraising →</a>`
+          : `
+        <p class="hero-meta mt16">No gifts yet — every step can give back. Support the current campaign via FPS.</p>
+        <a class="btn ghost sm mt16" href="#/giving">Give via FPS →</a>`
       }
     </div></div>`;
 }
@@ -795,18 +1356,41 @@ function accountPayments(user) {
     }`;
 }
 
-function accountPrivacy(user) {
+async function accountPrivacyEdit(user) {
+  const hydrated = await hydrateLiveUser(user);
+  return `
+    <a class="back-link" href="#/account/privacy">← Privacy &amp; Notifications</a>
+    <div class="kicker mt16">Profile · Privacy &amp; Notifications · Edit</div>
+    <h1 class="display sm">Privacy &amp; Notifications.</h1>
+    <form id="form-privacy" data-form="privacy-preferences" class="card mt16"><div class="card-body">
+      <div class="line"><span>Privacy policy accepted</span><strong>${hydrated.privacyAcceptedAt ? fmtDay(hydrated.privacyAcceptedAt) : "To be accepted"}</strong></div>
+      <label class="check"><input type="checkbox" name="photo_consent" ${hydrated.mediaConsent ? "checked" : ""}> Photos and video at sessions</label>
+      <label class="check"><input type="checkbox" name="whatsapp_reminders" ${hydrated.whatsappReminders ? "checked" : ""}> WhatsApp session reminders</label>
+      <label class="check"><input type="checkbox" name="email_receipts" ${hydrated.emailReceipts ? "checked" : ""}> Email receipts</label>
+      <label class="check"><input type="checkbox" name="community_news" ${hydrated.communityNews ? "checked" : ""}> Community news</label>
+      <div class="actions">
+        <button class="btn" type="submit">Save changes</button>
+        <a class="btn ghost" href="#/account/privacy">Cancel</a>
+      </div>
+    </div></form>`;
+}
+
+async function accountPrivacy(user) {
+  const hydrated = await hydrateLiveUser(user);
+  const onOff = (v) => (v ? "On" : "Off");
   return `
     <a class="back-link" href="#/account">← Profile</a>
     <div class="kicker mt16">Profile · Privacy &amp; Notifications</div>
     <h1 class="display sm">Privacy &amp; Notifications.</h1>
     <div class="card mt16"><div class="card-body">
       <div class="receipt-lines" style="margin-top:0;border-top:0">
-        <div class="line"><span>Photos at sessions</span><strong>${user.mediaConsent ? "Allowed" : "Not allowed"}</strong></div>
-        <div class="line"><span>WhatsApp session reminders</span><strong>On</strong></div>
-        <div class="line"><span>Email receipts</span><strong>On</strong></div>
-        <div class="line"><span>Community news</span><strong>Off</strong></div>
+        <div class="line"><span>Photo/video consent</span><strong>${hydrated.mediaConsent ? "Allowed" : "Not allowed"}</strong></div>
+        <div class="line"><span>Privacy policy accepted</span><strong>${hydrated.privacyAcceptedAt ? fmtDay(hydrated.privacyAcceptedAt) : "To be accepted"}</strong></div>
+        <div class="line"><span>WhatsApp session reminders</span><strong>${onOff(hydrated.whatsappReminders)}</strong></div>
+        <div class="line"><span>Email receipts</span><strong>${onOff(hydrated.emailReceipts)}</strong></div>
+        <div class="line"><span>Community news</span><strong>${onOff(hydrated.communityNews)}</strong></div>
       </div>
+      <a class="btn ghost sm mt16" href="#/account/privacy/edit">Edit privacy preferences</a>
       <p class="muted small mt16">Privacy and notification settings are stubbed for setup — they’ll be configurable here before launch.</p>
     </div></div>`;
 }
@@ -849,7 +1433,116 @@ function accountHistory(user) {
 
 // --- Apply ---------------------------------------------------------------------------------
 
+export async function viewApplyLive() {
+  const cu = await store.getCurrentUser();
+  if (!cu) return { redirect: "#/account" };
+  if (cu.role !== "pending") {
+    return `<section class="card"><p class="muted">Your application has already been processed.</p></section>`;
+  }
+  const existing = await store.getMyApplication();
+  if (existing) {
+    return `
+      <section class="card">
+        <p class="kicker">Application</p>
+        <h2 class="display">Awaiting review</h2>
+        <p class="muted">Your application was submitted on ${fmtDate(existing.submitted_at)}. An admin will review it shortly.</p>
+      </section>`;
+  }
+  return applyFormHtml(cu, store.getApplyDraft());
+}
+
+function heardSourceLabel(value) {
+  return {
+    friend: "Friend",
+    family: "Family",
+    search: "Search",
+    social: "Social media",
+    event: "Event",
+    other: "Other",
+  }[value] || String(value || "");
+}
+
+function ageStatusField(isMinor) {
+  return `
+    <div class="field age-status">
+      <span class="field-label">Are you 18 or over? *</span>
+      <label><input type="radio" name="age_over_18" value="yes" ${isMinor === false ? "checked" : ""} required> Yes</label>
+      <label><input type="radio" name="age_over_18" value="no" ${isMinor === true ? "checked" : ""} required> No</label>
+    </div>`;
+}
+
+function applyField(type, name, label, required, value = "") {
+  return `
+    <label class="field">
+      <span class="field-label">${esc(label)}${required ? " *" : ""}</span>
+      <input type="${type}" name="${name}" value="${esc(value || "")}" ${required ? "required" : ""}>
+    </label>`;
+}
+
+function applySelect(name, label, options, required, value = "") {
+  const selectOptions = value && !options.includes(value) ? [value, ...options] : options;
+  return `
+    <label class="field">
+      <span class="field-label">${esc(label)}${required ? " *" : ""}</span>
+      <select name="${name}" ${required ? "required" : ""}>
+        ${required ? "" : `<option value="">—</option>`}
+        ${selectOptions.map((option) => `<option value="${option}" ${option === value ? "selected" : ""}>${esc(heardSourceLabel(option))}</option>`).join("")}
+      </select>
+    </label>`;
+}
+
+function applyFormHtml(cu, draft) {
+  const displayName = cu?.profile?.full_name || cu?.email || "";
+  const fields = draft?.fields || {};
+  const savedAge = fields.age_over_18 === "no"
+    ? true
+    : fields.age_over_18 === "yes"
+      ? false
+      : undefined;
+  const checked = (name) => fields[name] ? "checked" : "";
+  const savedTime = draft
+    ? new Date(draft.savedAt).toLocaleTimeString("en-HK", { hour: "numeric", minute: "2-digit" })
+    : "";
+  return `
+    <section>
+      <p class="kicker">Application</p>
+      <h2 class="display">Tell us about you</h2>
+      <p class="muted">Signed in as <strong>${esc(displayName)}</strong>${cu?.email ? ` · ${esc(cu.email)}` : ""}. We collect this so the team can approve your application and reach you in an emergency.</p>
+      ${draft ? `<div class="banner mt16" data-draft-resume>
+        <p>Resumed from your draft saved at <strong>${esc(savedTime)}</strong>.</p>
+        <button class="btn ghost sm" type="button" data-action="discard-draft">Discard draft</button>
+      </div>` : ""}
+      <form data-form="apply" class="form-grid mt16">
+        ${applyField("text", "mobile", "Mobile / WhatsApp number", true, fields.mobile)}
+        ${ageStatusField(savedAge)}
+        <div data-minor-only ${savedAge === true ? "" : "hidden"}>
+          ${applyField("text", "guardian_name", "Guardian name", savedAge === true, fields.guardian_name)}
+          ${applyField("text", "guardian_phone", "Guardian phone", savedAge === true, fields.guardian_phone)}
+        </div>
+        ${applyField("text", "emergency_name", "Emergency contact name", true, fields.emergency_name)}
+        ${applyField("text", "emergency_phone", "Emergency contact phone", true, fields.emergency_phone)}
+        ${applySelect("heard_source", "How did you hear about ITC?", ["friend", "family", "search", "social", "event", "other"], true, fields.heard_source)}
+        ${applyField("text", "heard_detail", "Detail (optional)", false, fields.heard_detail)}
+        ${applyField("text", "preferred_name", "Preferred name (optional)", false, fields.preferred_name)}
+        <label class="check"><input type="checkbox" name="photo_consent" ${checked("photo_consent")}> I consent to photos/videos of me being used on ITC channels. (Optional)</label>
+        <label class="check"><input type="checkbox" name="waiver" ${checked("waiver")} required> I accept the participation waiver. (⏳ text pending ITC review)</label>
+        <label class="check"><input type="checkbox" name="privacy" ${checked("privacy")} required> I accept the privacy policy. (⏳ text pending ITC review)</label>
+        <label class="check"><input type="checkbox" name="guidelines" ${checked("guidelines")} required> I accept the community guidelines. (⏳ text pending ITC review)</label>
+        <button class="btn btn-primary" type="submit">Submit application</button>
+        <div class="draft-controls mt16">
+          <button class="btn ghost sm" type="button" data-action="save-draft">Save draft now</button>
+          <span class="muted small" data-draft-status aria-live="polite">${draft ? `Saved at ${esc(savedTime)}` : ""}</span>
+        </div>
+      </form>
+    </section>`;
+}
+
 export function viewApply() {
+  if (isLive()) return viewApplyLive();
+  return viewApplyLocal();
+}
+
+function viewApplyLocal() {
   return `
     <a class="back-link" href="#/account">← Account</a>
     <div class="kicker mt16">Membership application</div>
@@ -900,65 +1593,157 @@ export function viewApply() {
 // --- Checkout --------------------------------------------------------------------------------
 
 export function viewCheckout(sessionId) {
-  const s = findSession(store.activities(), sessionId);
+  const s = store.getSession(sessionId);
   if (!s || s.kind !== "paid") return viewNotFound("That checkout doesn’t exist.");
   const user = store.currentUser();
   if (!user || user.status !== "approved") {
     return { redirect: `#/activity/${sessionId}` };
   }
-  if (store.userBookingFor(user.id, s.id)) {
-    const b = store.userBookingFor(user.id, s.id);
-    return { redirect: `#/booking/${b.id}` };
+  const confirmed = store.userBookingFor(user.id, s.id);
+  if (confirmed) {
+    return { redirect: `#/booking/${confirmed.id}` };
   }
-  if (sessionStarted(s)) return { redirect: `#/activity/${sessionId}` };
-  if (store.spotsLeft(s) <= 0) return { redirect: `#/activity/${sessionId}` };
+  const existingRes = store.userReservationFor(user.id, s.id);
+  if (existingRes) return { redirect: `#/pay/${existingRes.id}` };
+  if (sessionStarted(s) || s.cancelled || store.spotsLeft(s) <= 0)
+    return { redirect: `#/activity/${sessionId}` };
+  if (store.isMidtown(s) && !store.midtownOpenFor(s))
+    return { redirect: `#/activity/${sessionId}` };
 
   return `
     <a class="back-link" href="#/activity/${s.id}">← ${esc(s.name)}</a>
-    <div class="kicker mt16">Checkout</div>
-    <h1 class="display sm">Book & pay.</h1>
+    <div class="kicker mt16">Reserve your spot</div>
+    <h1 class="display sm">Hold it, then pay.</h1>
     <div class="card mt16"><div class="card-body">
       <div class="receipt-lines" style="margin-top:0;border-top:0">
         <div class="line"><span>Session</span><strong>${esc(s.name)}</strong></div>
-        <div class="line"><span>When</span><strong>${esc(fmtDate(s.date))} · ${fmtTime(s.time)}</strong></div>
+        <div class="line"><span>When</span><strong>${esc(fmtDate(s.dateISO))} · ${fmtTime(s.time)}</strong></div>
         <div class="line"><span>Where</span><strong>${esc(s.location)}</strong></div>
-        <div class="line"><span>Length</span><strong>${s.durationMin} min</strong></div>
         <div class="line total"><span>Total</span><strong>${fmtMoney(s.price)}</strong></div>
       </div>
     </div></div>
-    <form id="form-checkout" class="mt16" data-session="${s.id}" novalidate>
+    <div class="banner mt16">
+      <span class="kicker">How it works</span>
+      <p>Your spot is held right away. Pay by PayMe or FPS before the <strong>Thursday 6 PM</strong> checkpoint — the on-duty collector confirms in-app. Unpaid spots go to the waitlist at the checkpoint.</p>
+    </div>
+    <form id="form-reserve" class="mt16" data-session="${s.id}">
+      <button class="btn" type="submit">Reserve spot · pay later</button>
+      <p class="muted small mt8 center">Can’t make it? Defer to a future session anytime before it starts — no refunds.</p>
+    </form>`;
+}
+
+// --- PayMe / FPS payment screen ----------------------------------------------------------------
+
+export function viewPay(bookingId) {
+  const b = store.getBooking(bookingId);
+  const user = store.currentUser();
+  if (!b || !user || user.status !== "approved" || b.userId !== user.id) return viewNotFound("Booking not found.");
+  if (b.status !== "reserved" || b.paymentMarkedAt)
+    return { redirect: `#/booking/${b.id}` };
+  const s = b.snapshot;
+  const collector = store.collectorFor(b.sessionId);
+  const cname = collector ? esc(collector.preferredName || collector.fullName) : "the on-duty collector";
+  const payme = collector?.paymeLink || "";
+  const fps = collector?.fpsPhone || "";
+
+  return `
+    <a class="back-link" href="#/activity/${b.sessionId}">← ${esc(s.name)}</a>
+    <div class="kicker mt16">Pay to secure your spot</div>
+    <h1 class="display sm">${fmtMoney(s.price)} to ${cname}.</h1>
+    <p class="subcopy mt8">Deadline: <strong>${fmtDeadline(b.payDeadlineAt)}</strong> — unpaid spots go to the waitlist.</p>
+    <div class="card mt16"><div class="card-body">
+      <h3>PayMe</h3>
+      <p class="muted small">Opens PayMe straight to ${cname} with the amount ready.</p>
+      <a class="btn mt8" href="${esc(payme)}" target="_blank" rel="noopener">PayMe to ${cname} · ${fmtMoney(s.price)}</a>
+      <h3 class="mt24">FPS to ${cname}</h3>
+      <p class="muted small">Scan with your banking app — the amount is embedded in the QR — or copy the number.</p>
+      <div class="fps-qr" aria-hidden="true"><span>FPS QR<br>(mock)</span></div>
+      <p class="mt8"><strong>${esc(fps)}</strong> · ${fmtMoney(s.price)}
+        <button class="btn ghost sm" type="button" data-action="copy-fps" data-phone="${esc(fps)}">Copy number</button>
+      </p>
+    </div></div>
+    <form id="form-mark-paid" class="mt16" data-booking="${b.id}">
       <div class="card"><div class="card-body">
-        <h3>Payment</h3>
-        <div class="field"><label for="cc-name">Name on card</label><input id="cc-name" name="cardName" autocomplete="cc-name" value="${esc(user.fullName)}" required></div>
-        <div class="field"><label for="cc-num">Card number</label><input id="cc-num" name="cardNumber" inputmode="numeric" autocomplete="cc-number" placeholder="•••• •••• •••• ••••" required></div>
+<<<<<<< HEAD
+        <h3>Done? Tell the collector</h3>
         <div class="field-row">
-          <div class="field"><label for="cc-exp">Expiry</label><input id="cc-exp" name="cardExp" inputmode="numeric" placeholder="MM/YY" required></div>
-          <div class="field"><label for="cc-cvc">CVC</label><input id="cc-cvc" name="cardCvc" inputmode="numeric" placeholder="•••" required></div>
+          <label class="chip"><input type="radio" name="method" value="PayMe" checked> PayMe</label>
+          <label class="chip"><input type="radio" name="method" value="FPS"> FPS</label>
         </div>
-        <p class="muted small mt8">Test checkout — no real charge. Any card details work.</p>
+        </div>
+        <div class="field"><label for="pay-ref">Reference (optional)</label><input id="pay-ref" name="ref" placeholder="e.g. last 4 digits"></div>
+        <p class="muted small mt8">${cname} confirms in-app when the money lands — your spot is held meanwhile.</p>
       </div></div>
-      <button class="btn mt16" id="pay-btn" type="submit">Pay ${fmtMoney(s.price)}</button>
-      <p class="muted small mt8 center">Cancellation & refund policy is being finalised — the prototype auto-refunds on cancellation.</p>
+      <button class="btn mt16" type="submit">I’ve paid</button>
     </form>`;
 }
 
 // --- Booking confirmation / manage ------------------------------------------------------------
 
+function currentBookingFor(userId, sessionId) {
+  return store.bookingsForUser(userId).find(
+    (x) => x.sessionId === sessionId && (x.status === "reserved" || x.status === "confirmed")
+  ) ?? null;
+}
+
 export function viewBooking(bookingId) {
   const b = store.getBooking(bookingId);
   const user = store.currentUser();
-  if (!b || !user || (b.userId !== user.id && !["admin", "superadmin"].includes(user.role))) {
+  if (!b || !user || (b.userId !== user.id && !isAdminRole(user.role))) {
     return viewNotFound("Booking not found.");
   }
   const s = b.snapshot;
   const receipt = store.receiptForBooking(b.id);
-  const live = b.status === "confirmed" && !sessionStarted(s);
+  const mine = b.userId === user.id;
 
-  const head = live
-    ? `<div class="confirm-mark">${ICONS.check}</div>
-       <h1 class="display sm center mt16">You’re booked in.</h1>
-       <p class="subcopy center mt8">Booking ref <span class="mono">${esc(b.id.toUpperCase())}</span></p>`
-    : `<h1 class="display sm mt16">Booking ${b.status === "cancelled" ? "cancelled" : "details"}.</h1>`;
+  let head = "";
+  let actions = "";
+  if (b.status === "reserved" && !b.paymentMarkedAt) {
+    head = `
+      <h1 class="display sm mt16">Spot held.</h1>
+      <p class="subcopy mt8">Pay ${fmtMoney(s.price)} by <strong>${fmtDeadline(b.payDeadlineAt)}</strong> or the spot goes to the waitlist.</p>`;
+    actions = `
+      <a class="btn" href="#/pay/${b.id}">Pay ${fmtMoney(s.price)}</a>
+      <button class="btn ghost" type="button" data-action="release-reservation" data-booking="${b.id}">Release spot</button>`;
+  } else if (b.status === "reserved" && b.paymentMarkedAt) {
+    const collector = store.collectorFor(b.sessionId);
+    const cname = collector ? esc(collector.preferredName || collector.fullName) : "the collector";
+    head = `
+      <h1 class="display sm mt16">Payment being confirmed.</h1>
+      <p class="subcopy mt8">${cname} is checking your ${esc(b.paidMethod || "payment")}${b.paymentRef ? ` (ref ${esc(b.paymentRef)})` : ""} — your spot is held meanwhile.</p>`;
+  } else if (b.status === "confirmed" && !sessionStarted(s)) {
+    head = `
+      <div class="confirm-mark">${ICONS.check}</div>
+      <h1 class="display sm center mt16">You’re booked in.</h1>
+      <p class="subcopy center mt8">Booking ref <span class="mono">${esc(b.id.toUpperCase())}</span></p>`;
+    const targets = mine ? store.deferTargetsFor(b) : [];
+    actions = `
+      <button class="btn ghost" type="button" data-action="ics-booking" data-booking="${b.id}">Add to calendar</button>
+      ${receipt ? `<a class="btn ghost" href="#/receipt/${receipt.id}">View receipt · ${esc(receipt.number)}</a>` : ""}`;
+    if (targets.length) {
+      actions += `
+      <div class="card mt16"><div class="card-body">
+        <h3>Can’t make it? Defer — no refunds</h3>
+        <p class="muted small">Move your paid spot to a future session with availability. Payment carries over.</p>
+        ${targets.map((t) => `
+          <div class="member-row">
+            <div class="who"><strong>${esc(fmtDate(t.dateISO))} · ${fmtTime(t.time)}</strong><span>${esc(t.location)} · ${store.spotsLeft(t)} spots left</span></div>
+            <button class="btn ghost sm" type="button" data-action="defer-to" data-booking="${b.id}" data-session="${t.id}">Move here</button>
+          </div>`).join("")}
+      </div></div>`;
+    }
+  } else {
+    const label =
+      b.status === "deferred" ? "Deferred"
+      : b.status === "expired" ? "Expired (missed the payment checkpoint)"
+      : b.status === "cancelled" ? "Cancelled"
+      : b.status === "attended" ? "Attended" : esc(b.status);
+    head = `<h1 class="display sm mt16">Booking ${label.toLowerCase()}.</h1>`;
+    if (b.status === "deferred" && b.deferredTo) {
+      const moved = currentBookingFor(user.id, b.deferredTo);
+      if (moved) actions = `<a class="btn" href="#/booking/${moved.id}">View new booking</a>`;
+    }
+  }
 
   return `
     ${head}
@@ -968,14 +1753,12 @@ export function viewBooking(bookingId) {
         <div class="line"><span>When</span><strong>${esc(fmtDate(s.dateISO))} · ${fmtTime(s.time)}</strong></div>
         <div class="line"><span>Where</span><strong>${esc(s.location)}</strong></div>
         <div class="line"><span>Status</span><strong>${esc(b.status)}</strong></div>
-        <div class="line total"><span>Paid</span><strong>${fmtMoney(s.price)}</strong></div>
+        <div class="line total"><span>Price</span><strong>${fmtMoney(s.price)}</strong></div>
       </div>
     </div></div>
     <div class="btn-row">
-      ${live ? `<button class="btn ghost" type="button" data-action="ics-booking" data-booking="${b.id}">Add to calendar</button>` : ""}
-      ${receipt ? `<a class="btn ghost" href="#/receipt/${receipt.id}">View receipt · ${esc(receipt.number)}</a>` : ""}
-      ${live ? `<button class="btn danger" type="button" data-action="cancel-booking" data-booking="${b.id}">Cancel & refund</button>` : ""}
-      <a class="btn" href="#/schedule">Back to schedule</a>
+      ${actions}
+      <a class="btn ghost" href="#/schedule">Back to schedule</a>
     </div>`;
 }
 
@@ -984,7 +1767,7 @@ export function viewBooking(bookingId) {
 export function viewReceipt(receiptId) {
   const r = store.getReceipt(receiptId);
   const user = store.currentUser();
-  if (!r || !user || (r.userId !== user.id && !["admin", "superadmin"].includes(user.role))) {
+  if (!r || !user || (r.userId !== user.id && !isAdminRole(user.role))) {
     return viewNotFound("Receipt not found.");
   }
   return `
@@ -995,29 +1778,80 @@ export function viewReceipt(receiptId) {
     <div class="card mt16"><div class="card-body">
       <div class="receipt-lines" style="margin-top:0;border-top:0">
         <div class="line"><span>Item</span><strong>${esc(r.line)}</strong></div>
-        <div class="line"><span>Payment method</span><strong>Card •••• ${esc(r.cardLast4)}</strong></div>
+        <div class="line"><span>Payment method</span><strong>${r.method ? esc(r.method) : `Card •••• ${esc(r.cardLast4)}`}</strong></div>
         <div class="line total"><span>Total (${esc(r.currency)})</span><strong>${fmtMoney(r.amount)}</strong></div>
       </div>
     </div></div>
     <p class="muted small mt16">Prototype: receipts render in-app. The real product will email a copy and record the payment provider reference.</p>`;
 }
 
+export function viewNotFound(msg = "Page not found.") {
+  return `<div class="card"><div class="card-body">
+    <span class="kicker">404</span>
+    <h2 class="mt8">${esc(msg)}</h2>
+    <a class="btn mt16" href="#/home">Back to home</a>
+  </div></div>`;
+}
+
 // --- Admin --------------------------------------------------------------------------------------
 
-export function viewAdmin(tab = "approvals") {
+// PostgREST emits PGRST205 when a query names a table the deployed schema
+// cache has not seen. The store stays authoritative — it throws the error —
+// so the Admin views can render an honest "setup required" panel rather than
+// a fake campaign list.
+const isGivingSchemaMissing = (error) => error?.code === "PGRST205";
+
+function adminGivingSetupRequired() {
+  return `
+    <div class="section-head"><h2>Giving setup required</h2></div>
+    <div class="card"><div class="card-body">
+      <p class="hero-meta">Campaign management becomes available after the Giving schema migrations are applied to the deployed Supabase project.</p>
+      <div class="receipt-lines mt16">
+        <div class="line"><span>1</span><strong class="mono">20260805000011_giving_campaigns.sql</strong></div>
+        <div class="line"><span>2</span><strong class="mono">20260806000001_donor_id.sql</strong></div>
+      </div>
+      <p class="muted small mt16">After installation, return here to create and publish the first real campaign.</p>
+    </div></div>`;
+}
+
+export async function viewAdmin(tab = "approvals") {
   const user = store.currentUser();
-  if (!user || !["admin", "superadmin"].includes(user.role)) {
+  if (!user || !isAdminRole(user.role)) {
     return { redirect: "#/account" };
   }
+  const canonicalTab = tab === "ops" ? "payments" : tab;
   const tabs = `
     <nav class="admin-tabs">
-      ${["approvals", "activities", "members"]
-        .map((t) => `<a href="#/admin/${t}" class="${t === tab ? "active" : ""}">${t}</a>`)
+      ${[
+        ["approvals", "Approvals"],
+        ["members", "Members"],
+        ["activities", "Activities"],
+        ["giving", "Giving"],
+        ["payments", "Payments / Ops"],
+      ]
+        .map(([key, label]) => `<a href="#/admin/${key}" class="${key === canonicalTab ? "active" : ""}"${key === canonicalTab ? ' aria-current="page"' : ""}>${label}</a>`)
         .join("")}
     </nav>`;
 
-  const body =
-    tab === "activities" ? adminActivities() : tab === "members" ? adminMembers(user) : adminApprovals();
+  // Live mode reads real data (Supabase applications + profiles); local
+  // mode keeps the local prototype lists.
+  let memberUsers = null;
+  if (["members", "payments", "ops"].includes(tab)) {
+    memberUsers = (await store.listPaymentUsers())
+      .sort((a, b) => a.fullName.localeCompare(b.fullName));
+  }
+  let body;
+  if (tab === "activities") body = adminActivities();
+  else if (tab === "members") body = adminMembers(user, memberUsers);
+  else if (tab === "giving") {
+    try {
+      body = adminGiving(await store.listGivingCampaigns());
+    } catch (error) {
+      if (!isGivingSchemaMissing(error)) throw error;
+      body = adminGivingSetupRequired();
+    }
+  } else if (["payments", "ops"].includes(tab)) body = adminOps(user, memberUsers);
+  else body = adminApprovals(await store.listApprovalCandidates());
 
   return `
     <div class="kicker">Admin</div>
@@ -1026,38 +1860,264 @@ export function viewAdmin(tab = "approvals") {
     ${body}`;
 }
 
-function adminApprovals() {
-  const pending = store.pendingApplicants();
-  if (!pending.length) {
-    return `<div class="empty">No pending applications. New signups will land here.</div>`;
-  }
-  return pending
-    .map(
-      (u) => `
-      <div class="card booking-card applicant"><div class="card-body">
+function pendingPayments(memberUsers) {
+  const directory = new Map((memberUsers || []).map((user) => [user.id, user]));
+  return store.pendingPaymentBookings().map((booking) => {
+    const member = directory.get(booking.userId);
+    return { booking, who: member ? (member.preferredName || member.fullName) : "Member" };
+  });
+}
+
+function adminOps(viewer, memberUsers) {
+  const upcoming = store.upcomingSessions(21).filter((s) => s.category === "HYROX" && !sessionStarted(s));
+  const thisWeekSat = upcoming[0]?.dateISO;
+  const dutyUser = thisWeekSat ? store.collectorFor(`hyrox-${thisWeekSat}`) : null;
+  const admins = (memberUsers || []).filter(
+    (u) => isAdminRole(u.role) && u.status === "approved"
+  );
+  const viewerPayouts = store.collectorPayoutsFor(viewer.id);
+
+  const pending = pendingPayments(memberUsers);
+
+  const dutyCard = `
+    <div class="card mt16"><div class="card-body">
+      <h3>Payment duty</h3>
+      <p class="muted small">One collector per week covers both venues. Member payment screens show this collector’s PayMe/FPS details.</p>
+      <p class="mt8">On duty this week: <strong>${dutyUser ? esc(dutyUser.preferredName || dutyUser.fullName) : "—"}</strong></p>
+      <div class="btn-row">
+        ${dutyUser?.id !== viewer.id ? `<button class="btn sm" type="button" data-action="duty-claim" data-week="${thisWeekSat}">I’m on duty this week</button>` : ""}
+        <select class="role-select" data-change="duty-set" data-week="${thisWeekSat}" aria-label="Hand over duty">
+          <option value="">Hand over to…</option>
+          ${admins.filter((a) => a.id !== dutyUser?.id).map((a) => `<option value="${esc(a.id)}">${esc(a.preferredName || a.fullName)}</option>`).join("")}
+        </select>
+      </div>
+      <form id="form-payouts" class="mt16">
+        <h3>My payout details</h3>
+        <div class="field"><label for="payme-link">PayMe link</label><input id="payme-link" name="paymeLink" value="${esc(viewerPayouts.paymeLink)}" placeholder="https://payme.hsbc.com.hk/…"></div>
+        <div class="field"><label for="fps-phone">FPS phone</label><input id="fps-phone" name="fpsPhone" value="${esc(viewerPayouts.fpsPhone)}" placeholder="+852 …"></div>
+        <button class="btn ghost sm mt8" type="submit">Save payout details</button>
+      </form>
+    </div></div>`;
+
+  const pendingCard = `
+    <div class="section-head mt24"><h2>Pending payments</h2></div>
+    ${pending.length ? pending.map(({ booking: b, who }) => `
+      <div class="card booking-card mt16"><div class="card-body">
         <header>
           <div>
-            <div class="kicker dim" style="margin-top:0">Applied ${new Date(u.appliedAt).toLocaleDateString("en-HK", { day: "numeric", month: "short" })}</div>
-            <h3 class="mt8">${esc(u.fullName)}</h3>
+            <h3>${esc(who)}</h3>
+            <p class="muted small">${esc(b.snapshot.name)} · ${esc(fmtDate(b.snapshot.dateISO))} · ${esc(b.paidMethod)}${b.paymentRef ? ` · ref ${esc(b.paymentRef)}` : ""}</p>
           </div>
-          <span class="badge warn">Pending</span>
+          <span class="badge warn">${fmtMoney(b.snapshot.price)}</span>
         </header>
-        <dl>
-          <dt>Email</dt><dd>${esc(u.email)}</dd>
-          <dt>Phone</dt><dd>${esc(u.phone)}</dd>
-          <dt>Emergency</dt><dd>${esc(u.emergencyName)} · ${esc(u.emergencyPhone)}</dd>
-          <dt>Heard via</dt><dd>${esc(u.heard)}</dd>
-          <dt>Age 18+ / guardian</dt><dd>${u.ageConfirmed ? "Confirmed" : "—"}</dd>
-          <dt>Indemnity</dt><dd>${u.indemnityAcceptedAt ? "Accepted" : "—"}</dd>
-          <dt>Photo consent</dt><dd>${u.mediaConsent ? "Yes" : "No"}</dd>
-        </dl>
         <div class="actions">
-          <button class="btn sm" type="button" data-action="approve" data-user="${u.id}">Approve</button>
-          <button class="btn danger sm" type="button" data-action="decline" data-user="${u.id}">Decline</button>
+          <button class="btn sm" type="button" data-action="confirm-payment" data-booking="${esc(b.id)}">Confirm received</button>
         </div>
-      </div></div>`
-    )
-    .join("");
+      </div></div>`).join("")
+    : `<div class="empty">Nothing waiting. When members mark “I’ve paid”, they land here.</div>`}`;
+
+  const sessionCards = upcoming.map((s) => {
+    const confirmed = store.heldBookingsForSession(s.id).filter((b) => b.status === "confirmed");
+    const atRisk = store.heldBookingsForSession(s.id).filter((b) => b.status === "reserved");
+    const override = store.getSession(s.id);
+    const names = store.attendeesFor(s);
+    const gymMsg = `ITC HYROX booking — ${fmtDate(s.dateISO)} ${fmtTime(s.time)} at ${s.location}. Confirmed: ${confirmed.length} of ${s.capacity}. Names: ${names.join(", ")}. Total: ${fmtMoney(confirmed.length * s.price)}.`;
+    const wa = `https://wa.me/?text=${encodeURIComponent(gymMsg)}`;
+    const gymDone = override.gymConfirmedAt;
+    const isMid = store.isMidtown(s);
+    const open = store.midtownOpenFor(s);
+    return `
+      <div class="card mt16 ${override.cancelled ? "is-cancelled" : ""}"><div class="card-body">
+        <div class="kicker dim" style="margin-top:0">${esc(fmtDate(s.dateISO))} · ${fmtTime(s.time)}</div>
+        <h3 class="mt8">${esc(s.location)}${isMid ? " (Midtown)" : " (BFT)"}</h3>
+        ${override.cancelled ? `<p class="badge danger">${esc(sessionCancellationCopy(override))}</p>` : ""}
+        ${isMid && !open && !override.cancelled ? `<p class="badge neutral">Not open</p>` : ""}
+        <p class="muted small mt8">${confirmed.length} confirmed in-app · ${atRisk.length} awaiting payment · cap ${s.capacity}</p>
+        ${!override.cancelled ? `
+        <details class="mt8">
+          <summary>Session controls</summary>
+          <div class="btn-row mt8">
+            ${isMid ? `<button class="btn ghost sm" type="button" data-action="midtown-toggle" data-session="${esc(s.id)}" data-open="${open ? "0" : "1"}">${open ? "Close Midtown" : "Open Midtown"}</button>` : ""}
+            <button class="btn ghost sm" type="button" data-action="venue-tbc-toggle" data-session="${esc(s.id)}" data-on="${override.venueTBC ? "0" : "1"}">${override.venueTBC ? "Venue confirmed" : "Mark venue TBC"}</button>
+          </div>
+          <form id="form-session-time" data-session="${esc(s.id)}" class="mt8">
+            <div class="field"><label>Change time</label><input type="time" name="time" value="${esc(s.time)}"></div>
+            <button class="btn ghost sm" type="submit">Save time</button>
+          </form>
+          <form id="form-session-notice" data-session="${esc(s.id)}" class="mt8">
+            <div class="field"><label>Session note (weather, logistics)</label><input name="notice" value="${esc(override.notice || "")}" placeholder="Shown on Schedule + session page"></div>
+            <button class="btn ghost sm" type="submit">Post note</button>
+          </form>
+          <form id="form-cancel-week" data-session="${esc(s.id)}" class="mt8">
+            <div class="field"><label>Cancel this week — reason (required)</label><input name="reason" placeholder="e.g. HYROX race weekend — no session" required></div>
+            <button class="btn danger sm" type="submit">Cancel session</button>
+          </form>
+        </details>
+        <div class="section-head mt16"><h2>Finalize with gym</h2></div>
+        ${gymDone
+          ? `<p class="badge free">Confirmed with gym ${new Date(gymDone).toLocaleDateString("en-HK", { day: "numeric", month: "short" })}${override.gymNote ? ` — ${esc(override.gymNote)}` : ""}</p>`
+          : `
+          <p class="muted small">Send Friday after the 2 PM checkpoint. The app number is what’s sent.</p>
+          <div class="btn-row">
+            <a class="btn sm" href="${wa}" target="_blank" rel="noopener">Send via WhatsApp</a>
+            <button class="btn ghost sm" type="button" data-action="copy-gym" data-msg="${esc(gymMsg)}">Copy message</button>
+          </div>
+          <form id="form-gym-note" data-session="${esc(s.id)}" class="mt8">
+            <div class="field"><label>Note (optional)</label><input name="note" placeholder="e.g. confirmed 16 with BFT"></div>
+            <button class="btn sm" type="submit">Mark confirmed with gym</button>
+          </form>`}
+        ` : ""}
+      </div></div>`;
+  }).join("");
+
+  return `
+    ${dutyCard}
+    ${pendingCard}
+    <div class="section-head mt24"><h2>HYROX sessions</h2></div>
+    ${sessionCards}`;
+}
+
+function adminApprovals(pending) {
+  if (!pending.length) {
+    return `<div class="empty">No pending members. New signups will land here.</div>`;
+  }
+
+  const ready = pending.filter((item) => item.applicationSubmitted);
+  const awaiting = pending.filter((item) => !item.applicationSubmitted);
+  const section = (title, items, emptyCopy, renderCard) => `
+    <section class="approval-group">
+      <div class="section-head"><h2>${title} (${items.length})</h2></div>
+      ${items.length ? items.map(renderCard).join("") : `<div class="empty">${emptyCopy}</div>`}
+    </section>`;
+  const decisionButton = (u, action, extraClass = "") => `
+    <button class="btn ${extraClass}sm" type="button" data-action="${action}" data-user="${esc(u.id)}" data-applicant-name="${esc(u.fullName)}">${action === "approve" ? "Approve" : "Decline"}</button>`;
+  const joinedDate = (u) => new Date(u.appliedAt).toLocaleDateString("en-HK", { day: "numeric", month: "short" });
+  const readyCard = (u) => `
+    <div class="card booking-card applicant" id="approval-${esc(u.id)}" data-approval-card data-applicant-name="${esc(u.fullName)}"><div class="card-body">
+      <header>
+        <div>
+          <div class="kicker dim" style="margin-top:0">Applied ${joinedDate(u)}</div>
+          <h3 class="mt8">${esc(u.fullName)}</h3>
+        </div>
+        <span class="badge warn">Pending</span>
+      </header>
+      <dl>
+        <dt>Email</dt><dd>${esc(u.email)}</dd>
+        <dt>Phone</dt><dd>${esc(u.phone)}</dd>
+        <dt>Emergency</dt><dd>${esc(u.emergencyName)} · ${esc(u.emergencyPhone)}</dd>
+        <dt>Heard via</dt><dd>${esc(u.heard)}</dd>
+        <dt>Age 18+ / guardian</dt><dd>${u.isMinor ? "Under 18 · guardian required" : "18 or over"}</dd>
+        <dt>Indemnity</dt><dd>${u.indemnityAcceptedAt ? "Accepted" : "—"}</dd>
+        <dt>Photo consent</dt><dd>${u.mediaConsent ? "Yes" : "No"}</dd>
+      </dl>
+      <div class="actions">
+        ${decisionButton(u, "approve")}
+        ${decisionButton(u, "decline", "danger ")}
+      </div>
+      <div class="decision-error" role="alert" hidden></div>
+    </div></div>`;
+  const awaitingCard = (u) => `
+    <div class="card booking-card applicant applicant-awaiting" id="approval-${esc(u.id)}" data-approval-card data-applicant-name="${esc(u.fullName)}"><div class="card-body">
+      <header>
+        <div>
+          <div class="kicker dim" style="margin-top:0">Joined ${joinedDate(u)}</div>
+          <h3 class="mt8">${esc(u.fullName)}</h3>
+        </div>
+        <span class="badge neutral">Awaiting</span>
+      </header>
+      <dl><dt>Email</dt><dd>${esc(u.email)}</dd></dl>
+      <p class="hero-meta mt8"><strong>Application not submitted</strong></p>
+      <p class="muted small">This pending profile has not finished the membership application yet, so approval stays locked until they submit it.</p>
+      <div class="actions">
+        <button class="btn sm" type="button" data-action="approve" data-user="${esc(u.id)}" data-applicant-name="${esc(u.fullName)}" disabled>Approve</button>
+        <button class="btn danger sm" type="button" data-action="decline" data-user="${esc(u.id)}" data-applicant-name="${esc(u.fullName)}" disabled>Decline</button>
+      </div>
+    </div></div>`;
+
+  return [
+    section("Ready for review", ready, "No applications ready for review.", readyCard),
+    section("Awaiting application", awaiting, "No members awaiting an application.", awaitingCard),
+  ].join("");
+}
+
+function campaignStatusBadge(status) {
+  const className = status === "published" ? "free" : status === "draft" ? "warn" : "neutral";
+  return `<span class="badge ${className}">${esc(status)}</span>`;
+}
+
+function adminGiving(campaignList) {
+  const hasOpen = campaignList.some((campaign) => campaign.status !== "closed");
+  return `
+    <div class="section-head"><h2>Giving campaigns</h2></div>
+    ${campaignList.length
+      ? `<div class="campaign-list">${campaignList.map((campaign) => `
+        <a class="card campaign-row" href="#/admin/campaign/${esc(campaign.id)}">
+          <div class="card-body">
+            <div><h3>${esc(campaign.title)}</h3><p class="hero-meta">${fmtMoney(campaign.goalHKD)} goal</p></div>
+            ${campaignStatusBadge(campaign.status)}
+          </div>
+        </a>`).join("")}</div>`
+      : `<div class="empty">No Giving campaigns yet.</div>`}
+    ${hasOpen ? "" : `<a class="btn ghost mt16" href="#/admin/campaign/new">+ Create campaign</a>`}`;
+}
+
+export async function viewAdminCampaign(id) {
+  const user = store.currentUser();
+  if (!user || !isAdminRole(user.role)) return { redirect: "#/account" };
+  let campaignList;
+  try {
+    campaignList = await store.listGivingCampaigns();
+  } catch (error) {
+    if (!isGivingSchemaMissing(error)) throw error;
+    return adminGivingSetupRequired();
+  }
+  const isNew = id === "new";
+  const campaign = isNew
+    ? { id: "", title: "", description: "", goalHKD: "", fpsId: "", fpsPayee: "", status: "draft" }
+    : campaignList.find((item) => item.id === id);
+  if (!campaign) return viewNotFound("Giving campaign not found.");
+  if (isNew && campaignList.some((item) => item.status !== "closed")) {
+    return viewNotFound("Close the current Giving campaign before creating another.");
+  }
+  const closed = campaign.status === "closed";
+  const field = (id, name, label, value, options = "") => `
+    <div class="field"><label for="${id}">${label} *</label>
+      <input id="${id}" name="${name}" value="${esc(value)}" ${options} required ${closed ? "disabled" : ""}>
+    </div>`;
+  if (closed) {
+    return `
+      <a class="back-link" href="#/admin/giving">← Giving</a>
+      <div class="kicker mt16">Admin · Giving · Closed</div>
+      <h1 class="display sm">${esc(campaign.title)}.</h1>
+      <div class="card mt16"><div class="card-body">
+        ${campaignStatusBadge(campaign.status)}
+        <p class="hero-meta mt16">${esc(campaign.description)}</p>
+        <div class="receipt-lines">
+          <div class="line"><span>Goal</span><strong>${fmtMoney(campaign.goalHKD)}</strong></div>
+          <div class="line"><span>FPS ID</span><strong class="mono">${esc(campaign.fpsId)}</strong></div>
+          <div class="line"><span>FPS payee</span><strong>${esc(campaign.fpsPayee)}</strong></div>
+          <div class="line"><span>Closed</span><strong>${campaign.closedAt ? esc(fmtDay(campaign.closedAt)) : "Closed"}</strong></div>
+        </div>
+      </div></div>`;
+  }
+  return `
+    <a class="back-link" href="#/admin/giving">← Giving</a>
+    <div class="kicker mt16">Admin · Giving</div>
+    <h1 class="display sm">${isNew ? "New campaign." : "Edit campaign."}</h1>
+    ${isNew ? "" : `<div class="mt16">${campaignStatusBadge(campaign.status)}</div>`}
+    <form id="form-campaign" class="mt16" data-campaign="${esc(campaign.id)}" novalidate>
+      ${field("campaign-title", "title", "Campaign title", campaign.title)}
+      <div class="field"><label for="campaign-description">Description *</label>
+        <textarea id="campaign-description" name="description" rows="4" required>${esc(campaign.description)}</textarea>
+      </div>
+      ${field("campaign-goal", "goalHKD", "Goal (HKD)", campaign.goalHKD, 'type="number" min="1" step="1" inputmode="numeric"')}
+      ${field("campaign-fps-id", "fpsId", "FPS ID", campaign.fpsId)}
+      ${field("campaign-fps-payee", "fpsPayee", "FPS payee", campaign.fpsPayee)}
+      <div id="campaign-error" aria-live="polite"></div>
+      <button class="btn mt24" type="submit">${isNew ? "Create draft" : "Save changes"}</button>
+      ${!isNew && campaign.status === "draft" ? `<button class="btn ghost mt16" type="button" data-action="campaign-publish" data-campaign="${esc(campaign.id)}" data-campaign-name="${esc(campaign.title)}">Publish campaign</button>` : ""}
+      ${campaign.status === "published" ? `<button class="btn danger mt16" type="button" data-action="campaign-close" data-campaign="${esc(campaign.id)}" data-campaign-name="${esc(campaign.title)}">Close campaign</button>` : ""}
+    </form>`;
 }
 
 function adminActivities() {
@@ -1084,37 +2144,73 @@ function adminActivities() {
     <a class="btn ghost mt16" href="#/admin/activity/new">+ New activity</a>`;
 }
 
-function adminMembers(viewer) {
-  const users = [...store.allUsers()].sort((a, b) => a.fullName.localeCompare(b.fullName));
-  const canEdit = viewer.role === "superadmin";
+function adminMembers(viewer, users) {
+  const canEdit = isSuperRole(viewer.role);
+  const query = adminMemberFilters.query.trim().toLocaleLowerCase();
+  const filtered = users.filter((u) => {
+    const matchesQuery = !query || `${u.fullName || ""} ${u.email || ""}`.toLocaleLowerCase().includes(query);
+    const matchesStatus = adminMemberFilters.status === "all" || u.status === adminMemberFilters.status;
+    const matchesRole = adminMemberFilters.role === "all" || normalizedRole(u.role) === adminMemberFilters.role;
+    return matchesQuery && matchesStatus && matchesRole;
+  });
+  const option = (value, label, selected) =>
+    `<option value="${value}" ${selected === value ? "selected" : ""}>${label}</option>`;
+  const filterChip = (key, value, label) =>
+    `<button id="member-filter-${key}-${value}" type="button" data-action="admin-member-filter" data-filter-key="${key}" data-filter-value="${value}" aria-pressed="${adminMemberFilters[key] === value}">${label}</button>`;
+  const activeFilters = [
+    query ? `search “${esc(adminMemberFilters.query.trim())}”` : "",
+    adminMemberFilters.status !== "all" ? `status ${adminMemberFilters.status[0].toUpperCase()}${adminMemberFilters.status.slice(1)}` : "",
+    adminMemberFilters.role !== "all" ? `role ${roleLabel(adminMemberFilters.role)}` : "",
+  ].filter(Boolean).join(", ");
+  const rows = filtered.map((u) => {
+    const role = normalizedRole(u.role);
+    const roleBadge =
+      u.status === "pending"
+        ? '<span class="badge warn">Pending</span>'
+        : u.status === "declined"
+          ? '<span class="badge danger">Declined</span>'
+          : `<span class="badge ${role === "member" ? "free" : role === "admin" ? "paid" : "warn"}">${roleLabel(role)}</span>`;
+    const editor = canEdit && u.status === "approved" && u.id !== viewer.id
+      ? `<div class="member-role-actions">
+          <label class="sr-only" for="member-role-${esc(u.id)}">Role for ${esc(u.fullName)}</label>
+          <select id="member-role-${esc(u.id)}" class="role-select" data-change="set-role" data-user="${esc(u.id)}" data-member-name="${esc(u.fullName)}" data-current-role="${role}">
+            ${["member", "admin", "superadmin"].map((r) => option(r, roleLabel(r), role)).join("")}
+          </select>
+          <button class="btn danger sm" type="button" data-action="revoke-member" data-user="${esc(u.id)}" data-member-name="${esc(u.fullName)}">Revoke access</button>
+        </div>`
+      : roleBadge;
+    return `
+      <div class="member-row">
+        <div class="who"><strong>${esc(u.fullName)}</strong><span>${esc(u.email)}</span></div>
+        ${editor}
+      </div>`;
+  }).join("");
+  const hasActiveFilters = adminMemberFilters.query.length > 0 ||
+    adminMemberFilters.status !== "all" || adminMemberFilters.role !== "all";
   return `
-    <p class="muted small mt16">${users.filter((u) => u.status === "approved").length} approved · ${store.pendingApplicants().length} pending. ${canEdit ? "Role changes are super-admin only." : "Only a super admin can change roles."}</p>
-    ${users
-      .map((u) => {
-        const roleBadge =
-          u.status === "pending"
-            ? '<span class="badge warn">Pending</span>'
-            : u.status === "declined"
-              ? '<span class="badge danger">Declined</span>'
-              : `<span class="badge ${u.role === "member" ? "free" : u.role === "admin" ? "paid" : "warn"}">${u.role}</span>`;
-        const editor =
-          canEdit && u.status === "approved" && u.id !== viewer.id
-            ? `<select class="role-select" data-change="set-role" data-user="${u.id}">
-                 ${["member", "admin", "superadmin"].map((r) => `<option value="${r}" ${u.role === r ? "selected" : ""}>${r}</option>`).join("")}
-               </select>`
-            : roleBadge;
-        return `
-          <div class="member-row">
-            <div class="who"><strong>${esc(u.fullName)}</strong><span>${esc(u.email)}</span></div>
-            ${editor}
-          </div>`;
-      })
-      .join("")}`;
+    <p class="muted small mt16">${canEdit ? "Role changes are Super Admin only." : "Only a Super Admin can change roles."}</p>
+    <div class="member-filters" aria-label="Filter members">
+      <div class="field"><label for="member-search">Search members</label><input id="member-search" type="search" value="${esc(adminMemberFilters.query)}" placeholder="Name or email" data-input="member-search"></div>
+      <fieldset class="admin-filter-group">
+        <legend>Status</legend>
+        <div class="admin-filter-chips">
+          ${filterChip("status", "all", "All")}${filterChip("status", "approved", "Approved")}${filterChip("status", "pending", "Pending")}${filterChip("status", "declined", "Declined")}
+        </div>
+      </fieldset>
+      <fieldset class="admin-filter-group">
+        <legend>Role</legend>
+        <div class="admin-filter-chips">
+          ${filterChip("role", "all", "All roles")}${filterChip("role", "member", "Member")}${filterChip("role", "admin", "Admin")}${filterChip("role", "superadmin", "Super Admin")}
+        </div>
+      </fieldset>
+      ${hasActiveFilters ? '<button class="admin-filters-clear" type="button" data-action="admin-member-filters-clear">Clear filters</button>' : ""}
+    </div>
+    <div class="member-results">${rows || `<div class="empty">No members match${activeFilters ? ` ${activeFilters}` : " these filters"}.</div>`}</div>`;
 }
 
 export function viewAdminActivity(id) {
   const user = store.currentUser();
-  if (!user || !["admin", "superadmin"].includes(user.role)) {
+  if (!user || !isAdminRole(user.role)) {
     return { redirect: "#/account" };
   }
   const isNew = id === "new";
@@ -1191,12 +2287,95 @@ export function viewAdminActivity(id) {
     </form>`;
 }
 
-// --- Fallback -----------------------------------------------------------------------------------
 
-export function viewNotFound(msg = "Page not found.") {
+export const notificationFilters = { kind: "all" };
+
+const ADMIN_NOTIFICATION_FILTERS = [
+  ["all", "All"],
+  ["application", "Applications"],
+  ["decision", "Decisions"],
+  ["role", "Role changes"],
+  ["club", "Club updates"],
+  ["personal", "My account"],
+];
+const MEMBER_NOTIFICATION_FILTERS = ADMIN_NOTIFICATION_FILTERS.filter(([kind]) =>
+  ["all", "club", "personal"].includes(kind)
+);
+const NOTIFICATION_CATEGORY_LABELS = {
+  application: "Application",
+  decision: "Decision",
+  role: "Role change",
+  club: "Club update",
+  personal: "My account",
+};
+
+export async function viewNotifications(now = new Date(), prefetchedRows = null) {
+  const user = store.currentUser();
+  const rows = prefetchedRows ?? await store.listMyNotifications();
+  const admin = isAdminRole(user?.role);
+  const availableFilters = admin ? ADMIN_NOTIFICATION_FILTERS : MEMBER_NOTIFICATION_FILTERS;
+  const availableKinds = new Set(availableFilters.map(([kind]) => kind));
+  const activeKind = availableKinds.has(notificationFilters.kind) ? notificationFilters.kind : "all";
+  notificationFilters.kind = activeKind;
+
+  // Keep the existing member boundary even for unknown future admin kinds:
+  // malformed categories fall back safely without exposing operational rows.
+  const visibleRows = rows.filter((notification) => {
+    const kind = typeof notification?.kind === "string" ? notification.kind.trim() : "";
+    return admin || !kind.startsWith("admin_");
+  }).sort((a, b) => {
+    const aTime = Date.parse(a?.created_at);
+    const bTime = Date.parse(b?.created_at);
+    return (Number.isFinite(bTime) ? bTime : -Infinity) - (Number.isFinite(aTime) ? aTime : -Infinity);
+  });
+  const filteredRows = activeKind === "all"
+    ? visibleRows
+    : visibleRows.filter((notification) => notificationCategory(notification?.kind) === activeKind);
+
+  const notificationRow = (notification) => {
+    const unread = !notification?.read_at;
+    const kind = typeof notification?.kind === "string" ? notification.kind.trim() : "";
+    const category = notificationCategory(kind);
+    const relativeTime = notificationRelativeTime(notification?.created_at, now);
+    const exactTime = notificationHktTime(notification?.created_at);
+    const time = relativeTime && exactTime
+      ? `<span>${esc(relativeTime)}</span><span>${esc(exactTime)}</span>`
+      : `<span>Time unavailable</span>`;
+    return `
+      <button class="notification-row${unread ? " unread" : ""}" type="button"
+        data-action="notification-open"
+        data-notification-id="${esc(notification?.id)}"
+        data-notification-read="${unread ? "false" : "true"}"
+        data-destination="${esc(notificationDestination(kind))}">
+        <span class="notification-unread" ${unread ? `aria-label="Unread"` : `aria-hidden="true"`}></span>
+        <span class="notification-copy">
+          <span class="notification-kind-badge">${esc(NOTIFICATION_CATEGORY_LABELS[category])}</span>
+          <strong>${esc(notification?.title)}</strong>
+          <span>${esc(notification?.body)}</span>
+        </span>
+        <span class="notification-time">${time}</span>
+      </button>`;
+  };
+
+  const activeLabel = availableFilters.find(([kind]) => kind === activeKind)?.[1] || "All";
+  const emptyCopy = activeKind === "all" ? "No any notifications." : `No ${activeLabel} notifications.`;
+  const filterButtons = availableFilters.map(([kind, label]) => `
+    <button type="button" data-action="notification-filter" data-notification-filter="${kind}"
+      aria-pressed="${kind === activeKind ? "true" : "false"}">${esc(label)}</button>`).join("");
+
   return `
-    <div class="empty mt24">
-      <p>${esc(msg)}</p>
-      <a class="btn ghost mt16" href="#/home" style="display:inline-flex;width:auto;padding:12px 22px">Back home</a>
-    </div>`;
+    <header class="notification-header">
+      <p class="kicker">Inbox</p>
+      <h1 class="display sm">Notifications</h1>
+    </header>
+    <div class="notification-filter-scroll">
+      <div class="notification-filter-chips" role="group" aria-label="Filter notifications">${filterButtons}</div>
+    </div>
+    ${filteredRows.length
+      ? `<section class="card notification-section" aria-label="${esc(activeLabel)} notifications">
+          <div class="card-body">
+            <div class="notification-list">${filteredRows.map(notificationRow).join("")}</div>
+          </div>
+        </section>`
+      : `<p class="notification-empty">${esc(emptyCopy)}</p>`}`;
 }

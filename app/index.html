@@ -7,7 +7,24 @@
   <title>Island Training Club</title>
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="icon" href="../assets/itc/logo.webp">
+  <link rel="preload" href="../assets/fonts/archivo-latin-variable.woff2" as="font" type="font/woff2" crossorigin>
   <link rel="stylesheet" href="styles.css">
+  <script>
+    // Live deployment values (hardcoded — Vercel does NOT inject env vars
+    // into vanilla static HTML). The anon key is designed to be public; RLS
+    // protects the data behind it. To run against localStorage + seeds
+    // instead, set both to "" before serving locally.
+    window.SUPABASE_URL = "https://krxbvgyolxvmzgysfjkj.supabase.co";
+    window.SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImtyeGJ2Z3lvbHh2bXpneXNmamtqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODU2NzQ2NzEsImV4cCI6MjEwMTI1MDY3MX0.kbkNnSkMINcqziHo12Sl8auaGQ5KtxtqWwCFZlXeyzg";
+  </script>
+  <script type="module">
+    // esm.sh ships supabase-js as a pure ESM module (it only `export`s
+    // createClient), so a bare <script src="…"> tag leaves window.supabase
+    // undefined and config.js's createClient branch never fires. Import
+    // createClient here and expose it on window so config.js can pick it up.
+    import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+    window.supabase = { createClient };
+  </script>
 </head>
 <body>
   <div class="app-shell">
@@ -19,16 +36,19 @@
         <strong>Island Training Club</strong>
         <span>Fitness · Faith · Community</span>
       </div>
-      <a href="#/account" class="top-avatar" id="top-avatar" aria-label="Account">·</a>
+          <a id="top-notifications" class="top-icon-button" href="#/notifications" hidden></a>
+    <a href="#/account" class="top-avatar" id="top-avatar" aria-label="Account">·</a>
     </header>
 
-    <main id="view" class="view" tabindex="-1"></main>
+          <div id="route-loader" class="route-loader" role="status" aria-live="polite" hidden>Loading…</div>
+<main id="view" class="view" tabindex="-1"></main>
 
     <nav class="bottom-nav" id="bottom-nav" aria-label="Primary"></nav>
   </div>
 
   <div class="toast-stack" id="toast-stack" aria-live="polite"></div>
 
+  <script type="module" src="js/config.js"></script>
   <script type="module" src="js/app.js"></script>
 </body>
 </html>

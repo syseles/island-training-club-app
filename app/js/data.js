@@ -76,7 +76,7 @@ export const SEED_ACTIVITIES = [
       "Weekly hybrid race training: ski, sled, burpees and running intervals. Every session is purchased separately at one fixed price.",
     memberNote: "Gym entry fee is included in the session price.",
     price: 180, // HKD
-    capacity: 18, // placeholder
+    capacity: 12,
     published: true,
   },
   {
@@ -94,11 +94,30 @@ export const SEED_ACTIVITIES = [
       "Weekly hybrid race training: ski, sled, burpees and running intervals. Every session is purchased separately at one fixed price.",
     memberNote: "Gym entry fee is included in the session price.",
     price: 180, // HKD
-    capacity: 18, // placeholder
+    capacity: 20,
     published: true,
   },
 ];
 
+export const ANNOUNCEMENTS = [
+  {
+    id: "ann-itc-turns-2",
+    title: "Island Training Club turns 2",
+    postedAt: new Date(2026, 7, 6, 12).getTime(),
+    lead: "Today, August 6, 2026 marks 2 years of Island Training Club.",
+    milestones: [
+      { value: "620", label: "members strong" },
+      { value: "14", label: "committed leaders" },
+      { value: "1", label: "unwavering vision" },
+      { value: "1", label: "clear mission" },
+      { value: "1", label: "God who made this all possible" },
+    ],
+    body: "On behalf of the ITC Leadership and Coaching Team, we are blessed to share this journey with you! We should all be proud of how far we've come and look forward to much more 👊",
+    commitment: "We will continue our commitment to serve our God and this community, doing our best to create and maintain a space where you grow in fitness, friendship, community and faith.",
+  },
+];
+
+// --- Leaders & culture (draft community content) ------------------------------
 // --- Leaders & culture (draft community content) ------------------------------
 
 export const LEADERS = [
@@ -174,6 +193,17 @@ export function mondayOf(date) {
   const d = new Date(date.getTime());
   const offset = (d.getDay() + 6) % 7; // Monday = 0
   return addDays(d, -offset);
+}
+
+function saturdayOnOrBefore(date) {
+  const d = new Date(date.getTime());
+  const offset = (d.getDay() + 1) % 7; // days since Saturday
+  return addDays(d, -offset);
+}
+
+export function saturdayOnOrAfter(date) {
+  const d = saturdayOnOrBefore(date);
+  return isoDate(d) === isoDate(date) ? d : addDays(d, 7);
 }
 
 export function isoDate(d) {
@@ -300,6 +330,35 @@ export function findSession(activities, sessionId) {
   return { ...act, id: sessionId, activityId, dateISO, date };
 }
 
+// --- Payment checkpoints ---------------------------------------------------
+// The collector's week: unpaid reservations expire at Thursday 6:00 PM;
+// promotions after that get until Friday 2:00 PM (when the collector
+// finalizes with the gym); last-minute spots get a 2-hour window.
+
+export function mainDeadlineFor(dateISO) {
+  const d = parseISO(dateISO);
+  d.setDate(d.getDate() - 2); // Saturday -> Thursday
+  d.setHours(18, 0, 0, 0);
+  return d.getTime();
+}
+
+export function finalCheckpointFor(dateISO) {
+  const d = parseISO(dateISO);
+  d.setDate(d.getDate() - 1); // Saturday -> Friday
+  d.setHours(14, 0, 0, 0);
+  return d.getTime();
+}
+
+export const LAST_MINUTE_WINDOW_MS = 2 * 60 * 60 * 1000;
+
+export function nextPayDeadline(dateISO, now = Date.now()) {
+  const main = mainDeadlineFor(dateISO);
+  if (now < main) return main;
+  const fin = finalCheckpointFor(dateISO);
+  if (now < fin) return fin;
+  return now + LAST_MINUTE_WINDOW_MS;
+}
+
 // --- Calendar (.ics) ------------------------------------------------------------
 
 export function buildICS(session) {
@@ -326,4 +385,120 @@ export function buildICS(session) {
 export function mapsUrl(session) {
   const q = session.mapsQuery || session.location;
   return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(q)}`;
+}
+
+// ============================================================================
+// Notifications — deterministic display helpers
+// ============================================================================
+
+const notificationDate = (value) => {
+  if (value == null || (typeof value === "string" && !value.trim())) return null;
+  const date = value instanceof Date ? value : new Date(value);
+  return Number.isFinite(date.getTime()) ? date : null;
+};
+
+const notificationKind = (kind) => typeof kind === "string" ? kind.trim() : "";
+
+const NOTIFICATION_CATEGORIES = new Map([
+  ["admin_application_submitted", "application"],
+  ["admin_application_approved", "decision"],
+  ["admin_application_declined", "decision"],
+  ["admin_role_promoted", "role"],
+  ["admin_role_demoted", "role"],
+  ["admin_membership_revoked", "role"],
+  // Retain a stable category for notifications created before transition-
+  // specific role kinds were introduced.
+  ["admin_role_changed", "role"],
+  ["giving_campaign_published", "club"],
+]);
+
+export function notificationCategory(kind) {
+  return NOTIFICATION_CATEGORIES.get(notificationKind(kind)) || "personal";
+}
+
+export function notificationRelativeTime(value, now = new Date()) {
+  const createdAt = notificationDate(value);
+  const currentTime = notificationDate(now);
+  if (!createdAt || !currentTime) return "";
+  const seconds = Math.max(0, Math.floor((currentTime - createdAt) / 1000));
+  if (seconds < 60) return "Just now";
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes} minute${minutes === 1 ? "" : "s"} ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours} hour${hours === 1 ? "" : "s"} ago`;
+  if (hours < 48) return "Yesterday";
+  const days = Math.floor(hours / 24);
+  return `${days} days ago`;
+}
+
+export function notificationHktTime(value) {
+  const date = notificationDate(value);
+  if (!date) return "";
+  const formatted = new Intl.DateTimeFormat("en-HK", {
+    timeZone: "Asia/Hong_Kong",
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
+  }).format(date);
+  return `${formatted.replace(/\b(am|pm)\b/i, (period) => period.toUpperCase())} HKT`;
+}
+
+export function notificationDestination(kind) {
+  const normalizedKind = notificationKind(kind);
+  if (normalizedKind === "admin_application_submitted") return "#/admin/approvals";
+  if (normalizedKind.startsWith("admin_")) return "#/admin/members";
+  if (normalizedKind === "giving_campaign_published") return "#/giving";
+  return "#/account";
+}
+
+// --- Weekly encouragement verse ------------------------------------------
+// Used by the Home page to display a deterministic weekly verse. The same
+// week shows the same verse across every browser and visitor; the verse
+// rotates on Sunday in Hong Kong local time.
+
+export const WEEKLY_VERSES = [
+  {
+    ref: "Hebrews 12:1",
+    text: "Let us run with perseverance the race marked out for us.",
+  },
+  {
+    ref: "Isaiah 40:31",
+    text: "Those who hope in the Lord will renew their strength; they will run and not grow weary.",
+  },
+  {
+    ref: "1 Corinthians 9:24",
+    text: "Run in such a way as to get the prize.",
+  },
+  {
+    ref: "Philippians 4:13",
+    text: "I can do all this through him who gives me strength.",
+  },
+  {
+    ref: "Joshua 1:9",
+    text: "Be strong and courageous — the Lord your God will be with you wherever you go.",
+  },
+  {
+    ref: "Colossians 3:23",
+    text: "Whatever you do, work at it with all your heart, as working for the Lord.",
+  },
+  {
+    ref: "Galatians 6:9",
+    text: "Let us not become weary in doing good, for at the proper time we will reap a harvest if we do not give up.",
+  },
+  {
+    ref: "2 Timothy 4:7",
+    text: "I have fought the good fight, I have finished the race, I have kept the faith.",
+  },
+];
+
+const VERSE_EPOCH = new Date(2026, 6, 26); // Sunday — week one shows verses[0]
+
+export function weeklyVerse(date = todayLocal()) {
+  const sunday = addDays(date, -date.getDay()); // weeks run Sunday–Saturday
+  const weeks = Math.round((sunday - VERSE_EPOCH) / (7 * 24 * 60 * 60 * 1000));
+  const n = WEEKLY_VERSES.length;
+  return WEEKLY_VERSES[((weeks % n) + n) % n];
 }
