@@ -16,6 +16,7 @@ import {
   findSession,
   sessionStarted,
   sessionsInRange,
+  parseISO,
   mondayOf,
   addDays,
   todayLocal,
@@ -204,17 +205,25 @@ export function viewHome() {
   // Same 14-day window bookings are made in — a confirmed booking can never
   // fall out of "My week" (e.g. next Saturday's booking seen on Sat evening).
   const upcoming = store.upcomingSessions(14);
+  const weekStart = mondayOf(todayLocal());
+  const weekEnd = addDays(weekStart, 6);
+  const inThisWeek = (s) => {
+    const iso = s.dateISO || (s.snapshot && s.snapshot.dateISO);
+    if (!iso) return false;
+    const t = parseISO(iso).getTime();
+    return t >= weekStart.getTime() && t <= weekEnd.getTime();
+  };
   const name = user ? esc(user.preferredName || user.fullName.split(" ")[0]) : null;
 
   let rows;
   let emptyMsg;
   let weekHeading;
   if (!user) {
-    rows = upcoming.filter((session) => session.kind === "free");
+    rows = upcoming.filter((session) => session.kind === "free" && inThisWeek(session));
     emptyMsg = "No open sessions this week — check back soon.";
     weekHeading = "This week — open to all";
   } else if (user.status !== "approved") {
-    rows = upcoming.filter((session) => session.kind === "free");
+    rows = upcoming.filter((session) => session.kind === "free" && inThisWeek(session));
     emptyMsg = "No open sessions this week — check back soon.";
     weekHeading = "My Week";
   } else {
