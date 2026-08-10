@@ -1103,7 +1103,12 @@ export function interestPosition(userId, sessionId) {
 // Session template + per-week override (cancelled, time, venueTBC, notice...).
 export function getSession(sessionId) {
   if (isLive()) {
-    return liveOps.getLiveSession(sessionId);
+    const live = liveOps.getLiveSession(sessionId);
+    if (live) return live;
+    // Free events live only in local state; the live cache has no row.
+    const local = findSession(state.activities, sessionId);
+    if (local) return decorateSession(local);
+    return null;
   }
   const s = findSession(state.activities, sessionId);
   if (!s) return null;
