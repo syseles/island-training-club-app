@@ -497,7 +497,7 @@ export const WEEKLY_VERSES = [
   },
 ];
 
-const VERSE_EPOCH = new Date(2026, 6, 26); // Sunday — week one shows verses[0]
+const VERSE_EPOCH = new Date(2026, 7, 9); // Sunday 9 August 2026 — this week shows verses[0]
 
 export function weeklyVerse(date = todayLocal()) {
   const sunday = addDays(date, -date.getDay()); // weeks run Sunday–Saturday
