@@ -1126,6 +1126,7 @@ async function boot() {
     try {
       await store.getCurrentUser();
       await store.fetchApplicationForUser(store.currentUser());
+      await store.hydrateLiveOperations({ ensureWindow: true });
     } catch (err) {
       bootError = err;
     }

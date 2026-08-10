@@ -240,6 +240,21 @@ async function fetchOperationalState() {
   };
 }
 
+export async function ensureLiveSessionWindow() {
+  if (!isLive() || !supabase) return null;
+  const iso = new Date().toISOString().slice(0, 10);
+  try {
+    const { error } = await supabase.rpc("ensure_operational_sessions", {
+      p_start_date: iso,
+      p_weeks: 16,
+    });
+    if (error) throw operationalProblem(error);
+  } catch (err) {
+    console.warn("ensureLiveSessionWindow failed", err);
+  }
+  return null;
+}
+
 export async function hydrateOperationalState({ force = false } = {}) {
   if (!isLive() || !supabase) return null;
   if (liveCache.loaded && !force) return liveCache;
