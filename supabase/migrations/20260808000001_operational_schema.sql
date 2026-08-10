@@ -310,8 +310,8 @@ revoke all on table public.operational_receipts from authenticated;
 revoke all on table public.collector_assignments from authenticated;
 revoke all on table public.collector_payout_profiles from authenticated;
 
-grant select on table public.operational_activity_templates to authenticated;
-grant select on table public.operational_sessions to authenticated;
+grant select on table public.operational_activity_templates to anon, authenticated;
+grant select on table public.operational_sessions to anon, authenticated;
 grant select on table public.operational_bookings to authenticated;
 grant select on table public.operational_queue_entries to authenticated;
 grant select on table public.operational_receipts to authenticated;
