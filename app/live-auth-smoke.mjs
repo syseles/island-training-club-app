@@ -166,6 +166,10 @@ const operationalRpcCalls = [];
 const operationalSubscriptions = [];
 const operationalTableRows = {
   operational_sessions: [],
+  operational_activity_templates: [
+    { activity_id: "hyrox", name: "ITC HYROX", venue: "BFT Causeway Bay", weekday: 6, start_time: "11:15:00", duration_minutes: 60, capacity: 20, price_hkd: 180, default_open: true, active: true },
+    { activity_id: "hyrox-midtown", name: "ITC HYROX", venue: "Midtown 28", weekday: 6, start_time: "11:00:00", duration_minutes: 60, capacity: 12, price_hkd: 180, default_open: false, active: true },
+  ],
   operational_bookings: [],
   operational_queue_entries: [],
   operational_receipts: [],

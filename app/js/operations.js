@@ -26,6 +26,7 @@ const cutoverMarker = "itc.live.operations.backend.v1";
 
 const liveCache = {
   sessions: new Map(),
+  templates: [],
   bookings: [],
   queues: [],
   receipts: [],
@@ -44,6 +45,21 @@ function notifyListeners() {
   for (const fn of listeners) {
     try { fn(); } catch (err) { console.warn("operations listener failed", err); }
   }
+}
+
+function buildTemplateRow(row) {
+  return {
+    activity_id: row.activity_id,
+    name: row.name,
+    venue: row.venue,
+    weekday: row.weekday,
+    start_time: String(row.start_time || "").slice(0, 5),
+    duration_minutes: row.duration_minutes,
+    capacity: row.capacity,
+    price_hkd: row.price_hkd,
+    default_open: row.default_open,
+    active: row.active,
+  };
 }
 
 function buildSessionRow(row) {
@@ -161,6 +177,7 @@ function buildPayoutRow(row) {
 
 function replaceState(payload) {
   liveCache.sessions = new Map(payload.sessions.map((row) => [row.id, row]));
+  liveCache.templates = payload.templates || [];
   liveCache.bookings = payload.bookings;
   liveCache.queues = payload.queues;
   liveCache.receipts = payload.receipts;
@@ -217,7 +234,7 @@ let hydrationPromise = null;
 async function fetchOperationalState() {
   if (!isLive() || !supabase) return null;
   const since = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
-  const [sessions, bookings, queues, receipts, assignments, payouts] = await Promise.all([
+  const [sessions, bookings, queues, receipts, assignments, payouts, templates] = await Promise.all([
     supabase.from("operational_sessions").select("*").gte("session_date", since).order("session_date"),
     supabase.from("operational_bookings").select("*"),
     supabase.from("operational_queue_entries").select("*")
@@ -226,12 +243,14 @@ async function fetchOperationalState() {
     supabase.from("operational_receipts").select("*").order("issued_at", { ascending: false }),
     supabase.from("collector_assignments").select("*"),
     supabase.from("collector_payout_profiles").select("*"),
+    supabase.from("operational_activity_templates").select("*").eq("active", true).order("activity_id"),
   ]);
-  for (const result of [sessions, bookings, queues, receipts, assignments, payouts]) {
+  for (const result of [sessions, bookings, queues, receipts, assignments, payouts, templates]) {
     if (result.error) throw operationalProblem(result.error);
   }
   return {
     sessions: (sessions.data || []).map(buildSessionRow),
+    templates: (templates.data || []).map(buildTemplateRow),
     bookings: (bookings.data || []).map(buildBookingRow),
     queues: (queues.data || []).map(buildQueueRow),
     receipts: (receipts.data || []).map(buildReceiptRow),
@@ -357,6 +376,10 @@ export function getLiveSession(id) {
 
 export function listLiveSessions() {
   return [...liveCache.sessions.values()];
+}
+
+export function liveActivityTemplates() {
+  return liveCache.templates.slice();
 }
 
 export function listLiveBookings(filter = () => true) {

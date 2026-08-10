@@ -305,20 +305,35 @@ export function viewSchedule() {
   if (!scheduleState.selected) {
     scheduleState.selected = scheduleState.weekOffset === 0 ? isoDate(t) : isoDate(monday);
   }
-  const sourceActivities = isLive()
-    ? liveOps.listLiveSessions().map((s) => ({
-        id: s.activityId,
-        weekday: 6,
-        price: s.price,
-        capacity: s.capacity,
-        kind: s.kind,
-        name: s.name,
-        venue: s.location,
-        published: true,
-      }))
-    : store.activities();
+  let sourceActivities;
+  if (isLive()) {
+    const liveTemplates = liveOps.liveActivityTemplates();
+    const templateActivities = liveTemplates.map((tpl) => ({
+      id: tpl.activity_id,
+      weekday: tpl.weekday,
+      price: tpl.price_hkd,
+      capacity: tpl.capacity,
+      kind: "paid",
+      name: tpl.name,
+      venue: tpl.venue,
+      durationMin: tpl.duration_minutes,
+      start_time: tpl.start_time,
+      category: "HYROX",
+      published: true,
+    }));
+    const freeActivities = store.activities().filter((a) => a.kind === "free");
+    sourceActivities = [...templateActivities, ...freeActivities];
+  } else {
+    sourceActivities = store.activities();
+  }
   const weekSessions = sessionsInRange(sourceActivities, monday, 7)
-    .map((s) => isLive() ? liveOps.getLiveSession(s.id) : store.getSession(s.id))
+    .map((s) => {
+      if (isLive()) {
+        if (s.kind === "free") return store.getSession(s.id);
+        return liveOps.getLiveSession(s.id);
+      }
+      return store.getSession(s.id);
+    })
     .filter(Boolean);
   const dayNames = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
