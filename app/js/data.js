@@ -456,3 +456,52 @@ export function notificationDestination(kind) {
   if (normalizedKind === "giving_campaign_published") return "#/giving";
   return "#/account";
 }
+
+// --- Weekly encouragement verse ------------------------------------------
+// Used by the Home page to display a deterministic weekly verse. The same
+// week shows the same verse across every browser and visitor; the verse
+// rotates on Sunday in Hong Kong local time.
+
+export const WEEKLY_VERSES = [
+  {
+    ref: "Hebrews 12:1",
+    text: "Let us run with perseverance the race marked out for us.",
+  },
+  {
+    ref: "Isaiah 40:31",
+    text: "Those who hope in the Lord will renew their strength; they will run and not grow weary.",
+  },
+  {
+    ref: "1 Corinthians 9:24",
+    text: "Run in such a way as to get the prize.",
+  },
+  {
+    ref: "Philippians 4:13",
+    text: "I can do all this through him who gives me strength.",
+  },
+  {
+    ref: "Joshua 1:9",
+    text: "Be strong and courageous — the Lord your God will be with you wherever you go.",
+  },
+  {
+    ref: "Colossians 3:23",
+    text: "Whatever you do, work at it with all your heart, as working for the Lord.",
+  },
+  {
+    ref: "Galatians 6:9",
+    text: "Let us not become weary in doing good, for at the proper time we will reap a harvest if we do not give up.",
+  },
+  {
+    ref: "2 Timothy 4:7",
+    text: "I have fought the good fight, I have finished the race, I have kept the faith.",
+  },
+];
+
+const VERSE_EPOCH = new Date(2026, 6, 26); // Sunday — week one shows verses[0]
+
+export function weeklyVerse(date = todayLocal()) {
+  const sunday = addDays(date, -date.getDay()); // weeks run Sunday–Saturday
+  const weeks = Math.round((sunday - VERSE_EPOCH) / (7 * 24 * 60 * 60 * 1000));
+  const n = WEEKLY_VERSES.length;
+  return WEEKLY_VERSES[((weeks % n) + n) % n];
+}

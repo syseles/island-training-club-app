@@ -26,6 +26,7 @@ import {
   fmtTime,
   fmtMoney,
   initials,
+  weeklyVerse,
   notificationRelativeTime,
   notificationHktTime,
   notificationDestination,
@@ -251,10 +252,19 @@ export function viewHome() {
     </div></div>`
     : "";
 
+  const verse = weeklyVerse();
+  const encouragement = `
+    <div class="card mt16"><div class="card-body">
+      <span class="kicker">Encouragement of the week</span>
+      <p class="verse-text">“${esc(verse.text)}”</p>
+      <p class="hero-meta">${esc(verse.ref)}</p>
+    </div></div>`;
+
   return `
     <div class="kicker">${esc(fmtDateLong(todayLocal()))} · Hong Kong</div>
     <h1 class="display">${name ? `Good to see you, ${name}.` : "Train together."}</h1>
     ${user && user.status === "pending" ? pendingBanner() : ""}
+    ${user ? encouragement : ""}
     ${guest}
     <div class="section-head">
       <h2>${weekHeading}</h2>
