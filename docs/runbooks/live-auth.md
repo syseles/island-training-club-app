@@ -6,11 +6,15 @@ identity, notifications, Giving, Admin, and approval workflows.
 ## Candidate ownership and surfaces
 
 - **Supabase owns:** identity, roles, applications, notifications, Giving
-  campaigns, and donor profiles.
-- **`localStorage` owns:** Payment operations and Community prototype
-  interactions. Reservations, bookings, queues, collector duty, payout details,
-  confirmations, receipts, and prototype donation records remain device-local
-  and are keyed by the authenticated Supabase profile UUID.
+  campaigns, donor profiles, and the full HYROX operational workflow:
+  activity templates, weekly sessions, bookings, queue entries, receipts,
+  collector duty, payout profiles, and the gym finalization record. All
+  operational mutations route through SECURITY DEFINER RPCs and are
+  synchronized across devices via Realtime.
+- **`localStorage` owns:** the device-local Community prototype interactions
+  (prayer requests, draft applications) and the UUID-keyed collector payout
+  profile that the on-duty admin edits locally. Operations state is never
+  stored in `localStorage` once live mode is enabled.
 - **Navigation:** Notification bell plus a signed-in-only Giving tab.
 - **Admin tabs:** Approvals, Members, Activities, Giving, and Payments / Ops.
   Each Admin route exposes exactly one active tab.
