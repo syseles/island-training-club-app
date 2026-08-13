@@ -2121,5 +2121,54 @@ try {
 }
 console.log("ok  free-event weekly venue state, fan-out, dedupe, and HYROX guard");
 
+// --- Inline free-event venue map (Task 5) ---
+const map = await import("./js/map.js");
+if (JSON.stringify(map.parseGeocodeCache('{"Central":{"lat":22.281,"lon":114.159}}'))
+  !== JSON.stringify({ Central: { lat: 22.281, lon: 114.159 } })) {
+  throw new Error("parseGeocodeCache should read valid entries");
+}
+if (JSON.stringify(map.parseGeocodeCache("not-json")) !== "{}") {
+  throw new Error("parseGeocodeCache should drop invalid JSON");
+}
+if (JSON.stringify(map.parseGeocodeCache('{"Bad":{"lat":"NaN","lon":114}}')) !== "{}") {
+  throw new Error("parseGeocodeCache should drop non-finite coords");
+}
+if (JSON.stringify(map.normalizeGeocodeResult([{ lat: "22.281", lon: "114.159" }]))
+  !== JSON.stringify({ lat: 22.281, lon: 114.159 })) {
+  throw new Error("normalizeGeocodeResult should coerce string coordinates");
+}
+if (map.normalizeGeocodeResult([]) !== null) {
+  throw new Error("normalizeGeocodeResult should reject empty arrays");
+}
+if (map.normalizeGeocodeResult([{ lat: "x", lon: "114" }]) !== null) {
+  throw new Error("normalizeGeocodeResult should reject non-finite coordinates");
+}
+
+// mountActivityMap must resolve to false and render fallback when no result is found.
+const mapHost = {
+  id: "activity-map",
+  dataset: { mapsQuery: "nowhere-imaginary-place", markerLabel: "Test session" },
+  isConnected: true,
+  innerHTML: "<p>Loading map\u2026</p>",
+};
+mem.set("itc.geocode.v1", "{}");
+const mountedMissing = await map.mountActivityMap(mapHost, {
+  fetchImpl: async () => ({
+    ok: true,
+    json: async () => [],
+  }),
+  loadLeaflet: async () => {
+    throw new Error("must not load when geocode fails");
+  },
+});
+if (mountedMissing !== false) {
+  throw new Error("missing geocode must not mount a map");
+}
+if (!/Couldn.t find the venue on the map/.test(mapHost.innerHTML)
+  || !/tap Get directions instead/.test(mapHost.innerHTML)) {
+  throw new Error(`fallback copy not rendered: ${mapHost.innerHTML}`);
+}
+console.log("ok  inline free-event map renders fallback when geocode fails");
+
 console.log(failures ? `\n${failures} FAILURE(S)` : "\nAll smoke tests passed.");
 process.exit(failures ? 1 : 0);
