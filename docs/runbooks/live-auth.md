@@ -146,6 +146,16 @@ export ITC_ALLOW_DATABASE_RESET=1
 bash supabase/tests/verify_operational_backend.sh
 ```
 
+If `set_session_venue` returns `Could not find 'public.operational_session_venue_overrides' in the schema cache` even though the migration was applied, reload PostgREST's schema cache for the calling role:
+
+```sql
+notify pgrst, 'reload schema';
+```
+
+Run it once per Supabase role (`anon`, `authenticated`, `service_role`) the
+client uses. After this the new table is visible to the PostgREST query path.
+Run it via the Supabase SQL editor or `psql` against the live database URL.
+
 Browser-level acceptance on the deployed environment:
 
 1. As an Admin, sign in and open **Admin Tools → Payments / Ops → Free-event
