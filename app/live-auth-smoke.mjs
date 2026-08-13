@@ -2520,3 +2520,29 @@ if (!liveHyroxDetail.includes("Get directions") || liveHyroxDetail.includes('id=
   throw new Error("paid HYROX activity must surface Get directions without the inline map");
 }
 console.log("ok  live paid HYROX surfaces Get directions without the inline map");
+
+// Mount contract: stale activity hosts must not be remounted after navigation.
+let lateMounted = false;
+const lateMap = await import("./js/map.js");
+globalThis.window.__lateMapLoader = () => {
+  lateMounted = true;
+  return Promise.resolve();
+};
+const lateHost = {
+  id: "activity-map",
+  isConnected: false,
+  dataset: { mapsQuery: "Causeway Bay, Hong Kong", markerLabel: "Late" },
+  innerHTML: "<p>Loading\u2026</p>",
+};
+const lateResult = await lateMap.mountActivityMap(lateHost, {
+  ownsGeneration: () => false,
+  fetchImpl: async () => ({ ok: true, json: async () => [] }),
+  loadLeaflet: globalThis.window.__lateMapLoader,
+});
+if (lateResult !== false) {
+  throw new Error("stale activity host must resolve to false");
+}
+if (lateMounted) {
+  throw new Error("stale activity host must not load Leaflet");
+}
+console.log("ok  inline map mount respects stale generation ownership");

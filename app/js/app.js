@@ -338,6 +338,16 @@ async function render(generation = renderGeneration) {
   avatarEl.classList.toggle("is-empty", !user);
   avatarEl.innerHTML = views.avatarHTML(user);
   if (!notificationsActive) renderNotificationChrome(user, false, generation);
+  if (page === "activity") {
+    const mapHost = viewEl.querySelector("#activity-map");
+    if (mapHost) {
+      void import("./js/map.js").then(({ mountActivityMap }) => {
+        mountActivityMap(mapHost, {
+          ownsGeneration: () => generation === renderGeneration,
+        });
+      });
+    }
+  }
   window.scrollTo({ top: 0 });
   viewEl.focus({ preventScroll: true });
   prevPage = page;
@@ -767,6 +777,20 @@ document.addEventListener("click", async (e) => {
       render();
       break;
 
+    case "reset-week-venue": {
+      const control = el;
+      withBusyControl(control, "Resetting\u2026", async () => {
+        try {
+          await store.setWeekVenue(el.dataset.session, { location: null, mapsQuery: null });
+          toast("Venue reset to the activity default");
+          await renderWithFeedback();
+        } catch (err) {
+          toast(err.message || "Unable to reset venue", true);
+        }
+      }, { busyKey: control });
+      break;
+    }
+
     case "copy-fps":
       if (el.dataset.phone && navigator.clipboard?.writeText) {
         await navigator.clipboard.writeText(el.dataset.phone);
@@ -1007,6 +1031,26 @@ document.addEventListener("submit", async (e) => {
       } catch (err) {
         toast(err.message || "Unable to record gym confirmation", true);
       }
+      break;
+    }
+
+    case "form-week-venue": {
+      e.preventDefault();
+      const control = form.querySelector('[type="submit"]');
+      const controls = [...form.querySelectorAll("input, button")];
+      const fd = new FormData(form);
+      await withBusyControl(control, "Saving\u2026", async () => {
+        try {
+          await store.setWeekVenue(form.dataset.session, {
+            location: fd.get("location"),
+            mapsQuery: fd.get("mapsQuery"),
+          });
+          toast("Venue saved for this week");
+          await renderWithFeedback();
+        } catch (err) {
+          toast(err.message || "Unable to save venue", true);
+        }
+      }, { busyKey: form, controls });
       break;
     }
 

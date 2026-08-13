@@ -128,6 +128,40 @@ any database containing users or application objects. Its safety gate requires
 an explicitly acknowledged, empty target. Exercise the gate without applying
 migrations with:
 
+## Free-event venue overrides
+
+Weekly free-event venues (`wnt`, `run`, `water`) live in the new
+`operational_session_venue_overrides` table and the
+`set_session_venue(p_session_id text, p_location text, p_maps_query text,
+p_was_tbc boolean)` RPC. The RPC is the only mutation path. HYROX sessions
+are rejected with `Activity venue is fixed.`. Members see the first
+confirmation per session; Admins see an audit notification on every actual
+save/reset, excluding the actor.
+
+Apply the migration after the operational backend chain:
+
+```bash
+export ITC_OPERATIONS_TEST_DATABASE_URL='postgresql://...disposable database...'
+export ITC_ALLOW_DATABASE_RESET=1
+bash supabase/tests/verify_operational_backend.sh
+```
+
+Browser-level acceptance on the deployed environment:
+
+1. As an Admin, sign in and open **Admin Tools → Payments / Ops → Free-event
+   venues**. Save a dated display location and geocode query.
+2. Open the dated activity page with `localStorage.removeItem("itc.geocode.v1")`.
+   Confirm the Leaflet marker, attribution, and external Get directions link.
+3. Confirm an approved member receives **Venue confirmed** and another Admin
+   receives **Session venue updated**. The actor must not receive a duplicate
+   notification.
+4. Edit and then reset the venue; members are not notified again.
+5. Block `unpkg.com` and `nominatim.openstreetmap.org` separately. Both
+   failure paths must settle on the fallback copy without breaking the
+   external Get directions link.
+6. Open both HYROX activity pages. Get directions must appear without a
+   weekly venue form.
+
 ```bash
 bash supabase/tests/verify_giving_campaigns.sh --safety-check-only
 bash supabase/tests/verify_giving_campaigns_safety.sh
