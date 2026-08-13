@@ -20,6 +20,7 @@ const LIVE_TABLES = [
   "operational_receipts",
   "collector_assignments",
   "collector_payout_profiles",
+  "operational_session_venue_overrides",
 ];
 
 const cutoverMarker = "itc.live.operations.backend.v1";
@@ -32,6 +33,7 @@ const liveCache = {
   receipts: [],
   assignments: new Map(),
   payout: new Map(),
+  venueOverrides: new Map(),
   loaded: false,
   loading: null,
   error: null,
@@ -175,6 +177,18 @@ function buildPayoutRow(row) {
   };
 }
 
+function buildVenueOverrideRow(row) {
+  return {
+    sessionId: row.session_id,
+    activityId: row.activity_id,
+    location: row.location || null,
+    mapsQuery: row.maps_query || null,
+    setBy: row.set_by || null,
+    setAt: row.set_at ? Date.parse(row.set_at) : null,
+    memberNotifiedAt: row.member_notified_at ? Date.parse(row.member_notified_at) : null,
+  };
+}
+
 function replaceState(payload) {
   liveCache.sessions = new Map(payload.sessions.map((row) => [row.id, row]));
   liveCache.templates = payload.templates || [];
@@ -186,6 +200,9 @@ function replaceState(payload) {
   );
   liveCache.payout = new Map(
     payload.payouts.map((row) => [row.profileId, row])
+  );
+  liveCache.venueOverrides = new Map(
+    (payload.venueOverrides || []).map((row) => [row.sessionId, row])
   );
   liveCache.loaded = true;
   liveCache.error = null;
@@ -226,6 +243,7 @@ function operationalProblem(error) {
   if (message.includes("Waitlist is only for full sessions")) return new Error("Waitlist is only for full sessions.");
   if (message.includes("Session is not full")) return new Error("Session is not full.");
   if (message.includes("Interest list is only")) return new Error("Interest list is only for closed Midtown sessions.");
+  if (message.includes("Activity venue is fixed.")) return new Error("Activity venue is fixed.");
   return new Error(message || "Unable to save — try again.");
 }
 
@@ -234,7 +252,7 @@ let hydrationPromise = null;
 async function fetchOperationalState() {
   if (!isLive() || !supabase) return null;
   const since = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
-  const [sessions, bookings, queues, receipts, assignments, payouts, templates] = await Promise.all([
+  const [sessions, bookings, queues, receipts, assignments, payouts, templates, venueOverrides] = await Promise.all([
     supabase.from("operational_sessions").select("*").gte("session_date", since).order("session_date"),
     supabase.from("operational_bookings").select("*"),
     supabase.from("operational_queue_entries").select("*")
@@ -244,8 +262,9 @@ async function fetchOperationalState() {
     supabase.from("collector_assignments").select("*"),
     supabase.from("collector_payout_profiles").select("*"),
     supabase.from("operational_activity_templates").select("*").eq("active", true).order("activity_id"),
+    supabase.from("operational_session_venue_overrides").select("*"),
   ]);
-  for (const result of [sessions, bookings, queues, receipts, assignments, payouts, templates]) {
+  for (const result of [sessions, bookings, queues, receipts, assignments, payouts, templates, venueOverrides]) {
     if (result.error) throw operationalProblem(result.error);
   }
   return {
@@ -256,6 +275,7 @@ async function fetchOperationalState() {
     receipts: (receipts.data || []).map(buildReceiptRow),
     assignments: (assignments.data || []).map(buildAssignmentRow),
     payouts: (payouts.data || []).map(buildPayoutRow),
+    venueOverrides: (venueOverrides.data || []).map(buildVenueOverrideRow),
   };
 }
 
@@ -339,6 +359,9 @@ export async function startOperationalRealtime() {
       () => scheduleRealtimeRefresh())
     .on("postgres_changes",
       { event: "*", schema: "public", table: "collector_payout_profiles" },
+      () => scheduleRealtimeRefresh())
+    .on("postgres_changes",
+      { event: "*", schema: "public", table: "operational_session_venue_overrides" },
       () => scheduleRealtimeRefresh())
     .subscribe();
   subscription = channel;
@@ -428,6 +451,14 @@ export function liveAssigneeForWeek(saturdayISO) {
 
 export function livePayoutFor(profileId) {
   return liveCache.payout.get(profileId) || null;
+}
+
+export function getLiveVenueOverride(sessionId) {
+  return liveCache.venueOverrides.get(sessionId) || null;
+}
+
+export function listLiveVenueOverrides() {
+  return [...liveCache.venueOverrides.values()];
 }
 
 export function liveReceiptsForUser(userId) {
@@ -535,6 +566,15 @@ export async function liveUpdatePayout(profileId, paymeLink, fpsPhone) {
     p_profile_id: profileId,
     p_payme_link: paymeLink || "",
     p_fps_phone: fpsPhone || "",
+  });
+}
+
+export async function liveSetWeekVenue(sessionId, { location, mapsQuery, wasTBC }) {
+  return runOperationalRpc("set_session_venue", {
+    p_session_id: sessionId,
+    p_location: String(location || "").trim() || null,
+    p_maps_query: String(mapsQuery || "").trim() || null,
+    p_was_tbc: !!wasTBC,
   });
 }
 

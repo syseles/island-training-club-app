@@ -1145,7 +1145,7 @@ export function getSession(sessionId) {
     if (live) return live;
     // Free events live only in local state; the live cache has no row.
     const local = findSession(state.activities, sessionId);
-    if (local) return decorateSession(local);
+    if (local) return decorateFreeSession(local);
     return null;
   }
   const s = findSession(state.activities, sessionId);
@@ -1164,7 +1164,35 @@ function decorateSession(s) {
   if (o.midtownOpen) out.midtownOpen = true;
   if (o.gymConfirmedAt) out.gymConfirmedAt = o.gymConfirmedAt;
   if (o.gymNote) out.gymNote = o.gymNote;
+  if (o.location) out.location = o.location;
+  if (o.mapsQuery) out.mapsQuery = o.mapsQuery;
+  if (o.location || o.mapsQuery) out.venueTBC = false;
   return out;
+}
+
+function decorateFreeSession(s) {
+  const o = liveOps.getLiveVenueOverride(s.id);
+  if (!o) return s;
+  const out = { ...s };
+  if (o.location) out.location = o.location;
+  if (o.mapsQuery) out.mapsQuery = o.mapsQuery;
+  if (o.location || o.mapsQuery) out.venueTBC = false;
+  return out;
+}
+
+export function weekVenueOverride(sessionId) {
+  const value = isLive()
+    ? liveOps.getLiveVenueOverride(sessionId)
+    : state.sessionOverrides[sessionId];
+  if (!value) return { location: "", mapsQuery: "" };
+  const notifiedAt = isLive()
+    ? value.memberNotifiedAt
+    : value.venueMemberNotifiedAt;
+  return {
+    location: value.location || "",
+    mapsQuery: value.mapsQuery || "",
+    ...(notifiedAt ? { venueMemberNotifiedAt: notifiedAt } : {}),
+  };
 }
 
 // --- Next relevant activity (home) ---------------------------------------------------
@@ -1470,6 +1498,88 @@ export function confirmGymBooking(sessionId, note, now = Date.now()) {
   override.gymNote = String(note || "").trim() || undefined;
   save();
   return override;
+}
+
+// Per-week free-event venue overrides. Admin only. Local mode fans out
+// notifications and dedupes per member; live mode delegates both to the
+// trusted `set_session_venue` RPC.
+export function setWeekVenue(sessionId, { location, mapsQuery } = {}) {
+  const cleanLocation = String(location || "").trim();
+  const cleanMapsQuery = String(mapsQuery || "").trim();
+  const overrideActivityId = String(sessionId).replace(/-\d{4}-\d{2}-\d{2}$/, "");
+  if (!new Set(["wnt", "run", "water"]).has(overrideActivityId)) {
+    throw new Error("Activity venue is fixed.");
+  }
+  const before = getSession(sessionId);
+  if (isLive()) {
+    const wasTBC = before?.location === "TBC" || !before?.mapsQuery;
+    return liveOps.liveSetWeekVenue(sessionId, {
+      location: cleanLocation,
+      mapsQuery: cleanMapsQuery,
+      wasTBC,
+    });
+  }
+  if (!before || before.kind !== "free") throw new Error("Session not found.");
+  const wasTBC = before.location === "TBC" || !before.mapsQuery;
+  requirePaymentAdminActor();
+  const actor = currentUser();
+  const override = (state.sessionOverrides[sessionId] ||= {});
+  const previousLocation = override.location || "";
+  const previousMapsQuery = override.mapsQuery || "";
+  const previousNotified = override.venueMemberNotifiedAt || null;
+  const cleared = cleanLocation === "" && cleanMapsQuery === "";
+  const changed = previousLocation !== cleanLocation || previousMapsQuery !== cleanMapsQuery;
+  if (!changed) {
+    return { sessionId, activityId: overrideActivityId, ...override, unchanged: true };
+  }
+  override.location = cleanLocation || undefined;
+  override.mapsQuery = cleanMapsQuery || undefined;
+  override.setAt = Date.now();
+  override.setBy = actor?.id || null;
+  override.venueMemberNotifiedAt = previousNotified;
+  const destination = `#/activity/${sessionId}`;
+  const sessionLabel = (() => {
+    const parts = sessionId.split("-");
+    return `${overrideActivityId} on ${parts[1]}-${parts[2]}-${parts[3]}`;
+  })();
+  if (wasTBC && !cleared && !override.venueMemberNotifiedAt) {
+    override.venueMemberNotifiedAt = Date.now();
+    for (const user of state.users) {
+      if (user?.status !== "approved" || user.role !== "member") continue;
+      state.notifications.push({
+        id: uid("n"),
+        userId: user.id,
+        kind: "operational_session_venue_updated",
+        title: "Venue confirmed",
+        body: `${sessionLabel} is at ${cleanLocation}. Check the activity page for details.`,
+        link: destination,
+        destination,
+        read: false,
+        createdAt: Date.now(),
+      });
+    }
+  }
+  for (const user of state.users) {
+    if (user?.status !== "approved") continue;
+    if (user.role !== "admin" && user.role !== "superadmin" && user.role !== "super_admin") continue;
+    if (actor && user.id === actor.id) continue;
+    const body = cleared
+      ? `Admin reset the venue for ${sessionId} to the activity default.`
+      : `Admin set the venue for ${sessionId} to ${cleanLocation}.`;
+    state.notifications.push({
+      id: uid("n"),
+      userId: user.id,
+      kind: "operational_session_venue_updated",
+      title: "Session venue updated",
+      body,
+      link: destination,
+      destination,
+      read: false,
+      createdAt: Date.now(),
+    });
+  }
+  save();
+  return { sessionId, activityId: overrideActivityId, ...override };
 }
 
 // --- Giving (FPS donations) -----------------------------------------------------

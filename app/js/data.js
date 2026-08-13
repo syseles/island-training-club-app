@@ -410,6 +410,7 @@ const NOTIFICATION_CATEGORIES = new Map([
   // specific role kinds were introduced.
   ["admin_role_changed", "role"],
   ["giving_campaign_published", "club"],
+  ["operational_session_venue_updated", "club"],
 ]);
 
 export function notificationCategory(kind) {
@@ -446,10 +447,12 @@ export function notificationHktTime(value) {
   return `${formatted.replace(/\b(am|pm)\b/i, (period) => period.toUpperCase())} HKT`;
 }
 
-export function notificationDestination(kind) {
+export function notificationDestination(kind, destination = null) {
+  if (typeof destination === "string" && destination.startsWith("#/")) return destination;
   const normalizedKind = notificationKind(kind);
   if (normalizedKind === "admin_application_submitted") return "#/admin/approvals";
   if (normalizedKind.startsWith("admin_")) return "#/admin/members";
+  if (normalizedKind === "operational_session_venue_updated") return "#/schedule";
   if (normalizedKind === "giving_campaign_published") return "#/giving";
   return "#/account";
 }

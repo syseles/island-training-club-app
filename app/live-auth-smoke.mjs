@@ -175,6 +175,7 @@ const operationalTableRows = {
   operational_receipts: [],
   collector_assignments: [],
   collector_payout_profiles: [],
+  operational_session_venue_overrides: [],
 };
 let authStateChangeHandler = null;
 let authCallbackLocked = false;
@@ -184,6 +185,7 @@ let releaseOAuth = null;
 let signOutCalls = 0;
 let releaseSignOut = null;
 const deferredAuthTasks = [];
+const LIVE_TABLES_COUNT = 7;
 const fixedIso = "2026-08-05T02:00:00.000Z";
 const RealDate = Date;
 globalThis.Date = class extends RealDate {
@@ -680,6 +682,30 @@ operationalRpcHandler = (name, args) => {
     session.gym_note = args.p_note || null;
     return Promise.resolve({ data: session, error: null });
   }
+  if (name === "set_session_venue") {
+    const sessionId = args.p_session_id;
+    const activityId = String(sessionId || "").replace(/-\d{4}-\d{2}-\d{2}$/, "");
+    if (!["wnt", "run", "water"].includes(activityId)) {
+      return Promise.resolve({ data: null, error: { message: "Activity venue is fixed." } });
+    }
+    const existing = operationalTableRows.operational_session_venue_overrides
+      .find((row) => row.session_id === sessionId);
+    const next = {
+      session_id: sessionId,
+      activity_id: activityId,
+      location: String(args.p_location || "").trim() || null,
+      maps_query: String(args.p_maps_query || "").trim() || null,
+      set_by: actingProfile,
+      set_at: now,
+      member_notified_at: existing?.member_notified_at || null,
+    };
+    if (existing) Object.assign(existing, next);
+    else operationalTableRows.operational_session_venue_overrides.push(next);
+    if (args.p_was_tbc && !existing?.member_notified_at && next.location && next.maps_query) {
+      next.member_notified_at = now;
+    }
+    return Promise.resolve({ data: next, error: null });
+  }
   return Promise.resolve({ data: null, error: null });
 };
 
@@ -698,6 +724,56 @@ assert.match(appSource, /case "save-draft"/);
 assert.match(appSource, /case "discard-draft"/);
 assert.match(appSource, /store\.saveApplyDraft/);
 assert.match(appSource, /store\.clearApplyDraft/);
+
+await store.setWeekVenue("wnt-2026-08-05", {
+  location: "Central Harbourfront — 7pm sharp",
+  mapsQuery: "Central Harbourfront, Hong Kong",
+  wasTBC: true,
+});
+operationalTableRows.operational_session_venue_overrides.push({
+  session_id: "wnt-2026-08-05",
+  activity_id: "wnt",
+  location: "Central Harbourfront — 7pm sharp",
+  maps_query: "Central Harbourfront, Hong Kong",
+  set_by: authUser.id,
+  set_at: fixedIso,
+  member_notified_at: fixedIso,
+});
+await operations.refreshOperationalState();
+const lastVenueCall = operationalRpcCalls
+  .filter((call) => call.name === "set_session_venue")
+  .at(-1);
+assert.equal(lastVenueCall.args.p_session_id, "wnt-2026-08-05");
+assert.equal(lastVenueCall.args.p_location, "Central Harbourfront — 7pm sharp");
+assert.equal(lastVenueCall.args.p_maps_query, "Central Harbourfront, Hong Kong");
+assert.equal(lastVenueCall.args.p_was_tbc, true);
+assert.equal(lastVenueCall.name, "set_session_venue");
+assert.deepEqual(operations.getLiveVenueOverride("wnt-2026-08-05"), {
+  sessionId: "wnt-2026-08-05",
+  activityId: "wnt",
+  location: "Central Harbourfront — 7pm sharp",
+  mapsQuery: "Central Harbourfront, Hong Kong",
+  setBy: authUser.id,
+  setAt: Date.parse(fixedIso),
+  memberNotifiedAt: Date.parse(fixedIso),
+});
+const venueChannel = operationalSubscriptions
+  .flatMap((channel) => channel.handlers)
+  .filter((handler) => handler);
+assert.ok(
+  operationalSubscriptions.some((channel) =>
+    channel.handlers.length >= LIVE_TABLES_COUNT),
+  "Realtime channel should subscribe to every operational table including venue overrides"
+);
+await assert.rejects(
+  () => store.setWeekVenue("hyrox-2026-08-22", {
+    location: "x",
+    mapsQuery: "y",
+    wasTBC: true,
+  }),
+  (err) => err?.message === "Activity venue is fixed.",
+);
+assert.equal(operations.operationalStateStatus().loaded, true);
 
 const signedOutHome = views.viewHome();
 assert.match(signedOutHome, /data-action="sign-in-google"[^>]*>Continue with Google</);
