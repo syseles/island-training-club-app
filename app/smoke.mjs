@@ -2048,6 +2048,48 @@ if (weekOverride.location !== "Causeway Bay Promenade — 7pm sharp"
     || weekOverride.mapsQuery !== "Causeway Bay Promenade, Hong Kong") {
   throw new Error("weekVenueOverride must expose the latest saved values");
 }
+// View: free event with a mapsQuery renders the inline map host + Get directions.
+const freeDetail = views.viewActivity(wntSession.id);
+if (!freeDetail.includes('id="activity-map"')
+    || !freeDetail.includes("Loading map")
+    || !freeDetail.includes("data-marker-label=")
+    || !freeDetail.includes("Get directions")) {
+  throw new Error("mapped free event must render the inline map host and directions");
+}
+const noMapsSession = store.upcomingSessions(21)
+  .filter((s) => s.activityId === "wnt" && !data.sessionStarted(s))
+  .find((s) => s.id !== wntSession.id);
+if (!noMapsSession) throw new Error("expected a second upcoming wnt session for the no-map case");
+store.setVenueTBC(noMapsSession.id, true);
+const tbcDetail = views.viewActivity(noMapsSession.id);
+if (tbcDetail.includes('id="activity-map"')) {
+  throw new Error("free events without mapsQuery must not render the inline map");
+}
+const hyroxDetailSample = store.upcomingSessions(21).find((s) => s.activityId === "hyrox" && !data.sessionStarted(s));
+const hyroxDetail = views.viewActivity(hyroxDetailSample.id);
+if (!hyroxDetail.includes("Get directions") || hyroxDetail.includes('id="activity-map"')) {
+  throw new Error("paid HYROX sessions must expose Get directions without the inline map");
+}
+const midtownSample = store.upcomingSessions(21).find((s) => s.activityId === "hyrox-midtown" && !data.sessionStarted(s));
+const midtownDetail = views.viewActivity(midtownSample.id);
+if (!midtownDetail.includes("Get directions") || midtownDetail.includes('id="activity-map"')) {
+  throw new Error("closed Midtown must expose Get directions without the inline map");
+}
+// Admin Ops renders the free-event venue forms with separate location/mapsQuery inputs.
+store.signIn("admin@example.test");
+const opsHtml = await views.viewAdmin("payments");
+if (!opsHtml.includes("Free-event venues")) {
+  throw new Error("Admin Ops must include the Free-event venues section");
+}
+if (!opsHtml.includes(`data-action="form-week-venue" data-session="${wntSession.id}"`)
+    || !opsHtml.includes(`name="location"`)
+    || !opsHtml.includes(`name="mapsQuery"`)) {
+  throw new Error("Free-event venue form must render distinct location + mapsQuery inputs");
+}
+if (opsHtml.match(/data-action="form-week-venue" data-session="hyrox-[^"]+"/)) {
+  throw new Error("HYROX sessions must not render a weekly venue form");
+}
+store.signOut();
 // Members cannot set a weekly venue.
 store.signIn("member@example.test");
 try {

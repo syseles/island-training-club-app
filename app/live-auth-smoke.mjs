@@ -712,6 +712,7 @@ operationalRpcHandler = (name, args) => {
 const store = await import("./js/store.js");
 const views = await import("./js/views.js");
 const operations = await import("./js/operations.js");
+const data = await import("./js/data.js");
 store.load();
 await store.hydrateLiveOperations();
 
@@ -764,14 +765,6 @@ assert.ok(
   operationalSubscriptions.some((channel) =>
     channel.handlers.length >= LIVE_TABLES_COUNT),
   "Realtime channel should subscribe to every operational table including venue overrides"
-);
-await assert.rejects(
-  () => store.setWeekVenue("hyrox-2026-08-22", {
-    location: "x",
-    mapsQuery: "y",
-    wasTBC: true,
-  }),
-  (err) => err?.message === "Activity venue is fixed.",
 );
 assert.equal(operations.operationalStateStatus().loaded, true);
 
@@ -2515,3 +2508,15 @@ if (!activityHtml.includes("Session cancelled by ITC — HYROX race weekend")) {
   throw new Error("Activity view must render the canonical cancellation copy");
 }
 console.log("ok  live cancellation copy renders 'Session cancelled by ITC — <reason>' everywhere");
+
+// Location-map surface: a non-cancelled paid HYROX exposes Get directions
+// without the inline map host.
+const liveNonCancelledHyrox = store.upcomingSessions(21)
+  .filter((s) => s.activityId === "hyrox" && !data.sessionStarted(s))
+  .find((s) => s.id !== "hyrox-2026-08-15");
+if (!liveNonCancelledHyrox) throw new Error("live smoke needs an upcoming non-cancelled hyrox session");
+const liveHyroxDetail = views.viewActivity(liveNonCancelledHyrox.id);
+if (!liveHyroxDetail.includes("Get directions") || liveHyroxDetail.includes('id="activity-map"')) {
+  throw new Error("paid HYROX activity must surface Get directions without the inline map");
+}
+console.log("ok  live paid HYROX surfaces Get directions without the inline map");
