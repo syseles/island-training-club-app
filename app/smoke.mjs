@@ -288,6 +288,24 @@ if (localVisitorHome.includes('data-action="sign-in-google"')) {
 console.log("ok  signed-out Home uses the correct live/local sign-in action");
 await check("home (visitor)", () => views.viewHome());
 await check("schedule", () => views.viewSchedule());
+
+// Schedule filters: Free/Paid kind filters removed; category filters remain.
+{
+  const schedHtml = views.viewSchedule();
+  for (const removed of ['data-filter="free"', 'data-filter="paid"']) {
+    if (schedHtml.includes(removed)) {
+      failures++;
+      console.error(`FAIL Schedule should not render the ${removed} filter chip`);
+    }
+  }
+  for (const kept of ['data-filter="all"', 'data-filter="Run"', 'data-filter="Strength"', 'data-filter="HYROX"', 'data-filter="Water"']) {
+    if (!schedHtml.includes(kept)) {
+      failures++;
+      console.error(`FAIL Schedule should keep the ${kept} filter chip`);
+    }
+  }
+  console.log("ok  Schedule drops Free/Paid filters, keeps category filters");
+}
 const hyroxSid = store.nextSession().kind === "paid" ? store.nextSession().id : null;
 await check("activity paid (visitor)", () => views.viewActivity(paid.id));
 await check("activity free (visitor)", () => views.viewActivity(free.id));
