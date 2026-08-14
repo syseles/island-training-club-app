@@ -65,6 +65,7 @@ security definer
 set search_path = public
 as $$
 declare
+  v_session_id text;
   v_actor uuid := auth.uid();
   v_activity_id text;
   v_location text;
