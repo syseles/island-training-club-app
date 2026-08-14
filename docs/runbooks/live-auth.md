@@ -149,6 +149,10 @@ Venue Overrides**.
 Recurring Swimming remains `TBC` in the activity template. Only dated weekly
 free-event overrides are shared through `set_session_venue`.
 
+Mapping privacy: Nominatim receives the venue text submitted for geocoding and
+the browser's IP address. The browser cache is device-local and stores only
+venue coordinates; it does not contain member or attendance data.
+
 Deploy the location updates after the operational backend chain in this order:
 
 1. `20260813000001_free_event_venue_overrides.sql`

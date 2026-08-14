@@ -76,6 +76,7 @@ declare
   v_should_notify_members boolean := false;
   v_destination text;
   v_session_label text;
+  v_actor_label text;
 begin
   perform public.operational_assert_admin('set_session_venue');
 
@@ -92,11 +93,26 @@ begin
   v_location := nullif(trim(p_location), '');
   v_maps_query := nullif(trim(p_maps_query), '');
 
-  -- Lock an existing row, if any, so concurrent admins serialize.
+  select coalesce(nullif(trim(full_name), ''), email, 'Admin')
+    into v_actor_label
+    from public.profiles
+   where id = v_actor;
+  v_actor_label := coalesce(v_actor_label, 'Admin');
+
+  -- A row lock cannot serialize the first insert because no row exists yet.
+  -- Lock the dated session key first so concurrent first saves cannot both
+  -- fan out member notifications or overwrite the dedupe timestamp.
+  perform pg_advisory_xact_lock(hashtext('set_session_venue'), hashtext(v_session_id));
+
   select * into v_existing
     from public.operational_session_venue_overrides
    where session_id = v_session_id
    for update;
+
+  -- Resetting a session that has never had an override is a true no-op.
+  if v_existing.session_id is null and v_location is null and v_maps_query is null then
+    return v_existing;
+  end if;
 
   v_changed := (v_existing.location is distinct from v_location)
                or (v_existing.maps_query is distinct from v_maps_query);
@@ -118,17 +134,26 @@ begin
   returning * into v_saved;
 
   v_destination := '#/activity/' || v_session_id;
-  v_session_label := v_activity_id || ' on ' || split_part(v_session_id, '-', 2)
-                     || '-' || split_part(v_session_id, '-', 3)
-                     || '-' || split_part(v_session_id, '-', 4);
+  v_session_label := case v_activity_id
+    when 'wnt' then 'Wednesday Night Training'
+    when 'run' then 'ITC Run Club'
+    when 'water' then 'ITC Swimming'
+  end || ' on ' || substring(v_session_id from '([0-9]{4}-[0-9]{2}-[0-9]{2})$');
 
-  -- Member fan-out fires once per session when the venue moves from
-  -- TBC/empty to a real location, regardless of subsequent edits.
-  v_should_notify_members := coalesce(p_was_tbc, false)
-                             and v_existing.session_id is not null -- no first confirmation when brand new
-                             and v_existing.member_notified_at is null
+  -- Member fan-out fires once per session when both member-facing location
+  -- and map query become usable. A first complete row and completion of a
+  -- retained partial row are both real confirmations.
+  v_should_notify_members := v_existing.member_notified_at is null
                              and v_location is not null
-                             and v_maps_query is not null;
+                             and upper(v_location) <> 'TBC'
+                             and v_maps_query is not null
+                             and upper(v_maps_query) <> 'TBC'
+                             and (
+                               v_existing.session_id is null
+                               or v_existing.location is null
+                               or v_existing.maps_query is null
+                               or coalesce(p_was_tbc, false)
+                             );
 
   if v_should_notify_members then
     update public.operational_session_venue_overrides
@@ -154,9 +179,10 @@ begin
          'Session venue updated',
          case
            when v_location is null and v_maps_query is null then
-             format('Admin reset the venue for %s to the activity default.', v_session_id)
+             format('%s reset the venue for %s to the activity default.', v_actor_label, v_session_id)
            else
-             format('Admin set the venue for %s to %s.', v_session_id, v_location)
+             format('%s set the venue for %s to %s.',
+                    v_actor_label, v_session_id, coalesce(v_location, 'the activity default'))
          end,
          v_destination
     from public.profiles p

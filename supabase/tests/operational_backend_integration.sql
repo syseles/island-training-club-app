@@ -449,16 +449,37 @@ declare
   v_pending   constant uuid := 'cc000000-0000-0000-0000-00000000c001';
   v_session   constant text := 'wnt-2026-08-19';
   v_other_session constant text := 'wnt-2026-08-26';
+  v_reset_only_session constant text := 'water-2026-08-18';
+  v_partial_session constant text := 'water-2026-08-25';
   v_initial_count integer;
   v_after_edit_count integer;
   v_after_reset_count integer;
   v_after_reconfirm_count integer;
   v_member_notified_at timestamptz;
+  v_partial_member_count integer;
 begin
   perform ensure_operational_sessions(date '2026-08-01', 5);
 
   perform set_config('request.jwt.claim.sub', v_admin::text, true);
   set local role authenticated;
+
+  -- Reset with no retained override is a true no-op: no blank row and no
+  -- audit notification are created.
+  select count(*) into v_initial_count from public.notifications
+    where kind = 'operational_session_venue_updated';
+  perform public.set_session_venue(v_reset_only_session, null, null, false);
+  perform pg_temp.op_assert(
+    not exists (
+      select 1 from public.operational_session_venue_overrides
+       where session_id = v_reset_only_session
+    ),
+    'first blank reset does not create an override row'
+  );
+  perform pg_temp.op_assert(
+    (select count(*) from public.notifications
+      where kind = 'operational_session_venue_updated') = v_initial_count,
+    'first blank reset does not create audit notifications'
+  );
 
   -- First confirmation: TBC -> real venue. Members should be notified once,
   -- other Admins should be notified once, actor excluded.
@@ -506,6 +527,24 @@ begin
        where kind = 'operational_session_venue_updated'
          and destination = '#/activity/' || v_session) >= 4,
     'every notification carries the dated activity destination'
+  );
+  perform pg_temp.op_assert(
+    exists (
+      select 1 from public.notifications
+       where kind = 'operational_session_venue_updated'
+         and profile_id = v_member_a
+         and body = 'Wednesday Night Training on 2026-08-19 is at Central Harbourfront — 7pm sharp. Check the activity page for details.'
+    ),
+    'member copy uses the activity display name and dated venue'
+  );
+  perform pg_temp.op_assert(
+    exists (
+      select 1 from public.notifications
+       where kind = 'operational_session_venue_updated'
+         and profile_id = v_super
+         and body = 'Admin Test set the venue for wnt-2026-08-19 to Central Harbourfront — 7pm sharp.'
+    ),
+    'admin audit copy identifies the acting profile'
   );
 
   -- Subsequent edit (also TBC flag): only Admins receive a new audit row.
@@ -574,6 +613,54 @@ begin
     'reconfirmation after reset notifies only other admins'
   );
 
+  -- A partial row does not consume member dedupe or create blank copy. Once
+  -- both usable values are present, that same session confirms exactly once.
+  perform public.set_session_venue(
+    v_partial_session,
+    null,
+    'Victoria Park Swimming Pool, Hong Kong',
+    true
+  );
+  perform pg_temp.op_assert(
+    (select member_notified_at from public.operational_session_venue_overrides
+      where session_id = v_partial_session) is null,
+    'partial override does not consume member_notified_at'
+  );
+  perform pg_temp.op_assert(
+    not exists (
+      select 1 from public.notifications
+       where kind = 'operational_session_venue_updated'
+         and destination = '#/activity/' || v_partial_session
+         and profile_id in (v_member_a, v_member_b, v_member_c)
+    ),
+    'partial override creates no member notification copy'
+  );
+  perform public.set_session_venue(
+    v_partial_session,
+    'Victoria Park Swimming Pool',
+    'Victoria Park Swimming Pool, Hong Kong',
+    true
+  );
+  select count(*) into v_partial_member_count
+    from public.notifications
+   where kind = 'operational_session_venue_updated'
+     and destination = '#/activity/' || v_partial_session
+     and profile_id in (v_member_a, v_member_b, v_member_c);
+  perform pg_temp.op_assert(
+    v_partial_member_count = 3,
+    'completing a partial override notifies approved members exactly once'
+  );
+  perform pg_temp.op_assert(
+    exists (
+      select 1 from public.notifications
+       where kind = 'operational_session_venue_updated'
+         and profile_id = v_member_a
+         and destination = '#/activity/' || v_partial_session
+         and body = 'ITC Swimming on 2026-08-25 is at Victoria Park Swimming Pool. Check the activity page for details.'
+    ),
+    'completed partial override uses Swimming display copy'
+  );
+
   -- Cancel-related cancellation flag does not block override saves.
   update public.operational_sessions
      set cancelled_at = null, cancelled_by = null,
@@ -592,6 +679,86 @@ begin
   );
 
   reset role;
+end $$;
+
+-- Public venue details are selectable through the actual anon and
+-- authenticated roles, while every direct mutation privilege is denied.
+do $$
+declare
+  v_anon_count integer;
+  v_authenticated_count integer;
+begin
+  set local role anon;
+  select count(*) into v_anon_count
+    from public.operational_session_venue_overrides;
+  reset role;
+  perform pg_temp.op_assert(v_anon_count > 0, 'anon can select venue overrides');
+
+  perform set_config('request.jwt.claim.sub', 'bb000000-0000-0000-0000-00000000b001', true);
+  set local role authenticated;
+  select count(*) into v_authenticated_count
+    from public.operational_session_venue_overrides;
+  reset role;
+  perform pg_temp.op_assert(
+    v_authenticated_count = v_anon_count,
+    'authenticated clients can select the same public venue overrides'
+  );
+end $$;
+
+do $$
+declare
+  v_denials integer := 0;
+begin
+  perform set_config('request.jwt.claim.sub', 'ff000000-0000-0000-0000-00000000f001', true);
+  set local role authenticated;
+  begin
+    insert into public.operational_session_venue_overrides
+      (session_id, activity_id, location, maps_query)
+    values ('run-2026-09-07', 'run', 'Direct insert', 'Direct insert');
+  exception when insufficient_privilege then
+    v_denials := v_denials + 1;
+  end;
+  begin
+    update public.operational_session_venue_overrides
+       set location = 'Direct update'
+     where session_id = 'wnt-2026-08-19';
+  exception when insufficient_privilege then
+    v_denials := v_denials + 1;
+  end;
+  begin
+    delete from public.operational_session_venue_overrides
+     where session_id = 'wnt-2026-08-19';
+  exception when insufficient_privilege then
+    v_denials := v_denials + 1;
+  end;
+  reset role;
+  perform pg_temp.op_assert(
+    v_denials = 3,
+    'authenticated direct insert/update/delete are all denied'
+  );
+end $$;
+
+-- Super Admins mutate successfully through the trusted RPC.
+do $$
+begin
+  perform set_config('request.jwt.claim.sub', 'ff000000-0000-0000-0000-00000000f001', true);
+  set local role authenticated;
+  perform public.set_session_venue(
+    'run-2026-09-07',
+    'Tamar Park',
+    'Tamar Park, Hong Kong',
+    true
+  );
+  reset role;
+  perform pg_temp.op_assert(
+    exists (
+      select 1 from public.operational_session_venue_overrides
+       where session_id = 'run-2026-09-07'
+         and set_by = 'ff000000-0000-0000-0000-00000000f001'
+         and member_notified_at is not null
+    ),
+    'Super Admin RPC saves and records first member fan-out'
+  );
 end $$;
 
 -- Denial: ordinary members cannot call the RPC.
