@@ -11,6 +11,7 @@
 // any local mutation that would otherwise mask the failure.
 // ==========================================================================
 
+import { SEED_ACTIVITIES } from "./data.js";
 import { isLive, supabase } from "./config.js";
 
 const LIVE_TABLES = [
@@ -24,6 +25,12 @@ const LIVE_TABLES = [
 ];
 
 const cutoverMarker = "itc.live.operations.backend.v1";
+
+const PAID_ACTIVITY_METADATA = new Map(
+  SEED_ACTIVITIES
+    .filter((activity) => activity.kind === "paid")
+    .map((activity) => [activity.id, activity])
+);
 
 const liveCache = {
   sessions: new Map(),
@@ -69,6 +76,15 @@ function buildSessionRow(row) {
     ? row.session_date.slice(0, 10)
     : new Date(row.session_date).toISOString().slice(0, 10);
   const date = new Date(`${dateISO}T00:00:00`);
+  const metadata = PAID_ACTIVITY_METADATA.get(row.activity_id);
+  const legacyMidtown = row.activity_id === "hyrox-midtown"
+    && row.venue === "Midtown 28";
+  const venue = legacyMidtown
+    ? (metadata?.location || row.venue)
+    : row.venue;
+  const mapsQuery = legacyMidtown
+    ? (metadata?.mapsQuery || row.venue)
+    : row.venue;
   return {
     id: row.id,
     activityId: row.activity_id,
@@ -80,9 +96,10 @@ function buildSessionRow(row) {
     date,
     time: String(row.start_time || "").slice(0, 5),
     durationMin: row.duration_minutes,
-    location: row.venue,
-    mapsQuery: row.venue,
-    venue: row.venue,
+    location: venue,
+    mapsQuery,
+    venue,
+    photo: metadata?.photo || "../assets/itc/hyrox.webp",
     capacity: row.capacity,
     price: row.price_hkd,
     isOpen: row.is_open,

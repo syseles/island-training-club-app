@@ -169,7 +169,7 @@ const operationalTableRows = {
   operational_sessions: [],
   operational_activity_templates: [
     { activity_id: "hyrox", name: "ITC HYROX", venue: "BFT Causeway Bay", weekday: 6, start_time: "11:15:00", duration_minutes: 60, capacity: 20, price_hkd: 180, default_open: true, active: true },
-    { activity_id: "hyrox-midtown", name: "ITC HYROX", venue: "Midtown28 Fitness", weekday: 6, start_time: "11:00:00", duration_minutes: 60, capacity: 12, price_hkd: 180, default_open: false, active: true },
+    { activity_id: "hyrox-midtown", name: "ITC HYROX", venue: "Midtown 28", weekday: 6, start_time: "11:00:00", duration_minutes: 60, capacity: 12, price_hkd: 180, default_open: false, active: true },
   ],
   operational_bookings: [],
   operational_queue_entries: [],
@@ -531,7 +531,7 @@ for (let i = 0; i < 4; i++) {
     session_date: iso,
     start_time: "11:00:00",
     duration_minutes: 60,
-    venue: "Midtown28 Fitness",
+    venue: "Midtown 28",
     capacity: 12,
     price_hkd: 180,
     is_open: false,
@@ -579,7 +579,7 @@ operationalTableRows.operational_sessions.push({
   session_date: aug15Iso,
   start_time: "11:00:00",
   duration_minutes: 60,
-  venue: "Midtown28 Fitness",
+  venue: "Midtown 28",
   capacity: 12,
   price_hkd: 180,
   is_open: false,
@@ -725,6 +725,39 @@ const operations = await import("./js/operations.js");
 const data = await import("./js/data.js");
 store.load();
 await store.hydrateLiveOperations();
+
+const hydratedBft = store.upcomingSessions(21)
+  .find((session) => session.activityId === "hyrox");
+const hydratedMidtown = store.upcomingSessions(21)
+  .find((session) => session.activityId === "hyrox-midtown");
+assert.equal(hydratedBft.photo, "../assets/itc/hyrox.webp");
+assert.equal(hydratedMidtown.photo, "../assets/itc/hyrox.webp");
+assert.equal(hydratedMidtown.location, "Midtown28 Fitness");
+assert.equal(hydratedMidtown.venue, "Midtown28 Fitness");
+assert.equal(hydratedMidtown.mapsQuery, "Midtown28 Fitness, Hong Kong");
+for (const html of [
+  views.viewActivity(hydratedBft.id),
+  views.viewActivity(hydratedMidtown.id),
+]) {
+  assert.match(html, /class="detail-photo" src="\.\.\/assets\/itc\/hyrox\.webp"/);
+}
+
+const customMidtownFixture = operationalTableRows.operational_sessions
+  .find((row) => row.id === hydratedMidtown.id);
+assert.ok(customMidtownFixture, "live smoke needs a Midtown fixture to mutate");
+customMidtownFixture.venue = "Custom Midtown Venue";
+try {
+  await operations.refreshOperationalState();
+  const customMidtown = store.upcomingSessions(21)
+    .find((session) => session.id === hydratedMidtown.id);
+  assert.equal(customMidtown.location, "Custom Midtown Venue");
+  assert.equal(customMidtown.venue, "Custom Midtown Venue");
+  assert.equal(customMidtown.mapsQuery, "Custom Midtown Venue");
+  assert.equal(customMidtown.photo, "../assets/itc/hyrox.webp");
+} finally {
+  customMidtownFixture.venue = "Midtown 28";
+  await operations.refreshOperationalState();
+}
 
 const appSource = readFileSync(resolve(__dirnameSmoke, "js/app.js"), "utf8");
 assert.match(appSource, /form\.dataset\.form === "apply"/);
