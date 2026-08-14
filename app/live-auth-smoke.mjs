@@ -2120,6 +2120,35 @@ assert.match(viewEl.innerHTML, /Confirmed with gym/);
 assert.match(viewEl.innerHTML, /Confirmed 18 with BFT/);
 console.log("ok  delegated gym confirmation persists and rerenders confirmed state");
 
+const swimmingSession = store.upcomingSessions(21)
+  .find((session) => session.activityId === "water" && !data.sessionStarted(session));
+assert.ok(swimmingSession, "live smoke needs an upcoming Swimming session");
+
+const weeklyVenueForm = new HTMLFormElement();
+weeklyVenueForm.id = "";
+weeklyVenueForm.dataset = {
+  action: "form-week-venue",
+  session: swimmingSession.id,
+};
+weeklyVenueForm.fields = {
+  location: "Victoria Park Swimming Pool",
+  mapsQuery: "Victoria Park Swimming Pool, Hong Kong",
+};
+const weeklySubmit = makeElement();
+weeklySubmit.type = "submit";
+weeklyVenueForm.querySelector = (selector) => selector === '[type="submit"]' ? weeklySubmit : null;
+weeklyVenueForm.querySelectorAll = () => [weeklySubmit];
+
+await domListeners.get("submit")({ target: weeklyVenueForm, preventDefault() {} });
+await new Promise(setImmediate);
+const weeklyVenueCall = operationalRpcCalls
+  .filter((call) => call.name === "set_session_venue")
+  .at(-1);
+assert.equal(weeklyVenueCall.args.p_session_id, swimmingSession.id);
+assert.equal(weeklyVenueCall.args.p_location, "Victoria Park Swimming Pool");
+assert.equal(weeklyVenueCall.args.p_maps_query, "Victoria Park Swimming Pool, Hong Kong");
+console.log("ok  delegated weekly venue submit persists repeated-form values");
+
 // Legacy member-management URLs canonicalize instead of rendering the removed
 // row/avatar implementation.
 location.hash = "#/admin/users";

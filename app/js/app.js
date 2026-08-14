@@ -837,7 +837,9 @@ document.addEventListener("submit", async (e) => {
     return;
   }
 
-  switch (form.id) {
+  const formAction = form.id || form.dataset.action;
+
+  switch (formAction) {
     case "form-signin": {
       e.preventDefault();
       const email = new FormData(form).get("email");
