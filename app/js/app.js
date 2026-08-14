@@ -12,6 +12,25 @@ const navEl = document.getElementById("bottom-nav");
 const notificationEl = document.getElementById("top-notifications");
 const avatarEl = document.getElementById("top-avatar");
 const toastStack = document.getElementById("toast-stack");
+const MAP_FALLBACK_HTML = `<p class="muted small activity-map-fallback" role="status">Couldn't find the venue on the map — tap Get directions instead.</p>`;
+
+export function loadActivityMapModule() {
+  return import("./map.js");
+}
+
+export async function mountCommittedActivityMap(host, options = {}) {
+  const {
+    ownsGeneration = () => true,
+    loadModule = loadActivityMapModule,
+  } = options;
+  try {
+    const { mountActivityMap } = await loadModule();
+    return await mountActivityMap(host, { ownsGeneration });
+  } catch (_err) {
+    if (ownsGeneration() && host?.isConnected) host.innerHTML = MAP_FALLBACK_HTML;
+    return false;
+  }
+}
 
 // --- Toasts --------------------------------------------------------------------
 
@@ -341,10 +360,8 @@ async function render(generation = renderGeneration) {
   if (page === "activity") {
     const mapHost = viewEl.querySelector("#activity-map");
     if (mapHost) {
-      void import("./js/map.js").then(({ mountActivityMap }) => {
-        mountActivityMap(mapHost, {
-          ownsGeneration: () => generation === renderGeneration,
-        });
+      void mountCommittedActivityMap(mapHost, {
+        ownsGeneration: () => generation === renderGeneration,
       });
     }
   }

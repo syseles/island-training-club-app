@@ -162,6 +162,7 @@ let givingCampaignListError = null;
 let givingCampaignRows = [];
 let operationalRpcHandler = null;
 let operationalAuthSubOverride = null;
+let operationalVenueOverrideReadError = null;
 const operationalRpcCalls = [];
 const operationalSubscriptions = [];
 const operationalTableRows = {
@@ -442,7 +443,16 @@ const fakeSupabase = {
     }
     if (table in operationalTableRows) {
       const rows = operationalTableRows[table];
-      const thenable = () => Promise.resolve({ data: rows.slice(), error: null });
+      const result = () => {
+        const error = table === "operational_session_venue_overrides"
+          ? operationalVenueOverrideReadError
+          : null;
+        if (table === "operational_session_venue_overrides") {
+          operationalVenueOverrideReadError = null;
+        }
+        return { data: error ? null : rows.slice(), error };
+      };
+      const thenable = () => Promise.resolve(result());
       const chain = {
         order: thenable,
         gte: () => chain,
@@ -453,7 +463,7 @@ const fakeSupabase = {
         is: () => chain,
         match: () => chain,
         then(resolve, reject) {
-          return Promise.resolve({ data: rows.slice(), error: null }).then(resolve, reject);
+          return Promise.resolve(result()).then(resolve, reject);
         },
       };
       return { select: () => chain };
@@ -699,11 +709,11 @@ operationalRpcHandler = (name, args) => {
       set_at: now,
       member_notified_at: existing?.member_notified_at || null,
     };
-    if (existing) Object.assign(existing, next);
-    else operationalTableRows.operational_session_venue_overrides.push(next);
     if (args.p_was_tbc && !existing?.member_notified_at && next.location && next.maps_query) {
       next.member_notified_at = now;
     }
+    if (existing) Object.assign(existing, next);
+    else operationalTableRows.operational_session_venue_overrides.push(next);
     return Promise.resolve({ data: next, error: null });
   }
   return Promise.resolve({ data: null, error: null });
@@ -730,15 +740,6 @@ await store.setWeekVenue("wnt-2026-08-05", {
   location: "Central Harbourfront — 7pm sharp",
   mapsQuery: "Central Harbourfront, Hong Kong",
   wasTBC: true,
-});
-operationalTableRows.operational_session_venue_overrides.push({
-  session_id: "wnt-2026-08-05",
-  activity_id: "wnt",
-  location: "Central Harbourfront — 7pm sharp",
-  maps_query: "Central Harbourfront, Hong Kong",
-  set_by: authUser.id,
-  set_at: fixedIso,
-  member_notified_at: fixedIso,
 });
 await operations.refreshOperationalState();
 const lastVenueCall = operationalRpcCalls
@@ -767,6 +768,63 @@ assert.ok(
   "Realtime channel should subscribe to every operational table including venue overrides"
 );
 assert.equal(operations.operationalStateStatus().loaded, true);
+
+// The mutation result is authoritative even when the best-effort full refresh
+// immediately after it fails. A rerender must see the just-saved override.
+const cacheFirstSessionId = "water-2026-08-11";
+operationalVenueOverrideReadError = { message: "simulated venue override refresh failure" };
+const refreshWarnings = [];
+const consoleWarnBeforeCacheTest = console.warn;
+console.warn = (...args) => refreshWarnings.push(args);
+await store.setWeekVenue(cacheFirstSessionId, {
+  location: "Victoria Park Swimming Pool",
+  mapsQuery: "Victoria Park Swimming Pool, Hong Kong",
+});
+console.warn = consoleWarnBeforeCacheTest;
+assert.ok(
+  refreshWarnings.some(([message]) => message === "operations refresh after rpc failed"),
+  "the live regression must exercise the failed best-effort refresh path"
+);
+assert.deepEqual(operations.getLiveVenueOverride(cacheFirstSessionId), {
+  sessionId: cacheFirstSessionId,
+  activityId: "water",
+  location: "Victoria Park Swimming Pool",
+  mapsQuery: "Victoria Park Swimming Pool, Hong Kong",
+  setBy: authUser.id,
+  setAt: Date.parse(fixedIso),
+  memberNotifiedAt: Date.parse(fixedIso),
+});
+const cacheFirstDecoratedSession = store.getSession(cacheFirstSessionId);
+assert.equal(cacheFirstDecoratedSession.location, "Victoria Park Swimming Pool");
+assert.equal(cacheFirstDecoratedSession.mapsQuery, "Victoria Park Swimming Pool, Hong Kong");
+await operations.refreshOperationalState();
+assert.equal(
+  operations.operationalStateStatus().error,
+  null,
+  "a one-shot refresh failure must not poison later operational refreshes"
+);
+console.log("ok  successful venue RPC updates live cache before a failed refresh");
+
+const partialLiveSessionId = "water-2026-08-18";
+await store.setWeekVenue(partialLiveSessionId, {
+  location: "",
+  mapsQuery: "Sun Yat Sen Pool, Hong Kong",
+});
+const partialLiveOverride = operations.getLiveVenueOverride(partialLiveSessionId);
+const partialLiveSession = store.getSession(partialLiveSessionId);
+assert.equal(partialLiveOverride.memberNotifiedAt, null);
+assert.equal(partialLiveSession.location, "TBC");
+assert.notEqual(partialLiveSession.venueTBC, false);
+await store.setWeekVenue(partialLiveSessionId, {
+  location: "Sun Yat Sen Memorial Park Swimming Pool",
+  mapsQuery: "Sun Yat Sen Pool, Hong Kong",
+});
+assert.equal(
+  operations.getLiveVenueOverride(partialLiveSessionId).memberNotifiedAt,
+  Date.parse(fixedIso),
+  "completing a live partial override must consume member dedupe only then"
+);
+console.log("ok  live partial venue remains TBC until both values confirm it");
 
 const signedOutHome = views.viewHome();
 assert.match(signedOutHome, /data-action="sign-in-google"[^>]*>Continue with Google</);
@@ -2549,6 +2607,32 @@ if (!liveHyroxDetail.includes("Get directions") || liveHyroxDetail.includes('id=
   throw new Error("paid HYROX activity must surface Get directions without the inline map");
 }
 console.log("ok  live paid HYROX surfaces Get directions without the inline map");
+
+// app.js owns the browser-relative lazy import. Exercise that real import from
+// app/js/app.js so a duplicated "js/" path cannot pass through the smoke file's
+// different base URL.
+const browserRelativeMap = await app.loadActivityMapModule();
+assert.equal(
+  typeof browserRelativeMap.mountActivityMap,
+  "function",
+  "app.js must resolve the map module relative to its own app/js URL"
+);
+
+// A rejected lazy import must settle the host on the public fallback instead
+// of escaping as an unhandled rejection or leaving "Loading map…" forever.
+const rejectedImportHost = {
+  id: "activity-map",
+  isConnected: true,
+  dataset: { mapsQuery: "Causeway Bay, Hong Kong", markerLabel: "Rejected import" },
+  innerHTML: "<p>Loading map…</p>",
+};
+const rejectedImportResult = await app.mountCommittedActivityMap(rejectedImportHost, {
+  loadModule: async () => { throw new Error("simulated map import rejection"); },
+});
+assert.equal(rejectedImportResult, false, "a rejected map import must resolve to false");
+assert.match(rejectedImportHost.innerHTML, /Couldn.t find the venue on the map/);
+assert.doesNotMatch(rejectedImportHost.innerHTML, /Loading map/);
+console.log("ok  app-relative map import resolves and import rejection renders fallback");
 
 // Mount contract: stale activity hosts must not be remounted after navigation.
 let lateMounted = false;

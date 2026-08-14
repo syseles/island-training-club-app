@@ -2106,6 +2106,59 @@ const wntSession = store.upcomingSessions(21).find(
 );
 if (!wntSession) throw new Error("expected an upcoming wnt session for venue tests");
 store.signIn("admin@example.test");
+
+// A partial TBC override remains incomplete: it may retain the independent
+// maps query, but it must not consume member dedupe or claim confirmation.
+const partialSwimmingSession = store.upcomingSessions(21).find(
+  (s) => s.activityId === "water" && !data.sessionStarted(s)
+);
+if (!partialSwimmingSession) throw new Error("expected an upcoming Swimming session for partial venue tests");
+store.setWeekVenue(partialSwimmingSession.id, {
+  location: "",
+  mapsQuery: "Victoria Park Swimming Pool, Hong Kong",
+});
+const partialSwimming = store.getSession(partialSwimmingSession.id);
+const partialSwimmingOverride = store.weekVenueOverride(partialSwimmingSession.id);
+const partialMemberNotes = store.notificationsFor("fixture-member").filter(
+  (n) => n.kind === "operational_session_venue_updated"
+    && n.destination === `#/activity/${partialSwimmingSession.id}`
+);
+if (partialSwimming.location !== "TBC" || partialSwimming.venueTBC === false) {
+  throw new Error("a maps-query-only Swimming override must remain TBC");
+}
+if (partialSwimmingOverride.venueMemberNotifiedAt || partialMemberNotes.length !== 0) {
+  throw new Error("an incomplete Swimming override must not consume member notification dedupe");
+}
+
+// Legacy free-event venueTBC flags must be superseded by both direct reset
+// and save-then-reset so the recurring default becomes visible again.
+const recurringRun = store.getActivity("run");
+store.saveActivity({
+  ...recurringRun,
+  location: "Recurring Run Venue",
+  mapsQuery: "Recurring Run Venue, Hong Kong",
+});
+const legacyRunSession = store.upcomingSessions(21).find(
+  (s) => s.activityId === "run" && !data.sessionStarted(s)
+);
+if (!legacyRunSession) throw new Error("expected an upcoming Run session for legacy venueTBC tests");
+store.setVenueTBC(legacyRunSession.id, true);
+store.setWeekVenue(legacyRunSession.id, { location: null, mapsQuery: null });
+let restoredLegacyRun = store.getSession(legacyRunSession.id);
+if (restoredLegacyRun.location !== "Recurring Run Venue" || restoredLegacyRun.venueTBC) {
+  throw new Error("reset must supersede a legacy venueTBC flag and restore the recurring venue");
+}
+store.setVenueTBC(legacyRunSession.id, true);
+store.setWeekVenue(legacyRunSession.id, {
+  location: "Dated Run Venue",
+  mapsQuery: "Dated Run Venue, Hong Kong",
+});
+store.setWeekVenue(legacyRunSession.id, { location: null, mapsQuery: null });
+restoredLegacyRun = store.getSession(legacyRunSession.id);
+if (restoredLegacyRun.location !== "Recurring Run Venue" || restoredLegacyRun.venueTBC) {
+  throw new Error("save then reset must not expose a legacy venueTBC flag");
+}
+
 store.setWeekVenue(wntSession.id, {
   location: "Central Harbourfront — 7pm sharp",
   mapsQuery: "Central Harbourfront, Hong Kong",
@@ -2116,34 +2169,42 @@ if (decorated.location !== "Central Harbourfront — 7pm sharp"
     || decorated.venueTBC) {
   throw new Error("weekly venue must decorate the dated free session");
 }
-const memberNotes = store.notificationsFor("fixture-member");
-const otherAdminNotes = store.notificationsFor("fixture-other-admin");
-const actorNotes = store.notificationsFor("fixture-admin");
-const pendingNotes = store.notificationsFor("fixture-pending-user");
-if (memberNotes.filter((n) => n.kind === "operational_session_venue_updated").length !== 1) {
+const venueNotesFor = (userId, sessionId) => store.notificationsFor(userId).filter(
+  (n) => n.kind === "operational_session_venue_updated"
+    && n.destination === `#/activity/${sessionId}`
+);
+const memberNotes = venueNotesFor("fixture-member", wntSession.id);
+const otherAdminNotes = venueNotesFor("fixture-other-admin", wntSession.id);
+const actorNotes = venueNotesFor("fixture-admin", wntSession.id);
+const pendingNotes = venueNotesFor("fixture-pending-user", wntSession.id);
+if (memberNotes.length !== 1) {
   throw new Error("first confirmation must notify each member exactly once");
 }
-if (otherAdminNotes.filter((n) => n.kind === "operational_session_venue_updated").length !== 1) {
+if (otherAdminNotes.length !== 1) {
   throw new Error("other admin must receive audit notification on actual save");
 }
-if (actorNotes.some((n) => n.kind === "operational_session_venue_updated")) {
+if (actorNotes.length) {
   throw new Error("actor must not receive its own audit notification");
 }
-if (pendingNotes.some((n) => n.kind === "operational_session_venue_updated")) {
+if (pendingNotes.length) {
   throw new Error("pending profile must not receive venue notifications");
 }
-const memberDestination = memberNotes
-  .find((n) => n.kind === "operational_session_venue_updated");
+const memberDestination = memberNotes[0];
 if (memberDestination?.destination !== `#/activity/${wntSession.id}`) {
   throw new Error("member notification must point at the dated activity route");
+}
+if (memberDestination?.body !== `Wednesday Night Training on ${wntSession.dateISO} is at Central Harbourfront — 7pm sharp. Check the activity page for details.`) {
+  throw new Error(`member venue copy must use the activity display name; got: ${memberDestination?.body}`);
+}
+if (otherAdminNotes[0]?.body !== `Test Admin set the venue for ${wntSession.id} to Central Harbourfront — 7pm sharp.`) {
+  throw new Error(`admin venue copy must identify the actor; got: ${otherAdminNotes[0]?.body}`);
 }
 // No-op save must not notify anyone.
 store.setWeekVenue(wntSession.id, {
   location: "Central Harbourfront — 7pm sharp",
   mapsQuery: "Central Harbourfront, Hong Kong",
 });
-if (store.notificationsFor("fixture-member")
-    .filter((n) => n.kind === "operational_session_venue_updated").length !== 1) {
+if (venueNotesFor("fixture-member", wntSession.id).length !== 1) {
   throw new Error("no-op save must not duplicate member notification");
 }
 // Edit must notify only other Admins (not members).
@@ -2151,12 +2212,10 @@ store.setWeekVenue(wntSession.id, {
   location: "Wan Chai Promenade — 7pm sharp",
   mapsQuery: "Wan Chai Promenade, Hong Kong",
 });
-if (store.notificationsFor("fixture-member")
-    .filter((n) => n.kind === "operational_session_venue_updated").length !== 1) {
+if (venueNotesFor("fixture-member", wntSession.id).length !== 1) {
   throw new Error("subsequent edits must not re-notify members");
 }
-if (store.notificationsFor("fixture-other-admin")
-    .filter((n) => n.kind === "operational_session_venue_updated").length !== 2) {
+if (venueNotesFor("fixture-other-admin", wntSession.id).length !== 2) {
   throw new Error("second save must notify other Admins again");
 }
 // Reset clears location/mapsQuery but preserves venueMemberNotifiedAt.
@@ -2166,8 +2225,7 @@ if (resetDecorated.location === "Central Harbourfront — 7pm sharp"
     || resetDecorated.mapsQuery === "Central Harbourfront, Hong Kong") {
   throw new Error("reset should restore the activity-template venue values");
 }
-if (store.notificationsFor("fixture-member")
-    .filter((n) => n.kind === "operational_session_venue_updated").length !== 1) {
+if (venueNotesFor("fixture-member", wntSession.id).length !== 1) {
   throw new Error("reset must not re-notify members");
 }
 // Reconfirmation does not re-notify members.
@@ -2175,8 +2233,7 @@ store.setWeekVenue(wntSession.id, {
   location: "Causeway Bay Promenade — 7pm sharp",
   mapsQuery: "Causeway Bay Promenade, Hong Kong",
 });
-if (store.notificationsFor("fixture-member")
-    .filter((n) => n.kind === "operational_session_venue_updated").length !== 1) {
+if (venueNotesFor("fixture-member", wntSession.id).length !== 1) {
   throw new Error("reconfirmation after reset must not re-notify members");
 }
 const weekOverride = store.weekVenueOverride(wntSession.id);
@@ -2220,6 +2277,14 @@ store.setWeekVenue(swimmingSession.id, {
   location: "Victoria Park Swimming Pool",
   mapsQuery: "Victoria Park Swimming Pool, Hong Kong",
 });
+const completedSwimmingOverride = store.weekVenueOverride(swimmingSession.id);
+const completedSwimmingNotes = venueNotesFor("fixture-member", swimmingSession.id);
+if (!completedSwimmingOverride.venueMemberNotifiedAt || completedSwimmingNotes.length !== 1) {
+  throw new Error("completing a partial Swimming override must notify members exactly once");
+}
+if (completedSwimmingNotes[0].body !== `ITC Swimming on ${swimmingSession.dateISO} is at Victoria Park Swimming Pool. Check the activity page for details.`) {
+  throw new Error(`Swimming member copy must use its display name; got: ${completedSwimmingNotes[0].body}`);
+}
 store.signIn("admin@example.test");
 const activitiesHtml = await views.viewAdmin("activities");
 const hyroxAdminHtml = await views.viewAdmin("payments");
@@ -2339,23 +2404,70 @@ const mapHost = {
   innerHTML: "<p>Loading map\u2026</p>",
 };
 mem.set("itc.geocode.v1", "{}");
+let emptyResultLoaderStarted = false;
 const mountedMissing = await map.mountActivityMap(mapHost, {
   fetchImpl: async () => ({
     ok: true,
     json: async () => [],
   }),
-  loadLeaflet: async () => {
-    throw new Error("must not load when geocode fails");
-  },
+  loadLeaflet: async () => { emptyResultLoaderStarted = true; },
 });
 if (mountedMissing !== false) {
   throw new Error("missing geocode must not mount a map");
+}
+if (!emptyResultLoaderStarted) {
+  throw new Error("the concurrent Leaflet loader must start even when geocoding returns empty");
 }
 if (!/Couldn.t find the venue on the map/.test(mapHost.innerHTML)
   || !/tap Get directions instead/.test(mapHost.innerHTML)) {
   throw new Error(`fallback copy not rendered: ${mapHost.innerHTML}`);
 }
-console.log("ok  inline free-event map renders fallback when geocode fails");
+
+// Leaflet loading rejection is independent from an empty geocode result and
+// must settle on the same fallback.
+const rejectedLoaderQuery = "loader-rejection-imaginary-place";
+mem.set("itc.geocode.v1", JSON.stringify({
+  [rejectedLoaderQuery]: { lat: 22.281, lon: 114.159 },
+}));
+const rejectedLoaderHost = {
+  id: "activity-map",
+  dataset: { mapsQuery: rejectedLoaderQuery, markerLabel: "Rejected loader" },
+  isConnected: true,
+  innerHTML: "<p>Loading map…</p>",
+};
+const rejectedLoaderResult = await map.mountActivityMap(rejectedLoaderHost, {
+  loadLeaflet: async () => { throw new Error("simulated Leaflet loader rejection"); },
+});
+if (rejectedLoaderResult !== false
+    || !/Couldn.t find the venue on the map/.test(rejectedLoaderHost.innerHTML)) {
+  throw new Error("Leaflet loader rejection must return false with fallback copy");
+}
+
+// Leaflet may load successfully and still throw while constructing the map.
+// That rendering exception must not be reported as a successful mount.
+const renderingExceptionQuery = "rendering-exception-imaginary-place";
+mem.set("itc.geocode.v1", JSON.stringify({
+  [renderingExceptionQuery]: { lat: 22.282, lon: 114.16 },
+}));
+const renderingExceptionHost = {
+  id: "activity-map",
+  dataset: { mapsQuery: renderingExceptionQuery, markerLabel: "Rendering exception" },
+  isConnected: true,
+  innerHTML: "<p>Loading map…</p>",
+};
+const previousLeafletGlobal = globalThis.L;
+globalThis.L = {
+  map() { throw new Error("simulated Leaflet rendering exception"); },
+};
+const renderingExceptionResult = await map.mountActivityMap(renderingExceptionHost, {
+  loadLeaflet: async () => {},
+});
+globalThis.L = previousLeafletGlobal;
+if (renderingExceptionResult !== false
+    || !/Couldn.t find the venue on the map/.test(renderingExceptionHost.innerHTML)) {
+  throw new Error("Leaflet rendering exceptions must return false with fallback copy");
+}
+console.log("ok  inline free-event map renders fallback for lookup, loader, and rendering failures");
 
 console.log(failures ? `\n${failures} FAILURE(S)` : "\nAll smoke tests passed.");
 process.exit(failures ? 1 : 0);

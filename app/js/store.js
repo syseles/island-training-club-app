@@ -1178,6 +1178,13 @@ export function getSession(sessionId) {
   return decorateSession(s);
 }
 
+function hasConfirmedVenue(location, mapsQuery) {
+  const display = String(location || "").trim();
+  const query = String(mapsQuery || "").trim();
+  return Boolean(display && display.toUpperCase() !== "TBC"
+    && query && query.toUpperCase() !== "TBC");
+}
+
 function decorateSession(s) {
   const o = state.sessionOverrides[s.id];
   if (!o) return s;
@@ -1191,7 +1198,7 @@ function decorateSession(s) {
   if (o.gymNote) out.gymNote = o.gymNote;
   if (o.location) out.location = o.location;
   if (o.mapsQuery) out.mapsQuery = o.mapsQuery;
-  if (o.location || o.mapsQuery) out.venueTBC = false;
+  if (hasConfirmedVenue(out.location, out.mapsQuery)) out.venueTBC = false;
   return out;
 }
 
@@ -1201,7 +1208,7 @@ function decorateFreeSession(s) {
   const out = { ...s };
   if (o.location) out.location = o.location;
   if (o.mapsQuery) out.mapsQuery = o.mapsQuery;
-  if (o.location || o.mapsQuery) out.venueTBC = false;
+  if (hasConfirmedVenue(out.location, out.mapsQuery)) out.venueTBC = false;
   return out;
 }
 
@@ -1543,7 +1550,8 @@ export function setWeekVenue(sessionId, { location, mapsQuery } = {}) {
   }
   const before = getSession(sessionId);
   if (isLive()) {
-    const wasTBC = before?.location === "TBC" || !before?.mapsQuery;
+    const wasTBC = before?.location === "TBC"
+      || !hasConfirmedVenue(before?.location, before?.mapsQuery);
     return liveOps.liveSetWeekVenue(sessionId, {
       location: cleanLocation,
       mapsQuery: cleanMapsQuery,
@@ -1551,29 +1559,39 @@ export function setWeekVenue(sessionId, { location, mapsQuery } = {}) {
     });
   }
   if (!before || before.kind !== "free") throw new Error("Session not found.");
-  const wasTBC = before.location === "TBC" || !before.mapsQuery;
+  const wasTBC = before.location === "TBC"
+    || !hasConfirmedVenue(before.location, before.mapsQuery);
   requirePaymentAdminActor();
   const actor = currentUser();
-  const override = (state.sessionOverrides[sessionId] ||= {});
+  const existingOverride = state.sessionOverrides[sessionId];
+  const cleared = cleanLocation === "" && cleanMapsQuery === "";
+  if (!existingOverride && cleared) {
+    return { sessionId, activityId: overrideActivityId, unchanged: true };
+  }
+  const override = existingOverride || (state.sessionOverrides[sessionId] = {});
   const previousLocation = override.location || "";
   const previousMapsQuery = override.mapsQuery || "";
   const previousNotified = override.venueMemberNotifiedAt || null;
-  const cleared = cleanLocation === "" && cleanMapsQuery === "";
-  const changed = previousLocation !== cleanLocation || previousMapsQuery !== cleanMapsQuery;
+  const recurring = getActivity(overrideActivityId);
+  const effectiveLocation = cleanLocation || recurring?.location || "";
+  const effectiveMapsQuery = cleanMapsQuery || recurring?.mapsQuery || "";
+  const confirmed = hasConfirmedVenue(effectiveLocation, effectiveMapsQuery);
+  const nextVenueTBC = cleared || confirmed ? false : Boolean(override.venueTBC);
+  const changed = previousLocation !== cleanLocation
+    || previousMapsQuery !== cleanMapsQuery
+    || Boolean(override.venueTBC) !== nextVenueTBC;
   if (!changed) {
     return { sessionId, activityId: overrideActivityId, ...override, unchanged: true };
   }
   override.location = cleanLocation || undefined;
   override.mapsQuery = cleanMapsQuery || undefined;
+  override.venueTBC = nextVenueTBC;
   override.setAt = Date.now();
   override.setBy = actor?.id || null;
   override.venueMemberNotifiedAt = previousNotified;
   const destination = `#/activity/${sessionId}`;
-  const sessionLabel = (() => {
-    const parts = sessionId.split("-");
-    return `${overrideActivityId} on ${parts[1]}-${parts[2]}-${parts[3]}`;
-  })();
-  if (wasTBC && !cleared && !override.venueMemberNotifiedAt) {
+  const sessionLabel = `${before.name || recurring?.name || overrideActivityId} on ${before.dateISO}`;
+  if (wasTBC && !cleared && confirmed && !override.venueMemberNotifiedAt) {
     override.venueMemberNotifiedAt = Date.now();
     for (const user of state.users) {
       if (user?.status !== "approved" || user.role !== "member") continue;
@@ -1582,7 +1600,7 @@ export function setWeekVenue(sessionId, { location, mapsQuery } = {}) {
         userId: user.id,
         kind: "operational_session_venue_updated",
         title: "Venue confirmed",
-        body: `${sessionLabel} is at ${cleanLocation}. Check the activity page for details.`,
+        body: `${sessionLabel} is at ${effectiveLocation}. Check the activity page for details.`,
         link: destination,
         destination,
         read: false,
@@ -1590,13 +1608,14 @@ export function setWeekVenue(sessionId, { location, mapsQuery } = {}) {
       });
     }
   }
+  const actorLabel = actor?.fullName || actor?.preferredName || actor?.email || "Admin";
   for (const user of state.users) {
     if (user?.status !== "approved") continue;
     if (user.role !== "admin" && user.role !== "superadmin" && user.role !== "super_admin") continue;
     if (actor && user.id === actor.id) continue;
     const body = cleared
-      ? `Admin reset the venue for ${sessionId} to the activity default.`
-      : `Admin set the venue for ${sessionId} to ${cleanLocation}.`;
+      ? `${actorLabel} reset the venue for ${sessionId} to the activity default.`
+      : `${actorLabel} set the venue for ${sessionId} to ${effectiveLocation}.`;
     state.notifications.push({
       id: uid("n"),
       userId: user.id,

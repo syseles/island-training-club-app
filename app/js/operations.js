@@ -314,9 +314,11 @@ export async function hydrateOperationalState({ force = false } = {}) {
     }
   });
   hydrationPromise = liveCache.loading;
-  const result = await hydrationPromise;
-  hydrationPromise = null;
-  return result;
+  try {
+    return await hydrationPromise;
+  } finally {
+    hydrationPromise = null;
+  }
 }
 
 export async function refreshOperationalState() {
@@ -383,12 +385,13 @@ function scheduleRealtimeRefresh() {
   }, 50);
 }
 
-export async function runOperationalRpc(name, args) {
+export async function runOperationalRpc(name, args, options = {}) {
   if (!isLive() || !supabase) {
     throw new Error("Live operations are unavailable in this deployment.");
   }
   const { data, error } = await supabase.rpc(name, args);
   if (error) throw operationalProblem(error);
+  options.applyResult?.(data);
   try { await refreshOperationalState(); } catch (err) { console.warn("operations refresh after rpc failed", err); }
   return data;
 }
@@ -575,6 +578,13 @@ export async function liveSetWeekVenue(sessionId, { location, mapsQuery, wasTBC 
     p_location: String(location || "").trim() || null,
     p_maps_query: String(mapsQuery || "").trim() || null,
     p_was_tbc: !!wasTBC,
+  }, {
+    applyResult(result) {
+      const row = Array.isArray(result) ? result[0] : result;
+      if (!row?.session_id) return;
+      const override = buildVenueOverrideRow(row);
+      liveCache.venueOverrides.set(override.sessionId, override);
+    },
   });
 }
 

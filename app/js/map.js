@@ -185,10 +185,6 @@ function renderFallback(host) {
   host.innerHTML = `<p class="muted small activity-map-fallback" role="status">${FALLBACK_COPY}</p>`;
 }
 
-function safeApply(fn) {
-  try { fn(); } catch (_err) { /* swallow — see renderFallback path */ }
-}
-
 export async function mountActivityMap(host, options = {}) {
   const { ownsGeneration = () => true, fetchImpl, timeoutMs, loadLeaflet } = options;
   if (!host || host.id !== "activity-map") return false;
@@ -212,8 +208,8 @@ export async function mountActivityMap(host, options = {}) {
   }
   if (!ownsGeneration() || !host.isConnected) return false;
   const label = String(host.dataset.markerLabel || query);
-  safeApply(() => {
-    if (!ownsGeneration() || !host.isConnected) return;
+  try {
+    if (!ownsGeneration() || !host.isConnected) return false;
     host.innerHTML = "";
     const map = globalThis.L.map(host, { scrollWheelZoom: false });
     map.setView([coords.lat, coords.lon], 15);
@@ -227,8 +223,11 @@ export async function mountActivityMap(host, options = {}) {
     title.textContent = label;
     popup.appendChild(title);
     marker.bindPopup(popup);
-  });
-  return true;
+    return true;
+  } catch (_err) {
+    if (ownsGeneration() && host.isConnected) renderFallback(host);
+    return false;
+  }
 }
 
 export const __test = { FALLBACK_COPY, CACHE_KEY };
