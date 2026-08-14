@@ -79,9 +79,13 @@ begin
   end if;
   if not exists (
     select 1 from public.operational_activity_templates
-    where activity_id = 'hyrox-midtown' and capacity = 12 and price_hkd = 180 and venue = 'Midtown 28'
+    where activity_id = 'hyrox-midtown'
+      and capacity = 12
+      and price_hkd = 180
+      and venue = 'Midtown28 Fitness'
   ) then
-    raise notice 'FAIL: hyrox-midtown activity template seed missing'; failures := failures + 1;
+    raise notice 'FAIL: corrected hyrox-midtown activity template seed missing';
+    failures := failures + 1;
   end if;
   perform 1 from pg_class c join pg_namespace n on n.oid = c.relnamespace
            where n.nspname = 'public' and c.relname = 'operational_sessions' and c.relrowsecurity;
@@ -653,6 +657,59 @@ begin
   end;
   reset role;
 end $$;
+
+update public.operational_activity_templates
+   set venue = 'Midtown 28'
+ where activity_id = 'hyrox-midtown';
+
+update public.operational_sessions
+   set venue = case id
+     when 'hyrox-midtown-2026-08-22' then 'Midtown 28'
+     when 'hyrox-midtown-2026-08-29' then 'Custom Midtown Venue'
+   end
+ where id in ('hyrox-midtown-2026-08-22', 'hyrox-midtown-2026-08-29');
+
+insert into public.operational_bookings
+  (profile_id, session_id, status, pay_deadline_at, snapshot)
+values
+  ('bb000000-0000-0000-0000-00000000b001',
+   'hyrox-midtown-2026-08-22', 'reserved', now() + interval '1 day',
+   '{"name":"hyrox-midtown","venue":"Midtown 28","price_hkd":180}'::jsonb),
+  ('dd000000-0000-0000-0000-00000000d001',
+   'hyrox-midtown-2026-08-29', 'reserved', now() + interval '1 day',
+   '{"name":"hyrox-midtown","venue":"Custom Midtown Venue","price_hkd":180}'::jsonb);
+
+\ir ../migrations/20260813000002_midtown28_fitness.sql
+
+select pg_temp.op_assert(
+  (select venue = 'Midtown28 Fitness'
+     from public.operational_activity_templates where activity_id = 'hyrox-midtown'),
+  'migration must correct the exact old Midtown template venue'
+);
+select pg_temp.op_assert(
+  (select venue = 'Midtown28 Fitness'
+     from public.operational_sessions where id = 'hyrox-midtown-2026-08-22'),
+  'migration must correct an exact old Midtown session venue'
+);
+select pg_temp.op_assert(
+  (select venue = 'Custom Midtown Venue'
+     from public.operational_sessions where id = 'hyrox-midtown-2026-08-29'),
+  'migration must preserve a custom Midtown session venue'
+);
+select pg_temp.op_assert(
+  (select snapshot ->> 'venue' = 'Midtown28 Fitness'
+     from public.operational_bookings
+    where profile_id = 'bb000000-0000-0000-0000-00000000b001'
+      and session_id = 'hyrox-midtown-2026-08-22'),
+  'migration must correct an exact old Midtown booking snapshot'
+);
+select pg_temp.op_assert(
+  (select snapshot ->> 'venue' = 'Custom Midtown Venue'
+     from public.operational_bookings
+    where profile_id = 'dd000000-0000-0000-0000-00000000d001'
+      and session_id = 'hyrox-midtown-2026-08-29'),
+  'migration must preserve a custom Midtown booking snapshot'
+);
 
 rollback;
 
