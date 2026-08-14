@@ -468,11 +468,14 @@ document.addEventListener("click", async (e) => {
       toast(draft ? "Draft saved on this device" : "Unable to save draft", !draft);
       break;
     }
-    case "open-indemnity-doc": {
-      components.openIndemnityModal({
+    case "open-doc": {
+      const docKey = el.dataset.doc;
+      if (!docKey) break;
+      components.openReadAndAcceptModal({
+        docKey,
         trigger: el,
         onAccept: (openingTrigger) => {
-          components.applyIndemnityAcceptance(openingTrigger || el);
+          components.applyDocumentAcceptance(openingTrigger || el);
         },
       });
       break;

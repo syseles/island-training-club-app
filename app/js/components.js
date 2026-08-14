@@ -3,15 +3,25 @@
 // sticky acknowledgement button, and the acknowledgement callback.
 //
 // Public API:
-//   SCROLL_END_THRESHOLD_PX                — constant exported for testing
-//   isAtScrollEnd(top,h,scroll)            — pure scroll-end math
-//   applyIndemnityAcceptance(t)            — DOM-mutation helper for the ack callback
-//   openIndemnityModal({onAccept, trigger})— the modal itself
+//   SCROLL_END_THRESHOLD_PX                          — constant exported for testing
+//   isAtScrollEnd(top,h,scroll)                      — pure scroll-end math
+//   applyDocumentAcceptance(trigger)                 — DOM-mutation helper for the ack callback
+//   openReadAndAcceptModal({docKey, onAccept, trigger}) — the modal itself
 //
-// The modal currently renders only the indemnity document, but is designed
-// so any future document body can be swapped in by changing the body source.
+// Documents come from the DOCUMENTS registry in documents.js. The modal is
+// document-agnostic: pass any registry key and it renders that document.
+//
+// Checkbox pairing convention (used by the apply forms):
+//   <div data-doc-accept="privacy">
+//     <label class="check"><input … disabled data-doc-checkbox> … <a
+//       data-action="open-doc" data-doc="privacy">privacy policy</a> …</label>
+//     <p class="muted small" data-doc-hint>Read the document to enable acceptance.</p>
+//   </div>
+// applyDocumentAcceptance(trigger) finds the trigger's nearest
+// [data-doc-accept] container and unlocks the checkbox inside it — so several
+// gated documents can share one form without cross-talk.
 
-import * as indemnityDoc from "./documents.js";
+import { DOCUMENTS } from "./documents.js";
 
 export const SCROLL_END_THRESHOLD_PX = 4;
 
@@ -19,20 +29,23 @@ export function isAtScrollEnd(scrollTop, clientHeight, scrollHeight) {
   return scrollTop + clientHeight >= scrollHeight - SCROLL_END_THRESHOLD_PX;
 }
 
-export function applyIndemnityAcceptance(trigger) {
-  const form = trigger && trigger.closest ? trigger.closest("form") : null;
-  const checkbox = form && form.querySelector
-    ? form.querySelector("[data-indemnity-checkbox]")
+export function applyDocumentAcceptance(trigger) {
+  const container = trigger && trigger.closest ? trigger.closest("[data-doc-accept]") : null;
+  const checkbox = container && container.querySelector
+    ? container.querySelector("[data-doc-checkbox]")
     : null;
   if (!checkbox) return false;
   checkbox.disabled = false;
   checkbox.checked = true;
-  const hint = form.querySelector("[data-indemnity-hint]");
+  const hint = container.querySelector("[data-doc-hint]");
   if (hint) hint.hidden = true;
   return true;
 }
 
-export function openIndemnityModal({ onAccept, trigger } = {}) {
+export function openReadAndAcceptModal({ docKey, onAccept, trigger } = {}) {
+  const doc = DOCUMENTS[docKey];
+  if (!doc) return;
+
   const previouslyFocused = document.activeElement;
 
   const backdrop = document.createElement("div");
@@ -42,16 +55,16 @@ export function openIndemnityModal({ onAccept, trigger } = {}) {
   dialog.className = "modal-dialog";
   dialog.setAttribute("role", "dialog");
   dialog.setAttribute("aria-modal", "true");
-  dialog.setAttribute("aria-labelledby", "indemnity-modal-title");
+  dialog.setAttribute("aria-labelledby", "doc-modal-title");
 
   dialog.innerHTML = `
     <header class="modal-header">
-      <h2 id="indemnity-modal-title" class="display sm">Health &amp; Liability Indemnity</h2>
+      <h2 id="doc-modal-title" class="display sm">${doc.title}</h2>
       <button type="button" class="modal-close" aria-label="Close document">×</button>
     </header>
     <div class="modal-doc">
       <div class="modal-doc-body" tabindex="0">
-        ${indemnityDoc.renderIndemnityDocument()}
+        ${doc.renderBody()}
       </div>
       <footer class="modal-doc-ack">
         <p class="muted small" data-modal-hint>Scroll to the end of the document to continue.</p>

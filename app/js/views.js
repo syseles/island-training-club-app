@@ -1263,7 +1263,7 @@ async function accountIndemnity(user) {
         <p>Please read the indemnity below, then accept and confirm — it’s required for joining ITC activities.</p>
       </div>`
     }
-    <a class="btn ghost sm mt16" href="#" data-action="open-indemnity-doc">View as full document</a>
+    <a class="btn ghost sm mt16" href="#" data-action="open-doc" data-doc="indemnity">View as full document</a>
     <div class="card mt16"><div class="card-body prose">
       ${indemnityDoc.renderIndemnityDocument()}
     </div></div>
@@ -1520,11 +1520,21 @@ function applyFormHtml(cu, draft) {
         ${applyField("text", "heard_detail", "Detail (optional)", false, fields.heard_detail)}
         ${applyField("text", "preferred_name", "Preferred name (optional)", false, fields.preferred_name)}
         <label class="check"><input type="checkbox" name="photo_consent" ${checked("photo_consent")}> I consent to photos/videos of me being used on ITC channels. (Optional)</label>
-        <label class="check"><input type="checkbox" name="waiver" ${checked("waiver")} required disabled data-indemnity-checkbox>
-          <span>I accept the <a href="#" class="modal-link" data-action="open-indemnity-doc">Health &amp; Liability Indemnity</a> form. *</span></label>
-        <p class="muted small" data-indemnity-hint>Read the document to enable acceptance.</p>
-        <label class="check"><input type="checkbox" name="privacy" ${checked("privacy")} required> I accept the privacy policy. (⏳ text pending ITC review)</label>
-        <label class="check"><input type="checkbox" name="guidelines" ${checked("guidelines")} required> I accept the community guidelines. (⏳ text pending ITC review)</label>
+        <div data-doc-accept="indemnity">
+          <label class="check"><input type="checkbox" name="waiver" ${checked("waiver")} required disabled data-doc-checkbox>
+            <span>I accept the <a href="#" class="modal-link" data-action="open-doc" data-doc="indemnity">Health &amp; Liability Indemnity</a> form. *</span></label>
+          <p class="muted small" data-doc-hint>Read the document to enable acceptance.</p>
+        </div>
+        <div data-doc-accept="privacy">
+          <label class="check"><input type="checkbox" name="privacy" ${checked("privacy")} required disabled data-doc-checkbox>
+            <span>I accept the <a href="#" class="modal-link" data-action="open-doc" data-doc="privacy">privacy policy</a>. *</span></label>
+          <p class="muted small" data-doc-hint>Read the document to enable acceptance.</p>
+        </div>
+        <div data-doc-accept="guidelines">
+          <label class="check"><input type="checkbox" name="guidelines" ${checked("guidelines")} required disabled data-doc-checkbox>
+            <span>I accept the <a href="#" class="modal-link" data-action="open-doc" data-doc="guidelines">community guidelines</a>. *</span></label>
+          <p class="muted small" data-doc-hint>Read the document to enable acceptance.</p>
+        </div>
         <button class="btn btn-primary" type="submit">Submit application</button>
         <div class="draft-controls mt16">
           <button class="btn ghost sm" type="button" data-action="save-draft">Save draft now</button>
@@ -1573,13 +1583,21 @@ function viewApplyLocal() {
       </div>
       <label class="check"><input type="checkbox" name="ageConfirmed" required>
         <span>I confirm I am 18 or over, or that a parent/guardian will accompany me to sessions. *</span></label>
-      <label class="check"><input type="checkbox" name="indemnity" required disabled data-indemnity-checkbox>
-        <span>I accept the <a href="#" class="modal-link" data-action="open-indemnity-doc">Health &amp; Liability Indemnity</a> form. *</span></label>
-      <p class="muted small" data-indemnity-hint>Read the document to enable acceptance.</p>
-      <label class="check"><input type="checkbox" name="guidelines" required>
-        <span>I accept the ITC community guidelines. *</span></label>
-      <label class="check"><input type="checkbox" name="privacy" required>
-        <span>I accept the privacy policy. *</span></label>
+      <div data-doc-accept="indemnity">
+        <label class="check"><input type="checkbox" name="indemnity" required disabled data-doc-checkbox>
+          <span>I accept the <a href="#" class="modal-link" data-action="open-doc" data-doc="indemnity">Health &amp; Liability Indemnity</a> form. *</span></label>
+        <p class="muted small" data-doc-hint>Read the document to enable acceptance.</p>
+      </div>
+      <div data-doc-accept="guidelines">
+        <label class="check"><input type="checkbox" name="guidelines" required disabled data-doc-checkbox>
+          <span>I accept the <a href="#" class="modal-link" data-action="open-doc" data-doc="guidelines">community guidelines</a>. *</span></label>
+        <p class="muted small" data-doc-hint>Read the document to enable acceptance.</p>
+      </div>
+      <div data-doc-accept="privacy">
+        <label class="check"><input type="checkbox" name="privacy" required disabled data-doc-checkbox>
+          <span>I accept the <a href="#" class="modal-link" data-action="open-doc" data-doc="privacy">privacy policy</a>. *</span></label>
+        <p class="muted small" data-doc-hint>Read the document to enable acceptance.</p>
+      </div>
       <label class="check"><input type="checkbox" name="mediaConsent">
         <span>(Optional) I consent to being included in ITC photos and videos.</span></label>
       <div id="apply-error"></div>

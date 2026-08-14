@@ -416,35 +416,53 @@ if (!views.viewApply().includes('name="donorId"')) {
   console.error("FAIL apply form missing optional Donor ID field");
 } else console.log("ok  apply form collects optional Donor ID");
 
-// --- apply form checkboxes render the read-and-accept link (Task 4) ---
+// --- apply form checkboxes render the read-and-accept links (all three docs) ---
 // local mode: viewApply() dispatches to viewApplyLocal when isLive() is false
 const applyLocalHtml = views.viewApply();
-if (!applyLocalHtml.includes("Health &amp; Liability Indemnity</a> form")) {
-  failures++;
-  console.error('FAIL local-mode apply form should label the acceptance as "Health & Liability Indemnity form"');
+for (const [key, label] of [
+  ["indemnity", "Health &amp; Liability Indemnity"],
+  ["privacy", "privacy policy"],
+  ["guidelines", "community guidelines"],
+]) {
+  if (!applyLocalHtml.includes(`data-action="open-doc" data-doc="${key}"`)) {
+    failures++;
+    console.error(`FAIL local-mode apply form missing modal trigger for "${key}"`);
+  }
+  if (!applyLocalHtml.includes(`data-doc-accept="${key}"`)) {
+    failures++;
+    console.error(`FAIL local-mode apply form missing doc-accept container for "${key}"`);
+  }
+  if (!applyLocalHtml.includes(label)) {
+    failures++;
+    console.error(`FAIL local-mode apply form missing label text "${label}"`);
+  }
 }
-if (!applyLocalHtml.includes('data-action="open-indemnity-doc"')) {
+if (!applyLocalHtml.includes("data-doc-checkbox")) {
   failures++;
-  console.error("FAIL local-mode apply form missing modal trigger on the acceptance link");
-}
-if (!applyLocalHtml.includes("data-indemnity-checkbox")) {
-  failures++;
-  console.error("FAIL local-mode apply form checkbox missing data-indemnity-checkbox attribute");
+  console.error("FAIL local-mode apply form checkboxes missing data-doc-checkbox attribute");
 }
 if (!applyLocalHtml.includes("Read the document to enable acceptance")) {
   failures++;
   console.error("FAIL local-mode apply form missing the read-first hint copy");
 }
-console.log("ok  local-mode apply form renders the indemnity link + disabled checkbox + hint");
+console.log("ok  local-mode apply form wires all three documents (indemnity, privacy, guidelines)");
 
-// Live-mode apply form copy moved from "participation waiver" to
-// "Health & Liability Indemnity" — the old string should no longer appear.
-// Source-level check: rendering viewApplyLive() requires Supabase state, so we
-// assert against the integrated source instead.
-if (combinedRuntimeSource.includes("I accept the participation waiver")) {
-  failures++;
-  console.error('FAIL live-mode apply form still references old "participation waiver" copy');
-} else console.log('ok  live-mode apply form no longer references "participation waiver"');
+// Live-mode apply form: old plain-checkbox copy and indemnity-only attributes
+// must be gone. Source-level check: rendering viewApplyLive() requires
+// Supabase state, so we assert against the integrated source instead.
+for (const stale of [
+  "I accept the participation waiver",
+  "I accept the privacy policy. (⏳",
+  "I accept the community guidelines. (⏳",
+  'data-action="open-indemnity-doc"',
+  "data-indemnity-checkbox",
+]) {
+  if (combinedRuntimeSource.includes(stale)) {
+    failures++;
+    console.error(`FAIL stale pre-registry pattern still present: "${stale}"`);
+  }
+}
+console.log("ok  no stale plain-checkbox or indemnity-only patterns remain");
 await check("checkout (visitor) -> redirect", () => views.viewCheckout(paid.id));
 await check("admin (visitor) -> redirect", () => views.viewAdmin("approvals"));
 await check("notfound", () => views.viewNotFound());
@@ -786,6 +804,10 @@ if (!indemnityPageHtml.includes("View as full document")) {
   failures++;
   console.error('FAIL Profile > Indemnity should expose a "View as full document" button');
 } else console.log('ok  Profile > Indemnity exposes "View as full document" button');
+if (!indemnityPageHtml.includes('data-action="open-doc" data-doc="indemnity"')) {
+  failures++;
+  console.error('FAIL Profile > Indemnity button should target the indemnity document');
+} else console.log("ok  Profile > Indemnity button targets the indemnity document");
 for (const heading of [
   "Health declaration",
   "Participation at my own risk",
@@ -874,32 +896,51 @@ for (const [top, height, scroll, expected] of scrollCases) {
 }
 console.log("ok  isAtScrollEnd math returns correct values for 4 cases");
 
-// --- applyIndemnityAcceptance: mutates the paired checkbox ---
-const fakeCheckbox = { disabled: true, checked: false };
-const fakeHint = { hidden: false };
-const fakeForm = {
-  querySelector: (sel) => {
-    if (sel === "[data-indemnity-checkbox]") return fakeCheckbox;
-    if (sel === "[data-indemnity-hint]") return fakeHint;
-    return null;
-  },
-};
-const fakeTrigger = { closest: (sel) => (sel === "form" ? fakeForm : null) };
-if (components.applyIndemnityAcceptance(fakeTrigger) !== true) {
+// --- generalized modal API ---
+if (typeof components.openReadAndAcceptModal !== "function") {
   failures++;
-  console.error("FAIL applyIndemnityAcceptance should return true when a checkbox is paired");
-}
-if (fakeCheckbox.disabled !== false || fakeCheckbox.checked !== true || fakeHint.hidden !== true) {
-  failures++;
-  console.error("FAIL applyIndemnityAcceptance did not enable/check checkbox and hide hint");
-} else console.log("ok  applyIndemnityAcceptance enables + checks paired checkbox and hides hint");
+  console.error("FAIL components should export openReadAndAcceptModal");
+} else console.log("ok  components exports openReadAndAcceptModal");
 
-// applyIndemnityAcceptance: returns false when no checkbox is paired (Profile > Indemnity trigger)
-const orphanTrigger = { closest: () => null };
-if (components.applyIndemnityAcceptance(orphanTrigger) !== false) {
+// --- applyDocumentAcceptance: scoped per document container ---
+const mkContainer = () => {
+  const checkbox = { disabled: true, checked: false };
+  const hint = { hidden: false };
+  return {
+    checkbox,
+    hint,
+    el: {
+      querySelector: (sel) =>
+        sel === "[data-doc-checkbox]" ? checkbox
+        : sel === "[data-doc-hint]" ? hint
+        : null,
+    },
+  };
+};
+const indemnityC = mkContainer();
+const privacyC = mkContainer();
+const guidelinesC = mkContainer();
+const privacyTrigger = { closest: (sel) => (sel === "[data-doc-accept]" ? privacyC.el : null) };
+if (components.applyDocumentAcceptance(privacyTrigger) !== true) {
   failures++;
-  console.error("FAIL applyIndemnityAcceptance should return false when no form is found");
-} else console.log("ok  applyIndemnityAcceptance returns false for orphan triggers");
+  console.error("FAIL applyDocumentAcceptance should return true when a container is paired");
+}
+if (privacyC.checkbox.disabled !== false || privacyC.checkbox.checked !== true || privacyC.hint.hidden !== true) {
+  failures++;
+  console.error("FAIL applyDocumentAcceptance did not enable/check the privacy checkbox and hide its hint");
+}
+if (indemnityC.checkbox.checked || guidelinesC.checkbox.checked || indemnityC.hint.hidden || guidelinesC.hint.hidden) {
+  failures++;
+  console.error("FAIL applyDocumentAcceptance mutated a container other than the trigger's");
+}
+console.log("ok  applyDocumentAcceptance mutates only the trigger's document container");
+
+// applyDocumentAcceptance: returns false when no container is paired (Profile trigger)
+const orphanTrigger = { closest: () => null };
+if (components.applyDocumentAcceptance(orphanTrigger) !== false) {
+  failures++;
+  console.error("FAIL applyDocumentAcceptance should return false when no container is found");
+} else console.log("ok  applyDocumentAcceptance returns false for orphan triggers");
 
 // --- modal CSS classes present (Task 3) ---
 const stylesSource = readFileSync(resolve(__dirnameSmoke, "styles.css"), "utf8");
