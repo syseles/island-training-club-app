@@ -938,6 +938,18 @@ store.resetLocalData();
   console.log("ok  seeds: capacities 20/12");
 }
 {
+  const correctedWater = store.activities().find((activity) => activity.id === "water");
+  if (correctedWater.location !== "TBC" || correctedWater.mapsQuery !== ""
+      || correctedWater.photo !== "../assets/itc/water.webp") {
+    throw new Error("Swimming must start TBC with its water photo");
+  }
+  const correctedMidtown = store.activities().find((activity) => activity.id === "hyrox-midtown");
+  if (correctedMidtown.location !== "Midtown28 Fitness"
+      || correctedMidtown.mapsQuery !== "Midtown28 Fitness, Hong Kong") {
+    throw new Error("Midtown HYROX must use the precise Fitness venue");
+  }
+}
+{
   // v9 migration: persist a v8-shaped snapshot and reload
   const raw = localStorage.getItem("itc.prototype.v1");
   const snap = JSON.parse(raw);
@@ -953,6 +965,96 @@ store.resetLocalData();
   const mid2 = store.activities().find((a) => a.id === "hyrox-midtown");
   if (bft2.capacity !== 20 || mid2.capacity !== 12) throw new Error("v9 migration must fix capacities");
   console.log("ok  v9 migration: capacities fixed");
+}
+
+{
+  const locationV13 = {
+    version: 13,
+    sessionUserId: null,
+    activities: structuredClone(data.SEED_ACTIVITIES),
+    users: [],
+    bookings: [{
+      id: "old-midtown-booking",
+      snapshot: { location: "Midtown 28" },
+    }],
+    receipts: [],
+    campaigns: [],
+    donations: [],
+    prayers: [],
+    notifications: [],
+    sessionOverrides: {},
+    queues: {},
+    duty: {},
+    paymentPayouts: {},
+  };
+  const oldWater = locationV13.activities.find((activity) => activity.id === "water");
+  Object.assign(oldWater, {
+    location: "TBC",
+    mapsQuery: "TBC",
+    photo: "../assets/itc/main.webp",
+  });
+  const oldMidtown = locationV13.activities.find((activity) => activity.id === "hyrox-midtown");
+  Object.assign(oldMidtown, {
+    location: "Midtown 28",
+    mapsQuery: "Midtown 28, Hong Kong",
+  });
+  localStorage.setItem("itc.prototype.v1", JSON.stringify(locationV13));
+  store.load();
+  const repairedWater = store.activities().find((activity) => activity.id === "water");
+  if (repairedWater.location !== "TBC" || repairedWater.mapsQuery !== ""
+      || repairedWater.photo !== "../assets/itc/water.webp") {
+    throw new Error("v14 migration must repair Swimming defaults");
+  }
+  const repairedMidtown = store.activities().find((activity) => activity.id === "hyrox-midtown");
+  if (repairedMidtown.location !== "Midtown28 Fitness"
+      || repairedMidtown.mapsQuery !== "Midtown28 Fitness, Hong Kong") {
+    throw new Error("v14 migration must repair Midtown HYROX defaults");
+  }
+  const repairedBooking = JSON.parse(localStorage.getItem("itc.prototype.v1")).bookings[0];
+  if (repairedBooking.snapshot.location !== "Midtown28 Fitness") {
+    throw new Error("v14 migration must repair exact Midtown booking snapshots");
+  }
+
+  const preservedV13 = {
+    version: 13,
+    sessionUserId: null,
+    activities: structuredClone(data.SEED_ACTIVITIES),
+    users: [],
+    bookings: [],
+    receipts: [],
+    campaigns: [],
+    donations: [],
+    prayers: [],
+    notifications: [],
+    sessionOverrides: {},
+    queues: {},
+    duty: {},
+    paymentPayouts: {},
+  };
+  const customWater = preservedV13.activities.find((activity) => activity.id === "water");
+  Object.assign(customWater, {
+    location: "Custom Pool",
+    mapsQuery: "Custom Pool, Hong Kong",
+    photo: "../assets/itc/custom-pool.webp",
+  });
+  const customMidtown = preservedV13.activities.find((activity) => activity.id === "hyrox-midtown");
+  Object.assign(customMidtown, {
+    location: "Custom Midtown Venue",
+    mapsQuery: "Custom Midtown Venue, Hong Kong",
+  });
+  localStorage.setItem("itc.prototype.v1", JSON.stringify(preservedV13));
+  store.load();
+  const preservedWater = store.activities().find((activity) => activity.id === "water");
+  if (preservedWater.location !== "Custom Pool"
+      || preservedWater.mapsQuery !== "Custom Pool, Hong Kong"
+      || preservedWater.photo !== "../assets/itc/custom-pool.webp") {
+    throw new Error("v14 migration must not overwrite custom swimming values");
+  }
+  const preservedMidtown = store.activities().find((activity) => activity.id === "hyrox-midtown");
+  if (preservedMidtown.location !== "Custom Midtown Venue"
+      || preservedMidtown.mapsQuery !== "Custom Midtown Venue, Hong Kong") {
+    throw new Error("v14 migration must not overwrite custom Midtown values");
+  }
 }
 
 // --- HYROX payment system: sweep + cascade (Task 3) ---
@@ -1324,8 +1426,8 @@ console.log("ok  reset");
   if (!fresh.paymentPayouts || Array.isArray(fresh.paymentPayouts)
       || Object.keys(fresh.paymentPayouts).length) {
     failures++;
-    console.error("FAIL v13 fresh state must have an empty UUID-keyed payout map");
-  } else console.log("ok  v13 fresh state has an empty UUID-keyed payout map");
+    console.error("FAIL v14 fresh state must have an empty UUID-keyed payout map");
+  } else console.log("ok  v14 fresh state has an empty UUID-keyed payout map");
   if (Array.isArray(fresh.activities)) {
     for (const a of fresh.activities) {
       if ("baseBooked" in a) {
@@ -1443,10 +1545,10 @@ console.log("ok  reset");
     failures++;
     console.error("FAIL v10 migration must clear session tied to a removed demo user");
   } else console.log("ok  v10 migration clears removed session");
-  if (migrated.version !== 13) {
+  if (migrated.version !== 14) {
     failures++;
-    console.error(`FAIL integrated migration must advance version to 13, got ${migrated.version}`);
-  } else console.log("ok  integrated migration advances genuine v9 state to v13");
+    console.error(`FAIL integrated migration must advance version to 14, got ${migrated.version}`);
+  } else console.log("ok  integrated migration advances genuine v9 state to v14");
 }
 
 // --- Install neutral fixtures for local authenticated paths (no demo seeds) ---
@@ -1884,11 +1986,11 @@ for (const fixture of sourceSnapshots) {
     && !Array.isArray(migrated.paymentPayouts);
   const suppliedPayoutsPreserved = fixture.version !== 12
     || migrated.paymentPayouts["real-admin"]?.fpsPhone === "+852 6000 0000";
-  if (migrated.version !== 13 || suppliedIds.some((id) => !serialized.includes(id))
+  if (migrated.version !== 14 || suppliedIds.some((id) => !serialized.includes(id))
       || !payoutMapValid || !suppliedPayoutsPreserved) {
     failures++;
-    console.error(`FAIL genuine v${fixture.version} fixture must reach v13 intact`);
-  } else console.log(`ok  genuine v${fixture.version} fixture reaches v13 intact`);
+    console.error(`FAIL genuine v${fixture.version} fixture must reach v14 intact`);
+  } else console.log(`ok  genuine v${fixture.version} fixture reaches v14 intact`);
 }
 
 for (const invalidCounter of [null, -1, 1.5, "broken"]) {

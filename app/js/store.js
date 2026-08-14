@@ -28,7 +28,7 @@ const STORAGE_KEY = "itc.prototype.v1";
 const APPLY_DEVICE_KEY = "itc.device.id";
 const APPLY_DRAFT_KEY = "itc.apply.draft.v1";
 const APPLY_DRAFT_VERSION = 1;
-const STATE_VERSION = 13;
+const STATE_VERSION = 14;
 
 // Live-mode (Supabase) session cache. Avoids hammering the DB on every
 // page load. The TTL is short so role flips and welcome notifications
@@ -119,8 +119,7 @@ function migrate() {
   if (!state.duty || typeof state.duty !== "object" || Array.isArray(state.duty)) state.duty = {};
   if (!state.paymentPayouts || typeof state.paymentPayouts !== "object"
       || Array.isArray(state.paymentPayouts)) state.paymentPayouts = {};
-  // v13 is not released yet: move legacy payout fields into the additive
-  // UUID-keyed operations map for every accepted v9-v13 snapshot.
+  // v14 keeps legacy payout fields additive for every accepted v9-v13 snapshot.
   for (const user of state.users) {
     if (!user?.id || state.paymentPayouts[user.id] || (!user.paymeLink && !user.fpsPhone)) continue;
     state.paymentPayouts[user.id] = {
@@ -337,6 +336,31 @@ function migrate() {
     const activities = Array.isArray(state.activities) ? state.activities : [];
     for (const activity of activities) delete activity.baseBooked;
     state.activities = activities;
+  }
+  if (v < 14) {
+    const water = state.activities.find((activity) => activity.id === "water");
+    if (water) {
+      if (["Victoria Park", "Victoria Park Swimming Pool"].includes(water.location)) {
+        water.location = "TBC";
+      }
+      if (["Victoria Park, Hong Kong", "Victoria Park Swimming Pool, Hong Kong", "TBC"].includes(water.mapsQuery)) {
+        water.mapsQuery = "";
+      }
+      if (water.photo === "../assets/itc/main.webp") {
+        water.photo = "../assets/itc/water.webp";
+      }
+    }
+
+    const midtown = state.activities.find((activity) => activity.id === "hyrox-midtown");
+    if (midtown?.location === "Midtown 28") midtown.location = "Midtown28 Fitness";
+    if (midtown?.mapsQuery === "Midtown 28, Hong Kong") {
+      midtown.mapsQuery = "Midtown28 Fitness, Hong Kong";
+    }
+    for (const booking of state.bookings) {
+      if (booking.snapshot?.location === "Midtown 28") {
+        booking.snapshot.location = "Midtown28 Fitness";
+      }
+    }
   }
   state.version = STATE_VERSION;
 }

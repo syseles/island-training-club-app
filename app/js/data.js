@@ -53,8 +53,8 @@ export const SEED_ACTIVITIES = [
     weekday: 2, // Tuesday
     time: "19:30",
     durationMin: 90,
-    location: "Victoria Park",
-    mapsQuery: "Victoria Park, Hong Kong",
+    location: "TBC",
+    mapsQuery: "",
     photo: PH + "water.webp",
     blurb:
       "Community water session — skills, games and a good workout. Kit is provided, just bring a towel.",
@@ -69,8 +69,8 @@ export const SEED_ACTIVITIES = [
     weekday: 6, // Saturday
     time: "11:00",
     durationMin: 75,
-    location: "Midtown 28",
-    mapsQuery: "Midtown 28, Hong Kong",
+    location: "Midtown28 Fitness",
+    mapsQuery: "Midtown28 Fitness, Hong Kong",
     photo: PH + "hyrox.webp",
     blurb:
       "Weekly hybrid race training: ski, sled, burpees and running intervals. Every session is purchased separately at one fixed price.",
