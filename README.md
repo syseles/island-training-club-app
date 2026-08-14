@@ -38,7 +38,7 @@ The design review remains available at `http://127.0.0.1:4173/references/itc-mob
 - The combined Testing candidate has explicit ownership boundaries:
   - **Supabase:** identity, roles, applications, notifications, Giving campaigns, and donor profiles.
   - **`localStorage`:** Payment operations and Community prototype interactions. Payment reservations, bookings, queues, collector duty, payout details, confirmations, receipts, and prototype donation records are keyed by the authenticated Supabase profile UUID. No real money is moved.
-- Navigation combines the Notification bell with a signed-in-only Giving tab. Admin navigation contains Approvals, Members, Activities, Giving, and Payments / Ops.
+- Navigation combines the Notification bell with a signed-in-only Giving tab. Admin navigation contains Approvals, Members, Activities, Giving, and HYROX.
 - Persisted prototype state is **v14** and accepts/migrates existing **v9–v13** snapshots without discarding genuine domain records.
 - With Supabase configured, a new Google profile remains `pending` until its application is submitted and an Admin approves it. Pending and declined profiles cannot use Payment or Giving controls.
 - Without Supabase configuration, local state starts empty. Apply through the membership flow to create a local pending profile, which can then sign in again by email (no password).

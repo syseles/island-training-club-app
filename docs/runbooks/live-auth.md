@@ -16,11 +16,11 @@ identity, notifications, Giving, Admin, and approval workflows.
   profile that the on-duty admin edits locally. Operations state is never
   stored in `localStorage` once live mode is enabled.
 - **Navigation:** Notification bell plus a signed-in-only Giving tab.
-- **Admin tabs:** Approvals, Members, Activities, Giving, and Payments / Ops.
+- **Admin tabs:** Approvals, Members, Activities, Giving, and HYROX.
   Each Admin route exposes exactly one active tab.
-- **State compatibility:** the current local state is v13; v9, v10, v11, and
-  v12 persisted snapshots are accepted and migrated while preserving genuine
-  records.
+- **State compatibility:** the current local state is v14; v9, v10, v11, v12,
+  and v13 persisted snapshots are accepted and migrated while preserving
+  genuine records.
 
 Pending and declined profiles can browse public surfaces but cannot render or
 invoke Payment reservation, queue, or pay controls, and cannot use Giving
@@ -128,6 +128,11 @@ any database containing users or application objects. Its safety gate requires
 an explicitly acknowledged, empty target. Exercise the gate without applying
 migrations with:
 
+```bash
+bash supabase/tests/verify_giving_campaigns.sh --safety-check-only
+bash supabase/tests/verify_giving_campaigns_safety.sh
+```
+
 ## Free-event venue overrides
 
 Weekly free-event venues (`wnt`, `run`, `water`) live in the new
@@ -138,7 +143,18 @@ are rejected with `Activity venue is fixed.`. Members see the first
 confirmation per session; Admins see an audit notification on every actual
 save/reset, excluding the actor.
 
-Apply the migration after the operational backend chain:
+The Admin UI exposes these controls at **Admin Tools → Activities → Weekly
+Venue Overrides**.
+
+Recurring Swimming remains `TBC` in the activity template. Only dated weekly
+free-event overrides are shared through `set_session_venue`.
+
+Deploy the location updates after the operational backend chain in this order:
+
+1. `20260813000001_free_event_venue_overrides.sql`
+2. `20260813000002_midtown28_fitness.sql`
+
+Then verify against a fresh disposable database:
 
 ```bash
 export ITC_OPERATIONS_TEST_DATABASE_URL='postgresql://...disposable database...'
@@ -158,8 +174,8 @@ Run it via the Supabase SQL editor or `psql` against the live database URL.
 
 Browser-level acceptance on the deployed environment:
 
-1. As an Admin, sign in and open **Admin Tools → Payments / Ops → Free-event
-   venues**. Save a dated display location and geocode query.
+1. As an Admin, sign in and open **Admin Tools → Activities → Weekly Venue
+   Overrides**. Save a dated display location and geocode query.
 2. Open the dated activity page with `localStorage.removeItem("itc.geocode.v1")`.
    Confirm the Leaflet marker, attribution, and external Get directions link.
 3. Confirm an approved member receives **Venue confirmed** and another Admin
@@ -171,11 +187,6 @@ Browser-level acceptance on the deployed environment:
    external Get directions link.
 6. Open both HYROX activity pages. Get directions must appear without a
    weekly venue form.
-
-```bash
-bash supabase/tests/verify_giving_campaigns.sh --safety-check-only
-bash supabase/tests/verify_giving_campaigns_safety.sh
-```
 
 Applying the migrations to the real remote target remains a manual deployment
 operation; confirm the selected project and backups before running

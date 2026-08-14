@@ -811,7 +811,7 @@ if (!homeBooked.includes("Booked") || !homeBooked.includes("BFT Causeway Bay")) 
   failures++;
   console.error('FAIL home "My week" does not show the booked session');
 } else console.log('ok  home "My week" shows the booked session');
-if (homeBooked.includes("Midtown 28") || homeBooked.includes("Just show up")) {
+if (homeBooked.includes("Midtown28 Fitness") || homeBooked.includes("Just show up")) {
   failures++;
   console.error('FAIL home "My week" shows sessions the member has not booked');
 } else console.log('ok  home "My week" hides unbooked sessions');
@@ -900,7 +900,7 @@ const memberHome = views.viewHome();
 const fixtureMember = store.currentUser();
 const fixtureBookings = store.bookingsForUser(fixtureMember.id);
 const bookedMarker = fixtureBookings[0]?.snapshot?.location ?? "BFT Causeway Bay";
-const otherMarker = "Midtown 28";
+const otherMarker = "Midtown28 Fitness";
 if (!memberHome.includes(bookedMarker) || memberHome.includes(otherMarker)) {
   failures++;
   console.error(`FAIL "My week" should show only the member's booked HYROX (${bookedMarker})`);

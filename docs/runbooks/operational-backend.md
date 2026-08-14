@@ -117,7 +117,7 @@ select activity_id, venue, capacity, price_hkd
 ```
 
 Expected: `hyrox` (BFT Causeway Bay, 20, 180) and `hyrox-midtown`
-(Midtown 28, 12, 180).
+(Midtown28 Fitness, 12, 180).
 
 Confirm the rejected registrations, gym confirmation, and cancellation
 gates are enforced:
@@ -181,7 +181,7 @@ two separate browsers signed in as different administrators.
    following Saturday). As a member signed in on a third browser, tap
    **Reserve**, **Mark paid**, and notify Admin A.
 5. As **Admin A**, confirm the payment. Verify the booking moves to
-   `confirmed` and a receipt appears in **Admin → Payments / Ops**.
+   `confirmed` and a receipt appears in **Admin → HYROX**.
 6. **Admin B** sees the same confirmed status without reloading. The
    booking's snapshot is preserved.
 7. As **Admin A**, record the gym confirmation. **Admin B** sees the
@@ -191,7 +191,7 @@ two separate browsers signed in as different administrators.
    matches Admin A's view (Realtime refresh).
 9. As **Admin A**, cancel the session with a custom reason. **Admin B**
    sees the cancellation immediately; the receipts and bookings
-   disappear from the Payments / Ops queue.
+   disappear from the HYROX queue.
 10. Confirm a paid booking was deferred to the next available session
     and the corresponding queued notification appeared for the member.
 
