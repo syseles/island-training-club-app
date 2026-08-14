@@ -9,7 +9,7 @@ import * as store from "./store.js";
 import { isLive } from "./config.js";
 import * as liveOps from "./operations.js";
 import { sessionCancellationCopy } from "./operations.js";
-import * as indemnityDoc from "./indemnity-doc.js";
+import * as indemnityDoc from "./documents.js";
 import {
   LEADERS,
   CULTURE,

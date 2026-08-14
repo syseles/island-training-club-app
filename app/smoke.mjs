@@ -809,21 +809,48 @@ if (!views.viewHome().includes("Nothing booked this week")) {
 } else console.log('ok  "My week" empty state prompts to book');
 await check("checkout (member)", () => views.viewCheckout(paid.id));
 
-// --- indemnity document source module (Task 1) ---
-const indemnityDoc = await import("./js/indemnity-doc.js");
-const docBody = indemnityDoc.renderIndemnityDocument();
-for (const heading of [
-  "Health declaration",
-  "Participation at my own risk",
-  "Release &amp; indemnity",
-  "Emergency contact",
-]) {
-  if (!docBody.includes(heading)) {
+// --- document registry (indemnity + privacy + guidelines) ---
+const docsModule = await import("./js/documents.js");
+const DOCS = docsModule.DOCUMENTS;
+for (const key of ["indemnity", "privacy", "guidelines"]) {
+  if (!DOCS[key] || typeof DOCS[key].renderBody !== "function" || !DOCS[key].title) {
     failures++;
-    console.error(`FAIL indemnity doc missing heading "${heading}"`);
+    console.error(`FAIL documents registry missing entry for "${key}"`);
   }
 }
-console.log("ok  indemnity doc renders all four section headings");
+console.log("ok  documents registry exposes indemnity + privacy + guidelines");
+
+const docExpectations = {
+  indemnity: [
+    "Health declaration",
+    "Participation at my own risk",
+    "Release &amp; indemnity",
+    "Emergency contact",
+  ],
+  privacy: [
+    "What we collect",
+    "Why we collect it",
+    "Who sees it",
+    "Your choices",
+  ],
+  guidelines: [
+    "Everyone is welcome",
+    "Respect and encouragement",
+    "Safety first",
+    "Photos and media",
+    "Conduct",
+  ],
+};
+for (const [key, headings] of Object.entries(docExpectations)) {
+  const body = DOCS[key]?.renderBody?.() || "";
+  for (const heading of headings) {
+    if (!body.includes(heading)) {
+      failures++;
+      console.error(`FAIL ${key} document missing heading "${heading}"`);
+    }
+  }
+}
+console.log("ok  all three documents render their section headings");
 
 // --- modal component: scroll-end math (Task 2) ---
 const components = await import("./js/components.js");

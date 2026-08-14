@@ -11,7 +11,7 @@
 // The modal currently renders only the indemnity document, but is designed
 // so any future document body can be swapped in by changing the body source.
 
-import * as indemnityDoc from "./indemnity-doc.js";
+import * as indemnityDoc from "./documents.js";
 
 export const SCROLL_END_THRESHOLD_PX = 4;
 
