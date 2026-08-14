@@ -825,6 +825,25 @@ if (components.applyIndemnityAcceptance(orphanTrigger) !== false) {
   console.error("FAIL applyIndemnityAcceptance should return false when no form is found");
 } else console.log("ok  applyIndemnityAcceptance returns false for orphan triggers");
 
+// --- modal CSS classes present (Task 3) ---
+const stylesSource = readFileSync(resolve(__dirnameSmoke, "styles.css"), "utf8");
+for (const cls of [
+  ".modal-backdrop",
+  ".modal-dialog",
+  ".modal-header",
+  ".modal-doc",
+  ".modal-doc-body",
+  ".modal-doc-ack",
+  ".modal-link",
+  ".check input[disabled] + span",
+]) {
+  if (!stylesSource.includes(cls)) {
+    failures++;
+    console.error(`FAIL styles.css missing rule for "${cls}"`);
+  }
+}
+console.log("ok  styles.css contains all modal-related class definitions");
+
 // --- HYROX payment system: reserve -> mark -> collector confirm (Task 2) ---
 const bftSession = allUpcoming.find(
   (s) => s.activityId === "hyrox" && !data.sessionStarted(s)
