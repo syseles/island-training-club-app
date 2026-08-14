@@ -2189,8 +2189,8 @@ weeklyVenueForm.dataset = {
   session: swimmingSession.id,
 };
 weeklyVenueForm.fields = {
-  location: "Victoria Park Swimming Pool",
-  mapsQuery: "Victoria Park Swimming Pool, Hong Kong",
+  location: "  Victoria Park Swimming Pool  ",
+  mapsQuery: "",
 };
 const weeklySubmit = makeElement();
 weeklySubmit.type = "submit";
@@ -2204,8 +2204,46 @@ const weeklyVenueCall = operationalRpcCalls
   .at(-1);
 assert.equal(weeklyVenueCall.args.p_session_id, swimmingSession.id);
 assert.equal(weeklyVenueCall.args.p_location, "Victoria Park Swimming Pool");
-assert.equal(weeklyVenueCall.args.p_maps_query, "Victoria Park Swimming Pool, Hong Kong");
-console.log("ok  delegated weekly venue submit persists repeated-form values");
+assert.equal(weeklyVenueCall.args.p_maps_query, "Victoria Park Swimming Pool");
+const savedSwimming = store.getSession(swimmingSession.id);
+assert.equal(savedSwimming.location, "Victoria Park Swimming Pool");
+assert.equal(savedSwimming.mapsQuery, "Victoria Park Swimming Pool");
+console.log("ok  delegated weekly venue submit copies location into blank map queries");
+
+const weeklyVenueFailureForm = new HTMLFormElement();
+weeklyVenueFailureForm.id = "";
+weeklyVenueFailureForm.dataset = {
+  action: "form-week-venue",
+  session: swimmingSession.id,
+};
+weeklyVenueFailureForm.fields = {
+  location: "Victoria Park Swimming Pool",
+  mapsQuery: "",
+};
+const weeklyVenueFailureSubmit = makeElement();
+weeklyVenueFailureSubmit.type = "submit";
+weeklyVenueFailureForm.querySelector = (selector) => selector === '[type="submit"]' ? weeklyVenueFailureSubmit : null;
+weeklyVenueFailureForm.querySelectorAll = () => [weeklyVenueFailureSubmit];
+const htmlBeforeVenueFailure = viewEl.innerHTML;
+const baseOperationalRpcHandler = operationalRpcHandler;
+let rejectNextVenueSave = true;
+operationalRpcHandler = (name, args) => {
+  if (rejectNextVenueSave && name === "set_session_venue") {
+    rejectNextVenueSave = false;
+    operationalRpcCalls.push({ name, args: structuredClone(args) });
+    return Promise.resolve({ data: null, error: { message: "Venue override setup unavailable" } });
+  }
+  return baseOperationalRpcHandler(name, args);
+};
+await domListeners.get("submit")({ target: weeklyVenueFailureForm, preventDefault() {} });
+await new Promise(setImmediate);
+assert.equal(viewEl.innerHTML, htmlBeforeVenueFailure);
+assert.equal(weeklyVenueFailureForm.fields.location, "Victoria Park Swimming Pool");
+assert.equal(weeklyVenueFailureSubmit.disabled, false);
+assert.ok(toastStack.children.some((item) =>
+  item.textContent === "Venue override setup unavailable"
+));
+console.log("ok  failed weekly venue submit preserves form state without rerendering");
 
 // Legacy member-management URLs canonicalize instead of rendering the removed
 // row/avatar implementation.

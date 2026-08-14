@@ -1058,11 +1058,14 @@ document.addEventListener("submit", async (e) => {
       const control = form.querySelector('[type="submit"]');
       const controls = [...form.querySelectorAll("input, button")];
       const fd = new FormData(form);
+      const location = String(fd.get("location") || "").trim();
+      const enteredMapsQuery = String(fd.get("mapsQuery") || "").trim();
+      const mapsQuery = enteredMapsQuery || location;
       await withBusyControl(control, "Saving\u2026", async () => {
         try {
           await store.setWeekVenue(form.dataset.session, {
-            location: fd.get("location"),
-            mapsQuery: fd.get("mapsQuery"),
+            location,
+            mapsQuery,
           });
           toast("Venue saved for this week");
           await renderWithFeedback();
