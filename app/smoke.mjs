@@ -460,6 +460,33 @@ if (!applyRes.user.indemnityAcceptedAt) {
   console.error("FAIL indemnity acceptance not recorded at application");
 } else console.log("ok  indemnity acceptance recorded at application");
 
+// --- Photo consent is required at application, with an ITC Committee contact line ---
+{
+  const applyHtml = views.viewApply();
+  if (!applyHtml.includes('name="mediaConsent" required')) {
+    failures++;
+    console.error("FAIL local-mode apply form photo consent should be required");
+  }
+  if (applyHtml.includes("(Optional) I consent")) {
+    failures++;
+    console.error("FAIL local-mode apply form photo consent should not be labelled optional");
+  }
+  if (!applyHtml.includes("Please contact ITC Committee if you have any questions/concerns about this.")) {
+    failures++;
+    console.error("FAIL apply form missing the ITC Committee contact line under photo consent");
+  }
+  // live mode: source-level check (rendering viewApplyLive needs Supabase state)
+  if (!integratedViewSource.includes('name="photo_consent" ${checked("photo_consent")} required')) {
+    failures++;
+    console.error("FAIL live-mode apply form photo consent should be required");
+  }
+  if (integratedViewSource.includes("I consent to photos/videos of me being used on ITC channels. (Optional)")) {
+    failures++;
+    console.error("FAIL live-mode apply form photo consent should not be labelled optional");
+  }
+  console.log("ok  photo consent is required in both apply modes, with an ITC Committee contact line");
+}
+
 // --- Application draft persistence ---
 {
   localStorage.removeItem("itc.device.id");

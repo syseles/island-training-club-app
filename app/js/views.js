@@ -1523,7 +1523,8 @@ function applyFormHtml(cu, draft) {
         ${applySelect("heard_source", "How did you hear about ITC?", ["friend", "family", "search", "social", "event", "other"], true, fields.heard_source)}
         ${applyField("text", "heard_detail", "Detail (optional)", false, fields.heard_detail)}
         ${applyField("text", "preferred_name", "Preferred name (optional)", false, fields.preferred_name)}
-        <label class="check"><input type="checkbox" name="photo_consent" ${checked("photo_consent")}> I consent to photos/videos of me being used on ITC channels. (Optional)</label>
+        <label class="check"><input type="checkbox" name="photo_consent" ${checked("photo_consent")} required> I consent to photos/videos of me being used on ITC channels. *</label>
+        <p class="muted small">Please contact ITC Committee if you have any questions/concerns about this.</p>
         <label class="check"><input type="checkbox" name="waiver" ${checked("waiver")} required> I accept the participation waiver. (⏳ text pending ITC review)</label>
         <label class="check"><input type="checkbox" name="privacy" ${checked("privacy")} required> I accept the privacy policy. (⏳ text pending ITC review)</label>
         <label class="check"><input type="checkbox" name="guidelines" ${checked("guidelines")} required> I accept the community guidelines. (⏳ text pending ITC review)</label>
@@ -1581,8 +1582,9 @@ function viewApplyLocal() {
         <span>I accept the ITC community guidelines. *</span></label>
       <label class="check"><input type="checkbox" name="privacy" required>
         <span>I accept the privacy policy. *</span></label>
-      <label class="check"><input type="checkbox" name="mediaConsent">
-        <span>(Optional) I consent to being included in ITC photos and videos.</span></label>
+      <label class="check"><input type="checkbox" name="mediaConsent" required>
+        <span>I consent to being included in ITC photos and videos. *</span></label>
+      <p class="muted small">Please contact ITC Committee if you have any questions/concerns about this.</p>
       <div id="apply-error"></div>
       <button class="btn mt24" type="submit">Submit application</button>
       <p class="muted small mt8">Draft form — final fields and waiver wording to be confirmed with ITC leadership.</p>
