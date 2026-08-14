@@ -776,6 +776,55 @@ for (const heading of [
 }
 console.log("ok  indemnity doc renders all four section headings");
 
+// --- modal component: scroll-end math (Task 2) ---
+const components = await import("./js/components.js");
+if (components.SCROLL_END_THRESHOLD_PX !== 4) {
+  failures++;
+  console.error(`FAIL scroll-end threshold should be 4, got ${components.SCROLL_END_THRESHOLD_PX}`);
+} else console.log("ok  scroll-end threshold is 4px");
+
+const scrollCases = [
+  [100, 200, 300, true],   // 300 >= 296
+  [50, 200, 300, false],   // 250 < 296
+  [0, 200, 200, true],     // everything fits, 200 >= 196
+  [0, 100, 50, true],      // degenerate: doc smaller than viewport
+];
+for (const [top, height, scroll, expected] of scrollCases) {
+  const got = components.isAtScrollEnd(top, height, scroll);
+  if (got !== expected) {
+    failures++;
+    console.error(`FAIL isAtScrollEnd(${top},${height},${scroll}) expected ${expected}, got ${got}`);
+  }
+}
+console.log("ok  isAtScrollEnd math returns correct values for 4 cases");
+
+// --- applyIndemnityAcceptance: mutates the paired checkbox ---
+const fakeCheckbox = { disabled: true, checked: false };
+const fakeHint = { hidden: false };
+const fakeForm = {
+  querySelector: (sel) => {
+    if (sel === "[data-indemnity-checkbox]") return fakeCheckbox;
+    if (sel === "[data-indemnity-hint]") return fakeHint;
+    return null;
+  },
+};
+const fakeTrigger = { closest: (sel) => (sel === "form" ? fakeForm : null) };
+if (components.applyIndemnityAcceptance(fakeTrigger) !== true) {
+  failures++;
+  console.error("FAIL applyIndemnityAcceptance should return true when a checkbox is paired");
+}
+if (fakeCheckbox.disabled !== false || fakeCheckbox.checked !== true || fakeHint.hidden !== true) {
+  failures++;
+  console.error("FAIL applyIndemnityAcceptance did not enable/check checkbox and hide hint");
+} else console.log("ok  applyIndemnityAcceptance enables + checks paired checkbox and hides hint");
+
+// applyIndemnityAcceptance: returns false when no checkbox is paired (Profile > Indemnity trigger)
+const orphanTrigger = { closest: () => null };
+if (components.applyIndemnityAcceptance(orphanTrigger) !== false) {
+  failures++;
+  console.error("FAIL applyIndemnityAcceptance should return false when no form is found");
+} else console.log("ok  applyIndemnityAcceptance returns false for orphan triggers");
+
 // --- HYROX payment system: reserve -> mark -> collector confirm (Task 2) ---
 const bftSession = allUpcoming.find(
   (s) => s.activityId === "hyrox" && !data.sessionStarted(s)
