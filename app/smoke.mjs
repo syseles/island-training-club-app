@@ -415,6 +415,36 @@ if (!views.viewApply().includes('name="donorId"')) {
   failures++;
   console.error("FAIL apply form missing optional Donor ID field");
 } else console.log("ok  apply form collects optional Donor ID");
+
+// --- apply form checkboxes render the read-and-accept link (Task 4) ---
+// local mode: viewApply() dispatches to viewApplyLocal when isLive() is false
+const applyLocalHtml = views.viewApply();
+if (!applyLocalHtml.includes("Health &amp; Liability Indemnity</a> form")) {
+  failures++;
+  console.error('FAIL local-mode apply form should label the acceptance as "Health & Liability Indemnity form"');
+}
+if (!applyLocalHtml.includes('data-action="open-indemnity-doc"')) {
+  failures++;
+  console.error("FAIL local-mode apply form missing modal trigger on the acceptance link");
+}
+if (!applyLocalHtml.includes("data-indemnity-checkbox")) {
+  failures++;
+  console.error("FAIL local-mode apply form checkbox missing data-indemnity-checkbox attribute");
+}
+if (!applyLocalHtml.includes("Read the document to enable acceptance")) {
+  failures++;
+  console.error("FAIL local-mode apply form missing the read-first hint copy");
+}
+console.log("ok  local-mode apply form renders the indemnity link + disabled checkbox + hint");
+
+// Live-mode apply form copy moved from "participation waiver" to
+// "Health & Liability Indemnity" — the old string should no longer appear.
+// Source-level check: rendering viewApplyLive() requires Supabase state, so we
+// assert against the integrated source instead.
+if (combinedRuntimeSource.includes("I accept the participation waiver")) {
+  failures++;
+  console.error('FAIL live-mode apply form still references old "participation waiver" copy');
+} else console.log('ok  live-mode apply form no longer references "participation waiver"');
 await check("checkout (visitor) -> redirect", () => views.viewCheckout(paid.id));
 await check("admin (visitor) -> redirect", () => views.viewAdmin("approvals"));
 await check("notfound", () => views.viewNotFound());

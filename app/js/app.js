@@ -6,6 +6,7 @@ import * as store from "./store.js";
 import { buildICS, findSession, todayLocal, mondayOf, addDays, isoDate, donorIdProblem } from "./data.js";
 import * as views from "./views.js";
 import { isLive, supabase } from "./config.js";
+import * as components from "./components.js";
 
 const viewEl = document.getElementById("view");
 const navEl = document.getElementById("bottom-nav");
@@ -465,6 +466,15 @@ document.addEventListener("click", async (e) => {
       clearTimeout(applyDraftTimer);
       const draft = saveApplyDraftForm(form);
       toast(draft ? "Draft saved on this device" : "Unable to save draft", !draft);
+      break;
+    }
+    case "open-indemnity-doc": {
+      components.openIndemnityModal({
+        trigger: el,
+        onAccept: (openingTrigger) => {
+          components.applyIndemnityAcceptance(openingTrigger || el);
+        },
+      });
       break;
     }
     case "discard-draft":
