@@ -599,6 +599,36 @@ if (!adminProfile.includes("Admin Tools") || !adminProfile.includes('href="#/adm
 }
 await check("admin activity edit", () => views.viewAdminActivity("hyrox"));
 await check("admin activity new", () => views.viewAdminActivity("new"));
+{
+  const swimmingBeforeEdit = structuredClone(store.getActivity("water"));
+  store.saveActivity({
+    ...swimmingBeforeEdit,
+    location: "TBC",
+    mapsQuery: "",
+    photo: "../assets/itc/main.webp",
+  });
+  if (store.getActivity("water").photo !== "../assets/itc/water.webp") {
+    throw new Error("editing Swimming must preserve its existing photo");
+  }
+
+  const activityId = "photo-regression-new";
+  store.saveActivity({
+    id: activityId,
+    title: "Photo Regression New",
+    kind: "paid",
+    location: "Main Hall",
+    mapsQuery: "Main Hall, Hong Kong",
+    photo: "../assets/itc/main.webp",
+    weekday: 2,
+    durationMin: 60,
+    price: 50,
+    capacity: 10,
+  });
+  if (store.getActivity(activityId).photo !== "../assets/itc/main.webp") {
+    throw new Error("new activities may keep the generic photo");
+  }
+  store.activities().splice(store.activities().findIndex((activity) => activity.id === activityId), 1);
+}
 const newApplicant = store.pendingApplicants().find((u) => u.email === "test@example.com");
 store.approveApplicant(newApplicant.id);
 console.log("ok  admin approved new applicant");

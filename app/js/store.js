@@ -637,6 +637,7 @@ export function saveActivity(draft) {
   const existing = state.activities.find((a) => a.id === draft.id);
   const record = {
     ...draft,
+    photo: existing?.photo || draft.photo || "../assets/itc/main.webp",
     price: draft.kind === "paid" ? Number(draft.price) || 0 : undefined,
     capacity: draft.kind === "paid" ? Number(draft.capacity) || 0 : undefined,
     durationMin: Number(draft.durationMin) || 60,
