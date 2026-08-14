@@ -225,7 +225,29 @@ if (localVisitorHome.includes("My Week")) {
 }
 const assertRenderedActivityLinksAreFree = (html, label) => {
   const linkedIds = [...html.matchAll(/href="#\/activity\/([^"]+)"/g)].map((match) => match[1]);
-  if (!linkedIds.length) throw new Error(`${label} must render at least one activity link`);
+  if (!linkedIds.length) {
+    // Mirror viewHome()'s visitor branch: when no free sessions exist in the
+    // current Mon–Sun window, the empty state is the expected output and
+    // there are no links to verify. The seed data (Mon/Tue/Wed only) makes
+    // this the case on Thu–Sun — without this guard the suite was green only
+    // on Mon–Wed.
+    const weekStart = data.mondayOf(data.todayLocal());
+    const weekEnd = data.addDays(weekStart, 6);
+    const freeInWeek = allUpcoming.filter((session) => {
+      if (session.kind !== "free") return false;
+      const iso = session.dateISO || (session.snapshot && session.snapshot.dateISO);
+      if (!iso) return false;
+      const t = data.parseISO(iso).getTime();
+      return t >= weekStart.getTime() && t <= weekEnd.getTime();
+    });
+    if (freeInWeek.length) {
+      throw new Error(`${label} must render at least one activity link (${freeInWeek.length} free sessions this week)`);
+    }
+    if (!html.includes("No open sessions this week")) {
+      throw new Error(`${label} should render the empty state when no free sessions are in the current week`);
+    }
+    return;
+  }
   for (const id of linkedIds) {
     const session = allUpcoming.find((item) => item.id === id);
     if (!session || session.kind !== "free") {
@@ -234,8 +256,27 @@ const assertRenderedActivityLinksAreFree = (html, label) => {
   }
 };
 assertRenderedActivityLinksAreFree(localVisitorHome, "visitor Home");
-if (!localVisitorHome.includes(free.name) || localVisitorHome.includes(paid.name)) {
-  throw new Error("visitor Home must show free sessions only");
+{
+  const weekStart = data.mondayOf(data.todayLocal());
+  const weekEnd = data.addDays(weekStart, 6);
+  const freeInWeek = allUpcoming.filter((session) => {
+    if (session.kind !== "free") return false;
+    const iso = session.dateISO || (session.snapshot && session.snapshot.dateISO);
+    if (!iso) return false;
+    const t = data.parseISO(iso).getTime();
+    return t >= weekStart.getTime() && t <= weekEnd.getTime();
+  });
+  if (freeInWeek.length) {
+    // free is guaranteed non-null in this branch — guard above found one.
+    if (!localVisitorHome.includes(free.name) || localVisitorHome.includes(paid.name)) {
+      throw new Error("visitor Home must show free sessions only");
+    }
+  } else {
+    // Thu–Sun: no free sessions in window, so neither name should appear.
+    if (localVisitorHome.includes(free.name) || localVisitorHome.includes(paid.name)) {
+      throw new Error("visitor Home should not list session names when the current week has no free sessions");
+    }
+  }
 }
 assertPrimaryNav(null, ["Home", "Schedule", "Community", "Account"], "visitor");
 if (!localVisitorHome.includes('href="#/account">Sign in or join</a>')) {
@@ -502,8 +543,31 @@ for (const [input, expect] of [
 console.log("ok  donor ID format validation");
 await check("account (pending)", () => views.viewAccount());
 const pendingHome = views.viewHome();
-if (!pendingHome.includes("My Week") || !pendingHome.includes(free.name) || pendingHome.includes(paid.name)) {
-  throw new Error("pending Home must show My Week with free sessions only");
+{
+  // Pending applicants see "My Week" filtered to free sessions in the
+  // current Mon–Sun window (same as the visitor branch). On Thu–Sun the
+  // seed data yields no such sessions, so neither session name appears.
+  const weekStart = data.mondayOf(data.todayLocal());
+  const weekEnd = data.addDays(weekStart, 6);
+  const freeInWeek = allUpcoming.filter((session) => {
+    if (session.kind !== "free") return false;
+    const iso = session.dateISO || (session.snapshot && session.snapshot.dateISO);
+    if (!iso) return false;
+    const t = data.parseISO(iso).getTime();
+    return t >= weekStart.getTime() && t <= weekEnd.getTime();
+  });
+  if (freeInWeek.length) {
+    if (!pendingHome.includes("My Week") || !pendingHome.includes(free.name) || pendingHome.includes(paid.name)) {
+      throw new Error("pending Home must show My Week with free sessions only");
+    }
+  } else {
+    if (!pendingHome.includes("My Week")) {
+      throw new Error("pending Home must show My Week heading even when no sessions this week");
+    }
+    if (pendingHome.includes(free.name) || pendingHome.includes(paid.name)) {
+      throw new Error("pending Home should not list session names when the current week has no free sessions");
+    }
+  }
 }
 assertRenderedActivityLinksAreFree(pendingHome, "pending Home");
 const pendingCommunity = views.viewCommunity();
