@@ -289,22 +289,16 @@ console.log("ok  signed-out Home uses the correct live/local sign-in action");
 await check("home (visitor)", () => views.viewHome());
 await check("schedule", () => views.viewSchedule());
 
-// Schedule filters: Free/Paid kind filters removed; category filters remain.
+// Schedule filters: Free/Paid kind filters restored; all chips render.
 {
   const schedHtml = views.viewSchedule();
-  for (const removed of ['data-filter="free"', 'data-filter="paid"']) {
-    if (schedHtml.includes(removed)) {
-      failures++;
-      console.error(`FAIL Schedule should not render the ${removed} filter chip`);
-    }
-  }
-  for (const kept of ['data-filter="all"', 'data-filter="Run"', 'data-filter="Strength"', 'data-filter="HYROX"', 'data-filter="Water"']) {
+  for (const kept of ['data-filter="all"', 'data-filter="free"', 'data-filter="paid"', 'data-filter="Run"', 'data-filter="Strength"', 'data-filter="HYROX"', 'data-filter="Water"']) {
     if (!schedHtml.includes(kept)) {
       failures++;
-      console.error(`FAIL Schedule should keep the ${kept} filter chip`);
+      console.error(`FAIL Schedule should render the ${kept} filter chip`);
     }
   }
-  console.log("ok  Schedule drops Free/Paid filters, keeps category filters");
+  console.log("ok  Schedule renders All + Free/Paid + category filter chips");
 }
 const hyroxSid = store.nextSession().kind === "paid" ? store.nextSession().id : null;
 await check("activity paid (visitor)", () => views.viewActivity(paid.id));

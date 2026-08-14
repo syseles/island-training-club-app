@@ -304,6 +304,8 @@ export function resetScheduleState() {
 
 const FILTERS = [
   ["all", "All"],
+  ["free", "Free"],
+  ["paid", "Paid"],
   ["Run", "Run"],
   ["Strength", "Strength"],
   ["HYROX", "HYROX"],
@@ -312,6 +314,7 @@ const FILTERS = [
 
 function matchesFilter(s, filter) {
   if (filter === "all") return true;
+  if (filter === "free" || filter === "paid") return s.kind === filter;
   return s.category === filter;
 }
 
