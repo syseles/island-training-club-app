@@ -1000,6 +1000,10 @@ store.resetLocalData();
   });
   localStorage.setItem("itc.prototype.v1", JSON.stringify(locationV13));
   store.load();
+  const migratedV13 = JSON.parse(localStorage.getItem("itc.prototype.v1"));
+  if (migratedV13.version !== 14) {
+    throw new Error("v14 migration must persist version 14");
+  }
   const repairedWater = store.activities().find((activity) => activity.id === "water");
   if (repairedWater.location !== "TBC" || repairedWater.mapsQuery !== ""
       || repairedWater.photo !== "../assets/itc/water.webp") {
