@@ -1238,19 +1238,25 @@ export function upcomingSessions(days = 14) {
       state.activities.filter((a) => a.kind === "free"),
       todayLocal(),
       days
-    ).map((s) => ({
-      ...s,
-      spots: spotsLeft(s),
-      past: false,
-    }));
+    ).map((s) => {
+      const decorated = decorateFreeSession(s);
+      return {
+        ...decorated,
+        spots: spotsLeft(decorated),
+        past: false,
+      };
+    });
     return [...freeSessions, ...livePaid];
   }
   const today = todayLocal();
-  return sessionsInRange(state.activities, today, days).map((s) => ({
-    ...s,
-    spots: spotsLeft(s),
-    past: false,
-  }));
+  return sessionsInRange(state.activities, today, days).map((s) => {
+    const decorated = decorateSession(s);
+    return {
+      ...decorated,
+      spots: spotsLeft(decorated),
+      past: false,
+    };
+  });
 }
 
 export function nextSession() {

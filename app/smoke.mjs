@@ -134,7 +134,7 @@ for (const marker of [
   "notification-filter",
   "Giving &amp; Fundraising",
   "ITC Anniversary",
-  "Payments / Ops",
+  "HYROX",
 ]) {
   if (!combinedRuntimeSource.includes(marker)) {
     throw new Error(`testing integration missing ${marker}`);
@@ -147,7 +147,7 @@ for (const marker of [
   "Privacy &amp; Notifications",
   "Approvals",
   "Members",
-  "Payments / Ops",
+  "HYROX",
   "Duty",
   "Session controls",
 ]) {
@@ -279,13 +279,13 @@ if (!commHtml.includes('data-action="connect-interest"')) {
   console.error("FAIL Community Pulse meal CTA should use the existing interest action");
 }
 const coexistenceSurface = `${integratedViewSource}\n${localVisitorHome}\n${commHtml}`;
-for (const marker of ["Home", "notificationBellHTML", '#/giving', "community-pulse", "Payments / Ops"]) {
+for (const marker of ["Home", "notificationBellHTML", '#/giving', "community-pulse", "HYROX"]) {
   if (!coexistenceSurface.includes(marker)) {
     failures++;
     console.error(`FAIL combined domain coexistence missing ${marker}`);
   }
 }
-console.log("ok  Home, Notification bell, Giving nav, Community pulse, and Payment Ops coexist");
+console.log("ok  Home, Notification bell, Giving nav, Community pulse, and HYROX admin coexist");
 let commOk = true;
 for (const link of [
   "#/community/prayers",
@@ -1421,7 +1421,7 @@ store.signIn("member@example.test");
   store.markBookingPaid(b.id, "FPS", "9921");
   store.signIn("admin@example.test");
   const ops = await views.viewAdmin("payments");
-  if (!ops.includes("Payments / Ops") || (ops.match(/aria-current="page"/g) || []).length !== 1)
+  if (!ops.includes("HYROX") || (ops.match(/aria-current="page"/g) || []).length !== 1)
     throw new Error("Admin payments tab should be labeled and expose one active tab");
   if (!ops.includes("Pending payments") || !ops.includes("9921"))
     throw new Error("ops should list pending payments with references");
@@ -2211,19 +2211,37 @@ const midtownDetail = views.viewActivity(midtownSample.id);
 if (!midtownDetail.includes("Get directions") || midtownDetail.includes('id="activity-map"')) {
   throw new Error("closed Midtown must expose Get directions without the inline map");
 }
-// Admin Ops renders the free-event venue forms with separate location/mapsQuery inputs.
+// Admin Activities separates recurring defaults from one-off free-session venue overrides.
+const swimmingSession = store.upcomingSessions(21).find(
+  (s) => s.activityId === "water" && !data.sessionStarted(s)
+);
+if (!swimmingSession) throw new Error("expected an upcoming swimming session for admin IA checks");
+store.setWeekVenue(swimmingSession.id, {
+  location: "Victoria Park Swimming Pool",
+  mapsQuery: "Victoria Park Swimming Pool, Hong Kong",
+});
 store.signIn("admin@example.test");
-const opsHtml = await views.viewAdmin("payments");
-if (!opsHtml.includes("Free-event venues")) {
-  throw new Error("Admin Ops must include the Free-event venues section");
+const activitiesHtml = await views.viewAdmin("activities");
+const hyroxAdminHtml = await views.viewAdmin("payments");
+if (!activitiesHtml.includes("Recurring Activity Defaults")
+    || !activitiesHtml.includes("Weekly Venue Overrides")
+    || !activitiesHtml.includes("Only this session")
+    || !activitiesHtml.includes("Google Maps search")
+    || !activitiesHtml.includes("Save Weekly Venue")
+    || !activitiesHtml.includes("Reset to Recurring Default")) {
+  throw new Error("Activities must separate recurring defaults from weekly overrides");
 }
-if (!opsHtml.includes(`data-action="form-week-venue" data-session="${wntSession.id}"`)
-    || !opsHtml.includes(`name="location"`)
-    || !opsHtml.includes(`name="mapsQuery"`)) {
-  throw new Error("Free-event venue form must render distinct location + mapsQuery inputs");
+if (!activitiesHtml.includes("Current venue: <strong>Victoria Park Swimming Pool</strong>")
+    || !activitiesHtml.includes("Recurring default: <strong>TBC</strong>")) {
+  throw new Error("Activities must show distinct current and recurring venues for overridden Swimming");
 }
-if (opsHtml.match(/data-action="form-week-venue" data-session="hyrox-[^"]+"/)) {
-  throw new Error("HYROX sessions must not render a weekly venue form");
+if (hyroxAdminHtml.includes("Weekly Venue Overrides")
+    || hyroxAdminHtml.includes('data-action="form-week-venue"')) {
+  throw new Error("HYROX must not contain free-event weekly venue controls");
+}
+if (!hyroxAdminHtml.includes(">HYROX</a>")
+    || hyroxAdminHtml.includes("Payments / Ops")) {
+  throw new Error("the final Admin tab must be HYROX");
 }
 store.signOut();
 // Members cannot set a weekly venue.

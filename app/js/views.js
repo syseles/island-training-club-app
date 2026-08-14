@@ -1860,7 +1860,7 @@ export async function viewAdmin(tab = "approvals") {
         ["members", "Members"],
         ["activities", "Activities"],
         ["giving", "Giving"],
-        ["payments", "Payments / Ops"],
+        ["payments", "HYROX"],
       ]
         .map(([key, label]) => `<a href="#/admin/${key}" class="${key === canonicalTab ? "active" : ""}"${key === canonicalTab ? ' aria-current="page"' : ""}>${label}</a>`)
         .join("")}
@@ -2006,7 +2006,6 @@ function adminOps(viewer, memberUsers) {
   return `
     ${dutyCard}
     ${pendingCard}
-    ${adminFreeEventVenues()}
     <div class="section-head mt24"><h2>HYROX sessions</h2></div>
     ${sessionCards}`;
 }
@@ -2016,10 +2015,11 @@ function adminFreeEventVenues() {
     .filter((s) => s.kind === "free" && !sessionStarted(s));
   if (!upcoming.length) return "";
   return `
-    <div class="section-head mt24"><h2>Free-event venues</h2></div>
-    <p class="muted small">Override the meeting point for a single week's free session. Leave blank to fall back to the activity template.</p>
+    <div class="section-head mt24"><h2>Weekly Venue Overrides</h2></div>
+    <p class="muted small">Set a venue for one dated free event. Later weeks keep the recurring default.</p>
     ${upcoming.map((s) => {
       const override = store.weekVenueOverride(s.id);
+      const recurring = store.getActivity(s.activityId);
       const safeId = esc(s.id);
       const locationId = `week-venue-location-${safeId}`;
       const mapsId = `week-venue-maps-${safeId}`;
@@ -2027,7 +2027,9 @@ function adminFreeEventVenues() {
         <div class="card mt16 free-event-venue-card"><div class="card-body">
           <div class="kicker dim" style="margin-top:0">${esc(fmtDate(s.dateISO))} · ${fmtTime(s.time)}</div>
           <h3 class="mt8">${esc(s.name)}</h3>
+          <span class="badge neutral">Only this session</span>
           <p class="muted small mt8">Current venue: <strong>${esc(s.location || "TBC")}</strong></p>
+          <p class="muted small">Recurring default: <strong>${esc(recurring?.location || "TBC")}</strong></p>
           <form class="mt8" data-action="form-week-venue" data-session="${safeId}">
             <div class="field-row">
               <div class="field">
@@ -2035,13 +2037,13 @@ function adminFreeEventVenues() {
                 <input id="${locationId}" name="location" value="${esc(override.location || '')}" placeholder="e.g. Central Harbourfront — 7pm sharp">
               </div>
               <div class="field">
-                <label for="${mapsId}">Geocode query (for map)</label>
+                <label for="${mapsId}">Google Maps search</label>
                 <input id="${mapsId}" name="mapsQuery" value="${esc(override.mapsQuery || '')}" placeholder="e.g. Central Harbourfront, Hong Kong">
               </div>
             </div>
             <div class="btn-row">
-              <button class="btn ghost sm" type="submit">Save venue for this week</button>
-              <button class="btn ghost sm" type="button" data-action="reset-week-venue" data-session="${safeId}">Reset</button>
+              <button class="btn ghost sm" type="submit">Save Weekly Venue</button>
+              <button class="btn ghost sm" type="button" data-action="reset-week-venue" data-session="${safeId}">Reset to Recurring Default</button>
             </div>
           </form>
         </div></div>`;
@@ -2193,11 +2195,9 @@ export async function viewAdminCampaign(id) {
 
 function adminActivities() {
   const acts = store.activities();
-  return `
-    <div class="session-list">
-      ${acts
-        .map(
-          (a) => `
+  const activityRows = acts
+    .map(
+      (a) => `
         <a class="session-row" href="#/admin/activity/${a.id}">
           <time>${["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][a.weekday]}<small>${a.time}</small></time>
           <div>
@@ -2209,10 +2209,14 @@ function adminActivities() {
             ${a.published ? "" : '<span class="badge neutral">Hidden</span>'}
           </div>
         </a>`
-        )
-        .join("")}
-    </div>
-    <a class="btn ghost mt16" href="#/admin/activity/new">+ New activity</a>`;
+    )
+    .join("");
+  return `
+    <div class="section-head"><h2>Recurring Activity Defaults</h2></div>
+    <p class="muted small">Changes here affect all future weeks unless a dated override is set below.</p>
+    <div class="session-list">${activityRows}</div>
+    <a class="btn ghost mt16" href="#/admin/activity/new">+ New activity</a>
+    ${adminFreeEventVenues()}`;
 }
 
 function adminMembers(viewer, users) {
