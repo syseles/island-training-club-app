@@ -759,6 +759,23 @@ if (!views.viewHome().includes("Nothing booked this week")) {
   console.error('FAIL "My week" should prompt when the member has no bookings');
 } else console.log('ok  "My week" empty state prompts to book');
 await check("checkout (member)", () => views.viewCheckout(paid.id));
+
+// --- indemnity document source module (Task 1) ---
+const indemnityDoc = await import("./js/indemnity-doc.js");
+const docBody = indemnityDoc.renderIndemnityDocument();
+for (const heading of [
+  "Health declaration",
+  "Participation at my own risk",
+  "Release &amp; indemnity",
+  "Emergency contact",
+]) {
+  if (!docBody.includes(heading)) {
+    failures++;
+    console.error(`FAIL indemnity doc missing heading "${heading}"`);
+  }
+}
+console.log("ok  indemnity doc renders all four section headings");
+
 // --- HYROX payment system: reserve -> mark -> collector confirm (Task 2) ---
 const bftSession = allUpcoming.find(
   (s) => s.activityId === "hyrox" && !data.sessionStarted(s)
