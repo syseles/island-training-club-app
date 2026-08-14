@@ -194,14 +194,19 @@ export async function mountActivityMap(host, options = {}) {
   if (!host || host.id !== "activity-map") return false;
   const query = String(host.dataset.mapsQuery || "").trim();
   if (!query) return false;
-  const coords = await geocodeQuery(query, { fetchImpl, timeoutMs });
-  if (!coords) {
+  if (!ownsGeneration() || !host.isConnected) return false;
+  const geocodePromise = geocodeQuery(query, { fetchImpl, timeoutMs });
+  const leafletPromise = Promise.resolve().then(() =>
+    (loadLeaflet || defaultLoadLeaflet)({ timeoutMs: timeoutMs || LEAFLET_TIMEOUT_MS })
+  );
+  let coords;
+  try {
+    [coords] = await Promise.all([geocodePromise, leafletPromise]);
+  } catch (_err) {
     if (ownsGeneration() && host.isConnected) renderFallback(host);
     return false;
   }
-  try {
-    await (loadLeaflet || defaultLoadLeaflet)({ timeoutMs: timeoutMs || LEAFLET_TIMEOUT_MS });
-  } catch (_err) {
+  if (!coords) {
     if (ownsGeneration() && host.isConnected) renderFallback(host);
     return false;
   }

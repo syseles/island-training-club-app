@@ -2298,6 +2298,39 @@ if (map.normalizeGeocodeResult([{ lat: "x", lon: "114" }]) !== null) {
   throw new Error("normalizeGeocodeResult should reject non-finite coordinates");
 }
 
+// mountActivityMap must start geocoding and Leaflet loading concurrently.
+let releaseGeocode;
+const geocodeGate = new Promise((resolve) => { releaseGeocode = resolve; });
+const starts = [];
+const concurrentHost = {
+  id: "activity-map",
+  dataset: {
+    mapsQuery: "task-5-concurrency-imaginary-place",
+    markerLabel: "ITC Swimming",
+  },
+  isConnected: true,
+  innerHTML: "<p>Loading map…</p>",
+};
+mem.set("itc.geocode.v1", "{}");
+const concurrentMount = map.mountActivityMap(concurrentHost, {
+  fetchImpl: async () => {
+    starts.push("geocode");
+    await geocodeGate;
+    return { ok: true, json: async () => [] };
+  },
+  loadLeaflet: async () => { starts.push("leaflet"); },
+});
+await Promise.resolve();
+const startedConcurrently = JSON.stringify(starts) === JSON.stringify(["geocode", "leaflet"]);
+releaseGeocode();
+const concurrentResult = await concurrentMount;
+if (!startedConcurrently) {
+  throw new Error(`geocoding and Leaflet must start concurrently; saw ${JSON.stringify(starts)}`);
+}
+if (concurrentResult !== false) {
+  throw new Error("empty geocode result must still resolve to false");
+}
+
 // mountActivityMap must resolve to false and render fallback when no result is found.
 const mapHost = {
   id: "activity-map",
