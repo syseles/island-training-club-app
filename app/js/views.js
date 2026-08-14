@@ -9,6 +9,7 @@ import * as store from "./store.js";
 import { isLive } from "./config.js";
 import * as liveOps from "./operations.js";
 import { sessionCancellationCopy } from "./operations.js";
+import * as indemnityDoc from "./indemnity-doc.js";
 import {
   LEADERS,
   CULTURE,
@@ -1262,15 +1263,9 @@ async function accountIndemnity(user) {
         <p>Please read the indemnity below, then accept and confirm — it’s required for joining ITC activities.</p>
       </div>`
     }
+    <a class="btn ghost sm mt16" href="#" data-action="open-indemnity-doc">View as full document</a>
     <div class="card mt16"><div class="card-body prose">
-      <h3>Health declaration</h3>
-      <p>I confirm that I am physically fit and in good health, and I know of no medical reason I should not take part in Island Training Club (ITC) activities. If my health changes, I will seek professional medical advice before taking part again.</p>
-      <h3>Participation at my own risk</h3>
-      <p>I understand that ITC activities are recreational, may be volunteer-led, and involve inherent physical risk. I take part at my own risk, will work within my own limits, and will follow the instructions of ITC leaders at all times.</p>
-      <h3>Release &amp; indemnity</h3>
-      <p>To the fullest extent permitted by law, I release and indemnify ITC, its leaders, members and volunteers against any claim, loss, injury or damage arising from my participation in ITC activities.</p>
-      <h3>Emergency contact</h3>
-      <p>I confirm the emergency contact details in my membership application are accurate, and I will keep them up to date.</p>
+      ${indemnityDoc.renderIndemnityDocument()}
     </div></div>
     ${
       at

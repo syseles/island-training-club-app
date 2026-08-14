@@ -779,6 +779,25 @@ if (!(await views.viewAccount("indemnity")).includes("Accept &amp; Confirm")) {
   failures++;
   console.error("FAIL indemnity page missing Accept & Confirm");
 } else console.log("ok  indemnity page offers Accept & Confirm");
+
+// --- Profile > Indemnity: View-as-document button + DRY card body (Task 5) ---
+const indemnityPageHtml = await views.viewAccount("indemnity");
+if (!indemnityPageHtml.includes("View as full document")) {
+  failures++;
+  console.error('FAIL Profile > Indemnity should expose a "View as full document" button');
+} else console.log('ok  Profile > Indemnity exposes "View as full document" button');
+for (const heading of [
+  "Health declaration",
+  "Participation at my own risk",
+  "Release &amp; indemnity",
+  "Emergency contact",
+]) {
+  if (!indemnityPageHtml.includes(heading)) {
+    failures++;
+    console.error(`FAIL Profile > Indemnity card missing heading "${heading}" after DRY refactor`);
+  }
+}
+console.log("ok  Profile > Indemnity card still renders all four section headings (DRY)");
 store.acceptIndemnity(store.currentUser().id);
 if (!(await views.viewAccount()).includes("Indemnity confirmed on")) {
   failures++;
