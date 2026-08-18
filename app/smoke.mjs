@@ -1288,6 +1288,36 @@ installLocalFixtures(); store.signIn("member@example.test");
     throw new Error("session overrides should decorate the session");
   console.log("ok  session overrides: time change, venue TBC, notice");
 }
+{
+  // Weekly venue override (free events): an Admin edit must surface on the
+  // Schedule row and the dated activity detail; reset restores the default.
+  const sess = store.upcomingSessions(21).find(
+    (s) => s.activityId === "wnt" && !data.sessionStarted(s)
+  );
+  const seedLocation = store.getSession(sess.id).location;
+  store.setWeekVenue(sess.id, {
+    location: "Central Harbourfront",
+    mapsQuery: "Central Harbourfront, Hong Kong",
+  });
+  const decorated = store.getSession(sess.id);
+  if (decorated.location !== "Central Harbourfront"
+    || decorated.mapsQuery !== "Central Harbourfront, Hong Kong")
+    throw new Error("weekly venue override should decorate the session");
+  views.scheduleState.weekOffset = Math.round(
+    (data.mondayOf(data.parseISO(sess.dateISO)) - data.mondayOf(data.todayLocal())) / (7 * 86400000)
+  );
+  views.scheduleState.selected = sess.dateISO;
+  views.scheduleState.filter = "all";
+  if (!views.viewSchedule().includes("Central Harbourfront"))
+    throw new Error("schedule row must show the overridden venue");
+  if (!views.viewActivity(sess.id).includes("Central Harbourfront"))
+    throw new Error("activity detail must show the overridden venue");
+  store.setWeekVenue(sess.id, { location: null, mapsQuery: null });
+  if (store.getSession(sess.id).location !== seedLocation)
+    throw new Error("reset should restore the recurring default venue");
+  views.scheduleState.weekOffset = 0;
+  console.log("ok  weekly venue override: schedule row + detail + reset");
+}
 
 // --- HYROX payment system: duty roster (Task 7) ---
 store.resetLocalData();
