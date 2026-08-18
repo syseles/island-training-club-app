@@ -2213,9 +2213,11 @@ function adminActivities() {
     .join("");
   return `
     <div class="section-head"><h2>Recurring Activity Defaults</h2></div>
-    <p class="muted small">Changes here affect all future weeks unless a dated override is set below.</p>
+    <p class="muted small">${isLive()
+      ? "Live deployment — recurring defaults are bundled with the app build and read-only. Set a venue for one week with the dated overrides below."
+      : "Changes here affect all future weeks unless a dated override is set below."}</p>
     <div class="session-list">${activityRows}</div>
-    <a class="btn ghost mt16" href="#/admin/activity/new">+ New activity</a>
+    ${isLive() ? "" : `<a class="btn ghost mt16" href="#/admin/activity/new">+ New activity</a>`}
     ${adminFreeEventVenues()}`;
 }
 
@@ -2310,13 +2312,22 @@ export function viewAdminActivity(id) {
     : store.getActivity(id);
   if (!a) return viewNotFound("Activity not found.");
 
+  // Live deployments: recurring defaults are seed/SQL-administered. Editing
+  // them here would write device-local state behind a success toast while the
+  // shared schedule never changes — so the editor is read-only on live.
+  const liveReadOnly = isLive();
+
   const paidOnly = (inner) => `<div class="paid-only ${a.kind === "paid" ? "" : "hidden"}">${inner}</div>`;
 
   return `
     <a class="back-link" href="#/admin/activities">← Activities</a>
     <div class="kicker mt16">Admin · Activity</div>
     <h1 class="display sm">${isNew ? "New activity." : "Edit activity."}</h1>
+    ${liveReadOnly ? `
+      <p class="badge neutral mt16">Live deployment — recurring defaults are bundled with the app build.</p>
+      <p class="muted small mt8">To change the venue for one week, use Weekly Venue Overrides on the Activities tab. Paid venues are administered in Supabase. This form is read-only here.</p>` : ""}
     <form id="form-activity" class="mt16" data-activity="${esc(a.id)}" novalidate>
+      ${liveReadOnly ? `<fieldset class="form-fieldset" disabled>` : ""}
       <div class="field"><label for="ac-name">Name *</label><input id="ac-name" name="name" value="${esc(a.name)}" required></div>
       <div class="field-row">
         <div class="field">
@@ -2358,7 +2369,8 @@ export function viewAdminActivity(id) {
       <div class="field"><label for="ac-note">Leader note (members only)</label><textarea id="ac-note" name="memberNote" rows="2">${esc(a.memberNote || "")}</textarea></div>
       <label class="check"><input type="checkbox" name="published" ${a.published ? "checked" : ""}>
         <span>Published — visible on the schedule</span></label>
-      <button class="btn mt24" type="submit">${isNew ? "Create activity" : "Save changes"}</button>
+      <button class="btn mt24" type="submit" ${liveReadOnly ? "hidden" : ""}>${isNew ? "Create activity" : "Save changes"}</button>
+      ${liveReadOnly ? `</fieldset>` : ""}
     </form>`;
 }
 

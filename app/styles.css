@@ -821,6 +821,8 @@ a.profile-row:hover .pr-text strong { color: var(--accent); }
 
 /* ---- Forms ------------------------------------------------------------ */
 
+.form-fieldset { border: 0; margin: 0; padding: 0; min-width: 0; }
+
 .field { margin-top: 14px; }
 
 .field label {

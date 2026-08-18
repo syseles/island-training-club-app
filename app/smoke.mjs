@@ -188,6 +188,21 @@ for (const marker of [
   }
 }
 console.log("ok  latest Notification domain markers coexist");
+{
+  // Live deployments: recurring activity defaults are seed/SQL-administered,
+  // so the Admin activity editor must render read-only with an honest note
+  // instead of silently writing device-local state behind a success toast.
+  if (!/export function viewAdminActivity[\s\S]*?isLive\(\)/.test(integratedViewSource)) {
+    throw new Error("viewAdminActivity must gate the recurring editor on isLive()");
+  }
+  if (!integratedViewSource.includes("form-fieldset")) {
+    throw new Error("live activity editor must disable the form via a fieldset");
+  }
+  if (!integratedViewSource.includes("recurring defaults are bundled with the app build")) {
+    throw new Error("live activity editor must explain that recurring defaults are bundled");
+  }
+  console.log("ok  live deployments render the recurring activity editor read-only");
+}
 
 const anniversary = data.ANNOUNCEMENTS[0];
 if (
@@ -599,6 +614,17 @@ if (!adminProfile.includes("Admin Tools") || !adminProfile.includes('href="#/adm
 }
 await check("admin activity edit", () => views.viewAdminActivity("hyrox"));
 await check("admin activity new", () => views.viewAdminActivity("new"));
+{
+  // Local prototype mode keeps the recurring editor fully editable; the
+  // read-only live gate must not leak into local renders.
+  const editHtml = views.viewAdminActivity("wnt");
+  if (!editHtml.includes('id="form-activity"') || editHtml.includes("form-fieldset\" disabled"))
+    throw new Error("local mode must keep the recurring activity editor editable");
+  const listHtml = await views.viewAdmin("activities");
+  if (!listHtml.includes('#/admin/activity/new'))
+    throw new Error("local mode must offer + New activity");
+  console.log("ok  recurring activity editor stays editable in local mode");
+}
 {
   const swimmingBeforeEdit = structuredClone(store.getActivity("water"));
   store.saveActivity({
