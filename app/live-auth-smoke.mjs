@@ -2897,6 +2897,18 @@ await venueImageError();
 assert.ok(replacedVenueFigure, "image error must replace the guide figure");
 assert.equal(mountedFallbackHost?.dataset?.mapsQuery, "Island ECC");
 
+let noQueryError;
+let noQueryRemoved = false;
+const noQueryImage = {
+  dataset: { fallbackQuery: "" },
+  isConnected: true,
+  closest: () => ({ remove() { noQueryRemoved = true; } }),
+  addEventListener(type, callback) { if (type === "error") noQueryError = callback; },
+};
+assert.equal(app.mountVenueImageFallback(noQueryImage), true);
+noQueryError();
+assert.equal(noQueryRemoved, true, "failed guide without a map query must be removed");
+
 let staleReplaced = false;
 let staleImageError;
 const staleImage = {

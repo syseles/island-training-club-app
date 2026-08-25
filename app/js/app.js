@@ -87,11 +87,14 @@ export function mountVenueImageFallback(image, options = {}) {
   } = options;
   if (!image || !ownsGeneration()) return false;
   const query = String(image.dataset.fallbackQuery || "").trim();
-  if (!query) return false;
   image.addEventListener("error", () => {
     if (!ownsGeneration() || !image.isConnected) return;
     const figure = image.closest("figure");
     if (!figure) return;
+    if (!query) {
+      figure.remove();
+      return;
+    }
     const section = document.createElement("section");
     section.className = "activity-map-section";
     section.setAttribute("aria-label", "Venue map");
