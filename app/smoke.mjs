@@ -2448,6 +2448,10 @@ if (completedSwimmingNotes[0].body !== `ITC Swimming on ${swimmingSession.dateIS
   throw new Error(`Swimming member copy must use its display name; got: ${completedSwimmingNotes[0].body}`);
 }
 store.signIn("admin@example.test");
+store.setWeekVenue(wntSession.id, {
+  location: "Tamar Park", mapsQuery: "Tamar Park",
+  meetingLat: 22.2825, meetingLng: 114.1659,
+});
 const activitiesHtml = await views.viewAdmin("activities");
 const hyroxAdminHtml = await views.viewAdmin("payments");
 if (!activitiesHtml.includes("Recurring Activity Defaults")
@@ -2455,8 +2459,11 @@ if (!activitiesHtml.includes("Recurring Activity Defaults")
     || !activitiesHtml.includes("Only this session")
     || !activitiesHtml.includes("Google Maps search")
     || !activitiesHtml.includes("Save Weekly Venue")
-    || !activitiesHtml.includes("Reset to Recurring Default")) {
-  throw new Error("Activities must separate recurring defaults from weekly overrides");
+    || !activitiesHtml.includes("Reset to Recurring Default")
+    || !activitiesHtml.includes("Meeting point · Only this session")
+    || !activitiesHtml.includes('name="meetingLat" value="22.2825"')
+    || !activitiesHtml.includes('name="meetingLng" value="114.1659"')) {
+  throw new Error("Activities must separate recurring defaults and render the dated WNT picker");
 }
 if (!activitiesHtml.includes("Current venue: <strong>Victoria Park Swimming Pool</strong>")
     || !activitiesHtml.includes("Recurring default: <strong>TBC</strong>")) {

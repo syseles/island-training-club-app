@@ -187,6 +187,13 @@ function renderFallback(host) {
   host.innerHTML = `<p class="muted small activity-map-fallback" role="status">${FALLBACK_COPY}</p>`;
 }
 
+function addOsmTiles(map) {
+  globalThis.L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+    maxZoom: 19,
+    attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+  }).addTo(map);
+}
+
 export async function mountActivityMap(host, options = {}) {
   const { ownsGeneration = () => true, fetchImpl, timeoutMs, loadLeaflet } = options;
   if (!host || host.id !== "activity-map") return false;
@@ -218,10 +225,7 @@ export async function mountActivityMap(host, options = {}) {
     host.innerHTML = "";
     const map = globalThis.L.map(host, { scrollWheelZoom: false });
     map.setView([coords.lat, coords.lon], 15);
-    globalThis.L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
-      maxZoom: 19,
-      attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
-    }).addTo(map);
+    addOsmTiles(map);
     const marker = globalThis.L.marker([coords.lat, coords.lon]).addTo(map);
     const popup = document.createElement("div");
     const title = document.createElement("strong");
@@ -229,6 +233,38 @@ export async function mountActivityMap(host, options = {}) {
     popup.appendChild(title);
     marker.bindPopup(popup);
     return true;
+  } catch (_err) {
+    if (ownsGeneration() && host.isConnected) renderFallback(host);
+    return false;
+  }
+}
+
+export async function mountVenuePicker(host, options = {}) {
+  const {
+    initialPoint,
+    onChange = () => {},
+    ownsGeneration = () => true,
+    loadLeaflet = defaultLoadLeaflet,
+  } = options;
+  const point = normalizeMeetingPoint(initialPoint?.lat, initialPoint?.lng);
+  if (!host || !point || !ownsGeneration() || !host.isConnected) return false;
+  try {
+    await loadLeaflet({ timeoutMs: options.timeoutMs || LEAFLET_TIMEOUT_MS });
+    if (!ownsGeneration() || !host.isConnected) return false;
+    host.innerHTML = "";
+    const map = globalThis.L.map(host, { scrollWheelZoom: false });
+    map.setView([point.lat, point.lng], 17);
+    addOsmTiles(map);
+    const marker = globalThis.L.marker([point.lat, point.lng], { draggable: true }).addTo(map);
+    const update = (candidate) => {
+      const next = normalizeMeetingPoint(candidate?.lat, candidate?.lng);
+      if (!next || !ownsGeneration() || !host.isConnected) return;
+      marker.setLatLng([next.lat, next.lng]);
+      onChange(next);
+    };
+    map.on("click", (event) => update(event.latlng));
+    marker.on("dragend", () => update(marker.getLatLng()));
+    return { destroy() { map.remove(); } };
   } catch (_err) {
     if (ownsGeneration() && host.isConnected) renderFallback(host);
     return false;

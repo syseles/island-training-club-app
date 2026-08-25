@@ -6,6 +6,11 @@ import * as store from "./store.js";
 import { buildICS, findSession, todayLocal, mondayOf, addDays, isoDate, donorIdProblem } from "./data.js";
 import * as views from "./views.js";
 import { isLive, supabase } from "./config.js";
+import {
+  normalizeMeetingPoint,
+  normalizeVenueLocation,
+  TAMAR_DEFAULT_MEETING_POINT,
+} from "./venue.js";
 
 const viewEl = document.getElementById("view");
 const navEl = document.getElementById("bottom-nav");
@@ -30,6 +35,49 @@ export async function mountCommittedActivityMap(host, options = {}) {
     if (ownsGeneration() && host?.isConnected) host.innerHTML = MAP_FALLBACK_HTML;
     return false;
   }
+}
+
+export async function syncWeekVenuePicker(form, options = {}) {
+  const ownsGeneration = options.ownsGeneration || (() => true);
+  if (!(form instanceof HTMLFormElement) || !String(form.dataset.session || "").startsWith("wnt-")) {
+    return false;
+  }
+  const locationField = form.querySelector('[name="location"]');
+  const latField = form.querySelector('[name="meetingLat"]');
+  const lngField = form.querySelector('[name="meetingLng"]');
+  const shell = form.querySelector("[data-venue-picker-shell]");
+  const host = form.querySelector("[data-venue-picker]");
+  if (!locationField || !latField || !lngField || !shell || !host) return false;
+  const isTamar = normalizeVenueLocation(locationField.value) === "tamar park";
+  shell.classList.toggle("hidden", !isTamar);
+  if (!isTamar) {
+    latField.value = "";
+    lngField.value = "";
+    venuePickerControllers.get(form)?.destroy();
+    venuePickerControllers.delete(form);
+    return false;
+  }
+  const initialPoint = normalizeMeetingPoint(latField.value, lngField.value)
+    || TAMAR_DEFAULT_MEETING_POINT;
+  latField.value = String(initialPoint.lat);
+  lngField.value = String(initialPoint.lng);
+  if (venuePickerControllers.has(form)) return true;
+  const { mountVenuePicker } = await (options.loadModule || loadActivityMapModule)();
+  const controller = await mountVenuePicker(host, {
+    initialPoint,
+    ownsGeneration,
+    onChange(point) {
+      latField.value = String(point.lat);
+      lngField.value = String(point.lng);
+    },
+  });
+  const stillTamar = normalizeVenueLocation(locationField.value) === "tamar park";
+  if (!controller || !ownsGeneration() || !stillTamar) {
+    controller?.destroy();
+    return false;
+  }
+  venuePickerControllers.set(form, controller);
+  return true;
 }
 
 export function mountVenueImageFallback(image, options = {}) {
@@ -104,6 +152,7 @@ let renderGeneration = 0;
 let notificationRouteRows = null;
 let pendingNotificationRouteRequest = null;
 const controlBusy = new WeakSet();
+const venuePickerControllers = new WeakMap();
 const APPLY_DRAFT_DEBOUNCE_MS = 500;
 let applyDraftTimer = null;
 
@@ -397,6 +446,11 @@ async function render(generation = renderGeneration) {
     const venueImage = viewEl.querySelector("[data-venue-image]");
     if (venueImage) mountVenueImageFallback(venueImage, { ownsGeneration });
   }
+  if (page === "admin" && arg === "activities") {
+    const ownsGeneration = () => generation === renderGeneration;
+    const venueForms = viewEl.querySelectorAll?.('form[data-action="form-week-venue"]') || [];
+    [...venueForms].forEach((form) => { void syncWeekVenuePicker(form, { ownsGeneration }); });
+  }
   window.scrollTo({ top: 0 });
   viewEl.focus({ preventScroll: true });
   prevPage = page;
@@ -405,6 +459,15 @@ async function render(generation = renderGeneration) {
 document.addEventListener("input", async (e) => {
   const field = e.target;
   if (field?.getAttribute?.("aria-invalid") === "true") clearFieldError(field);
+  if (field?.name === "location") {
+    const venueForm = field.closest?.('form[data-action="form-week-venue"]');
+    if (venueForm) {
+      const generation = renderGeneration;
+      void syncWeekVenuePicker(venueForm, {
+        ownsGeneration: () => generation === renderGeneration,
+      });
+    }
+  }
   if (field?.dataset?.input === "member-search") {
     views.adminMemberFilters.query = field.value;
     const cursor = field.selectionStart;
@@ -833,7 +896,9 @@ document.addEventListener("click", async (e) => {
       const control = el;
       withBusyControl(control, "Resetting\u2026", async () => {
         try {
-          await store.setWeekVenue(el.dataset.session, { location: null, mapsQuery: null });
+          await store.setWeekVenue(el.dataset.session, {
+            location: null, mapsQuery: null, meetingLat: null, meetingLng: null,
+          });
           toast("Venue reset to the activity default");
           await renderWithFeedback();
         } catch (err) {
@@ -1101,6 +1166,8 @@ document.addEventListener("submit", async (e) => {
           await store.setWeekVenue(form.dataset.session, {
             location,
             mapsQuery,
+            meetingLat: fd.get("meetingLat"),
+            meetingLng: fd.get("meetingLng"),
           });
           toast("Venue saved for this week");
           await renderWithFeedback();

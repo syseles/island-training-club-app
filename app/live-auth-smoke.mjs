@@ -2702,6 +2702,93 @@ assert.equal(
   "app.js must resolve the map module relative to its own app/js URL"
 );
 
+// Admin Tamar picker: map click and marker drag emit exact selected points.
+const pickerLeafletBefore = globalThis.L;
+let pickerMapClick;
+let pickerMarkerDrag;
+let pickerMarkerPoint = { lat: 22.2816182, lng: 114.1655613 };
+let pickerRemoved = 0;
+const pickerSetViews = [];
+const pickerChanges = [];
+const pickerMap = {
+  setView(coords, zoom) { pickerSetViews.push([coords, zoom]); },
+  on(type, callback) { if (type === "click") pickerMapClick = callback; },
+  remove() { pickerRemoved += 1; },
+};
+const pickerMarker = {
+  addTo() { return this; },
+  setLatLng(coords) { pickerMarkerPoint = { lat: coords[0], lng: coords[1] }; },
+  getLatLng() { return pickerMarkerPoint; },
+  on(type, callback) { if (type === "dragend") pickerMarkerDrag = callback; },
+};
+globalThis.L = {
+  map: () => pickerMap,
+  tileLayer: () => ({ addTo() {} }),
+  marker: () => pickerMarker,
+};
+const pickerHost = makeElement();
+pickerHost.isConnected = true;
+const pickerController = await browserRelativeMap.mountVenuePicker(pickerHost, {
+  initialPoint: { lat: 22.2816182, lng: 114.1655613 },
+  onChange: (point) => pickerChanges.push(point),
+  loadLeaflet: async () => {},
+});
+assert.deepEqual(pickerSetViews, [[ [22.2816182, 114.1655613], 17 ]]);
+pickerMapClick({ latlng: { lat: 22.2825, lng: 114.1659 } });
+assert.deepEqual(pickerChanges.at(-1), { lat: 22.2825, lng: 114.1659 });
+pickerMarkerPoint = { lat: 22.2827, lng: 114.1661 };
+pickerMarkerDrag();
+assert.deepEqual(pickerChanges.at(-1), { lat: 22.2827, lng: 114.1661 });
+pickerController.destroy();
+assert.equal(pickerRemoved, 1);
+globalThis.L = pickerLeafletBefore;
+
+// Form synchronization reveals Tamar, seeds defaults, retains marker changes,
+// and clears/destroys the picker after changing to an indoor venue.
+const pickerForm = new HTMLFormElement();
+pickerForm.dataset = { session: "wnt-2026-08-26" };
+const pickerLocation = { value: "Tamar Park" };
+const pickerLat = { value: "" };
+const pickerLng = { value: "" };
+const pickerShell = makeElement();
+pickerShell.classList.toggle("hidden", true);
+const pickerFormHost = makeElement();
+pickerFormHost.isConnected = true;
+pickerForm.querySelector = (selector) => ({
+  '[name="location"]': pickerLocation,
+  '[name="meetingLat"]': pickerLat,
+  '[name="meetingLng"]': pickerLng,
+  "[data-venue-picker-shell]": pickerShell,
+  "[data-venue-picker]": pickerFormHost,
+})[selector] || null;
+let pickerFormChange;
+let pickerFormDestroyed = 0;
+let pickerInitialPoint;
+assert.equal(await app.syncWeekVenuePicker(pickerForm, {
+  ownsGeneration: () => true,
+  loadModule: async () => ({
+    mountVenuePicker: async (_host, options) => {
+      pickerInitialPoint = options.initialPoint;
+      pickerFormChange = options.onChange;
+      return { destroy() { pickerFormDestroyed += 1; } };
+    },
+  }),
+}), true);
+assert.equal(pickerShell.classList.contains("hidden"), false);
+assert.deepEqual(pickerInitialPoint, { lat: 22.2816182, lng: 114.1655613 });
+assert.equal(pickerLat.value, "22.2816182");
+assert.equal(pickerLng.value, "114.1655613");
+pickerFormChange({ lat: 22.2825, lng: 114.1659 });
+assert.equal(pickerLat.value, "22.2825");
+assert.equal(pickerLng.value, "114.1659");
+pickerLocation.value = "Island ECC 9/F";
+assert.equal(await app.syncWeekVenuePicker(pickerForm), false);
+assert.equal(pickerShell.classList.contains("hidden"), true);
+assert.equal(pickerLat.value, "");
+assert.equal(pickerLng.value, "");
+assert.equal(pickerFormDestroyed, 1);
+console.log("ok  Admin Tamar picker click, drag, default, and clear behavior");
+
 // A rejected lazy import must settle the host on the public fallback instead
 // of escaping as an unhandled rejection or leaving "Loading map…" forever.
 const rejectedImportHost = {

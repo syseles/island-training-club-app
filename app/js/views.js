@@ -9,7 +9,11 @@ import * as store from "./store.js";
 import { isLive } from "./config.js";
 import * as liveOps from "./operations.js";
 import { sessionCancellationCopy } from "./operations.js";
-import { venuePresentationFor } from "./venue.js";
+import {
+  normalizeMeetingPoint,
+  normalizeVenueLocation,
+  venuePresentationFor,
+} from "./venue.js";
 import {
   LEADERS,
   CULTURE,
@@ -2052,6 +2056,17 @@ function adminFreeEventVenues() {
       const safeId = esc(s.id);
       const locationId = `week-venue-location-${safeId}`;
       const mapsId = `week-venue-maps-${safeId}`;
+      const point = normalizeMeetingPoint(override.meetingLat, override.meetingLng);
+      const isTamar = normalizeVenueLocation(override.location || s.location) === "tamar park";
+      const picker = s.activityId === "wnt" ? `
+        <input type="hidden" name="meetingLat" value="${point?.lat ?? ""}">
+        <input type="hidden" name="meetingLng" value="${point?.lng ?? ""}">
+        <div class="venue-picker-shell ${isTamar ? "" : "hidden"}" data-venue-picker-shell>
+          <p class="kicker dim">Meeting point · Only this session</p>
+          <div class="venue-picker" data-venue-picker data-session="${safeId}">
+            <p class="muted small" role="status">Loading map…</p>
+          </div>
+        </div>` : "";
       return `
         <div class="card mt16 free-event-venue-card"><div class="card-body">
           <div class="kicker dim" style="margin-top:0">${esc(fmtDate(s.dateISO))} · ${fmtTime(s.time)}</div>
@@ -2070,6 +2085,7 @@ function adminFreeEventVenues() {
                 <input id="${mapsId}" name="mapsQuery" value="${esc(override.mapsQuery || '')}" placeholder="e.g. Central Harbourfront, Hong Kong">
               </div>
             </div>
+            ${picker}
             <div class="btn-row">
               <button class="btn ghost sm" type="submit">Save Weekly Venue</button>
               <button class="btn ghost sm" type="button" data-action="reset-week-venue" data-session="${safeId}">Reset to Recurring Default</button>
