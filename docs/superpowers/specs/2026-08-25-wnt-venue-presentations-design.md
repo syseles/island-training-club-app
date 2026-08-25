@@ -1,7 +1,7 @@
 # WNT Venue-Specific Images and Meeting-Point Pins Design
 
 **Date:** 2026-08-25
-**Status:** Approved for specification review
+**Status:** Approved
 
 ## Goal
 
@@ -34,7 +34,7 @@ It does not add images to Schedule rows, make meeting points recurring, add a ge
 
 The existing dated form keeps its Display Location and Google Maps Search fields.
 
-When the Display Location resolves to Tamar Park:
+When a dated WNT form’s Display Location resolves to Tamar Park:
 
 1. A compact interactive map appears below the fields.
 2. Its label is **Meeting point · Only this session**.
@@ -58,7 +58,7 @@ The venue area immediately above the existing action row resolves as follows:
 | --- | --- |
 | `Island ECC 11/F` | Responsive 11/F wayfinding image with caption **The Well · 11/F Island ECC** |
 | `Island ECC 9/F` | Responsive 9/F wayfinding image with caption **Kid’s Club Hall · 9/F Island ECC** |
-| Tamar Park alias | Interactive map centred on the dated meeting-point coordinates |
+| WNT at a Tamar Park alias | Interactive map centred on the dated meeting-point coordinates |
 | Any other free venue with a map query | Existing Nominatim-geocoded inline map |
 | No usable map query or coordinates | No venue visual; existing location text remains |
 
@@ -83,7 +83,7 @@ Create `app/js/venue.js`. It has no DOM, store, Supabase, Leaflet, or network de
 - `normalizeMeetingPoint(lat, lng)`
 - `venuePresentationFor(session)`
 
-`venuePresentationFor(session)` returns one of these explicit shapes:
+Specialized ECC/Tamar matching applies only when `activityId === "wnt"` (or the dated ID has the `wnt-` prefix). Other activities continue through the generic map behavior. `venuePresentationFor(session)` returns one of these explicit shapes:
 
 ```js
 { kind: "image", src, alt, caption, fallbackQuery }
@@ -212,7 +212,7 @@ The migration:
 
 1. Adds nullable `meeting_lat double precision` and `meeting_lng double precision` columns.
 2. Adds paired-null and coordinate-range checks.
-3. Extends the venue RPC to validate and store coordinates only for a Tamar display location.
+3. Extends the venue RPC to validate and store coordinates only for a WNT session with a Tamar display location.
 4. Returns the coordinate columns in the override row.
 5. Retains existing notification and deduplication behavior.
 6. Reloads the PostgREST schema cache.
@@ -250,7 +250,7 @@ For image and geocode presentations, directions continue to use the existing enc
 - A missing half of a pair is treated as invalid.
 - Supabase repeats paired-null and range validation independently.
 - Tamar without valid saved coordinates uses the approved default pin.
-- Non-Tamar saves persist null coordinates.
+- Non-WNT or non-Tamar saves persist null coordinates.
 
 ### Save failure
 
