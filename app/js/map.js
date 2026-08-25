@@ -12,6 +12,8 @@
 // views. Pure helpers are exported for smoke coverage.
 // ==========================================================================
 
+import { normalizeMeetingPoint } from "./venue.js";
+
 const CACHE_KEY = "itc.geocode.v1";
 const LEAFLET_CSS = "https://unpkg.com/leaflet@1.9.4/dist/leaflet.css";
 const LEAFLET_CSS_INTEGRITY = "sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=";
@@ -188,16 +190,19 @@ function renderFallback(host) {
 export async function mountActivityMap(host, options = {}) {
   const { ownsGeneration = () => true, fetchImpl, timeoutMs, loadLeaflet } = options;
   if (!host || host.id !== "activity-map") return false;
+  const exactPoint = normalizeMeetingPoint(host.dataset.mapLat, host.dataset.mapLng);
   const query = String(host.dataset.mapsQuery || "").trim();
-  if (!query) return false;
+  if (!exactPoint && !query) return false;
   if (!ownsGeneration() || !host.isConnected) return false;
-  const geocodePromise = geocodeQuery(query, { fetchImpl, timeoutMs });
+  const coordsPromise = exactPoint
+    ? Promise.resolve({ lat: exactPoint.lat, lon: exactPoint.lng })
+    : geocodeQuery(query, { fetchImpl, timeoutMs });
   const leafletPromise = Promise.resolve().then(() =>
     (loadLeaflet || defaultLoadLeaflet)({ timeoutMs: timeoutMs || LEAFLET_TIMEOUT_MS })
   );
   let coords;
   try {
-    [coords] = await Promise.all([geocodePromise, leafletPromise]);
+    [coords] = await Promise.all([coordsPromise, leafletPromise]);
   } catch (_err) {
     if (ownsGeneration() && host.isConnected) renderFallback(host);
     return false;

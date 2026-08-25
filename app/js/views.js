@@ -9,6 +9,7 @@ import * as store from "./store.js";
 import { isLive } from "./config.js";
 import * as liveOps from "./operations.js";
 import { sessionCancellationCopy } from "./operations.js";
+import { venuePresentationFor } from "./venue.js";
 import {
   LEADERS,
   CULTURE,
@@ -396,6 +397,33 @@ export function viewSchedule() {
 
 // --- Activity detail ------------------------------------------------------------------
 
+function venuePresentationHTML(presentation) {
+  if (presentation.kind === "image") return `
+    <figure class="venue-guide activity-map-section">
+      <img class="venue-guide-image" src="${esc(presentation.src)}"
+        alt="${esc(presentation.alt)}" data-venue-image
+        data-fallback-query="${esc(presentation.fallbackQuery)}">
+      <figcaption>${esc(presentation.caption)}</figcaption>
+    </figure>`;
+  if (presentation.kind === "coordinates") return `
+    <section class="activity-map-section" aria-label="Venue map">
+      <div class="activity-map" id="activity-map"
+        data-map-lat="${presentation.lat}" data-map-lng="${presentation.lng}"
+        data-marker-label="${esc(presentation.markerLabel)}">
+        <p class="muted small" role="status">Loading map…</p>
+      </div>
+    </section>`;
+  if (presentation.kind === "geocode") return `
+    <section class="activity-map-section" aria-label="Venue map">
+      <div class="activity-map" id="activity-map"
+        data-maps-query="${esc(presentation.query)}"
+        data-marker-label="${esc(presentation.markerLabel)}">
+        <p class="muted small" role="status">Loading map…</p>
+      </div>
+    </section>`;
+  return "";
+}
+
 export function viewActivity(sessionId) {
   const s = store.getSession(sessionId);
   if (!s) return viewNotFound("That session doesn’t exist.");
@@ -411,18 +439,15 @@ export function viewActivity(sessionId) {
   const collectorName = collector ? (collector.preferredName || collector.fullName) : "the on-duty collector";
 
   let actionBlock = "";
-  const showDirections = !s.cancelled && !past && s.mapsQuery;
+  const markerLabel = `${s.name} · ${fmtDate(s.date)} · ${fmtTime(s.time)}`;
+  const venuePresentation = venuePresentationFor({ ...s, markerLabel });
+  const showDirections = !s.cancelled && !past
+    && (venuePresentation.kind === "coordinates" || Boolean(s.mapsQuery));
   const directionsLink = showDirections
     ? `<a class="btn ghost" href="${mapsHref(s)}" target="_blank" rel="noopener">Get directions</a>`
     : "";
-  const mapHost = !s.cancelled && !past && s.kind === "free" && s.mapsQuery
-    ? `<section class="activity-map-section" aria-label="Venue map">
-        <div class="activity-map" id="activity-map"
-          data-maps-query="${esc(s.mapsQuery)}"
-          data-marker-label="${esc(`${s.name} · ${fmtDate(s.date)} · ${fmtTime(s.time)}`)}">
-          <p class="muted small" role="status">Loading map…</p>
-        </div>
-      </section>`
+  const venueVisual = !s.cancelled && !past && s.kind === "free"
+    ? venuePresentationHTML(venuePresentation)
     : "";
   if (s.cancelled) {
     actionBlock = `
@@ -542,12 +567,16 @@ export function viewActivity(sessionId) {
     </div>
     <p class="subcopy mt16">${esc(s.blurb)}</p>
     ${leaderNote}
-    ${mapHost}
+    ${venueVisual}
     ${actionBlock}
     ${attendees}`;
 }
 
 function mapsHref(s) {
+  const presentation = venuePresentationFor(s);
+  if (presentation.kind === "coordinates") {
+    return `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(`${presentation.lat},${presentation.lng}`)}`;
+  }
   const q = s.mapsQuery || s.location;
   return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(q)}`;
 }

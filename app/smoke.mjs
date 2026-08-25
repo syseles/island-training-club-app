@@ -2369,6 +2369,40 @@ if ("meetingLat" in store.getSession(tamarSession.id)) {
 }
 console.log("ok  local WNT override persists, clears, validates, and resets meeting coordinates");
 
+store.setWeekVenue(wntSession.id, {
+  location: "Island ECC 11/F", mapsQuery: "Island ECC",
+});
+let venueDetail = views.viewActivity(wntSession.id);
+if (!venueDetail.includes("island-ecc-11.jpg")
+    || !venueDetail.includes("The Well · 11/F Island ECC")
+    || venueDetail.includes('id="activity-map"')) {
+  throw new Error("11/F WNT detail must render only the 11/F guide");
+}
+store.setWeekVenue(wntSession.id, {
+  location: "Island ECC 9/F", mapsQuery: "Island ECC",
+});
+venueDetail = views.viewActivity(wntSession.id);
+if (!venueDetail.includes("island-ecc-9.jpg")
+    || !venueDetail.includes("Kid’s Club Hall · 9/F Island ECC")
+    || venueDetail.includes('id="activity-map"')) {
+  throw new Error("9/F WNT detail must render only the 9/F guide");
+}
+store.setWeekVenue(wntSession.id, {
+  location: "Tamar Park", mapsQuery: "Tamar Park",
+  meetingLat: 22.2825, meetingLng: 114.1659,
+});
+venueDetail = views.viewActivity(wntSession.id);
+if (!venueDetail.includes('data-map-lat="22.2825"')
+    || !venueDetail.includes('data-map-lng="114.1659"')
+    || !venueDetail.includes("destination=22.2825%2C114.1659")) {
+  throw new Error("Tamar detail and directions must use the exact dated point");
+}
+store.setWeekVenue(wntSession.id, {
+  location: "Causeway Bay Promenade — 7pm sharp",
+  mapsQuery: "Causeway Bay Promenade, Hong Kong",
+});
+console.log("ok  WNT Activity Details selects ECC guides and exact Tamar directions");
+
 // View: free event with a mapsQuery renders the inline map host + Get directions.
 const freeDetail = views.viewActivity(wntSession.id);
 if (!freeDetail.includes('id="activity-map"')
@@ -2558,6 +2592,42 @@ if (map.normalizeGeocodeResult([]) !== null) {
 }
 if (map.normalizeGeocodeResult([{ lat: "x", lon: "114" }]) !== null) {
   throw new Error("normalizeGeocodeResult should reject non-finite coordinates");
+}
+
+// Exact meeting-point maps must bypass Nominatim and use the dated point.
+const originalDocument = globalThis.document;
+const originalLeaflet = globalThis.L;
+const exactSetViews = [];
+const exactMarkers = [];
+globalThis.document = {
+  createElement: () => ({ textContent: "", children: [], appendChild(child) { this.children.push(child); } }),
+};
+globalThis.L = {
+  map: () => ({ setView(coords, zoom) { exactSetViews.push([coords, zoom]); } }),
+  tileLayer: () => ({ addTo() {} }),
+  marker: (coords) => ({
+    addTo() { exactMarkers.push(coords); return this; },
+    bindPopup() {},
+  }),
+};
+const exactMapHost = {
+  id: "activity-map",
+  dataset: {
+    mapLat: "22.2825", mapLng: "114.1659", markerLabel: "WNT meeting point",
+  },
+  isConnected: true,
+  innerHTML: "<p>Loading map…</p>",
+};
+const exactMounted = await map.mountActivityMap(exactMapHost, {
+  fetchImpl: async () => { throw new Error("exact map must not geocode"); },
+  loadLeaflet: async () => {},
+});
+globalThis.document = originalDocument;
+globalThis.L = originalLeaflet;
+if (!exactMounted
+    || JSON.stringify(exactSetViews) !== JSON.stringify([[[22.2825, 114.1659], 15]])
+    || JSON.stringify(exactMarkers) !== JSON.stringify([[22.2825, 114.1659]])) {
+  throw new Error(`exact map must mount at the dated point without geocoding: mounted=${exactMounted} views=${JSON.stringify(exactSetViews)} markers=${JSON.stringify(exactMarkers)}`);
 }
 
 // mountActivityMap must start geocoding and Leaflet loading concurrently.

@@ -1634,6 +1634,7 @@ const makeElement = () => {
   className: "",
   innerHTML: "",
   textContent: "",
+  dataset: {},
   hidden: false,
   attributes: new Map(),
   classList: {
@@ -2716,6 +2717,45 @@ assert.equal(rejectedImportResult, false, "a rejected map import must resolve to
 assert.match(rejectedImportHost.innerHTML, /Couldn.t find the venue on the map/);
 assert.doesNotMatch(rejectedImportHost.innerHTML, /Loading map/);
 console.log("ok  app-relative map import resolves and import rejection renders fallback");
+
+// A failed ECC guide image must be replaced with the generic map host while
+// route ownership is current; stale routes must leave their figure untouched.
+let venueImageError;
+let replacedVenueFigure = null;
+let mountedFallbackHost = null;
+const venueFigure = {
+  replaceWith(node) { replacedVenueFigure = node; },
+};
+const venueImage = {
+  dataset: { fallbackQuery: "Island ECC" },
+  isConnected: true,
+  closest: () => venueFigure,
+  addEventListener(type, callback) {
+    if (type === "error") venueImageError = callback;
+  },
+};
+assert.equal(app.mountVenueImageFallback(venueImage, {
+  mountMap: async (host) => { mountedFallbackHost = host; return true; },
+}), true);
+assert.equal(replacedVenueFigure, null);
+await venueImageError();
+assert.ok(replacedVenueFigure, "image error must replace the guide figure");
+assert.equal(mountedFallbackHost?.dataset?.mapsQuery, "Island ECC");
+
+let staleReplaced = false;
+let staleImageError;
+const staleImage = {
+  dataset: { fallbackQuery: "Island ECC" },
+  isConnected: true,
+  closest: () => ({ replaceWith() { staleReplaced = true; } }),
+  addEventListener(type, callback) { if (type === "error") staleImageError = callback; },
+};
+assert.equal(app.mountVenueImageFallback(staleImage, {
+  ownsGeneration: () => false,
+}), false);
+assert.equal(staleImageError, undefined);
+assert.equal(staleReplaced, false);
+console.log("ok  ECC guide failure falls back to map only for the current route");
 
 // Mount contract: stale activity hosts must not be remounted after navigation.
 let lateMounted = false;

@@ -1454,6 +1454,21 @@ a.profile-row:hover .pr-text strong { color: var(--accent); }
 
 /* ---- Free-event venue override + activity map ----------------------- */
 .activity-map-section { margin-top: 16px; }
+.venue-guide { margin-right: 0; margin-bottom: 0; margin-left: 0; }
+.venue-guide-image {
+  display: block;
+  width: 100%;
+  height: auto;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius);
+  background: #fff;
+}
+.venue-guide figcaption {
+  margin-top: 8px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
 .activity-map {
   min-height: 260px;
   overflow: hidden;

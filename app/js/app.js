@@ -32,6 +32,37 @@ export async function mountCommittedActivityMap(host, options = {}) {
   }
 }
 
+export function mountVenueImageFallback(image, options = {}) {
+  const {
+    ownsGeneration = () => true,
+    mountMap = mountCommittedActivityMap,
+  } = options;
+  if (!image || !ownsGeneration()) return false;
+  const query = String(image.dataset.fallbackQuery || "").trim();
+  if (!query) return false;
+  image.addEventListener("error", () => {
+    if (!ownsGeneration() || !image.isConnected) return;
+    const figure = image.closest("figure");
+    if (!figure) return;
+    const section = document.createElement("section");
+    section.className = "activity-map-section";
+    section.setAttribute("aria-label", "Venue map");
+    const host = document.createElement("div");
+    host.className = "activity-map";
+    host.id = "activity-map";
+    host.dataset.mapsQuery = query;
+    const status = document.createElement("p");
+    status.className = "muted small";
+    status.setAttribute("role", "status");
+    status.textContent = "Loading map…";
+    host.appendChild(status);
+    section.appendChild(host);
+    figure.replaceWith(section);
+    void mountMap(host, { ownsGeneration });
+  }, { once: true });
+  return true;
+}
+
 // --- Toasts --------------------------------------------------------------------
 
 export function toast(msg, isErr = false) {
@@ -358,12 +389,13 @@ async function render(generation = renderGeneration) {
   avatarEl.innerHTML = views.avatarHTML(user);
   if (!notificationsActive) renderNotificationChrome(user, false, generation);
   if (page === "activity") {
+    const ownsGeneration = () => generation === renderGeneration;
     const mapHost = viewEl.querySelector("#activity-map");
     if (mapHost) {
-      void mountCommittedActivityMap(mapHost, {
-        ownsGeneration: () => generation === renderGeneration,
-      });
+      void mountCommittedActivityMap(mapHost, { ownsGeneration });
     }
+    const venueImage = viewEl.querySelector("[data-venue-image]");
+    if (venueImage) mountVenueImageFallback(venueImage, { ownsGeneration });
   }
   window.scrollTo({ top: 0 });
   viewEl.focus({ preventScroll: true });
