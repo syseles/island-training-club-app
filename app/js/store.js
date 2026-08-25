@@ -22,6 +22,7 @@ import {
   donorIdProblem,
 } from "./data.js";
 import { supabase, isLive } from "./config.js";
+import { normalizeMeetingPoint, normalizeVenueLocation } from "./venue.js";
 import * as liveOps from "./operations.js";
 
 const STORAGE_KEY = "itc.prototype.v1";
@@ -1198,6 +1199,8 @@ function decorateSession(s) {
   if (o.gymNote) out.gymNote = o.gymNote;
   if (o.location) out.location = o.location;
   if (o.mapsQuery) out.mapsQuery = o.mapsQuery;
+  const point = normalizeMeetingPoint(o.meetingLat, o.meetingLng);
+  if (point) Object.assign(out, { meetingLat: point.lat, meetingLng: point.lng });
   if (hasConfirmedVenue(out.location, out.mapsQuery)) out.venueTBC = false;
   return out;
 }
@@ -1208,6 +1211,8 @@ function decorateFreeSession(s) {
   const out = { ...s };
   if (o.location) out.location = o.location;
   if (o.mapsQuery) out.mapsQuery = o.mapsQuery;
+  const point = normalizeMeetingPoint(o.meetingLat, o.meetingLng);
+  if (point) Object.assign(out, { meetingLat: point.lat, meetingLng: point.lng });
   if (hasConfirmedVenue(out.location, out.mapsQuery)) out.venueTBC = false;
   return out;
 }
@@ -1216,13 +1221,16 @@ export function weekVenueOverride(sessionId) {
   const value = isLive()
     ? liveOps.getLiveVenueOverride(sessionId)
     : state.sessionOverrides[sessionId];
-  if (!value) return { location: "", mapsQuery: "" };
+  if (!value) return { location: "", mapsQuery: "", meetingLat: "", meetingLng: "" };
   const notifiedAt = isLive()
     ? value.memberNotifiedAt
     : value.venueMemberNotifiedAt;
+  const point = normalizeMeetingPoint(value.meetingLat, value.meetingLng);
   return {
     location: value.location || "",
     mapsQuery: value.mapsQuery || "",
+    meetingLat: point?.lat ?? "",
+    meetingLng: point?.lng ?? "",
     ...(notifiedAt ? { venueMemberNotifiedAt: notifiedAt } : {}),
   };
 }
@@ -1541,13 +1549,25 @@ export function confirmGymBooking(sessionId, note, now = Date.now()) {
 // Per-week free-event venue overrides. Admin only. Local mode fans out
 // notifications and dedupes per member; live mode delegates both to the
 // trusted `set_session_venue` RPC.
-export function setWeekVenue(sessionId, { location, mapsQuery } = {}) {
+export function setWeekVenue(sessionId, {
+  location, mapsQuery, meetingLat = null, meetingLng = null,
+} = {}) {
   const cleanLocation = String(location || "").trim();
   const cleanMapsQuery = String(mapsQuery || "").trim();
   const overrideActivityId = String(sessionId).replace(/-\d{4}-\d{2}-\d{2}$/, "");
   if (!new Set(["wnt", "run", "water"]).has(overrideActivityId)) {
     throw new Error("Activity venue is fixed.");
   }
+  const rawPointProvided = ![meetingLat, meetingLng].every(
+    (value) => value === null || value === undefined || value === ""
+  );
+  const normalizedPoint = normalizeMeetingPoint(meetingLat, meetingLng);
+  const acceptsPoint = overrideActivityId === "wnt"
+    && normalizeVenueLocation(cleanLocation) === "tamar park";
+  if (acceptsPoint && rawPointProvided && !normalizedPoint) {
+    throw new Error("Choose a valid meeting point.");
+  }
+  const meetingPoint = acceptsPoint ? normalizedPoint : null;
   const before = getSession(sessionId);
   if (isLive()) {
     const wasTBC = before?.location === "TBC"
@@ -1555,6 +1575,8 @@ export function setWeekVenue(sessionId, { location, mapsQuery } = {}) {
     return liveOps.liveSetWeekVenue(sessionId, {
       location: cleanLocation,
       mapsQuery: cleanMapsQuery,
+      meetingLat: meetingPoint?.lat ?? null,
+      meetingLng: meetingPoint?.lng ?? null,
       wasTBC,
     });
   }
@@ -1571,20 +1593,31 @@ export function setWeekVenue(sessionId, { location, mapsQuery } = {}) {
   const override = existingOverride || (state.sessionOverrides[sessionId] = {});
   const previousLocation = override.location || "";
   const previousMapsQuery = override.mapsQuery || "";
+  const previousPoint = normalizeMeetingPoint(override.meetingLat, override.meetingLng);
   const previousNotified = override.venueMemberNotifiedAt || null;
   const recurring = getActivity(overrideActivityId);
   const effectiveLocation = cleanLocation || recurring?.location || "";
   const effectiveMapsQuery = cleanMapsQuery || recurring?.mapsQuery || "";
   const confirmed = hasConfirmedVenue(effectiveLocation, effectiveMapsQuery);
   const nextVenueTBC = cleared || confirmed ? false : Boolean(override.venueTBC);
+  const pointChanged = (previousPoint?.lat ?? null) !== (meetingPoint?.lat ?? null)
+    || (previousPoint?.lng ?? null) !== (meetingPoint?.lng ?? null);
   const changed = previousLocation !== cleanLocation
     || previousMapsQuery !== cleanMapsQuery
-    || Boolean(override.venueTBC) !== nextVenueTBC;
+    || Boolean(override.venueTBC) !== nextVenueTBC
+    || pointChanged;
   if (!changed) {
     return { sessionId, activityId: overrideActivityId, ...override, unchanged: true };
   }
   override.location = cleanLocation || undefined;
   override.mapsQuery = cleanMapsQuery || undefined;
+  if (meetingPoint) {
+    override.meetingLat = meetingPoint.lat;
+    override.meetingLng = meetingPoint.lng;
+  } else {
+    delete override.meetingLat;
+    delete override.meetingLng;
+  }
   override.venueTBC = nextVenueTBC;
   override.setAt = Date.now();
   override.setBy = actor?.id || null;

@@ -2297,6 +2297,78 @@ if (weekOverride.location !== "Causeway Bay Promenade — 7pm sharp"
     || weekOverride.mapsQuery !== "Causeway Bay Promenade, Hong Kong") {
   throw new Error("weekVenueOverride must expose the latest saved values");
 }
+
+const tamarSession = store.upcomingSessions(21).find(
+  (s) => s.activityId === "wnt" && s.id !== wntSession.id && !data.sessionStarted(s)
+);
+if (!tamarSession) throw new Error("expected another upcoming WNT for dated meeting-point tests");
+store.setWeekVenue(tamarSession.id, {
+  location: "Tamar Park",
+  mapsQuery: "Tamar Park",
+  meetingLat: 22.2825,
+  meetingLng: 114.1659,
+});
+let tamarDecorated = store.getSession(tamarSession.id);
+if (tamarDecorated.meetingLat !== 22.2825 || tamarDecorated.meetingLng !== 114.1659) {
+  throw new Error("dated Tamar point must decorate the session");
+}
+let tamarOverride = store.weekVenueOverride(tamarSession.id);
+if (tamarOverride.meetingLat !== 22.2825 || tamarOverride.meetingLng !== 114.1659) {
+  throw new Error("Admin override read must retain the dated Tamar point");
+}
+const otherWnt = store.upcomingSessions(21).find(
+  (s) => s.activityId === "wnt"
+    && s.id !== wntSession.id && s.id !== tamarSession.id
+    && !data.sessionStarted(s)
+);
+if (!otherWnt || "meetingLat" in store.getSession(otherWnt.id)) {
+  throw new Error("dated Tamar point must not leak into another WNT occurrence");
+}
+const memberBeforeMove = venueNotesFor("fixture-member", tamarSession.id).length;
+const adminBeforeMove = venueNotesFor("fixture-other-admin", tamarSession.id).length;
+store.setWeekVenue(tamarSession.id, {
+  location: "Tamar Park",
+  mapsQuery: "Tamar Park",
+  meetingLat: 22.2827,
+  meetingLng: 114.1661,
+});
+if (venueNotesFor("fixture-member", tamarSession.id).length !== memberBeforeMove) {
+  throw new Error("coordinate-only edit must not repeat member fan-out");
+}
+if (venueNotesFor("fixture-other-admin", tamarSession.id).length !== adminBeforeMove + 1) {
+  throw new Error("coordinate-only edit must create one Admin audit notification");
+}
+store.setWeekVenue(tamarSession.id, {
+  location: "Island ECC 9/F",
+  mapsQuery: "Island ECC",
+  meetingLat: 22.2827,
+  meetingLng: 114.1661,
+});
+tamarDecorated = store.getSession(tamarSession.id);
+if ("meetingLat" in tamarDecorated || "meetingLng" in tamarDecorated) {
+  throw new Error("non-Tamar save must clear stale meeting coordinates");
+}
+for (const point of [
+  { meetingLat: 22.28, meetingLng: null },
+  { meetingLat: 91, meetingLng: 114.16 },
+]) {
+  try {
+    store.setWeekVenue(tamarSession.id, {
+      location: "Tamar Park", mapsQuery: "Tamar Park", ...point,
+    });
+    throw new Error("invalid Tamar point must fail");
+  } catch (err) {
+    if (err.message !== "Choose a valid meeting point.") throw err;
+  }
+}
+store.setWeekVenue(tamarSession.id, {
+  location: null, mapsQuery: null, meetingLat: null, meetingLng: null,
+});
+if ("meetingLat" in store.getSession(tamarSession.id)) {
+  throw new Error("venue reset must remove the dated meeting point");
+}
+console.log("ok  local WNT override persists, clears, validates, and resets meeting coordinates");
+
 // View: free event with a mapsQuery renders the inline map host + Get directions.
 const freeDetail = views.viewActivity(wntSession.id);
 if (!freeDetail.includes('id="activity-map"')
