@@ -13,6 +13,7 @@
 
 import { SEED_ACTIVITIES } from "./data.js";
 import { isLive, supabase } from "./config.js";
+import { normalizeMeetingPoint } from "./venue.js";
 
 const LIVE_TABLES = [
   "operational_sessions",
@@ -195,11 +196,14 @@ function buildPayoutRow(row) {
 }
 
 function buildVenueOverrideRow(row) {
+  const point = normalizeMeetingPoint(row.meeting_lat, row.meeting_lng);
   return {
     sessionId: row.session_id,
     activityId: row.activity_id,
     location: row.location || null,
     mapsQuery: row.maps_query || null,
+    meetingLat: point?.lat ?? null,
+    meetingLng: point?.lng ?? null,
     setBy: row.set_by || null,
     setAt: row.set_at ? Date.parse(row.set_at) : null,
     memberNotifiedAt: row.member_notified_at ? Date.parse(row.member_notified_at) : null,
@@ -589,12 +593,17 @@ export async function liveUpdatePayout(profileId, paymeLink, fpsPhone) {
   });
 }
 
-export async function liveSetWeekVenue(sessionId, { location, mapsQuery, wasTBC }) {
+export async function liveSetWeekVenue(sessionId, {
+  location, mapsQuery, wasTBC, meetingLat = null, meetingLng = null,
+}) {
+  const point = normalizeMeetingPoint(meetingLat, meetingLng);
   return runOperationalRpc("set_session_venue", {
     p_session_id: sessionId,
     p_location: String(location || "").trim() || null,
     p_maps_query: String(mapsQuery || "").trim() || null,
     p_was_tbc: !!wasTBC,
+    p_meeting_lat: point?.lat ?? null,
+    p_meeting_lng: point?.lng ?? null,
   }, {
     applyResult(result) {
       const row = Array.isArray(result) ? result[0] : result;

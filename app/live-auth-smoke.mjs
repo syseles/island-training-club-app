@@ -176,7 +176,17 @@ const operationalTableRows = {
   operational_receipts: [],
   collector_assignments: [],
   collector_payout_profiles: [],
-  operational_session_venue_overrides: [],
+  operational_session_venue_overrides: [{
+    session_id: "wnt-2026-08-26",
+    activity_id: "wnt",
+    location: "Tamar Park",
+    maps_query: "Tamar Park",
+    meeting_lat: 22.2825,
+    meeting_lng: 114.1659,
+    set_by: "live-admin",
+    set_at: "2026-08-05T02:00:00.000Z",
+    member_notified_at: "2026-08-05T02:00:00.000Z",
+  }],
 };
 let authStateChangeHandler = null;
 let authCallbackLocked = false;
@@ -700,11 +710,17 @@ operationalRpcHandler = (name, args) => {
     }
     const existing = operationalTableRows.operational_session_venue_overrides
       .find((row) => row.session_id === sessionId);
+    const location = String(args.p_location || "").trim() || null;
+    const normalizedLocation = String(location || "").trim().toLowerCase().replace(/\s+/g, " ");
+    const acceptsPoint = activityId === "wnt"
+      && ["tamar park", "tamar park, admiralty"].includes(normalizedLocation);
     const next = {
       session_id: sessionId,
       activity_id: activityId,
-      location: String(args.p_location || "").trim() || null,
+      location,
       maps_query: String(args.p_maps_query || "").trim() || null,
+      meeting_lat: acceptsPoint ? args.p_meeting_lat ?? null : null,
+      meeting_lng: acceptsPoint ? args.p_meeting_lng ?? null : null,
       set_by: actingProfile,
       set_at: now,
       member_notified_at: existing?.member_notified_at || null,
@@ -726,6 +742,9 @@ const data = await import("./js/data.js");
 store.load();
 await store.hydrateLiveOperations();
 
+const hydratedWntPoint = store.getSession("wnt-2026-08-26");
+assert.equal(hydratedWntPoint.meetingLat, 22.2825);
+assert.equal(hydratedWntPoint.meetingLng, 114.1659);
 const hydratedBft = store.upcomingSessions(21)
   .find((session) => session.activityId === "hyrox");
 const hydratedMidtown = store.upcomingSessions(21)
@@ -782,12 +801,16 @@ assert.equal(lastVenueCall.args.p_session_id, "wnt-2026-08-05");
 assert.equal(lastVenueCall.args.p_location, "Central Harbourfront — 7pm sharp");
 assert.equal(lastVenueCall.args.p_maps_query, "Central Harbourfront, Hong Kong");
 assert.equal(lastVenueCall.args.p_was_tbc, true);
+assert.equal(lastVenueCall.args.p_meeting_lat, null);
+assert.equal(lastVenueCall.args.p_meeting_lng, null);
 assert.equal(lastVenueCall.name, "set_session_venue");
 assert.deepEqual(operations.getLiveVenueOverride("wnt-2026-08-05"), {
   sessionId: "wnt-2026-08-05",
   activityId: "wnt",
   location: "Central Harbourfront — 7pm sharp",
   mapsQuery: "Central Harbourfront, Hong Kong",
+  meetingLat: null,
+  meetingLng: null,
   setBy: authUser.id,
   setAt: Date.parse(fixedIso),
   memberNotifiedAt: Date.parse(fixedIso),
@@ -823,6 +846,8 @@ assert.deepEqual(operations.getLiveVenueOverride(cacheFirstSessionId), {
   activityId: "water",
   location: "Victoria Park Swimming Pool",
   mapsQuery: "Victoria Park Swimming Pool, Hong Kong",
+  meetingLat: null,
+  meetingLng: null,
   setBy: authUser.id,
   setAt: Date.parse(fixedIso),
   memberNotifiedAt: Date.parse(fixedIso),
@@ -2256,15 +2281,56 @@ assert.equal(savedSwimming.location, "Victoria Park Swimming Pool");
 assert.equal(savedSwimming.mapsQuery, "Victoria Park Swimming Pool");
 console.log("ok  delegated weekly venue submit copies location into blank map queries");
 
+const wntVenueForm = new HTMLFormElement();
+wntVenueForm.id = "";
+wntVenueForm.dataset = {
+  action: "form-week-venue",
+  session: "wnt-2026-08-26",
+};
+wntVenueForm.fields = {
+  location: "Tamar Park",
+  mapsQuery: "Tamar Park",
+  meetingLat: "22.2827",
+  meetingLng: "114.1661",
+};
+const wntVenueSubmit = makeElement();
+wntVenueSubmit.type = "submit";
+wntVenueForm.querySelector = (selector) => selector === '[type="submit"]' ? wntVenueSubmit : null;
+wntVenueForm.querySelectorAll = () => [wntVenueSubmit];
+await domListeners.get("submit")({ target: wntVenueForm, preventDefault() {} });
+await new Promise(setImmediate);
+const wntVenueCall = operationalRpcCalls
+  .filter((call) => call.name === "set_session_venue")
+  .at(-1);
+assert.deepEqual({
+  p_session_id: wntVenueCall.args.p_session_id,
+  p_location: wntVenueCall.args.p_location,
+  p_maps_query: wntVenueCall.args.p_maps_query,
+  p_meeting_lat: wntVenueCall.args.p_meeting_lat,
+  p_meeting_lng: wntVenueCall.args.p_meeting_lng,
+}, {
+  p_session_id: "wnt-2026-08-26",
+  p_location: "Tamar Park",
+  p_maps_query: "Tamar Park",
+  p_meeting_lat: 22.2827,
+  p_meeting_lng: 114.1661,
+});
+const savedWntPoint = store.getSession("wnt-2026-08-26");
+assert.equal(savedWntPoint.meetingLat, 22.2827);
+assert.equal(savedWntPoint.meetingLng, 114.1661);
+console.log("ok  delegated WNT venue submit persists exact meeting coordinates");
+
 const weeklyVenueFailureForm = new HTMLFormElement();
 weeklyVenueFailureForm.id = "";
 weeklyVenueFailureForm.dataset = {
   action: "form-week-venue",
-  session: swimmingSession.id,
+  session: "wnt-2026-08-26",
 };
 weeklyVenueFailureForm.fields = {
-  location: "Victoria Park Swimming Pool",
-  mapsQuery: "",
+  location: "Tamar Park",
+  mapsQuery: "Tamar Park",
+  meetingLat: "22.2829",
+  meetingLng: "114.1663",
 };
 const weeklyVenueFailureSubmit = makeElement();
 weeklyVenueFailureSubmit.type = "submit";
@@ -2284,7 +2350,9 @@ operationalRpcHandler = (name, args) => {
 await domListeners.get("submit")({ target: weeklyVenueFailureForm, preventDefault() {} });
 await new Promise(setImmediate);
 assert.equal(viewEl.innerHTML, htmlBeforeVenueFailure);
-assert.equal(weeklyVenueFailureForm.fields.location, "Victoria Park Swimming Pool");
+assert.equal(weeklyVenueFailureForm.fields.location, "Tamar Park");
+assert.equal(weeklyVenueFailureForm.fields.meetingLat, "22.2829");
+assert.equal(weeklyVenueFailureForm.fields.meetingLng, "114.1663");
 assert.equal(weeklyVenueFailureSubmit.disabled, false);
 assert.ok(toastStack.children.some((item) =>
   item.textContent === "Venue override setup unavailable"
