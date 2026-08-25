@@ -2227,8 +2227,20 @@ weeklyVenueForm.fields = {
 };
 const weeklySubmit = makeElement();
 weeklySubmit.type = "submit";
+weeklySubmit.closest = () => weeklyVenueForm;
 weeklyVenueForm.querySelector = (selector) => selector === '[type="submit"]' ? weeklySubmit : null;
 weeklyVenueForm.querySelectorAll = () => [weeklySubmit];
+
+// A click on the nested submit control must be left to the browser so it can
+// emit the form's submit event. The form's own data-action must not make the
+// generic click delegate cancel that default behavior first.
+let weeklyClickPrevented = false;
+await click({
+  target: weeklySubmit,
+  preventDefault() { weeklyClickPrevented = true; },
+});
+assert.equal(weeklyClickPrevented, false,
+  "weekly venue submit click must not be cancelled by the click delegate");
 
 await domListeners.get("submit")({ target: weeklyVenueForm, preventDefault() {} });
 await new Promise(setImmediate);

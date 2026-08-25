@@ -451,7 +451,10 @@ function downloadICS(session) {
 
 document.addEventListener("click", async (e) => {
   const el = e.target.closest("[data-action]");
-  if (!el) return;
+  // Repeated forms route through the submit delegate via data-action. If a
+  // nested submit button resolves to its parent form here, preventDefault()
+  // below cancels the browser's submit event before that handler can run.
+  if (!el || el instanceof HTMLFormElement) return;
   const { action } = el.dataset;
   e.preventDefault?.();
 
