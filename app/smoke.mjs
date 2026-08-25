@@ -2396,6 +2396,75 @@ try {
 }
 console.log("ok  free-event weekly venue state, fan-out, dedupe, and HYROX guard");
 
+// --- WNT venue-specific guidance ---
+const venue = await import("./js/venue.js");
+const sameVenueValue = (actual, expected, label) => {
+  if (JSON.stringify(actual) !== JSON.stringify(expected)) {
+    throw new Error(`${label}: ${JSON.stringify(actual)}`);
+  }
+};
+if (venue.normalizeVenueLocation("  ISLAND ECC 11 / F ") !== "island ecc 11/f") {
+  throw new Error("11/F venue formatting must canonicalize");
+}
+if (venue.normalizeVenueLocation("Island ECC 9F") !== "island ecc 9/f") {
+  throw new Error("9F venue formatting must canonicalize");
+}
+if (venue.normalizeVenueLocation("Tamar Park, Admiralty") !== "tamar park") {
+  throw new Error("Tamar alias must canonicalize");
+}
+if (venue.normalizeVenueLocation("Tamar Street") === "tamar park") {
+  throw new Error("unrelated Tamar text must not specialize");
+}
+sameVenueValue(
+  venue.normalizeMeetingPoint("22.2816182", "114.1655613"),
+  { lat: 22.2816182, lng: 114.1655613 },
+  "valid meeting point"
+);
+for (const [lat, lng] of [[null, 114], [91, 114], [22, -181], ["x", 114]]) {
+  if (venue.normalizeMeetingPoint(lat, lng) !== null) {
+    throw new Error(`invalid meeting point accepted: ${lat},${lng}`);
+  }
+}
+sameVenueValue(venue.venuePresentationFor({
+  id: "wnt-2026-09-02", activityId: "wnt", location: "Island ECC 11/F",
+  mapsQuery: "Island ECC", markerLabel: "WNT · 2 Sep · 7:30 PM",
+}), {
+  kind: "image",
+  src: "../assets/itc/venues/island-ecc-11.jpg",
+  alt: "Route to The Well on 11/F at Island ECC",
+  caption: "The Well · 11/F Island ECC",
+  fallbackQuery: "Island ECC",
+}, "11/F image presentation");
+sameVenueValue(venue.venuePresentationFor({
+  id: "wnt-2026-09-09", activityId: "wnt", location: "Island ECC 9F",
+  mapsQuery: "Island ECC", markerLabel: "WNT · 9 Sep · 7:30 PM",
+}), {
+  kind: "image",
+  src: "../assets/itc/venues/island-ecc-9.jpg",
+  alt: "Route to Kid’s Club Hall on 9/F at Island ECC",
+  caption: "Kid’s Club Hall · 9/F Island ECC",
+  fallbackQuery: "Island ECC",
+}, "9/F image presentation");
+sameVenueValue(venue.venuePresentationFor({
+  id: "wnt-2026-09-16", activityId: "wnt", location: "Tamar Park",
+  mapsQuery: "Tamar Park", markerLabel: "WNT · 16 Sep · 7:30 PM",
+}), {
+  kind: "coordinates", lat: 22.2816182, lng: 114.1655613,
+  markerLabel: "WNT · 16 Sep · 7:30 PM",
+}, "default Tamar presentation");
+sameVenueValue(venue.venuePresentationFor({
+  id: "run-2026-09-14", activityId: "run", location: "Island ECC 9/F",
+  mapsQuery: "Island ECC", markerLabel: "Run",
+}), { kind: "geocode", query: "Island ECC", markerLabel: "Run" },
+"non-WNT generic presentation");
+for (const path of [
+  "../assets/itc/venues/island-ecc-11.jpg",
+  "../assets/itc/venues/island-ecc-9.jpg",
+]) {
+  if (!existsSync(resolve(__dirnameSmoke, path))) throw new Error(`missing venue guide: ${path}`);
+}
+console.log("ok  WNT venue resolver selects ECC images, Tamar point, and generic fallback");
+
 // --- Inline free-event venue map (Task 5) ---
 const map = await import("./js/map.js");
 if (JSON.stringify(map.parseGeocodeCache('{"Central":{"lat":22.281,"lon":114.159}}'))
