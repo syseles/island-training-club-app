@@ -103,6 +103,34 @@ begin
   if has_function_privilege('anon', 'public.set_session_venue(text, text, text, boolean)', 'execute') then
     raise notice 'FAIL: anon should not execute set_session_venue'; failures := failures + 1;
   end if;
+  if to_regprocedure('public.set_session_venue(text,text,text,boolean,double precision,double precision)') is null then
+    raise notice 'FAIL: six-argument meeting-point RPC missing'; failures := failures + 1;
+  elsif not has_function_privilege(
+    'authenticated',
+    'public.set_session_venue(text,text,text,boolean,double precision,double precision)',
+    'execute'
+  ) then
+    raise notice 'FAIL: authenticated cannot execute meeting-point RPC'; failures := failures + 1;
+  elsif has_function_privilege(
+    'anon',
+    'public.set_session_venue(text,text,text,boolean,double precision,double precision)',
+    'execute'
+  ) then
+    raise notice 'FAIL: anon should not execute meeting-point RPC'; failures := failures + 1;
+  end if;
+  if not exists (
+    select 1 from information_schema.columns
+     where table_schema = 'public'
+       and table_name = 'operational_session_venue_overrides'
+       and column_name = 'meeting_lat'
+  ) or not exists (
+    select 1 from information_schema.columns
+     where table_schema = 'public'
+       and table_name = 'operational_session_venue_overrides'
+       and column_name = 'meeting_lng'
+  ) then
+    raise notice 'FAIL: venue meeting-point columns missing'; failures := failures + 1;
+  end if;
   if failures > 0 then raise exception 'schema failures: %', failures; end if;
   raise notice 'OK: operational schema foundations';
 end $$;
@@ -449,6 +477,7 @@ declare
   v_pending   constant uuid := 'cc000000-0000-0000-0000-00000000c001';
   v_session   constant text := 'wnt-2026-08-19';
   v_other_session constant text := 'wnt-2026-08-26';
+  v_non_tamar_session constant text := 'wnt-2026-09-02';
   v_reset_only_session constant text := 'water-2026-08-18';
   v_partial_session constant text := 'water-2026-08-25';
   v_initial_count integer;
@@ -457,6 +486,9 @@ declare
   v_after_reconfirm_count integer;
   v_member_notified_at timestamptz;
   v_partial_member_count integer;
+  v_member_before_point integer;
+  v_admin_before_point integer;
+  v_retained_notified_at timestamptz;
 begin
   perform ensure_operational_sessions(date '2026-08-01', 5);
 
@@ -661,21 +693,110 @@ begin
     'completed partial override uses Swimming display copy'
   );
 
-  -- Cancel-related cancellation flag does not block override saves.
-  update public.operational_sessions
-     set cancelled_at = null, cancelled_by = null,
-         cancelled_source = null, cancel_reason = null
-   where id = v_session;
+  -- A six-argument WNT Tamar save stores the dated point.
   perform public.set_session_venue(
-    v_other_session,
-    'Tamar Park',
-    'Tamar Park, Hong Kong',
-    true
+    v_other_session, 'Tamar Park', 'Tamar Park', true,
+    22.2825, 114.1659
   );
   perform pg_temp.op_assert(
-    (select location from public.operational_session_venue_overrides where session_id = v_other_session)
-      = 'Tamar Park',
-    'cancellation state of operational_sessions does not block venue override writes'
+    (select meeting_lat = 22.2825 and meeting_lng = 114.1659
+       from public.operational_session_venue_overrides
+      where session_id = v_other_session),
+    'dated WNT meeting point is stored'
+  );
+
+  -- Moving only the point audits Admins once without repeating members.
+  select count(*) into v_member_before_point
+    from public.notifications
+   where kind = 'operational_session_venue_updated'
+     and destination = '#/activity/' || v_other_session
+     and profile_id in (v_member_a, v_member_b, v_member_c);
+  select count(*) into v_admin_before_point
+    from public.notifications
+   where kind = 'operational_session_venue_updated'
+     and destination = '#/activity/' || v_other_session
+     and profile_id = v_super;
+  perform public.set_session_venue(
+    v_other_session, 'Tamar Park', 'Tamar Park', false,
+    22.2827, 114.1661
+  );
+  perform pg_temp.op_assert(
+    (select count(*) from public.notifications
+      where kind = 'operational_session_venue_updated'
+        and destination = '#/activity/' || v_other_session
+        and profile_id in (v_member_a, v_member_b, v_member_c)) = v_member_before_point,
+    'coordinate-only edit does not repeat member fan-out'
+  );
+  perform pg_temp.op_assert(
+    (select count(*) from public.notifications
+      where kind = 'operational_session_venue_updated'
+        and destination = '#/activity/' || v_other_session
+        and profile_id = v_super) = v_admin_before_point + 1,
+    'coordinate-only edit creates one Admin audit notification'
+  );
+
+  -- Partial and out-of-range Tamar points are rejected before persistence.
+  begin
+    perform public.set_session_venue(
+      'wnt-2026-09-09', 'Tamar Park', 'Tamar Park', true,
+      22.28, null
+    );
+    raise exception 'partial point should fail';
+  exception when others then
+    if sqlerrm not like '%Meeting point must include valid latitude and longitude.%' then raise; end if;
+  end;
+  begin
+    perform public.set_session_venue(
+      'wnt-2026-09-09', 'Tamar Park', 'Tamar Park', true,
+      91, 114.16
+    );
+    raise exception 'latitude should fail';
+  exception when others then
+    if sqlerrm not like '%Meeting point must include valid latitude and longitude.%' then raise; end if;
+  end;
+  begin
+    perform public.set_session_venue(
+      'wnt-2026-09-09', 'Tamar Park', 'Tamar Park', true,
+      22.28, -181
+    );
+    raise exception 'longitude should fail';
+  exception when others then
+    if sqlerrm not like '%Meeting point must include valid latitude and longitude.%' then raise; end if;
+  end;
+
+  -- Stale arguments never attach specialized points to another activity or venue.
+  perform public.set_session_venue(
+    'run-2026-09-14', 'Tamar Park', 'Tamar Park', true,
+    22.2825, 114.1659
+  );
+  perform pg_temp.op_assert(
+    (select meeting_lat is null and meeting_lng is null
+       from public.operational_session_venue_overrides
+      where session_id = 'run-2026-09-14'),
+    'non-WNT save clears stale coordinates'
+  );
+  perform public.set_session_venue(
+    v_non_tamar_session, 'Island ECC 9/F', 'Island ECC', true,
+    22.2825, 114.1659
+  );
+  perform pg_temp.op_assert(
+    (select meeting_lat is null and meeting_lng is null
+       from public.operational_session_venue_overrides
+      where session_id = v_non_tamar_session),
+    'non-Tamar save clears stale coordinates'
+  );
+
+  -- The old signature remains usable and reset clears the point while retaining dedupe.
+  select member_notified_at into v_retained_notified_at
+    from public.operational_session_venue_overrides
+   where session_id = v_other_session;
+  perform public.set_session_venue(v_other_session, null, null, false);
+  perform pg_temp.op_assert(
+    (select meeting_lat is null and meeting_lng is null
+        and member_notified_at = v_retained_notified_at
+       from public.operational_session_venue_overrides
+      where session_id = v_other_session),
+    'four-argument reset clears point and retains member dedupe'
   );
 
   reset role;
