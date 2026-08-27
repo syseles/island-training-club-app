@@ -832,11 +832,21 @@ await check("profile > donor", () => views.viewAccount("donor"));
 await check("profile > payments", () => views.viewAccount("payments"));
 await check("profile > privacy", () => views.viewAccount("privacy"));
 await check("profile > history", () => views.viewAccount("history"));
+const membershipDetailsHtml = await views.viewAccount("details");
+const membershipDetailsEditHtml = await views.viewAccount("details", "edit");
+if (!membershipDetailsHtml.includes("Emergency contact relationship")) {
+  failures++;
+  console.error("FAIL Membership Details summary missing emergency contact relationship");
+}
+if (!membershipDetailsEditHtml.includes('name="emergency_relationship"')) {
+  failures++;
+  console.error("FAIL Membership Details edit form missing emergency_relationship field");
+} else console.log("ok  Membership Details summary and edit include emergency relationship");
 
 // sub-page headings are title-cased to match the row titles
 for (const [section, title] of [
   ["details", "Membership Details."],
-  ["indemnity", "Health &amp; Liability Indemnity."],
+  ["indemnity", "Indemnity."],
   ["donor", "Donor Profile."],
   ["payments", "Payments &amp; Receipts."],
   ["privacy", "Privacy &amp; Notifications."],
@@ -854,43 +864,66 @@ if (!(await views.viewAccount("nope")).includes("Page not found")) {
 } else console.log("ok  unknown Profile section 404s");
 
 // indemnity: accepted at application -> confirmed on Profile as a single
-// "Indemnity confirmed on [date]" line; a member who never accepted sees
-// "To be accepted" and can confirm from the sub-page
+// "Indemnity confirmed on [date]" line; stale consent must be detected from
+// store.isIndemnityCurrent(), not from the timestamp alone.
 if (!newMemberAcct.includes("Indemnity confirmed on") || newMemberAcct.includes("Accepted on")) {
   failures++;
   console.error("FAIL Profile should show a single indemnity-confirmed-on-date line");
 } else console.log("ok  Profile shows single-line indemnity confirmation");
+const currentIndemnityHtml = await views.viewAccount("indemnity");
+for (const marker of [
+  "Indemnity confirmed on",
+  "Signed by",
+  "Test Person",
+  "Date of signing",
+  "Emergency contact relationship",
+  "Sibling",
+  "Document version",
+  "v1",
+]) {
+  if (!currentIndemnityHtml.includes(marker)) {
+    failures++;
+    console.error(`FAIL current Indemnity page missing "${marker}"`);
+  }
+}
+console.log("ok  current indemnity page shows the stored consent record");
 store.currentUser().indemnityAcceptedAt = Date.now() - 86400000;
-store.currentUser().indemnitySignature = null;
-store.currentUser().indemnitySignedAt = null;
-store.currentUser().indemnityFormVersion = null;
-store.currentUser().emergencyRelationship = null;
+store.currentUser().indemnityFormVersion = "v0";
 const legacyIndemnityProfile = await views.viewAccount();
 if (legacyIndemnityProfile.includes("Indemnity confirmed on") || !legacyIndemnityProfile.includes("Legacy acceptance recorded on")) {
   failures++;
-  console.error("FAIL timestamp-only legacy indemnity should stay stale on Profile");
-} else console.log("ok  timestamp-only legacy indemnity stays stale on Profile");
-const legacyIndemnityPageHtml = await views.viewAccount("indemnity");
-if (!legacyIndemnityPageHtml.includes("Legacy acceptance recorded on") || !legacyIndemnityPageHtml.includes("Accept &amp; Confirm")) {
-  failures++;
-  console.error("FAIL timestamp-only legacy indemnity should prompt review and confirmation");
-} else console.log("ok  timestamp-only legacy indemnity prompts review and confirmation");
-if (!legacyIndemnityPageHtml.includes('name="emergencyRelationship"')) {
-  failures++;
-  console.error("FAIL local Profile > Indemnity form missing emergencyRelationship field");
-} else console.log("ok  local Profile > Indemnity form collects emergencyRelationship");
+  console.error("FAIL timestamp-only or stale indemnity should stay stale on Profile");
+} else console.log("ok  timestamp-only or stale indemnity stays stale on Profile");
+const staleIndemnityHtml = await views.viewAccount("indemnity");
 for (const marker of [
-  'signature: user.fullName',
-  'signedAt: isoDate(todayLocal())',
-  'emergencyRelationship: fd.get("emergencyRelationship") || user.emergencyRelationship || ""',
+  "A new version of the Indemnity is available",
+  'data-doc-accept="indemnity"',
+  'name="signature"',
+  'name="signedAt"',
+  'name="emergencyRelationship"',
+  "Accept &amp; Confirm",
+  "Edit in Membership Details",
+]) {
+  if (!staleIndemnityHtml.includes(marker)) {
+    failures++;
+    console.error(`FAIL stale Indemnity page missing "${marker}"`);
+  }
+}
+console.log("ok  stale indemnity page renders the re-sign flow");
+for (const marker of [
+  'await store.acceptMyIndemnity({',
+  'signature: fd.get("signature") || ""',
+  'signedAt: fd.get("signedAt") || ""',
+  'emergencyRelationship: fd.get("emergencyRelationship") || ""',
 ]) {
   if (!integratedAppSource.includes(marker)) {
     failures++;
-    console.error(`FAIL local Profile > Indemnity handler missing structured contract: ${marker}`);
+    console.error(`FAIL Profile > Indemnity handler missing structured contract: ${marker}`);
   }
 }
-console.log("ok  local Profile > Indemnity handler bridges the structured contract");
+console.log("ok  Profile > Indemnity handler bridges the structured contract");
 store.currentUser().indemnityAcceptedAt = null;
+store.currentUser().indemnityFormVersion = null;
 if (!(await views.viewAccount()).includes("To be accepted")) {
   failures++;
   console.error('FAIL unaccepted indemnity should read "To be accepted"');

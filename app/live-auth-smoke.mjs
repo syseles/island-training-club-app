@@ -697,7 +697,10 @@ const appSource = readFileSync(resolve(__dirnameSmoke, "js/app.js"), "utf8");
 assert.match(appSource, /form\.dataset\.form === "apply"/);
 assert.match(appSource, /payload\.waiver = !!fd\.get\("waiver"\)/);
 assert.match(appSource, /await store\.saveMyApplication\(payload\)/);
+assert.match(appSource, /form\.dataset\.form === "membership-details"/);
+assert.match(appSource, /await store\.updateMyMembershipDetails\(/);
 assert.match(appSource, /await store\.acceptMyIndemnity\(\{/);
+assert.match(appSource, /fd\.get\("indemnityAccept"\) !== "on"/);
 assert.match(appSource, /signature:\s*fd\.get\("signature"\)/);
 assert.match(appSource, /signedAt:\s*fd\.get\("signedAt"\)/);
 assert.match(appSource, /emergencyRelationship:\s*fd\.get\("emergencyRelationship"\)/);
@@ -1072,14 +1075,27 @@ const indemnity = await views.viewAccount("indemnity");
 if (!indemnity.includes(`Indemnity confirmed on ${confirmedDay}`) || indemnity.includes("To be accepted")) {
   throw new Error("Indemnity page should reflect the live application waiver acceptance date");
 }
+for (const marker of [
+  "Signed by",
+  "Riley Runner",
+  "Date of signing",
+  "Emergency contact relationship",
+  "Coach",
+  "Document version",
+  "v1",
+]) {
+  if (!indemnity.includes(marker)) {
+    throw new Error(`Current live indemnity page missing ${marker}`);
+  }
+}
 store.currentUser().role = "pending";
 store.currentUser().status = "pending";
 const pendingAccount = await views.viewAccount();
 if (!pendingAccount.includes("+852 6123 4567")) {
   throw new Error("Pending Profile should render the fetched application phone");
 }
-if (!pendingAccount.includes("Taylor Coach · +852 6777 8888")) {
-  throw new Error("Pending Profile should render the fetched application emergency contact");
+if (!pendingAccount.includes("Taylor Coach · Coach · +852 6777 8888")) {
+  throw new Error("Pending Profile should render the fetched application emergency contact and relationship");
 }
 if (!pendingAccount.includes("Accepted")) {
   throw new Error("Pending Profile should render the fetched application waiver state");
@@ -1218,6 +1234,7 @@ for (const label of [
   "Mobile / WhatsApp number",
   "Age status",
   "Emergency contact name",
+  "Emergency contact relationship",
   "Emergency contact phone",
   "How you heard about ITC",
 ]) {
@@ -1251,8 +1268,11 @@ if (!/name="age_over_18" value="yes"[^>]*checked/.test(detailsEdit)) {
 if (!detailsEdit.includes("data-minor-only") || !detailsEdit.includes("hidden")) {
   throw new Error("Live details edit route should keep the guardian block conditional");
 }
-if (!detailsEdit.includes('value="Taylor Coach"') || !detailsEdit.includes('value="+852 6777 8888"')) {
+if (!detailsEdit.includes('value="Taylor Coach"') || !detailsEdit.includes('value="Coach"') || !detailsEdit.includes('value="+852 6777 8888"')) {
   throw new Error("Live details edit route should prefill emergency contact fields");
+}
+if (!detailsEdit.includes('name="emergency_relationship"')) {
+  throw new Error("Live details edit route should include emergency_relationship");
 }
 if (detailsEdit.includes('name="photo_consent"')) {
   throw new Error("Live details edit route should exclude photo consent controls");
@@ -1440,12 +1460,17 @@ if (!legacyAccount.includes(`Legacy acceptance recorded on ${confirmedDay}`) || 
   throw new Error("Legacy live rows must stay stale/re-signable on the Profile summary");
 }
 const legacyWaiver = await views.viewAccount("indemnity");
-if (!legacyWaiver.includes(`Legacy acceptance recorded on ${confirmedDay}`) || !legacyWaiver.includes("Accept &amp; Confirm")) {
-  throw new Error("Legacy live rows must render the re-sign flow on Profile > Indemnity");
-}
-for (const fieldName of ["signature", "signedAt", "emergencyRelationship"]) {
-  if (!legacyWaiver.includes(`name="${fieldName}"`)) {
-    throw new Error(`Live legacy re-sign form missing ${fieldName}`);
+for (const marker of [
+  "A new version of the Indemnity is available",
+  'data-doc-accept="indemnity"',
+  'name="signature"',
+  'name="signedAt"',
+  'name="emergencyRelationship"',
+  "Accept &amp; Confirm",
+  "Edit in Membership Details",
+]) {
+  if (!legacyWaiver.includes(marker)) {
+    throw new Error(`Legacy live re-sign flow missing ${marker}`);
   }
 }
 const createdWaiver = await store.acceptMyIndemnity({

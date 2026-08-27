@@ -837,6 +837,23 @@ document.addEventListener("submit", async (e) => {
     return;
   }
 
+  if (form.dataset.form === "membership-details") {
+    e.preventDefault();
+    if (!form.reportValidity()) return;
+    const control = form.querySelector('[type="submit"]');
+    await withBusyControl(control, "Saving…", async () => {
+      try {
+        await store.updateMyMembershipDetails(Object.fromEntries(new FormData(form).entries()));
+        toast("Membership details saved");
+        location.hash = "#/account/details";
+        await renderWithFeedback();
+      } catch (err) {
+        toast(err.message || "Unable to save membership details", true);
+      }
+    });
+    return;
+  }
+
   switch (form.id) {
     case "form-signin": {
       e.preventDefault();
@@ -966,31 +983,23 @@ document.addEventListener("submit", async (e) => {
     case "form-indemnity": {
       e.preventDefault();
       if (!form.reportValidity()) return;
-      const user = store.currentUser();
-      if (!user) return;
-      const errEl = form.querySelector("#indemnity-error");
       const fd = new FormData(form);
-      try {
-        if (isLive()) {
-          await store.acceptMyIndemnity({
-            signature: fd.get("signature") || user.fullName || "",
-            signedAt: fd.get("signedAt") || isoDate(todayLocal()),
-            emergencyRelationship: fd.get("emergencyRelationship") || user.emergencyRelationship || "",
-          });
-        } else {
-          store.acceptIndemnity(user.id, {
-            signature: user.fullName,
-            signedAt: isoDate(todayLocal()),
-            emergencyRelationship: fd.get("emergencyRelationship") || user.emergencyRelationship || "",
-          });
-        }
-        if (errEl) errEl.innerHTML = "";
-      } catch (err) {
-        if (errEl) errEl.innerHTML = `<div class="form-error">${err.message || "Unable to confirm the indemnity right now."}</div>`;
+      const errorEl = form.querySelector("#indemnity-error");
+      if (fd.get("indemnityAccept") !== "on") {
+        showInlineFormError(errorEl, "Read and accept the Indemnity before confirming");
         return;
       }
-      toast("Indemnity accepted & confirmed");
-      render();
+      try {
+        await store.acceptMyIndemnity({
+          signature: fd.get("signature") || "",
+          signedAt: fd.get("signedAt") || "",
+          emergencyRelationship: fd.get("emergencyRelationship") || "",
+        });
+        toast("Indemnity accepted & confirmed");
+        await renderWithFeedback();
+      } catch (err) {
+        showInlineFormError(errorEl, err.message || "Unable to accept the Indemnity");
+      }
       break;
     }
 

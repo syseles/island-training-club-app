@@ -1005,7 +1005,7 @@ async function hydrateLiveUser(user) {
       indemnityAcceptedAt: app.waiver_accepted_at ?? user.indemnityAcceptedAt,
       indemnitySignature: app.waiver_signature_text ?? user.indemnitySignature ?? "",
       indemnitySignedAt: app.waiver_signed_at ?? user.indemnitySignedAt ?? "",
-      indemnityFormVersion: app.waiver_form_version ?? user.indemnityFormVersion ?? null,
+      indemnityFormVersion: app.waiver_form_version ?? user.indemnityFormVersion ?? "",
       privacyAcceptedAt: app.privacy_accepted_at ?? user.privacyAcceptedAt,
       appliedAt: app.submitted_at ?? user.appliedAt,
     };
@@ -1042,7 +1042,6 @@ function accountVisitor() {
         <div id="signin-error"></div>
         <button class="btn mt16" type="submit">Sign in</button>
       </form>
-<<<<<<< HEAD
       <p class="muted small mt16">This local prototype has no password. Sign in with the email used for an application on this device.</p>
     </div></div>
     <div class="card mt16"><div class="card-body">
@@ -1050,6 +1049,15 @@ function accountVisitor() {
       <p class="hero-meta">Apply in two minutes. You’ll keep browsing access while a leader reviews your application.</p>
       <a class="btn mt16" href="#/apply">Apply for membership</a>
     </div></div>`;
+}
+
+function emergencyContactSummary(name, relationship, phone) {
+  return esc(
+    [name, relationship, phone]
+      .map((value) => String(value || "").trim())
+      .filter(Boolean)
+      .join(" · ") || "—"
+  );
 }
 
 function indemnityState(user) {
@@ -1090,7 +1098,7 @@ async function accountPending(user) {
       <div class="receipt-lines">
         <div class="line"><span>Name</span><strong>${esc(user.fullName)}</strong></div>
         <div class="line"><span>Phone</span><strong>${esc(hydrated.phone)}</strong></div>
-        <div class="line"><span>Emergency contact</span><strong>${esc(hydrated.emergencyName)} · ${esc(hydrated.emergencyPhone)}</strong></div>
+        <div class="line"><span>Emergency contact</span><strong>${emergencyContactSummary(hydrated.emergencyName, hydrated.emergencyRelationship, hydrated.emergencyPhone)}</strong></div>
         <div class="line"><span>Heard about ITC</span><strong>${esc(hydrated.heard)}</strong></div>
         ${user.donorId ? `<div class="line"><span>Donor ID</span><strong>${esc(user.donorId)}</strong></div>` : ""}
         <div class="line"><span>Indemnity</span><strong>${indemnity.kind === "current" ? "Accepted" : indemnity.kind === "stale" ? "Review & confirm" : "—"}</strong></div>
@@ -1217,6 +1225,10 @@ async function accountDetailsEdit(user) {
         <input id="md-emergency_name" name="emergency_name" value="${esc(hydrated.emergencyName || "")}" required>
       </div>
       <div class="field">
+        <label for="md-emergency_relationship">Emergency contact relationship *</label>
+        <input id="md-emergency_relationship" name="emergency_relationship" value="${esc(hydrated.emergencyRelationship || "")}" required>
+      </div>
+      <div class="field">
         <label for="md-emergency_phone">Emergency contact phone *</label>
         <input id="md-emergency_phone" name="emergency_phone" type="tel" value="${esc(hydrated.emergencyPhone || "")}" required>
       </div>
@@ -1247,11 +1259,12 @@ async function accountDetails(user) {
         <div class="line"><span>Mobile / WhatsApp number</span><strong>${esc(hydrated.phone)}</strong></div>
         <div class="line"><span>Age status</span><strong>${ageStatus}</strong></div>
         <div class="line"><span>Emergency contact name</span><strong>${esc(hydrated.emergencyName)}</strong></div>
+        <div class="line"><span>Emergency contact relationship</span><strong>${esc(hydrated.emergencyRelationship)}</strong></div>
         <div class="line"><span>Emergency contact phone</span><strong>${esc(hydrated.emergencyPhone)}</strong></div>
         <div class="line"><span>How you heard about ITC</span><strong>${esc(hydrated.heard || "—")}</strong></div>
         <a class="btn ghost sm mt16" href="#/account/details/edit">Edit membership details</a>
       </div>
-      <p class="muted small mt16">Profile editing is stubbed in the prototype — fields come from the application form.</p>
+      <p class="muted small mt16">Keep these details current so ITC leaders can reach you in an emergency.</p>
     </div></div>`;
 }
 
@@ -1272,66 +1285,58 @@ function linkCard(href, title, status, { sub = "", cls = "" } = {}) {
     </a>`;
 }
 
-// Draft indemnity wording — final text to be confirmed with ITC leadership
-// before launch. The apply form captures acceptance at join time; this page
-// catches members who joined before that requirement existed.
 async function accountIndemnity(user) {
   const hydrated = await hydrateLiveUser(user);
-  const indemnity = indemnityState(hydrated);
+  const current = store.isIndemnityCurrent(hydrated);
+  const hadAcceptance = !!hydrated.indemnityAcceptedAt;
+  const defaultDate = todayISO();
   return `
     <a class="back-link" href="#/account">← Profile</a>
     <div class="kicker mt16">Profile · Indemnity</div>
-    <h1 class="display sm">Health &amp; Liability Indemnity.</h1>
-    <div class="banner${indemnity.kind === "current" ? "" : " warn"} mt16">
-      <span class="kicker">${esc(indemnity.kicker)}</span>
-      <p>${esc(indemnity.body)}</p>
-    </div>
+    <h1 class="display sm">Indemnity.</h1>
+    ${current ? `
+      <div class="banner mt16">
+        <span class="kicker">Indemnity confirmed on ${fmtDay(hydrated.indemnityAcceptedAt)}</span>
+        <p>You’re confirmed to join ITC activities.</p>
+      </div>` : `
+      <div class="banner warn mt16">
+        <span class="kicker">To be accepted</span>
+        <p>${hadAcceptance
+          ? "A new version of the Indemnity is available. Please read and re-sign."
+          : "Please read the Indemnity, then accept and confirm."}</p>
+      </div>`}
     <a class="btn ghost sm mt16" href="#" data-action="open-doc" data-doc="indemnity">View as full document</a>
     <div class="card mt16"><div class="card-body prose">
       ${indemnityDoc.renderIndemnityDocument()}
     </div></div>
-    ${
-      indemnity.kind === "current"
-        ? ""
-        : isLive()
-          ? `
+    ${current ? `
+      <div class="card mt16"><div class="card-body receipt-lines">
+        <div class="line"><span>Signed by</span><strong>${esc(hydrated.indemnitySignature)}</strong></div>
+        <div class="line"><span>Date of signing</span><strong>${fmtDay(parseISO(hydrated.indemnitySignedAt))}</strong></div>
+        <div class="line"><span>Emergency contact name</span><strong>${esc(hydrated.emergencyName)}</strong></div>
+        <div class="line"><span>Emergency contact relationship</span><strong>${esc(hydrated.emergencyRelationship)}</strong></div>
+        <div class="line"><span>Emergency contact phone</span><strong>${esc(hydrated.emergencyPhone)}</strong></div>
+        <div class="line"><span>Document version</span><strong>${esc(hydrated.indemnityFormVersion)}</strong></div>
+      </div></div>` : `
       <form id="form-indemnity" class="mt16" novalidate>
-        <div class="card"><div class="card-body">
-          <div class="field">
-            <label for="indemnity-signature">Signature *</label>
-            <input id="indemnity-signature" name="signature" value="${esc(hydrated.indemnitySignature || user.fullName)}" required>
-          </div>
-          <div class="field">
-            <label for="indemnity-signed-at">Signing date *</label>
-            <input id="indemnity-signed-at" name="signedAt" type="date" value="${esc(hydrated.indemnitySignedAt || todayISO())}" required>
-          </div>
-          <div class="field">
-            <label for="indemnity-emergency-relationship">Emergency contact relationship *</label>
-            <input id="indemnity-emergency-relationship" name="emergencyRelationship" value="${esc(hydrated.emergencyRelationship || "")}" required>
-          </div>
-          <label class="check"><input type="checkbox" name="indemnityAccept" required>
-            <span>I have read and accept the health &amp; liability indemnity above. *</span></label>
-          <div id="indemnity-error"></div>
-          <button class="btn mt16" type="submit">Accept &amp; Confirm</button>
+        <div data-doc-accept="indemnity">
+          <label class="check"><input type="checkbox" name="indemnityAccept" required disabled data-doc-checkbox>
+            <span>I accept the <a href="#" class="modal-link" data-action="open-doc" data-doc="indemnity">Indemnity</a> form. *</span>
+          </label>
+          <p class="muted small" data-doc-hint>Read the document to enable acceptance.</p>
+        </div>
+        <div class="field"><label for="indemnity-signature">Participant's full name as signature *</label><input id="indemnity-signature" name="signature" required autocomplete="name"></div>
+        <div class="field"><label for="indemnity-signed-at">Date of signing *</label><input id="indemnity-signed-at" name="signedAt" type="date" value="${defaultDate}" max="${defaultDate}" required></div>
+        <div class="card"><div class="card-body receipt-lines">
+          <div class="line"><span>Emergency contact name</span><strong>${esc(hydrated.emergencyName || "Not provided")}</strong></div>
+          <div class="line"><span>Emergency contact phone</span><strong>${esc(hydrated.emergencyPhone || "Not provided")}</strong></div>
         </div></div>
-      </form>`
-          : `
-      <form id="form-indemnity" class="mt16" novalidate>
-        <div class="card"><div class="card-body">
-          <div class="line"><span>Signature</span><strong>${esc(user.fullName)}</strong></div>
-          <div class="line"><span>Signing date</span><strong>${esc(todayISO())}</strong></div>
-          <div class="field mt16">
-            <label for="indemnity-emergency-relationship">Emergency contact relationship *</label>
-            <input id="indemnity-emergency-relationship" name="emergencyRelationship" value="${esc(hydrated.emergencyRelationship || "")}" required>
-          </div>
-          <label class="check"><input type="checkbox" name="indemnityAccept" required>
-            <span>I have read and accept the health &amp; liability indemnity above. *</span></label>
-          <div id="indemnity-error"></div>
-          <button class="btn mt16" type="submit">Accept &amp; Confirm</button>
-        </div></div>
-      </form>`
-    }
-    <p class="muted small mt16">Draft wording — the final indemnity will be confirmed with ITC leadership before launch.</p>`;
+        <div class="field"><label for="indemnity-relationship">Emergency contact relationship *</label><input id="indemnity-relationship" name="emergencyRelationship" value="${esc(hydrated.emergencyRelationship || "")}" required></div>
+        <a class="btn ghost sm" href="#/account/details/edit">Edit in Membership Details →</a>
+        <div id="indemnity-error"></div>
+        <button class="btn mt16" type="submit">Accept &amp; Confirm</button>
+      </form>`}
+  `;
 }
 
 function accountDonor(user, application) {
@@ -2084,7 +2089,7 @@ function adminApprovals(pending) {
       <dl>
         <dt>Email</dt><dd>${esc(u.email)}</dd>
         <dt>Phone</dt><dd>${esc(u.phone)}</dd>
-        <dt>Emergency</dt><dd>${esc(u.emergencyName)} · ${esc(u.emergencyPhone)}</dd>
+        <dt>Emergency</dt><dd>${emergencyContactSummary(u.emergencyName, u.emergencyRelationship, u.emergencyPhone)}</dd>
         <dt>Heard via</dt><dd>${esc(u.heard)}</dd>
         <dt>Age 18+ / guardian</dt><dd>${u.isMinor ? "Under 18 · guardian required" : "18 or over"}</dd>
         <dt>Indemnity</dt><dd>${u.indemnityAcceptedAt ? "Accepted" : "—"}</dd>
