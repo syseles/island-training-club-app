@@ -508,15 +508,35 @@ export function clearApplyDraft() {
 
 // --- Signup / approval ---------------------------------------------------------
 
+function normalizeEmergencyContact({
+  emergencyName,
+  emergencyRelationship,
+  emergencyPhone,
+} = {}) {
+  const name = String(emergencyName || "").trim();
+  const relationship = String(emergencyRelationship || "").trim();
+  const phone = String(emergencyPhone || "").trim();
+  if (!name || !relationship || !phone) {
+    throw new Error("Enter emergency contact name, relationship and phone");
+  }
+  return { name, relationship, phone };
+}
+
 function normalizeIndemnityAcceptance({
   signature,
   signedAt,
+  emergencyName,
   emergencyRelationship,
+  emergencyPhone,
   formVersion = INDEMNITY_VERSION,
 } = {}) {
   const normalizedSignature = String(signature || "").trim();
   const normalizedSignedAt = String(signedAt || "").trim();
-  const normalizedRelationship = String(emergencyRelationship || "").trim();
+  const emergency = normalizeEmergencyContact({
+    emergencyName,
+    emergencyRelationship,
+    emergencyPhone,
+  });
   if (normalizedSignature.length < 2) {
     throw new Error("Type your full name as your signature");
   }
@@ -526,16 +546,15 @@ function normalizeIndemnityAcceptance({
   if (normalizedSignedAt > isoDate(todayLocal())) {
     throw new Error("Signing date cannot be in the future");
   }
-  if (!normalizedRelationship) {
-    throw new Error("Enter your emergency contact relationship");
-  }
   if (formVersion !== INDEMNITY_VERSION) {
     throw new Error("The Indemnity has changed. Reload and review the current document");
   }
   return {
     signature: normalizedSignature,
     signedAt: normalizedSignedAt,
-    emergencyRelationship: normalizedRelationship,
+    emergencyName: emergency.name,
+    emergencyRelationship: emergency.relationship,
+    emergencyPhone: emergency.phone,
     formVersion: INDEMNITY_VERSION,
   };
 }
@@ -544,7 +563,9 @@ export function isIndemnityCurrent(user) {
   if (!user?.indemnityAcceptedAt || user.indemnityFormVersion !== INDEMNITY_VERSION) return false;
   if (String(user.indemnitySignature || "").trim().length < 2) return false;
   if (!/^\d{4}-\d{2}-\d{2}$/.test(String(user.indemnitySignedAt || ""))) return false;
-  return !!String(user.emergencyRelationship || "").trim();
+  return !!String(user.emergencyName || "").trim()
+    && !!String(user.emergencyRelationship || "").trim()
+    && !!String(user.emergencyPhone || "").trim();
 }
 
 export function applyForMembership(form) {
@@ -556,7 +577,9 @@ export function applyForMembership(form) {
   const acceptance = normalizeIndemnityAcceptance({
     signature: form.indemnitySignature,
     signedAt: form.indemnitySignedAt,
+    emergencyName: form.emergencyName,
     emergencyRelationship: form.emergencyRelationship,
+    emergencyPhone: form.emergencyPhone,
   });
   const acceptedAt = Date.now();
   const user = {
@@ -568,9 +591,9 @@ export function applyForMembership(form) {
     email,
     phone: form.phone.trim(),
     ageConfirmed: !!form.ageConfirmed,
-    emergencyName: form.emergencyName.trim(),
+    emergencyName: acceptance.emergencyName,
     emergencyRelationship: acceptance.emergencyRelationship,
-    emergencyPhone: form.emergencyPhone.trim(),
+    emergencyPhone: acceptance.emergencyPhone,
     heard: form.heard.trim(),
     mediaConsent: !!form.mediaConsent,
     donorId: normalizeDonorId(form.donorId),
@@ -650,7 +673,11 @@ export async function updateMyDonorId(raw) {
 export function acceptIndemnity(userId, payload) {
   const user = state.users.find((candidate) => candidate.id === userId);
   if (!user) return null;
-  const acceptance = normalizeIndemnityAcceptance(payload);
+  const acceptance = normalizeIndemnityAcceptance({
+    ...payload,
+    emergencyName: user.emergencyName,
+    emergencyPhone: user.emergencyPhone,
+  });
   user.indemnityAcceptedAt = Date.now();
   user.indemnitySignature = acceptance.signature;
   user.indemnitySignedAt = acceptance.signedAt;
@@ -1938,23 +1965,25 @@ function localApplication(user) {
 function membershipPatch(form) {
   const isMinor = parseAgeOver18(form.age_over_18);
   const guardian = guardianFields(isMinor, form.guardian_name, form.guardian_phone);
+  const emergency = normalizeEmergencyContact({
+    emergencyName: form.emergency_name,
+    emergencyRelationship: form.emergency_relationship,
+    emergencyPhone: form.emergency_phone,
+  });
   const patch = {
     mobile: String(form.mobile || "").trim(),
     is_minor: isMinor,
     date_of_birth: null,
     guardian_name: guardian.name,
     guardian_phone: guardian.phone,
-    emergency_name: String(form.emergency_name || "").trim(),
-    emergency_relationship: String(form.emergency_relationship || "").trim(),
-    emergency_phone: String(form.emergency_phone || "").trim(),
+    emergency_name: emergency.name,
+    emergency_relationship: emergency.relationship,
+    emergency_phone: emergency.phone,
     heard_source: String(form.heard_source || "").trim(),
     heard_detail: String(form.heard_detail || "").trim() || null,
     preferred_name: String(form.preferred_name || "").trim() || null,
   };
   if (!patch.mobile) throw new Error("Enter mobile number");
-  if (!patch.emergency_name || !patch.emergency_relationship || !patch.emergency_phone) {
-    throw new Error("Enter emergency contact name, relationship and phone");
-  }
   if (!patch.heard_source) throw new Error("Choose how you heard about ITC");
   return patch;
 }
@@ -2007,7 +2036,9 @@ export async function saveMyApplication(form) {
   const acceptance = normalizeIndemnityAcceptance({
     signature: form.waiver_signature_text,
     signedAt: form.waiver_signed_at,
+    emergencyName: form.emergency_name,
     emergencyRelationship: form.emergency_relationship,
+    emergencyPhone: form.emergency_phone,
   });
   const acceptedAt = new Date().toISOString();
   const row = {
@@ -2017,9 +2048,9 @@ export async function saveMyApplication(form) {
     is_minor: isMinor,
     guardian_name: guardian.name,
     guardian_phone: guardian.phone,
-    emergency_name: form.emergency_name,
+    emergency_name: acceptance.emergencyName,
     emergency_relationship: acceptance.emergencyRelationship,
-    emergency_phone: form.emergency_phone,
+    emergency_phone: acceptance.emergencyPhone,
     heard_source: form.heard_source,
     heard_detail: form.heard_detail || null,
     preferred_name: form.preferred_name || null,
@@ -2105,10 +2136,16 @@ export async function acceptMyIndemnity(payload) {
     indemnitySignature: app.waiver_signature_text,
     indemnitySignedAt: app.waiver_signed_at,
     indemnityFormVersion: app.waiver_form_version,
+    emergencyName: app.emergency_name,
     emergencyRelationship: app.emergency_relationship,
+    emergencyPhone: app.emergency_phone,
   };
   if (isIndemnityCurrent(mapped)) return app.waiver_accepted_at;
-  const acceptance = normalizeIndemnityAcceptance(payload);
+  const acceptance = normalizeIndemnityAcceptance({
+    ...payload,
+    emergencyName: app.emergency_name,
+    emergencyPhone: app.emergency_phone,
+  });
   const waiver_accepted_at = new Date().toISOString();
   const patch = {
     waiver_accepted_at,

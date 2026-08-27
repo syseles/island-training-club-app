@@ -302,9 +302,8 @@ Profile > Indemnity updates do not fail on missing columns.
 
 ## ⏳ Awaiting ITC leadership workshop
 
-The following copy is placeholdered until the workshop lands:
+The supplied Hyrox indemnity source is already implemented. The following copy is still placeholdered until the workshop lands:
 
-- Waiver acceptance text.
 - Privacy policy text.
 - Community guidelines text.
 - Welcome notification body.

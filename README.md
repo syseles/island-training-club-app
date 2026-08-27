@@ -52,7 +52,7 @@ The design review remains available at `http://127.0.0.1:4173/references/itc-mob
 
 - Merchandise shop (deferred in the phase-one brief).
 - Real payments, delivered email receipts, outbound messages, and a service worker (manifest is included; a cache layer would fight the refinement loop). Live in-app notifications are Supabase-backed when configured.
-- Final waiver/privacy/guidelines copy — all such text is draft placeholder.
+- Final privacy/guidelines copy and any post-workshop legal/policy revisions. The supplied Hyrox indemnity source is implemented; privacy and guidelines remain provisional.
 
 ## Selected Direction
 

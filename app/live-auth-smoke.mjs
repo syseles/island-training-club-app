@@ -689,7 +689,9 @@ operationalRpcHandler = (name, args) => {
 
 const store = await import("./js/store.js");
 const views = await import("./js/views.js");
+const data = await import("./js/data.js");
 const operations = await import("./js/operations.js");
+const todayISO = data.isoDate(data.todayLocal());
 store.load();
 await store.hydrateLiveOperations();
 
@@ -737,6 +739,8 @@ for (const name of ["emergency_relationship", "waiver_signature_text", "waiver_s
 assert.match(liveApplyHtml, /name="waiver"/);
 assert.match(liveApplyHtml, /data-doc-accept="indemnity"/);
 assert.match(liveApplyHtml, /name="waiver"[^>]*disabled[^>]*data-doc-checkbox/);
+assert.match(liveApplyHtml, new RegExp(`name="waiver_signed_at"[^>]*value="${todayISO}"`));
+assert.match(liveApplyHtml, new RegExp(`name="waiver_signed_at"[^>]*max="${todayISO}"`));
 assert.doesNotMatch(liveApplyHtml, /name="email"/);
 
 store.saveApplyDraft({ fields: {
@@ -764,7 +768,7 @@ assert.match(draftApplyHtml, /name="waiver_signed_at" value="2026-08-05"/);
 assert.match(draftApplyHtml, /data-action="save-draft"/);
 assert.match(draftApplyHtml, /data-action="discard-draft"/);
 
-await store.saveMyApplication({
+const liveApplyPayload = {
   mobile: "+852 6123 4567",
   age_over_18: "yes",
   guardian_name: "",
@@ -779,7 +783,18 @@ await store.saveMyApplication({
   waiver: true,
   waiver_signature_text: "Riley Runner",
   waiver_signed_at: "2026-08-05",
-});
+};
+for (const [label, overrides] of [
+  ["missing emergency name", { emergency_name: "" }],
+  ["missing emergency phone", { emergency_phone: "" }],
+]) {
+  await assert.rejects(
+    () => store.saveMyApplication({ ...liveApplyPayload, ...overrides }),
+    /Enter emergency contact name, relationship and phone/,
+    `${label} should be rejected during live application submit`
+  );
+}
+await store.saveMyApplication(liveApplyPayload);
 assert.equal(store.getApplyDraft(), null, "successful live submit must clear its draft");
 
 Object.assign(profile, originalProfileForApply);
@@ -802,6 +817,15 @@ assert.ok(approvalsHtml.indexOf("Submitted Runner") < approvalsHtml.indexOf("Inc
 if (!approvalsHtml.includes("Application not submitted")) {
   throw new Error("Approvals must explain incomplete pending profiles");
 }
+assert.match(approvalsHtml, /<dt>Indemnity<\/dt><dd>Accepted<\/dd>/);
+const submittedApplication = structuredClone(applicationRows.get("pending-submitted"));
+applicationRows.set("pending-submitted", {
+  ...submittedApplication,
+  emergency_phone: "",
+});
+const reviewRequiredHtml = await views.viewAdmin("approvals");
+assert.match(reviewRequiredHtml, /<dt>Indemnity<\/dt><dd>Review required<\/dd>/);
+applicationRows.set("pending-submitted", submittedApplication);
 const submittedProfile = pendingProfiles.find((item) => item.id === "pending-submitted");
 const incompleteProfile = pendingProfiles.find((item) => item.id === "pending-incomplete");
 submittedProfile.role = "member";
@@ -1448,6 +1472,23 @@ const preservedWaiver = await store.acceptMyIndemnity({
 });
 assert.equal(preservedWaiver, "2026-08-05T01:00:00.000Z");
 assert.equal(applicationUpdates.length, 0, "current v1 acceptance should remain idempotent");
+applicationRows.set(authUser.id, {
+  ...applicationRows.get(authUser.id),
+  emergency_phone: "",
+});
+await assert.rejects(
+  () => store.acceptMyIndemnity({
+    signature: "Riley Runner",
+    signedAt: "2026-08-05",
+    emergencyRelationship: "Coach",
+  }),
+  /Enter emergency contact name, relationship and phone/
+);
+assert.equal(applicationUpdates.length, 0, "missing canonical emergency contact must not write a live waiver update");
+applicationRows.set(authUser.id, {
+  ...applicationRows.get(authUser.id),
+  emergency_phone: "+852 6777 8888",
+});
 applicationRows.set(authUser.id, {
   ...applicationRows.get(authUser.id),
   waiver_signature_text: null,

@@ -1749,7 +1749,6 @@ export function viewPay(bookingId) {
     </div></div>
     <form id="form-mark-paid" class="mt16" data-booking="${b.id}">
       <div class="card"><div class="card-body">
-<<<<<<< HEAD
         <h3>Done? Tell the collector</h3>
         <div class="field-row">
           <label class="chip"><input type="radio" name="method" value="PayMe" checked> PayMe</label>
@@ -2077,6 +2076,11 @@ function adminApprovals(pending) {
   const decisionButton = (u, action, extraClass = "") => `
     <button class="btn ${extraClass}sm" type="button" data-action="${action}" data-user="${esc(u.id)}" data-applicant-name="${esc(u.fullName)}">${action === "approve" ? "Approve" : "Decline"}</button>`;
   const joinedDate = (u) => new Date(u.appliedAt).toLocaleDateString("en-HK", { day: "numeric", month: "short" });
+  const indemnityStatus = (u) => !u.indemnityAcceptedAt
+    ? "—"
+    : store.isIndemnityCurrent(u)
+      ? "Accepted"
+      : "Review required";
   const readyCard = (u) => `
     <div class="card booking-card applicant" id="approval-${esc(u.id)}" data-approval-card data-applicant-name="${esc(u.fullName)}"><div class="card-body">
       <header>
@@ -2092,7 +2096,7 @@ function adminApprovals(pending) {
         <dt>Emergency</dt><dd>${emergencyContactSummary(u.emergencyName, u.emergencyRelationship, u.emergencyPhone)}</dd>
         <dt>Heard via</dt><dd>${esc(u.heard)}</dd>
         <dt>Age 18+ / guardian</dt><dd>${u.isMinor ? "Under 18 · guardian required" : "18 or over"}</dd>
-        <dt>Indemnity</dt><dd>${u.indemnityAcceptedAt ? "Accepted" : "—"}</dd>
+        <dt>Indemnity</dt><dd>${indemnityStatus(u)}</dd>
         <dt>Photo consent</dt><dd>${u.mediaConsent ? "Yes" : "No"}</dd>
       </dl>
       <div class="actions">

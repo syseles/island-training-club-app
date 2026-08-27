@@ -1519,7 +1519,7 @@ a.profile-row:hover .pr-text strong { color: var(--accent); }
   overscroll-behavior: contain;
 }
 
-.modal-doc-body::after {
+.modal-doc-body.doc-provisional::after {
   content: "Draft — pending ITC leadership review";
   position: sticky;
   display: block;

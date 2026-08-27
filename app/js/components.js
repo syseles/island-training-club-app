@@ -63,7 +63,7 @@ export function openReadAndAcceptModal({ docKey, onAccept, trigger } = {}) {
       <button type="button" class="modal-close" aria-label="Close document">×</button>
     </header>
     <div class="modal-doc">
-      <div class="modal-doc-body" tabindex="0">
+      <div class="modal-doc-body${doc.provisional ? " doc-provisional" : ""}" tabindex="0">
         ${doc.renderBody()}
       </div>
       <footer class="modal-doc-ack">

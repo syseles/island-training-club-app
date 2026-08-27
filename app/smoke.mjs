@@ -471,6 +471,14 @@ if (!applyLocalHtml.includes("Participant's full name as signature")) {
   failures++;
   console.error("FAIL local apply form missing signature label");
 }
+if (!/name="indemnity"[^>]*disabled[^>]*data-doc-checkbox/.test(applyLocalHtml)) {
+  failures++;
+  console.error("FAIL local indemnity checkbox should stay disabled until the modal is read");
+}
+if (!applyLocalHtml.includes(`value="${data.isoDate(data.todayLocal())}"`)) {
+  failures++;
+  console.error("FAIL local signing date should default to today");
+}
 if (!applyLocalHtml.includes(`max="${data.isoDate(data.todayLocal())}"`)) {
   failures++;
   console.error("FAIL local signing date should be capped at today");
@@ -566,6 +574,38 @@ if (!store.isIndemnityCurrent(applyRes.user)) {
   failures++;
   console.error("FAIL signed v1 application should have current indemnity");
 }
+const localApplicationFixture = (email, overrides = {}) => ({
+  fullName: "Contact Check",
+  preferredName: "Contact",
+  email,
+  phone: "+852 1234 5678",
+  emergencyName: "E Person",
+  emergencyRelationship: "Sibling",
+  emergencyPhone: "+852 8765 4321",
+  heard: "A friend",
+  ageConfirmed: true,
+  mediaConsent: false,
+  donorId: "Not applicable",
+  indemnity: true,
+  indemnitySignature: "Contact Check",
+  indemnitySignedAt: data.isoDate(data.todayLocal()),
+  ...overrides,
+});
+for (const [label, email, overrides] of [
+  ["missing emergency name", "missing-emergency-name@example.test", { emergencyName: "" }],
+  ["missing emergency phone", "missing-emergency-phone@example.test", { emergencyPhone: "" }],
+]) {
+  let error = null;
+  try { store.applyForMembership(localApplicationFixture(email, overrides)); } catch (err) { error = err; }
+  if (!error || !/emergency contact name, relationship and phone/.test(error.message)) {
+    failures++;
+    console.error(`FAIL ${label} should reject with the canonical emergency-contact error`);
+  }
+}
+if (store.isIndemnityCurrent({ ...applyRes.user, emergencyPhone: "" })) {
+  failures++;
+  console.error("FAIL indemnity currentness should require canonical emergency contact phone");
+}
 for (const [label, payload, pattern] of [
   ["short signature", { signature: "X", signedAt: data.isoDate(data.todayLocal()), emergencyRelationship: "Sibling" }, /full name as your signature/],
   ["invalid date", { signature: "Test Person", signedAt: "2026-02-31", emergencyRelationship: "Sibling" }, /valid signing date/],
@@ -577,6 +617,28 @@ for (const [label, payload, pattern] of [
   if (!error || !pattern.test(error.message)) {
     failures++;
     console.error(`FAIL ${label} should reject with ${pattern}`);
+  }
+}
+for (const [label, field] of [
+  ["missing canonical emergency name", "emergencyName"],
+  ["missing canonical emergency phone", "emergencyPhone"],
+]) {
+  const original = applyRes.user[field];
+  applyRes.user[field] = "";
+  let error = null;
+  try {
+    store.acceptIndemnity(applyRes.user.id, {
+      signature: "Test Person",
+      signedAt: data.isoDate(data.todayLocal()),
+      emergencyRelationship: "Sibling",
+    });
+  } catch (err) {
+    error = err;
+  }
+  applyRes.user[field] = original;
+  if (!error || !/emergency contact name, relationship and phone/.test(error.message)) {
+    failures++;
+    console.error(`FAIL ${label} should block re-sign acceptance`);
   }
 }
 
@@ -987,6 +1049,13 @@ for (const key of ["indemnity", "privacy", "guidelines"]) {
   }
 }
 console.log("ok  documents registry exposes indemnity + privacy + guidelines");
+for (const [key, expected] of [["indemnity", false], ["privacy", true], ["guidelines", true]]) {
+  if (!!DOCS[key]?.provisional !== expected) {
+    failures++;
+    console.error(`FAIL ${key} provisional watermark flag expected ${expected}, got ${!!DOCS[key]?.provisional}`);
+  }
+}
+console.log("ok  document registry scopes provisional watermarks by document");
 
 const indemnityBody = DOCS.indemnity?.renderBody?.() || "";
 for (const marker of [
@@ -1140,6 +1209,14 @@ for (const cls of [
     failures++;
     console.error(`FAIL styles.css missing rule for "${cls}"`);
   }
+}
+if (!stylesSource.includes(".modal-doc-body.doc-provisional::after")) {
+  failures++;
+  console.error("FAIL modal document watermark should be scoped to provisional documents");
+}
+if (stylesSource.includes(".modal-doc-body::after {")) {
+  failures++;
+  console.error("FAIL modal document watermark should not apply to every document body");
 }
 console.log("ok  styles.css contains all modal-related class definitions");
 
