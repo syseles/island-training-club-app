@@ -1916,12 +1916,16 @@ function localApplication(user) {
     guardian_name: user.guardianName || null,
     guardian_phone: user.guardianPhone || null,
     emergency_name: user.emergencyName || "",
+    emergency_relationship: user.emergencyRelationship || null,
     emergency_phone: user.emergencyPhone || "",
     heard_source: user.heard || "other",
     heard_detail: user.heardDetail || null,
     preferred_name: user.preferredName || null,
     photo_consent: !!user.mediaConsent,
     waiver_accepted_at: user.indemnityAcceptedAt || null,
+    waiver_signature_text: user.indemnitySignature || null,
+    waiver_signed_at: user.indemnitySignedAt || null,
+    waiver_form_version: user.indemnityFormVersion || null,
     privacy_accepted_at: user.privacyAcceptedAt || null,
     guidelines_accepted_at: user.guidelinesAcceptedAt || user.appliedAt || null,
     submitted_at: user.appliedAt || null,
@@ -1941,14 +1945,15 @@ function membershipPatch(form) {
     guardian_name: guardian.name,
     guardian_phone: guardian.phone,
     emergency_name: String(form.emergency_name || "").trim(),
+    emergency_relationship: String(form.emergency_relationship || "").trim(),
     emergency_phone: String(form.emergency_phone || "").trim(),
     heard_source: String(form.heard_source || "").trim(),
     heard_detail: String(form.heard_detail || "").trim() || null,
     preferred_name: String(form.preferred_name || "").trim() || null,
   };
   if (!patch.mobile) throw new Error("Enter mobile number");
-  if (!patch.emergency_name || !patch.emergency_phone) {
-    throw new Error("Enter emergency contact name and phone");
+  if (!patch.emergency_name || !patch.emergency_relationship || !patch.emergency_phone) {
+    throw new Error("Enter emergency contact name, relationship and phone");
   }
   if (!patch.heard_source) throw new Error("Choose how you heard about ITC");
   return patch;
@@ -1998,6 +2003,13 @@ export async function saveMyApplication(form) {
   if (!cu) throw new Error("Not signed in");
   const isMinor = parseAgeOver18(form.age_over_18);
   const guardian = guardianFields(isMinor, form.guardian_name, form.guardian_phone);
+  if (!form.waiver) throw new Error("Read and accept the Indemnity");
+  const acceptance = normalizeIndemnityAcceptance({
+    signature: form.waiver_signature_text,
+    signedAt: form.waiver_signed_at,
+    emergencyRelationship: form.emergency_relationship,
+  });
+  const acceptedAt = new Date().toISOString();
   const row = {
     profile_id: cu.id,
     mobile: form.mobile,
@@ -2006,14 +2018,18 @@ export async function saveMyApplication(form) {
     guardian_name: guardian.name,
     guardian_phone: guardian.phone,
     emergency_name: form.emergency_name,
+    emergency_relationship: acceptance.emergencyRelationship,
     emergency_phone: form.emergency_phone,
     heard_source: form.heard_source,
     heard_detail: form.heard_detail || null,
     preferred_name: form.preferred_name || null,
     photo_consent: !!form.photo_consent,
-    waiver_accepted_at: new Date().toISOString(),
-    privacy_accepted_at: new Date().toISOString(),
-    guidelines_accepted_at: new Date().toISOString(),
+    waiver_accepted_at: acceptedAt,
+    waiver_signature_text: acceptance.signature,
+    waiver_signed_at: acceptance.signedAt,
+    waiver_form_version: acceptance.formVersion,
+    privacy_accepted_at: acceptedAt,
+    guidelines_accepted_at: acceptedAt,
   };
   const { error } = await supabase.from("applications").upsert(row);
   if (error) throw error;
@@ -2030,6 +2046,7 @@ export async function updateMyMembershipDetails(form) {
     user.guardianName = patch.guardian_name;
     user.guardianPhone = patch.guardian_phone;
     user.emergencyName = patch.emergency_name;
+    user.emergencyRelationship = patch.emergency_relationship;
     user.emergencyPhone = patch.emergency_phone;
     user.heard = patch.heard_source;
     user.heardDetail = patch.heard_detail;
@@ -2073,25 +2090,36 @@ export async function updateMyPrivacyPreferences(form) {
   return data;
 }
 
-export async function acceptMyIndemnity() {
+export async function acceptMyIndemnity(payload) {
   if (!isLive() || !supabase) {
     const user = currentUser();
     if (!user) throw new Error("Not signed in");
-    if (!user.indemnityAcceptedAt) {
-      user.indemnityAcceptedAt = Date.now();
-      save();
-    }
-    return user.indemnityAcceptedAt;
+    return acceptIndemnity(user.id, payload);
   }
   const cu = await getCurrentUser();
   if (!cu) throw new Error("Not signed in");
   const app = await getMyApplication();
   if (!app) throw new Error("Application not found");
-  if (app.waiver_accepted_at) return app.waiver_accepted_at;
+  const mapped = {
+    indemnityAcceptedAt: app.waiver_accepted_at,
+    indemnitySignature: app.waiver_signature_text,
+    indemnitySignedAt: app.waiver_signed_at,
+    indemnityFormVersion: app.waiver_form_version,
+    emergencyRelationship: app.emergency_relationship,
+  };
+  if (isIndemnityCurrent(mapped)) return app.waiver_accepted_at;
+  const acceptance = normalizeIndemnityAcceptance(payload);
   const waiver_accepted_at = new Date().toISOString();
+  const patch = {
+    waiver_accepted_at,
+    waiver_signature_text: acceptance.signature,
+    waiver_signed_at: acceptance.signedAt,
+    waiver_form_version: acceptance.formVersion,
+    emergency_relationship: acceptance.emergencyRelationship,
+  };
   const { data, error } = await supabase
     .from("applications")
-    .update({ waiver_accepted_at })
+    .update(patch)
     .eq("profile_id", cu.id)
     .select()
     .single();
@@ -2132,11 +2160,15 @@ export async function listPendingApplications() {
       email: a.profiles.email,
       phone: a.mobile,
       emergencyName: a.emergency_name,
+      emergencyRelationship: a.emergency_relationship,
       emergencyPhone: a.emergency_phone,
       heard: a.heard_source,
       appliedAt: a.submitted_at,
       isMinor: !!a.is_minor,
       indemnityAcceptedAt: a.waiver_accepted_at,
+      indemnitySignature: a.waiver_signature_text,
+      indemnitySignedAt: a.waiver_signed_at,
+      indemnityFormVersion: a.waiver_form_version,
       mediaConsent: a.photo_consent,
     }));
 }

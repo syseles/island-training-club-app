@@ -43,12 +43,16 @@ const applicationRows = new Map([
       guardian_name: null,
       guardian_phone: null,
       emergency_name: "Taylor Coach",
+      emergency_relationship: "Coach",
       emergency_phone: "+852 6777 8888",
       heard_source: "instagram",
       heard_detail: "Coach post",
       preferred_name: "Riley",
       photo_consent: true,
       waiver_accepted_at: "2026-08-05T01:00:00.000Z",
+      waiver_signature_text: "Riley Runner",
+      waiver_signed_at: "2026-08-05",
+      waiver_form_version: "v1",
       privacy_accepted_at: "2026-08-05T01:05:00.000Z",
       guidelines_accepted_at: "2026-08-05T01:10:00.000Z",
       submitted_at: "2026-08-05T01:15:00.000Z",
@@ -747,11 +751,15 @@ await store.saveMyApplication({
   guardian_name: "",
   guardian_phone: "",
   emergency_name: "Taylor Coach",
+  emergency_relationship: "Coach",
   emergency_phone: "+852 6777 8888",
   heard_source: "friend",
   heard_detail: "",
   preferred_name: "Riley",
   photo_consent: false,
+  waiver: true,
+  waiver_signature_text: "Riley Runner",
+  waiver_signed_at: "2026-08-05",
 });
 assert.equal(store.getApplyDraft(), null, "successful live submit must clear its draft");
 
@@ -1324,6 +1332,7 @@ await store.updateMyMembershipDetails({
   mobile: "+852 9000 0000",
   age_over_18: "yes",
   emergency_name: "Alex Runner",
+  emergency_relationship: "Coach",
   emergency_phone: "+852 9111 1111",
   heard_source: "friend",
   heard_detail: "Run club",
@@ -1338,6 +1347,7 @@ if (
     "date_of_birth",
     "emergency_name",
     "emergency_phone",
+    "emergency_relationship",
     "guardian_name",
     "guardian_phone",
     "heard_detail",
@@ -1383,6 +1393,7 @@ for (const banned of [
   "guardian_phone",
   "emergency_name",
   "emergency_phone",
+  "emergency_relationship",
   "heard_source",
   "heard_detail",
   "preferred_name",
@@ -1394,29 +1405,37 @@ for (const banned of [
   if (banned in privacyPatch) throw new Error(`privacy patch should exclude ${banned}`);
 }
 applicationUpdates.length = 0;
-const preservedWaiver = await store.acceptMyIndemnity();
-if (preservedWaiver !== "2026-08-05T01:00:00.000Z") {
-  throw new Error("acceptMyIndemnity should preserve an existing timestamp");
-}
-if (applicationUpdates.length !== 0) {
-  throw new Error("acceptMyIndemnity should not write when already accepted");
-}
+const preservedWaiver = await store.acceptMyIndemnity({
+  signature: "Riley Runner",
+  signedAt: "2026-08-05",
+  emergencyRelationship: "Coach",
+});
+assert.equal(preservedWaiver, "2026-08-05T01:00:00.000Z");
+assert.equal(applicationUpdates.length, 0, "current v1 acceptance should remain idempotent");
 applicationRows.set(authUser.id, {
   ...applicationRows.get(authUser.id),
   waiver_accepted_at: null,
+  waiver_signature_text: null,
+  waiver_signed_at: null,
+  waiver_form_version: null,
 });
 const waiverMissing = await views.viewAccount("indemnity");
 if (!waiverMissing.includes("To be accepted")) {
   throw new Error("Indemnity page should prompt when the live waiver is missing");
 }
-const createdWaiver = await store.acceptMyIndemnity();
-if (createdWaiver !== fixedIso) {
-  throw new Error(`acceptMyIndemnity should write ${fixedIso}, got ${createdWaiver}`);
-}
-const indemnityPatch = applicationUpdates.at(-1);
-if (!indemnityPatch || Object.keys(indemnityPatch).join(",") !== "waiver_accepted_at") {
-  throw new Error("acceptMyIndemnity should only write waiver_accepted_at");
-}
+const createdWaiver = await store.acceptMyIndemnity({
+  signature: "Riley Runner",
+  signedAt: "2026-08-05",
+  emergencyRelationship: "Coach",
+});
+assert.equal(createdWaiver, fixedIso);
+assert.deepEqual(applicationUpdates.at(-1), {
+  waiver_accepted_at: fixedIso,
+  waiver_signature_text: "Riley Runner",
+  waiver_signed_at: "2026-08-05",
+  waiver_form_version: "v1",
+  emergency_relationship: "Coach",
+});
 
 const home = views.viewHome();
 if (!home.includes("Good to see you, Riley.")) {

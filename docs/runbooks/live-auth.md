@@ -105,8 +105,9 @@ remains reachable. This does not make donations functional.
 To enable Giving:
 
 1. Apply the ordered migration chain, including
-   `20260805000011_giving_campaigns.sql` and `20260806000001_donor_id.sql`, to
-   the intended Supabase project.
+   `20260805000011_giving_campaigns.sql`, `20260806000001_donor_id.sql`, and
+   `20260827000001_hyrox_indemnity_fields.sql`, to the intended Supabase
+   project.
 2. Sign in as an approved Admin or Super Admin and use **Admin Tools → Giving**
    to create and publish a real campaign.
 3. Verify the published campaign as an approved member.
@@ -291,6 +292,13 @@ update public.notifications
 All schema lives in `supabase/migrations/` and is replayed in order by
 `supabase db push`. Never edit a migration after it has been applied to
 a shared environment — add a new one instead.
+
+`20260827000001_hyrox_indemnity_fields.sql` is additive: it adds
+`waiver_signature_text`, `waiver_signed_at`, `waiver_form_version`, and
+`emergency_relationship` to `public.applications` without backfilling or
+adding `not null` constraints. Apply it before deploying any UI revision
+that writes the versioned indemnity fields so live application submits and
+Profile > Indemnity updates do not fail on missing columns.
 
 ## ⏳ Awaiting ITC leadership workshop
 

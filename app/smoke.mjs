@@ -60,6 +60,7 @@ for (const relativePath of [
   "live-auth-smoke.mjs",
   "../supabase/migrations/20260804000000_profiles.sql",
   "../supabase/migrations/20260805000007_admin_application_decisions.sql",
+  "../supabase/migrations/20260827000001_hyrox_indemnity_fields.sql",
 ]) {
   const absolutePath = resolve(__dirnameSmoke, relativePath);
   if (!existsSync(absolutePath)) {
@@ -72,6 +73,20 @@ const profilesMigrationSource = readFileSync(
   resolve(__dirnameSmoke, "../supabase/migrations/20260804000000_profiles.sql"),
   "utf8"
 );
+const indemnityMigrationSource = readFileSync(
+  resolve(__dirnameSmoke, "../supabase/migrations/20260827000001_hyrox_indemnity_fields.sql"),
+  "utf8"
+);
+for (const column of [
+  "waiver_signature_text",
+  "waiver_signed_at",
+  "waiver_form_version",
+  "emergency_relationship",
+]) {
+  if (!indemnityMigrationSource.includes(column)) {
+    throw new Error(`Hyrox indemnity migration missing ${column}`);
+  }
+}
 const liveAuthRunbookSource = readFileSync(
   resolve(__dirnameSmoke, "../docs/runbooks/live-auth.md"),
   "utf8"
