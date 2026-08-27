@@ -808,13 +808,17 @@ if (!indemnityPageHtml.includes('data-action="open-doc" data-doc="indemnity"')) 
   failures++;
   console.error('FAIL Profile > Indemnity button should target the indemnity document');
 } else console.log("ok  Profile > Indemnity button targets the indemnity document");
+if (!indemnityPageHtml.includes("ITC Hyrox Training - Liability Release &amp; Data Privacy Form")) {
+  failures++;
+  console.error("FAIL Profile > Indemnity card missing Hyrox source title marker");
+} else console.log("ok  Profile > Indemnity card includes Hyrox source title marker");
 for (const clause of ["1", "2", "3", "4", "5", "6", "7", "8", "9", "10"]) {
   if (!indemnityPageHtml.includes(`data-clause="${clause}"`)) {
     failures++;
     console.error(`FAIL Profile > Indemnity card missing clause marker ${clause}`);
   }
 }
-console.log("ok  Profile > Indemnity card exposes clause markers");
+console.log("ok  Profile > Indemnity card exposes source title and clause markers");
 store.acceptIndemnity(store.currentUser().id);
 if (!(await views.viewAccount()).includes("Indemnity confirmed on")) {
   failures++;
@@ -887,6 +891,31 @@ for (const removed of [
   }
 }
 console.log("ok  indemnity registry exposes versioned Hyrox legal copy");
+
+for (const [key, headings] of Object.entries({
+  privacy: [
+    "What we collect",
+    "Why we collect it",
+    "Who sees it",
+    "Your choices",
+  ],
+  guidelines: [
+    "Everyone is welcome",
+    "Respect and encouragement",
+    "Safety first",
+    "Photos and media",
+    "Conduct",
+  ],
+})) {
+  const body = DOCS[key]?.renderBody?.() || "";
+  for (const heading of headings) {
+    if (!body.includes(heading)) {
+      failures++;
+      console.error(`FAIL ${key} document missing heading "${heading}"`);
+    }
+  }
+}
+console.log("ok  privacy and guidelines registry bodies still expose their section headings");
 
 // --- modal component: scroll-end math (Task 2) ---
 const components = await import("./js/components.js");

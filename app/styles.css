@@ -1519,6 +1519,22 @@ a.profile-row:hover .pr-text strong { color: var(--accent); }
   overscroll-behavior: contain;
 }
 
+.modal-doc-body::after {
+  content: "Draft — pending ITC leadership review";
+  position: sticky;
+  display: block;
+  bottom: 8px;
+  left: 0;
+  right: 0;
+  text-align: center;
+  font-size: 10.5px;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  color: rgba(0, 0, 0, .25);
+  pointer-events: none;
+  margin-top: 24px;
+}
+
 .modal-doc-body .doc-content h3 {
   font-size: 14px;
   text-transform: uppercase;

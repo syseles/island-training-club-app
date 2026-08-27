@@ -50,3 +50,23 @@ All smoke tests passed.
 ## Concerns
 - The indemnity profile page heading remains outside this task’s scope, so visual consistency there should be revisited only if a later task requires it.
 - The nested clause spacing/indentation should be spot-checked in-browser, but smoke coverage is green.
+
+## Review round 1 fixes
+- Restored the Profile inline-card smoke assertion for the Hyrox source-title marker alongside the clause markers.
+- Restored the document-registry body-content assertions for privacy and guidelines.
+- Restored the shared `.modal-doc-body::after` watermark rule so privacy/guidelines modal presentation stays unchanged.
+
+## Verification
+Command:
+```sh
+node app/smoke.mjs
+```
+Relevant output:
+```text
+ok  Profile > Indemnity card includes Hyrox source title marker
+ok  Profile > Indemnity card exposes source title and clause markers
+ok  documents registry exposes indemnity + privacy + guidelines
+ok  privacy and guidelines registry bodies still expose their section headings
+ok  styles.css contains all modal-related class definitions
+All smoke tests passed.
+```
