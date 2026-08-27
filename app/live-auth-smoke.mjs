@@ -696,6 +696,10 @@ await store.hydrateLiveOperations();
 const appSource = readFileSync(resolve(__dirnameSmoke, "js/app.js"), "utf8");
 assert.match(appSource, /form\.dataset\.form === "apply"/);
 assert.match(appSource, /await store\.saveMyApplication\(payload\)/);
+assert.match(appSource, /await store\.acceptMyIndemnity\(\{/);
+assert.match(appSource, /signature:\s*fd\.get\("signature"\)/);
+assert.match(appSource, /signedAt:\s*fd\.get\("signedAt"\)/);
+assert.match(appSource, /emergencyRelationship:\s*fd\.get\("emergencyRelationship"\)/);
 assert.match(appSource, /t\.name !== "age_over_18"/);
 assert.match(appSource, /const APPLY_DRAFT_DEBOUNCE_MS = 500/);
 assert.match(appSource, /case "save-draft"/);
@@ -723,18 +727,24 @@ const liveApplyHtml = await views.viewApply();
 assert.match(liveApplyHtml, /data-form="apply"/);
 assert.match(liveApplyHtml, /name="mobile"/);
 assert.match(liveApplyHtml, /name="age_over_18"/);
+assert.match(liveApplyHtml, /name="emergency_relationship"/);
 assert.match(liveApplyHtml, /name="waiver"/);
+assert.match(liveApplyHtml, /name="waiver_signature_text"/);
+assert.match(liveApplyHtml, /name="waiver_signed_at"/);
 assert.doesNotMatch(liveApplyHtml, /name="email"/);
 
 store.saveApplyDraft({ fields: {
   mobile: "+852 6123 4567",
   age_over_18: "yes",
   emergency_name: "Taylor Coach",
+  emergency_relationship: "Coach",
   emergency_phone: "+852 6777 8888",
   heard_source: "friend",
   preferred_name: "Riley",
   photo_consent: true,
   waiver: true,
+  waiver_signature_text: "Riley Runner",
+  waiver_signed_at: "2026-08-05",
   privacy: true,
   guidelines: true,
 } });
@@ -742,6 +752,9 @@ const draftApplyHtml = await views.viewApply();
 assert.match(draftApplyHtml, /data-draft-resume/);
 assert.match(draftApplyHtml, /value="\+852 6123 4567"/);
 assert.match(draftApplyHtml, /name="age_over_18" value="yes" checked/);
+assert.match(draftApplyHtml, /name="emergency_relationship" value="Coach"/);
+assert.match(draftApplyHtml, /name="waiver_signature_text" value="Riley Runner"/);
+assert.match(draftApplyHtml, /name="waiver_signed_at" value="2026-08-05"/);
 assert.match(draftApplyHtml, /data-action="save-draft"/);
 assert.match(draftApplyHtml, /data-action="discard-draft"/);
 
@@ -1414,14 +1427,23 @@ assert.equal(preservedWaiver, "2026-08-05T01:00:00.000Z");
 assert.equal(applicationUpdates.length, 0, "current v1 acceptance should remain idempotent");
 applicationRows.set(authUser.id, {
   ...applicationRows.get(authUser.id),
-  waiver_accepted_at: null,
   waiver_signature_text: null,
   waiver_signed_at: null,
   waiver_form_version: null,
+  emergency_relationship: null,
 });
-const waiverMissing = await views.viewAccount("indemnity");
-if (!waiverMissing.includes("To be accepted")) {
-  throw new Error("Indemnity page should prompt when the live waiver is missing");
+const legacyAccount = await views.viewAccount();
+if (!legacyAccount.includes(`Legacy acceptance recorded on ${confirmedDay}`) || legacyAccount.includes("Indemnity confirmed on")) {
+  throw new Error("Legacy live rows must stay stale/re-signable on the Profile summary");
+}
+const legacyWaiver = await views.viewAccount("indemnity");
+if (!legacyWaiver.includes(`Legacy acceptance recorded on ${confirmedDay}`) || !legacyWaiver.includes("Accept &amp; Confirm")) {
+  throw new Error("Legacy live rows must render the re-sign flow on Profile > Indemnity");
+}
+for (const fieldName of ["signature", "signedAt", "emergencyRelationship"]) {
+  if (!legacyWaiver.includes(`name="${fieldName}"`)) {
+    throw new Error(`Live legacy re-sign form missing ${fieldName}`);
+  }
 }
 const createdWaiver = await store.acceptMyIndemnity({
   signature: "Riley Runner",
@@ -1452,6 +1474,18 @@ if (!refreshedAccount.includes(`Indemnity confirmed on ${confirmedDay}`) || refr
 const refreshedIndemnity = await views.viewAccount("indemnity");
 if (!refreshedIndemnity.includes(`Indemnity confirmed on ${confirmedDay}`) || refreshedIndemnity.includes("To be accepted")) {
   throw new Error("Indemnity page should rerender from the accepted live waiver timestamp");
+}
+applicationRows.set(authUser.id, {
+  ...applicationRows.get(authUser.id),
+  waiver_accepted_at: null,
+  waiver_signature_text: null,
+  waiver_signed_at: null,
+  waiver_form_version: null,
+  emergency_relationship: null,
+});
+const waiverMissing = await views.viewAccount("indemnity");
+if (!waiverMissing.includes("To be accepted")) {
+  throw new Error("Indemnity page should prompt when the live waiver is missing");
 }
 applicationRows.delete(authUser.id);
 const missingAccount = await views.viewAccount();

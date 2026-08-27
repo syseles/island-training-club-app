@@ -143,3 +143,83 @@ ok  live cancellation copy renders 'Session cancelled by ITC — <reason>' every
 ## Concerns
 1. The runbook now documents the migration ordering, but applying the new migration to the real remote Supabase project remains a manual deployment step.
 2. Live verification here is smoke-level and fake-Supabase based; the task did not include a real hosted Supabase environment check.
+
+---
+
+## Review Fix Follow-up — live UI/handler compatibility
+
+### Scope
+Addressed the Task 3 review findings without broad UI refinement:
+- restored live apply compatibility with the structured waiver fields already required by `saveMyApplication()`
+- made legacy live waiver rows stale/re-signable instead of implicitly current
+- extended live smoke coverage to check rendered field names and legacy live rendering, not just direct store calls
+
+### Root cause verified
+The review findings matched the runtime code paths:
+1. `app/js/store.js` already required live `emergency_relationship`, `waiver_signature_text`, and `waiver_signed_at`, but `viewApplyLive()` did not render those inputs.
+2. `app/js/app.js` submitted live indemnity re-acceptance with `await store.acceptMyIndemnity()` and no payload, so any live stale row could not provide the structured signature/date/relationship contract.
+3. `app/js/views.js` treated any live row with `waiver_accepted_at` as current because `indemnityState()` used `if (isLive() || store.isIndemnityCurrent(user))`, which bypassed structured-currentness checks for live users.
+4. `hydrateLiveUser()` did not hydrate `emergency_relationship`, `waiver_signature_text`, `waiver_signed_at`, or `waiver_form_version`, so even if the store carried them, live Profile rendering could not evaluate them correctly.
+
+### RED evidence
+After adding the new smoke assertions first, `node app/live-auth-smoke.mjs` failed on the missing live re-sign handler contract:
+
+```text
+AssertionError [ERR_ASSERTION]: The input did not match the regular expression /await store\.acceptMyIndemnity\(\{/.
+```
+
+That confirmed the review item before changing production code.
+
+### Production changes
+#### `app/js/views.js`
+- Hydrated these live application fields into the Profile view model:
+  - `emergencyRelationship`
+  - `indemnitySignature`
+  - `indemnitySignedAt`
+  - `indemnityFormVersion`
+- Changed live/current indemnity evaluation to use `store.isIndemnityCurrent(user)` for live and local alike.
+- Added the missing live apply inputs required by the existing store contract:
+  - `name="emergency_relationship"`
+  - `name="waiver_signature_text"`
+  - `name="waiver_signed_at"`
+- Added the minimal live Profile > Indemnity re-sign form fields:
+  - `name="signature"`
+  - `name="signedAt"`
+  - `name="emergencyRelationship"`
+
+#### `app/js/app.js`
+- Updated the live `form-indemnity` submit path to pass the structured payload into `store.acceptMyIndemnity({ ... })` using the rendered live form fields.
+- Kept local indemnity behavior unchanged apart from sharing the already-created `FormData` instance.
+
+#### `app/live-auth-smoke.mjs`
+- Added source-level assertions that the live indemnity submit handler now passes structured payload fields.
+- Added rendered live apply assertions for:
+  - `emergency_relationship`
+  - `waiver_signature_text`
+  - `waiver_signed_at`
+- Added draft-resume assertions proving those live fields are preserved in the rendered form.
+- Added legacy live row coverage proving that a row with `waiver_accepted_at` but missing structured fields:
+  - renders as legacy/stale on the Profile summary
+  - renders the live re-sign form on Profile > Indemnity
+  - exposes the expected live re-sign field names
+- Kept the existing direct store acceptance assertions to verify the patch payload persisted to the application row.
+
+### GREEN evidence
+Commands:
+
+```sh
+node app/smoke.mjs
+node app/live-auth-smoke.mjs
+```
+
+Observed result:
+- `app/smoke.mjs`: `All smoke tests passed.`
+- `app/live-auth-smoke.mjs`: completed successfully with the live regression markers, including the indemnity/profile checks.
+
+### Constraints honored
+- No CSS changes.
+- No HYROX detail/checkout gate changes.
+- No migration/store-schema shape changes beyond the already-established Task 3 data contract.
+
+### Remaining concern
+This follow-up restores the live UI/handler contract and stale legacy handling, but the live application/Profile layouts are still intentionally minimal. Later Task 4/Task 5 refinement can improve copy/layout without changing the now-covered runtime contract.

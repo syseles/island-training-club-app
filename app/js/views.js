@@ -991,6 +991,7 @@ async function hydrateLiveUser(user) {
       ...user,
       phone: app.mobile ?? user.phone ?? "",
       emergencyName: app.emergency_name ?? user.emergencyName ?? "",
+      emergencyRelationship: app.emergency_relationship ?? user.emergencyRelationship ?? "",
       emergencyPhone: app.emergency_phone ?? user.emergencyPhone ?? "",
       preferredName: (Object.prototype.hasOwnProperty.call(app, "preferred_name")) ? (app.preferred_name || "") : user.preferredName,
       heard: app.heard_source ?? user.heard ?? "",
@@ -1002,6 +1003,9 @@ async function hydrateLiveUser(user) {
       emailReceipts: app.email_receipts !== undefined ? !!app.email_receipts : user.emailReceipts,
       communityNews: app.community_news !== undefined ? !!app.community_news : user.communityNews,
       indemnityAcceptedAt: app.waiver_accepted_at ?? user.indemnityAcceptedAt,
+      indemnitySignature: app.waiver_signature_text ?? user.indemnitySignature ?? "",
+      indemnitySignedAt: app.waiver_signed_at ?? user.indemnitySignedAt ?? "",
+      indemnityFormVersion: app.waiver_form_version ?? user.indemnityFormVersion ?? null,
       privacyAcceptedAt: app.privacy_accepted_at ?? user.privacyAcceptedAt,
       appliedAt: app.submitted_at ?? user.appliedAt,
     };
@@ -1058,7 +1062,7 @@ function indemnityState(user) {
       body: "Please read the indemnity below, then accept and confirm — it’s required for joining ITC activities.",
     };
   }
-  if (isLive() || store.isIndemnityCurrent(user)) {
+  if (store.isIndemnityCurrent(user)) {
     return {
       kind: "current",
       row: `Indemnity confirmed on ${fmtDay(acceptedAt)}`,
@@ -1292,10 +1296,24 @@ async function accountIndemnity(user) {
         : isLive()
           ? `
       <form id="form-indemnity" class="mt16" novalidate>
-        <label class="check"><input type="checkbox" name="indemnityAccept" required>
-          <span>I have read and accept the health &amp; liability indemnity above. *</span></label>
-        <div id="indemnity-error"></div>
-        <button class="btn mt16" type="submit">Accept &amp; Confirm</button>
+        <div class="card"><div class="card-body">
+          <div class="field">
+            <label for="indemnity-signature">Signature *</label>
+            <input id="indemnity-signature" name="signature" value="${esc(hydrated.indemnitySignature || user.fullName)}" required>
+          </div>
+          <div class="field">
+            <label for="indemnity-signed-at">Signing date *</label>
+            <input id="indemnity-signed-at" name="signedAt" type="date" value="${esc(hydrated.indemnitySignedAt || todayISO())}" required>
+          </div>
+          <div class="field">
+            <label for="indemnity-emergency-relationship">Emergency contact relationship *</label>
+            <input id="indemnity-emergency-relationship" name="emergencyRelationship" value="${esc(hydrated.emergencyRelationship || "")}" required>
+          </div>
+          <label class="check"><input type="checkbox" name="indemnityAccept" required>
+            <span>I have read and accept the health &amp; liability indemnity above. *</span></label>
+          <div id="indemnity-error"></div>
+          <button class="btn mt16" type="submit">Accept &amp; Confirm</button>
+        </div></div>
       </form>`
           : `
       <form id="form-indemnity" class="mt16" novalidate>
@@ -1550,11 +1568,14 @@ function applyFormHtml(cu, draft) {
           ${applyField("text", "guardian_phone", "Guardian phone", savedAge === true, fields.guardian_phone)}
         </div>
         ${applyField("text", "emergency_name", "Emergency contact name", true, fields.emergency_name)}
+        ${applyField("text", "emergency_relationship", "Emergency contact relationship", true, fields.emergency_relationship)}
         ${applyField("text", "emergency_phone", "Emergency contact phone", true, fields.emergency_phone)}
         ${applySelect("heard_source", "How did you hear about ITC?", ["friend", "family", "search", "social", "event", "other"], true, fields.heard_source)}
         ${applyField("text", "heard_detail", "Detail (optional)", false, fields.heard_detail)}
         ${applyField("text", "preferred_name", "Preferred name (optional)", false, fields.preferred_name)}
         <label class="check"><input type="checkbox" name="photo_consent" ${checked("photo_consent")}> I consent to photos/videos of me being used on ITC channels. (Optional)</label>
+        ${applyField("text", "waiver_signature_text", "Signature (type your full name)", true, fields.waiver_signature_text || displayName)}
+        ${applyField("date", "waiver_signed_at", "Signing date", true, fields.waiver_signed_at || todayISO())}
         <div data-doc-accept="indemnity">
           <label class="check"><input type="checkbox" name="waiver" ${checked("waiver")} required disabled data-doc-checkbox>
             <span>I accept the <a href="#" class="modal-link" data-action="open-doc" data-doc="indemnity">Health &amp; Liability Indemnity</a> form. *</span></label>

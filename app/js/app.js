@@ -957,11 +957,15 @@ document.addEventListener("submit", async (e) => {
       const user = store.currentUser();
       if (!user) return;
       const errEl = form.querySelector("#indemnity-error");
+      const fd = new FormData(form);
       try {
         if (isLive()) {
-          await store.acceptMyIndemnity();
+          await store.acceptMyIndemnity({
+            signature: fd.get("signature") || user.fullName || "",
+            signedAt: fd.get("signedAt") || isoDate(todayLocal()),
+            emergencyRelationship: fd.get("emergencyRelationship") || user.emergencyRelationship || "",
+          });
         } else {
-          const fd = new FormData(form);
           store.acceptIndemnity(user.id, {
             signature: user.fullName,
             signedAt: isoDate(todayLocal()),
