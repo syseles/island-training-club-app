@@ -435,7 +435,7 @@ if (!views.viewApply().includes('name="donorId"')) {
 // local mode: viewApply() dispatches to viewApplyLocal when isLive() is false
 const applyLocalHtml = views.viewApply();
 for (const [key, label] of [
-  ["indemnity", "Health &amp; Liability Indemnity"],
+  ["indemnity", "Indemnity"],
   ["privacy", "privacy policy"],
   ["guidelines", "community guidelines"],
 ]) {
@@ -461,14 +461,25 @@ if (!applyLocalHtml.includes("Read the document to enable acceptance")) {
   console.error("FAIL local-mode apply form missing the read-first hint copy");
 }
 console.log("ok  local-mode apply form wires all three documents (indemnity, privacy, guidelines)");
-if (!applyLocalHtml.includes('name="emergencyRelationship"') || !applyLocalHtml.includes("Emergency contact relationship")) {
+for (const name of ["emergencyRelationship", "indemnitySignature", "indemnitySignedAt"]) {
+  if (!applyLocalHtml.includes(`name="${name}"`)) {
+    failures++;
+    console.error(`FAIL local apply form missing ${name}`);
+  }
+}
+if (!applyLocalHtml.includes("Participant's full name as signature")) {
   failures++;
-  console.error("FAIL local-mode apply form missing emergencyRelationship field for structured indemnity");
-} else console.log("ok  local-mode apply form collects emergencyRelationship for structured indemnity");
+  console.error("FAIL local apply form missing signature label");
+}
+if (!applyLocalHtml.includes(`max="${data.isoDate(data.todayLocal())}"`)) {
+  failures++;
+  console.error("FAIL local signing date should be capped at today");
+}
+console.log("ok  local-mode apply form collects emergencyRelationship, signature, and signing date");
 for (const marker of [
   'emergencyRelationship: fd.get("emergencyRelationship") || ""',
-  'indemnitySignature: fd.get("fullName") || ""',
-  'indemnitySignedAt: isoDate(todayLocal())',
+  'indemnitySignature: fd.get("indemnitySignature") || ""',
+  'indemnitySignedAt: fd.get("indemnitySignedAt") || ""',
 ]) {
   if (!integratedAppSource.includes(marker)) {
     failures++;

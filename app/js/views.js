@@ -1519,11 +1519,11 @@ function ageStatusField(isMinor) {
     </div>`;
 }
 
-function applyField(type, name, label, required, value = "") {
+function applyField(type, name, label, required, value = "", attrs = "") {
   return `
     <label class="field">
       <span class="field-label">${esc(label)}${required ? " *" : ""}</span>
-      <input type="${type}" name="${name}" value="${esc(value || "")}" ${required ? "required" : ""}>
+      <input type="${type}" name="${name}" value="${esc(value || "")}" ${required ? "required" : ""}${attrs ? ` ${attrs}` : ""}>
     </label>`;
 }
 
@@ -1568,19 +1568,19 @@ function applyFormHtml(cu, draft) {
           ${applyField("text", "guardian_phone", "Guardian phone", savedAge === true, fields.guardian_phone)}
         </div>
         ${applyField("text", "emergency_name", "Emergency contact name", true, fields.emergency_name)}
-        ${applyField("text", "emergency_relationship", "Emergency contact relationship", true, fields.emergency_relationship)}
+        ${applyField("text", "emergency_relationship", "Relationship to participant", true, fields.emergency_relationship)}
         ${applyField("text", "emergency_phone", "Emergency contact phone", true, fields.emergency_phone)}
         ${applySelect("heard_source", "How did you hear about ITC?", ["friend", "family", "search", "social", "event", "other"], true, fields.heard_source)}
         ${applyField("text", "heard_detail", "Detail (optional)", false, fields.heard_detail)}
         ${applyField("text", "preferred_name", "Preferred name (optional)", false, fields.preferred_name)}
         <label class="check"><input type="checkbox" name="photo_consent" ${checked("photo_consent")}> I consent to photos/videos of me being used on ITC channels. (Optional)</label>
-        ${applyField("text", "waiver_signature_text", "Signature (type your full name)", true, fields.waiver_signature_text || displayName)}
-        ${applyField("date", "waiver_signed_at", "Signing date", true, fields.waiver_signed_at || todayISO())}
         <div data-doc-accept="indemnity">
           <label class="check"><input type="checkbox" name="waiver" ${checked("waiver")} required disabled data-doc-checkbox>
-            <span>I accept the <a href="#" class="modal-link" data-action="open-doc" data-doc="indemnity">Health &amp; Liability Indemnity</a> form. *</span></label>
+            <span>I accept the <a href="#" class="modal-link" data-action="open-doc" data-doc="indemnity">Indemnity</a> form. *</span></label>
           <p class="muted small" data-doc-hint>Read the document to enable acceptance.</p>
         </div>
+        ${applyField("text", "waiver_signature_text", "Participant's full name as signature", true, fields.waiver_signature_text)}
+        ${applyField("date", "waiver_signed_at", "Date of signing", true, fields.waiver_signed_at || todayISO(), `max="${todayISO()}"`)}
         <div data-doc-accept="privacy">
           <label class="check"><input type="checkbox" name="privacy" ${checked("privacy")} required disabled data-doc-checkbox>
             <span>I accept the <a href="#" class="modal-link" data-action="open-doc" data-doc="privacy">privacy policy</a>. *</span></label>
@@ -1620,9 +1620,9 @@ function viewApplyLocal() {
       <div class="field"><label for="ap-phone">Mobile / WhatsApp *</label><input id="ap-phone" name="phone" type="tel" required autocomplete="tel" placeholder="+852 …"></div>
       <div class="field-row">
         <div class="field"><label for="ap-en">Emergency contact name *</label><input id="ap-en" name="emergencyName" required></div>
+        <div class="field"><label for="ap-er">Relationship to participant *</label><input id="ap-er" name="emergencyRelationship" required></div>
         <div class="field"><label for="ap-ep">Emergency contact phone *</label><input id="ap-ep" name="emergencyPhone" type="tel" required></div>
       </div>
-      <div class="field"><label for="ap-er">Emergency contact relationship *</label><input id="ap-er" name="emergencyRelationship" required></div>
       <div class="field">
         <label for="ap-heard">How did you hear about ITC?</label>
         <select id="ap-heard" name="heard">
@@ -1642,8 +1642,16 @@ function viewApplyLocal() {
         <span>I confirm I am 18 or over, or that a parent/guardian will accompany me to sessions. *</span></label>
       <div data-doc-accept="indemnity">
         <label class="check"><input type="checkbox" name="indemnity" required disabled data-doc-checkbox>
-          <span>I accept the <a href="#" class="modal-link" data-action="open-doc" data-doc="indemnity">Health &amp; Liability Indemnity</a> form. *</span></label>
+          <span>I accept the <a href="#" class="modal-link" data-action="open-doc" data-doc="indemnity">Indemnity</a> form. *</span></label>
         <p class="muted small" data-doc-hint>Read the document to enable acceptance.</p>
+      </div>
+      <div class="field">
+        <label for="ap-signature">Participant's full name as signature *</label>
+        <input id="ap-signature" name="indemnitySignature" required autocomplete="name">
+      </div>
+      <div class="field">
+        <label for="ap-signed-at">Date of signing *</label>
+        <input id="ap-signed-at" name="indemnitySignedAt" type="date" value="${todayISO()}" max="${todayISO()}" required>
       </div>
       <div data-doc-accept="guidelines">
         <label class="check"><input type="checkbox" name="guidelines" required disabled data-doc-checkbox>
@@ -1659,7 +1667,6 @@ function viewApplyLocal() {
         <span>(Optional) I consent to being included in ITC photos and videos.</span></label>
       <div id="apply-error"></div>
       <button class="btn mt24" type="submit">Submit application</button>
-      <p class="muted small mt8">Draft form — final fields and waiver wording to be confirmed with ITC leadership.</p>
     </form>`;
 }
 

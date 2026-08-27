@@ -178,6 +178,16 @@ function showFieldError(form, field, errorHost, message) {
   field.focus();
 }
 
+function showInlineFormError(host, message) {
+  if (!host) return;
+  host.innerHTML = "";
+  const alert = document.createElement("div");
+  alert.className = "form-error";
+  alert.setAttribute("role", "alert");
+  alert.textContent = message;
+  host.appendChild(alert);
+}
+
 export async function maybeRedirectToApply() {
   if (!isLive()) return;
   const cu = await store.getCurrentUser();
@@ -814,6 +824,7 @@ document.addEventListener("submit", async (e) => {
       const fd = new FormData(form);
       const payload = Object.fromEntries(fd.entries());
       payload.photo_consent = !!fd.get("photo_consent");
+      payload.waiver = !!fd.get("waiver");
       try {
         await store.saveMyApplication(payload);
         toast(form.dataset.toast || "Application submitted.");
@@ -848,32 +859,33 @@ document.addEventListener("submit", async (e) => {
       const fd = new FormData(form);
       const errEl = form.querySelector("#apply-error");
       if (donorIdProblem(fd.get("donorId"))) {
-        errEl.innerHTML = `<div class="form-error">That Donor ID doesn’t look right — it needs a hyphen between your last name and the 4- or 5-digit number (e.g. CHUI-08879 or CHUI-8879). Please enter it again, or leave it blank if you don’t have one.</div>`;
+        showInlineFormError(errEl, "That Donor ID doesn’t look right — it needs a hyphen between your last name and the 4- or 5-digit number (e.g. CHUI-08879 or CHUI-8879). Please enter it again, or leave it blank if you don’t have one.");
         return;
       }
+      const payload = {
+        fullName: fd.get("fullName") || "",
+        preferredName: fd.get("preferredName") || "",
+        email: fd.get("email") || "",
+        phone: fd.get("phone") || "",
+        emergencyName: fd.get("emergencyName") || "",
+        emergencyRelationship: fd.get("emergencyRelationship") || "",
+        emergencyPhone: fd.get("emergencyPhone") || "",
+        heard: fd.get("heard") || "",
+        ageConfirmed: fd.get("ageConfirmed") === "on",
+        mediaConsent: fd.get("mediaConsent") === "on",
+        donorId: fd.get("donorId") || "",
+        indemnity: fd.get("indemnity") === "on",
+        indemnitySignature: fd.get("indemnitySignature") || "",
+        indemnitySignedAt: fd.get("indemnitySignedAt") || "",
+      };
       try {
-        const res = store.applyForMembership({
-          fullName: fd.get("fullName") || "",
-          preferredName: fd.get("preferredName") || "",
-          email: fd.get("email") || "",
-          phone: fd.get("phone") || "",
-          emergencyName: fd.get("emergencyName") || "",
-          emergencyRelationship: fd.get("emergencyRelationship") || "",
-          emergencyPhone: fd.get("emergencyPhone") || "",
-          heard: fd.get("heard") || "",
-          ageConfirmed: fd.get("ageConfirmed") === "on",
-          mediaConsent: fd.get("mediaConsent") === "on",
-          donorId: fd.get("donorId") || "",
-          indemnity: fd.get("indemnity") === "on",
-          indemnitySignature: fd.get("fullName") || "",
-          indemnitySignedAt: isoDate(todayLocal()),
-        });
+        const res = store.applyForMembership(payload);
         if (!res.ok) {
-          errEl.innerHTML = `<div class="form-error">An application already exists for that email — try signing in instead.</div>`;
+          showInlineFormError(errEl, "An application already exists for that email — try signing in instead.");
           return;
         }
       } catch (err) {
-        errEl.innerHTML = `<div class="form-error">${err.message || "Unable to submit your application right now."}</div>`;
+        showInlineFormError(errEl, err.message || "Unable to submit application");
         return;
       }
       toast("Application submitted — a leader will review it");

@@ -695,6 +695,7 @@ await store.hydrateLiveOperations();
 
 const appSource = readFileSync(resolve(__dirnameSmoke, "js/app.js"), "utf8");
 assert.match(appSource, /form\.dataset\.form === "apply"/);
+assert.match(appSource, /payload\.waiver = !!fd\.get\("waiver"\)/);
 assert.match(appSource, /await store\.saveMyApplication\(payload\)/);
 assert.match(appSource, /await store\.acceptMyIndemnity\(\{/);
 assert.match(appSource, /signature:\s*fd\.get\("signature"\)/);
@@ -727,10 +728,12 @@ const liveApplyHtml = await views.viewApply();
 assert.match(liveApplyHtml, /data-form="apply"/);
 assert.match(liveApplyHtml, /name="mobile"/);
 assert.match(liveApplyHtml, /name="age_over_18"/);
-assert.match(liveApplyHtml, /name="emergency_relationship"/);
+for (const name of ["emergency_relationship", "waiver_signature_text", "waiver_signed_at"]) {
+  assert.match(liveApplyHtml, new RegExp(`name="${name}"`));
+}
 assert.match(liveApplyHtml, /name="waiver"/);
-assert.match(liveApplyHtml, /name="waiver_signature_text"/);
-assert.match(liveApplyHtml, /name="waiver_signed_at"/);
+assert.match(liveApplyHtml, /data-doc-accept="indemnity"/);
+assert.match(liveApplyHtml, /name="waiver"[^>]*disabled[^>]*data-doc-checkbox/);
 assert.doesNotMatch(liveApplyHtml, /name="email"/);
 
 store.saveApplyDraft({ fields: {
