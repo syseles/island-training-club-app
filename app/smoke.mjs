@@ -491,12 +491,15 @@ const applyRes = store.applyForMembership({
   email: "test@example.com",
   phone: "+852 1234 5678",
   emergencyName: "E Person",
+  emergencyRelationship: "Sibling",
   emergencyPhone: "+852 8765 4321",
   heard: "A friend",
   ageConfirmed: true,
   mediaConsent: false,
   donorId: "Not applicable",
   indemnity: true,
+  indemnitySignature: "Test Person",
+  indemnitySignedAt: data.isoDate(data.todayLocal()),
 });
 if (!applyRes.ok) throw new Error("apply failed");
 if (applyRes.user.donorId !== null) {
@@ -507,6 +510,34 @@ if (!applyRes.user.indemnityAcceptedAt) {
   failures++;
   console.error("FAIL indemnity acceptance not recorded at application");
 } else console.log("ok  indemnity acceptance recorded at application");
+for (const [field, expected] of [
+  ["emergencyRelationship", "Sibling"],
+  ["indemnitySignature", "Test Person"],
+  ["indemnitySignedAt", data.isoDate(data.todayLocal())],
+  ["indemnityFormVersion", "v1"],
+]) {
+  if (applyRes.user[field] !== expected) {
+    failures++;
+    console.error(`FAIL application ${field} expected ${expected}, got ${applyRes.user[field]}`);
+  }
+}
+if (!store.isIndemnityCurrent(applyRes.user)) {
+  failures++;
+  console.error("FAIL signed v1 application should have current indemnity");
+}
+for (const [label, payload, pattern] of [
+  ["short signature", { signature: "X", signedAt: data.isoDate(data.todayLocal()), emergencyRelationship: "Sibling" }, /full name as your signature/],
+  ["invalid date", { signature: "Test Person", signedAt: "2026-02-31", emergencyRelationship: "Sibling" }, /valid signing date/],
+  ["future date", { signature: "Test Person", signedAt: "2999-01-01", emergencyRelationship: "Sibling" }, /cannot be in the future/],
+  ["missing relationship", { signature: "Test Person", signedAt: data.isoDate(data.todayLocal()), emergencyRelationship: "" }, /relationship/],
+]) {
+  let error = null;
+  try { store.acceptIndemnity(applyRes.user.id, payload); } catch (err) { error = err; }
+  if (!error || !pattern.test(error.message)) {
+    failures++;
+    console.error(`FAIL ${label} should reject with ${pattern}`);
+  }
+}
 
 // --- Application draft persistence ---
 {
@@ -819,7 +850,11 @@ for (const clause of ["1", "2", "3", "4", "5", "6", "7", "8", "9", "10"]) {
   }
 }
 console.log("ok  Profile > Indemnity card exposes source title and clause markers");
-store.acceptIndemnity(store.currentUser().id);
+store.acceptIndemnity(store.currentUser().id, {
+  signature: "Test Person",
+  signedAt: data.isoDate(data.todayLocal()),
+  emergencyRelationship: "Sibling",
+});
 if (!(await views.viewAccount()).includes("Indemnity confirmed on")) {
   failures++;
   console.error("FAIL acceptIndemnity did not confirm on Profile");
@@ -1626,8 +1661,8 @@ console.log("ok  reset");
   if (!fresh.paymentPayouts || Array.isArray(fresh.paymentPayouts)
       || Object.keys(fresh.paymentPayouts).length) {
     failures++;
-    console.error("FAIL v13 fresh state must have an empty UUID-keyed payout map");
-  } else console.log("ok  v13 fresh state has an empty UUID-keyed payout map");
+    console.error("FAIL v14 fresh state must have an empty UUID-keyed payout map");
+  } else console.log("ok  v14 fresh state has an empty UUID-keyed payout map");
   if (Array.isArray(fresh.activities)) {
     for (const a of fresh.activities) {
       if ("baseBooked" in a) {
@@ -1745,10 +1780,41 @@ console.log("ok  reset");
     failures++;
     console.error("FAIL v10 migration must clear session tied to a removed demo user");
   } else console.log("ok  v10 migration clears removed session");
-  if (migrated.version !== 13) {
+  if (migrated.version !== 14) {
     failures++;
-    console.error(`FAIL integrated migration must advance version to 13, got ${migrated.version}`);
-  } else console.log("ok  integrated migration advances genuine v9 state to v13");
+    console.error(`FAIL integrated migration must advance version to 14, got ${migrated.version}`);
+  } else console.log("ok  integrated migration advances genuine v9 state to v14");
+}
+
+{
+  store.resetLocalData();
+  const v13 = JSON.parse(mem.get("itc.prototype.v1"));
+  v13.version = 13;
+  v13.users = [{
+    id: "real-v13-member",
+    role: "member",
+    status: "approved",
+    fullName: "Real Member",
+    email: "real-v13@example.test",
+    indemnityAcceptedAt: 123456789,
+  }];
+  mem.set("itc.prototype.v1", JSON.stringify(v13));
+  store.load();
+  const v14 = JSON.parse(mem.get("itc.prototype.v1"));
+  const migratedUser = v14.users.find((user) => user.id === "real-v13-member");
+  if (v14.version !== 14 || !migratedUser) throw new Error("v14 migration lost the genuine member");
+  for (const field of ["indemnitySignature", "indemnitySignedAt", "indemnityFormVersion", "emergencyRelationship"]) {
+    if (!(field in migratedUser) || migratedUser[field] !== null) {
+      throw new Error(`v14 migration should initialize ${field} to null`);
+    }
+  }
+  if (migratedUser.indemnityAcceptedAt !== 123456789) {
+    throw new Error("v14 migration must preserve indemnityAcceptedAt");
+  }
+  if (store.isIndemnityCurrent(migratedUser)) {
+    throw new Error("timestamp-only v13 acceptance must be stale in v14");
+  }
+  console.log("ok  v14 migration preserves legacy acceptance and initializes consent fields");
 }
 
 // --- Install neutral fixtures for local authenticated paths (no demo seeds) ---
@@ -2186,11 +2252,11 @@ for (const fixture of sourceSnapshots) {
     && !Array.isArray(migrated.paymentPayouts);
   const suppliedPayoutsPreserved = fixture.version !== 12
     || migrated.paymentPayouts["real-admin"]?.fpsPhone === "+852 6000 0000";
-  if (migrated.version !== 13 || suppliedIds.some((id) => !serialized.includes(id))
+  if (migrated.version !== 14 || suppliedIds.some((id) => !serialized.includes(id))
       || !payoutMapValid || !suppliedPayoutsPreserved) {
     failures++;
-    console.error(`FAIL genuine v${fixture.version} fixture must reach v13 intact`);
-  } else console.log(`ok  genuine v${fixture.version} fixture reaches v13 intact`);
+    console.error(`FAIL genuine v${fixture.version} fixture must reach v14 intact`);
+  } else console.log(`ok  genuine v${fixture.version} fixture reaches v14 intact`);
 }
 
 for (const invalidCounter of [null, -1, 1.5, "broken"]) {

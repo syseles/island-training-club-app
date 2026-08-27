@@ -22,13 +22,14 @@ import {
   donorIdProblem,
 } from "./data.js";
 import { supabase, isLive } from "./config.js";
+import { INDEMNITY_VERSION } from "./documents.js";
 import * as liveOps from "./operations.js";
 
 const STORAGE_KEY = "itc.prototype.v1";
 const APPLY_DEVICE_KEY = "itc.device.id";
 const APPLY_DRAFT_KEY = "itc.apply.draft.v1";
 const APPLY_DRAFT_VERSION = 1;
-const STATE_VERSION = 13;
+const STATE_VERSION = 14;
 
 // Live-mode (Supabase) session cache. Avoids hammering the DB on every
 // page load. The TTL is short so role flips and welcome notifications
@@ -119,8 +120,8 @@ function migrate() {
   if (!state.duty || typeof state.duty !== "object" || Array.isArray(state.duty)) state.duty = {};
   if (!state.paymentPayouts || typeof state.paymentPayouts !== "object"
       || Array.isArray(state.paymentPayouts)) state.paymentPayouts = {};
-  // v13 is not released yet: move legacy payout fields into the additive
-  // UUID-keyed operations map for every accepted v9-v13 snapshot.
+  // v14 carries forward the additive UUID-keyed operations map for every
+  // accepted v9-v13 snapshot.
   for (const user of state.users) {
     if (!user?.id || state.paymentPayouts[user.id] || (!user.paymeLink && !user.fpsPhone)) continue;
     state.paymentPayouts[user.id] = {
@@ -338,6 +339,18 @@ function migrate() {
     for (const activity of activities) delete activity.baseBooked;
     state.activities = activities;
   }
+  if (v < 14) {
+    for (const user of state.users) {
+      for (const field of [
+        "indemnitySignature",
+        "indemnitySignedAt",
+        "indemnityFormVersion",
+        "emergencyRelationship",
+      ]) {
+        if (!Object.prototype.hasOwnProperty.call(user, field)) user[field] = null;
+      }
+    }
+  }
   state.version = STATE_VERSION;
 }
 
@@ -495,11 +508,57 @@ export function clearApplyDraft() {
 
 // --- Signup / approval ---------------------------------------------------------
 
+function normalizeIndemnityAcceptance({
+  signature,
+  signedAt,
+  emergencyRelationship,
+  formVersion = INDEMNITY_VERSION,
+} = {}) {
+  const normalizedSignature = String(signature || "").trim();
+  const normalizedSignedAt = String(signedAt || "").trim();
+  const normalizedRelationship = String(emergencyRelationship || "").trim();
+  if (normalizedSignature.length < 2) {
+    throw new Error("Type your full name as your signature");
+  }
+  const validDate = /^\d{4}-\d{2}-\d{2}$/.test(normalizedSignedAt)
+    && isoDate(parseISO(normalizedSignedAt)) === normalizedSignedAt;
+  if (!validDate) throw new Error("Enter a valid signing date");
+  if (normalizedSignedAt > isoDate(todayLocal())) {
+    throw new Error("Signing date cannot be in the future");
+  }
+  if (!normalizedRelationship) {
+    throw new Error("Enter your emergency contact relationship");
+  }
+  if (formVersion !== INDEMNITY_VERSION) {
+    throw new Error("The Indemnity has changed. Reload and review the current document");
+  }
+  return {
+    signature: normalizedSignature,
+    signedAt: normalizedSignedAt,
+    emergencyRelationship: normalizedRelationship,
+    formVersion: INDEMNITY_VERSION,
+  };
+}
+
+export function isIndemnityCurrent(user) {
+  if (!user?.indemnityAcceptedAt || user.indemnityFormVersion !== INDEMNITY_VERSION) return false;
+  if (String(user.indemnitySignature || "").trim().length < 2) return false;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(user.indemnitySignedAt || ""))) return false;
+  return !!String(user.emergencyRelationship || "").trim();
+}
+
 export function applyForMembership(form) {
   const email = String(form.email).trim().toLowerCase();
   if (state.users.some((u) => u.email.toLowerCase() === email)) {
     return { ok: false, reason: "duplicate" };
   }
+  if (!form.indemnity) throw new Error("Read and accept the Indemnity");
+  const acceptance = normalizeIndemnityAcceptance({
+    signature: form.indemnitySignature,
+    signedAt: form.indemnitySignedAt,
+    emergencyRelationship: form.emergencyRelationship,
+  });
+  const acceptedAt = Date.now();
   const user = {
     id: uid("u"),
     role: "pending",
@@ -510,13 +569,15 @@ export function applyForMembership(form) {
     phone: form.phone.trim(),
     ageConfirmed: !!form.ageConfirmed,
     emergencyName: form.emergencyName.trim(),
+    emergencyRelationship: acceptance.emergencyRelationship,
     emergencyPhone: form.emergencyPhone.trim(),
     heard: form.heard.trim(),
     mediaConsent: !!form.mediaConsent,
     donorId: normalizeDonorId(form.donorId),
-    // Joining requires accepting the health & liability indemnity; the
-    // timestamp is the member's acceptance record (Profile > Indemnity).
-    indemnityAcceptedAt: form.indemnity ? Date.now() : null,
+    indemnityAcceptedAt: acceptedAt,
+    indemnitySignature: acceptance.signature,
+    indemnitySignedAt: acceptance.signedAt,
+    indemnityFormVersion: acceptance.formVersion,
     appliedAt: Date.now(),
   };
   state.users.push(user);
@@ -586,15 +647,16 @@ export async function updateMyDonorId(raw) {
   return data.donor_id;
 }
 
-// Records the member's acceptance of the health & liability indemnity.
-// Idempotent — the first acceptance timestamp is the record that matters.
-export function acceptIndemnity(userId) {
-  const user = state.users.find((u) => u.id === userId);
+export function acceptIndemnity(userId, payload) {
+  const user = state.users.find((candidate) => candidate.id === userId);
   if (!user) return null;
-  if (!user.indemnityAcceptedAt) {
-    user.indemnityAcceptedAt = Date.now();
-    save();
-  }
+  const acceptance = normalizeIndemnityAcceptance(payload);
+  user.indemnityAcceptedAt = Date.now();
+  user.indemnitySignature = acceptance.signature;
+  user.indemnitySignedAt = acceptance.signedAt;
+  user.indemnityFormVersion = acceptance.formVersion;
+  user.emergencyRelationship = acceptance.emergencyRelationship;
+  save();
   return user.indemnityAcceptedAt;
 }
 
