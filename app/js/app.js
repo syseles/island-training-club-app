@@ -851,21 +851,29 @@ document.addEventListener("submit", async (e) => {
         errEl.innerHTML = `<div class="form-error">That Donor ID doesn’t look right — it needs a hyphen between your last name and the 4- or 5-digit number (e.g. CHUI-08879 or CHUI-8879). Please enter it again, or leave it blank if you don’t have one.</div>`;
         return;
       }
-      const res = store.applyForMembership({
-        fullName: fd.get("fullName") || "",
-        preferredName: fd.get("preferredName") || "",
-        email: fd.get("email") || "",
-        phone: fd.get("phone") || "",
-        emergencyName: fd.get("emergencyName") || "",
-        emergencyPhone: fd.get("emergencyPhone") || "",
-        heard: fd.get("heard") || "",
-        ageConfirmed: fd.get("ageConfirmed") === "on",
-        mediaConsent: fd.get("mediaConsent") === "on",
-        donorId: fd.get("donorId") || "",
-        indemnity: fd.get("indemnity") === "on",
-      });
-      if (!res.ok) {
-        errEl.innerHTML = `<div class="form-error">An application already exists for that email — try signing in instead.</div>`;
+      try {
+        const res = store.applyForMembership({
+          fullName: fd.get("fullName") || "",
+          preferredName: fd.get("preferredName") || "",
+          email: fd.get("email") || "",
+          phone: fd.get("phone") || "",
+          emergencyName: fd.get("emergencyName") || "",
+          emergencyRelationship: fd.get("emergencyRelationship") || "",
+          emergencyPhone: fd.get("emergencyPhone") || "",
+          heard: fd.get("heard") || "",
+          ageConfirmed: fd.get("ageConfirmed") === "on",
+          mediaConsent: fd.get("mediaConsent") === "on",
+          donorId: fd.get("donorId") || "",
+          indemnity: fd.get("indemnity") === "on",
+          indemnitySignature: fd.get("fullName") || "",
+          indemnitySignedAt: isoDate(todayLocal()),
+        });
+        if (!res.ok) {
+          errEl.innerHTML = `<div class="form-error">An application already exists for that email — try signing in instead.</div>`;
+          return;
+        }
+      } catch (err) {
+        errEl.innerHTML = `<div class="form-error">${err.message || "Unable to submit your application right now."}</div>`;
         return;
       }
       toast("Application submitted — a leader will review it");
@@ -948,7 +956,23 @@ document.addEventListener("submit", async (e) => {
       if (!form.reportValidity()) return;
       const user = store.currentUser();
       if (!user) return;
-      store.acceptIndemnity(user.id);
+      const errEl = form.querySelector("#indemnity-error");
+      try {
+        if (isLive()) {
+          await store.acceptMyIndemnity();
+        } else {
+          const fd = new FormData(form);
+          store.acceptIndemnity(user.id, {
+            signature: user.fullName,
+            signedAt: isoDate(todayLocal()),
+            emergencyRelationship: fd.get("emergencyRelationship") || user.emergencyRelationship || "",
+          });
+        }
+        if (errEl) errEl.innerHTML = "";
+      } catch (err) {
+        if (errEl) errEl.innerHTML = `<div class="form-error">${err.message || "Unable to confirm the indemnity right now."}</div>`;
+        return;
+      }
       toast("Indemnity accepted & confirmed");
       render();
       break;

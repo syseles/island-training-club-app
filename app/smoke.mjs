@@ -446,6 +446,21 @@ if (!applyLocalHtml.includes("Read the document to enable acceptance")) {
   console.error("FAIL local-mode apply form missing the read-first hint copy");
 }
 console.log("ok  local-mode apply form wires all three documents (indemnity, privacy, guidelines)");
+if (!applyLocalHtml.includes('name="emergencyRelationship"') || !applyLocalHtml.includes("Emergency contact relationship")) {
+  failures++;
+  console.error("FAIL local-mode apply form missing emergencyRelationship field for structured indemnity");
+} else console.log("ok  local-mode apply form collects emergencyRelationship for structured indemnity");
+for (const marker of [
+  'emergencyRelationship: fd.get("emergencyRelationship") || ""',
+  'indemnitySignature: fd.get("fullName") || ""',
+  'indemnitySignedAt: isoDate(todayLocal())',
+]) {
+  if (!integratedAppSource.includes(marker)) {
+    failures++;
+    console.error(`FAIL local apply handler missing structured indemnity contract: ${marker}`);
+  }
+}
+console.log("ok  local apply handler bridges the structured indemnity contract");
 
 // Live-mode apply form: old plain-checkbox copy and indemnity-only attributes
 // must be gone. Source-level check: rendering viewApplyLive() requires
@@ -819,6 +834,36 @@ if (!newMemberAcct.includes("Indemnity confirmed on") || newMemberAcct.includes(
   failures++;
   console.error("FAIL Profile should show a single indemnity-confirmed-on-date line");
 } else console.log("ok  Profile shows single-line indemnity confirmation");
+store.currentUser().indemnityAcceptedAt = Date.now() - 86400000;
+store.currentUser().indemnitySignature = null;
+store.currentUser().indemnitySignedAt = null;
+store.currentUser().indemnityFormVersion = null;
+store.currentUser().emergencyRelationship = null;
+const legacyIndemnityProfile = await views.viewAccount();
+if (legacyIndemnityProfile.includes("Indemnity confirmed on") || !legacyIndemnityProfile.includes("Legacy acceptance recorded on")) {
+  failures++;
+  console.error("FAIL timestamp-only legacy indemnity should stay stale on Profile");
+} else console.log("ok  timestamp-only legacy indemnity stays stale on Profile");
+const legacyIndemnityPageHtml = await views.viewAccount("indemnity");
+if (!legacyIndemnityPageHtml.includes("Legacy acceptance recorded on") || !legacyIndemnityPageHtml.includes("Accept &amp; Confirm")) {
+  failures++;
+  console.error("FAIL timestamp-only legacy indemnity should prompt review and confirmation");
+} else console.log("ok  timestamp-only legacy indemnity prompts review and confirmation");
+if (!legacyIndemnityPageHtml.includes('name="emergencyRelationship"')) {
+  failures++;
+  console.error("FAIL local Profile > Indemnity form missing emergencyRelationship field");
+} else console.log("ok  local Profile > Indemnity form collects emergencyRelationship");
+for (const marker of [
+  'signature: user.fullName',
+  'signedAt: isoDate(todayLocal())',
+  'emergencyRelationship: fd.get("emergencyRelationship") || user.emergencyRelationship || ""',
+]) {
+  if (!integratedAppSource.includes(marker)) {
+    failures++;
+    console.error(`FAIL local Profile > Indemnity handler missing structured contract: ${marker}`);
+  }
+}
+console.log("ok  local Profile > Indemnity handler bridges the structured contract");
 store.currentUser().indemnityAcceptedAt = null;
 if (!(await views.viewAccount()).includes("To be accepted")) {
   failures++;
@@ -1829,17 +1874,19 @@ function installLocalFixtures({ withMemberBooking = false } = {}) {
     {
       id: "fixture-admin", role: "admin", status: "approved", fullName: "Test Admin",
       preferredName: "Admin", email: "admin@example.test", phone: "+852 5000 0001",
-      emergencyName: "Test Contact", emergencyPhone: "+852 5000 9001", heard: "Test fixture",
+      emergencyName: "Test Contact", emergencyRelationship: "Sibling", emergencyPhone: "+852 5000 9001", heard: "Test fixture",
       isMinor: false, appliedAt: Date.now() - 86400000, indemnityAcceptedAt: Date.now() - 86400000,
+      indemnitySignature: "Test Admin", indemnitySignedAt: data.isoDate(data.todayLocal()), indemnityFormVersion: "v1",
       privacyAcceptedAt: Date.now() - 86400000, whatsappReminders: false, emailReceipts: false,
       communityNews: false,
     },
     {
       id: "fixture-member", role: "member", status: "approved", fullName: "Test Member",
       preferredName: "Tester", email: "member@example.test", phone: "+852 5000 0002",
-      emergencyName: "Test Contact", emergencyPhone: "+852 5000 9002", heard: "Test fixture",
+      emergencyName: "Test Contact", emergencyRelationship: "Sibling", emergencyPhone: "+852 5000 9002", heard: "Test fixture",
       mediaConsent: true, donorId: "TEST-1234", isMinor: false,
       appliedAt: Date.now() - 172800000, indemnityAcceptedAt: Date.now() - 172800000,
+      indemnitySignature: "Test Member", indemnitySignedAt: data.isoDate(data.todayLocal()), indemnityFormVersion: "v1",
       privacyAcceptedAt: Date.now() - 172800000, whatsappReminders: false,
       emailReceipts: false, communityNews: false,
     },

@@ -1048,8 +1048,35 @@ function accountVisitor() {
     </div></div>`;
 }
 
+function indemnityState(user) {
+  const acceptedAt = user?.indemnityAcceptedAt;
+  if (!acceptedAt) {
+    return {
+      kind: "missing",
+      row: "To be accepted",
+      kicker: "To be accepted",
+      body: "Please read the indemnity below, then accept and confirm — it’s required for joining ITC activities.",
+    };
+  }
+  if (isLive() || store.isIndemnityCurrent(user)) {
+    return {
+      kind: "current",
+      row: `Indemnity confirmed on ${fmtDay(acceptedAt)}`,
+      kicker: `Indemnity confirmed on ${fmtDay(acceptedAt)}`,
+      body: "You’re confirmed to join ITC activities.",
+    };
+  }
+  return {
+    kind: "stale",
+    row: `Legacy acceptance recorded on ${fmtDay(acceptedAt)}`,
+    kicker: `Legacy acceptance recorded on ${fmtDay(acceptedAt)}`,
+    body: "Please review the current indemnity and confirm it again so your record includes the required signature, signing date, and emergency-contact relationship.",
+  };
+}
+
 async function accountPending(user) {
   const hydrated = await hydrateLiveUser(user);
+  const indemnity = indemnityState(hydrated);
   return `
     <div class="kicker">Profile · ${esc(user.email)}</div>
     <h1 class="display">Thanks, ${esc(hydrated.preferredName || user.fullName.split(" ")[0])}.</h1>
@@ -1062,7 +1089,7 @@ async function accountPending(user) {
         <div class="line"><span>Emergency contact</span><strong>${esc(hydrated.emergencyName)} · ${esc(hydrated.emergencyPhone)}</strong></div>
         <div class="line"><span>Heard about ITC</span><strong>${esc(hydrated.heard)}</strong></div>
         ${user.donorId ? `<div class="line"><span>Donor ID</span><strong>${esc(user.donorId)}</strong></div>` : ""}
-        <div class="line"><span>Indemnity</span><strong>${hydrated.indemnityAcceptedAt ? "Accepted" : "—"}</strong></div>
+        <div class="line"><span>Indemnity</span><strong>${indemnity.kind === "current" ? "Accepted" : indemnity.kind === "stale" ? "Review & confirm" : "—"}</strong></div>
         <div class="line"><span>Photo consent</span><strong>${hydrated.mediaConsent ? "Yes" : "No"}</strong></div>
       </div>
     </div></div>
@@ -1088,6 +1115,7 @@ function accountDeclined(user) {
 
 async function accountMember(user) {
   const hydrated = await hydrateLiveUser(user);
+  const indemnity = indemnityState(hydrated);
   const normalized = normalizeRole(hydrated.role);
   if (user.role !== normalized) user.role = normalized;
   const isAdmin = isAdminRole(normalized);
@@ -1126,8 +1154,8 @@ async function accountMember(user) {
         "#/account/indemnity",
         ICONS.check,
         "Indemnity",
-        hydrated.indemnityAcceptedAt ? `Indemnity confirmed on ${fmtDay(hydrated.indemnityAcceptedAt)}` : "To be accepted",
-        { cls: hydrated.indemnityAcceptedAt ? "ok" : "todo" }
+        indemnity.row,
+        { cls: indemnity.kind === "current" ? "ok" : "todo" }
       )}
       ${profileRow("#/account/donor", ICONS.heart, "Donor Profile", "Donor ID and e-receipt details")}
       ${profileRow("#/account/payments", ICONS.dollar, "Payments & Receipts", "Bookings, donations and orders")}
@@ -1245,37 +1273,44 @@ function linkCard(href, title, status, { sub = "", cls = "" } = {}) {
 // catches members who joined before that requirement existed.
 async function accountIndemnity(user) {
   const hydrated = await hydrateLiveUser(user);
-  const at = hydrated.indemnityAcceptedAt;
+  const indemnity = indemnityState(hydrated);
   return `
     <a class="back-link" href="#/account">← Profile</a>
     <div class="kicker mt16">Profile · Indemnity</div>
     <h1 class="display sm">Health &amp; Liability Indemnity.</h1>
-    ${
-      at
-        ? `
-      <div class="banner mt16">
-        <span class="kicker">Indemnity confirmed on ${fmtDay(at)}</span>
-        <p>You’re confirmed to join ITC activities.</p>
-      </div>`
-        : `
-      <div class="banner warn mt16">
-        <span class="kicker">To be accepted</span>
-        <p>Please read the indemnity below, then accept and confirm — it’s required for joining ITC activities.</p>
-      </div>`
-    }
+    <div class="banner${indemnity.kind === "current" ? "" : " warn"} mt16">
+      <span class="kicker">${esc(indemnity.kicker)}</span>
+      <p>${esc(indemnity.body)}</p>
+    </div>
     <a class="btn ghost sm mt16" href="#" data-action="open-doc" data-doc="indemnity">View as full document</a>
     <div class="card mt16"><div class="card-body prose">
       ${indemnityDoc.renderIndemnityDocument()}
     </div></div>
     ${
-      at
+      indemnity.kind === "current"
         ? ""
-        : `
+        : isLive()
+          ? `
       <form id="form-indemnity" class="mt16" novalidate>
         <label class="check"><input type="checkbox" name="indemnityAccept" required>
           <span>I have read and accept the health &amp; liability indemnity above. *</span></label>
         <div id="indemnity-error"></div>
         <button class="btn mt16" type="submit">Accept &amp; Confirm</button>
+      </form>`
+          : `
+      <form id="form-indemnity" class="mt16" novalidate>
+        <div class="card"><div class="card-body">
+          <div class="line"><span>Signature</span><strong>${esc(user.fullName)}</strong></div>
+          <div class="line"><span>Signing date</span><strong>${esc(todayISO())}</strong></div>
+          <div class="field mt16">
+            <label for="indemnity-emergency-relationship">Emergency contact relationship *</label>
+            <input id="indemnity-emergency-relationship" name="emergencyRelationship" value="${esc(hydrated.emergencyRelationship || "")}" required>
+          </div>
+          <label class="check"><input type="checkbox" name="indemnityAccept" required>
+            <span>I have read and accept the health &amp; liability indemnity above. *</span></label>
+          <div id="indemnity-error"></div>
+          <button class="btn mt16" type="submit">Accept &amp; Confirm</button>
+        </div></div>
       </form>`
     }
     <p class="muted small mt16">Draft wording — the final indemnity will be confirmed with ITC leadership before launch.</p>`;
@@ -1566,6 +1601,7 @@ function viewApplyLocal() {
         <div class="field"><label for="ap-en">Emergency contact name *</label><input id="ap-en" name="emergencyName" required></div>
         <div class="field"><label for="ap-ep">Emergency contact phone *</label><input id="ap-ep" name="emergencyPhone" type="tel" required></div>
       </div>
+      <div class="field"><label for="ap-er">Emergency contact relationship *</label><input id="ap-er" name="emergencyRelationship" required></div>
       <div class="field">
         <label for="ap-heard">How did you hear about ITC?</label>
         <select id="ap-heard" name="heard">
