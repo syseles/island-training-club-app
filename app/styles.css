@@ -1519,22 +1519,6 @@ a.profile-row:hover .pr-text strong { color: var(--accent); }
   overscroll-behavior: contain;
 }
 
-.modal-doc-body::after {
-  content: "Draft — pending ITC leadership review";
-  position: sticky;
-  display: block;
-  bottom: 8px;
-  left: 0;
-  right: 0;
-  text-align: center;
-  font-size: 10.5px;
-  letter-spacing: .08em;
-  text-transform: uppercase;
-  color: rgba(0, 0, 0, .25);
-  pointer-events: none;
-  margin-top: 24px;
-}
-
 .modal-doc-body .doc-content h3 {
   font-size: 14px;
   text-transform: uppercase;
@@ -1544,6 +1528,30 @@ a.profile-row:hover .pr-text strong { color: var(--accent); }
 }
 .modal-doc-body .doc-content h3:first-child { margin-top: 0; }
 .modal-doc-body .doc-content p { margin: 0 0 12px; }
+
+.doc-content .doc-clauses,
+.doc-content .doc-subclauses {
+  padding-left: 1.4rem;
+}
+.doc-content .doc-clauses > li,
+.doc-content .doc-subclauses > li {
+  margin: 0 0 12px;
+  padding-left: 4px;
+}
+.doc-content .doc-subclauses {
+  margin-top: 12px;
+  list-style: none;
+  counter-reset: doc-subclause;
+}
+.doc-content .doc-subclauses > li {
+  position: relative;
+  counter-increment: doc-subclause;
+}
+.doc-content .doc-subclauses > li::before {
+  content: "(" counter(doc-subclause, lower-alpha) ")";
+  position: absolute;
+  right: calc(100% + 6px);
+}
 
 .modal-doc-ack {
   display: flex;

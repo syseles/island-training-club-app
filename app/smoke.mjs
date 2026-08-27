@@ -808,18 +808,13 @@ if (!indemnityPageHtml.includes('data-action="open-doc" data-doc="indemnity"')) 
   failures++;
   console.error('FAIL Profile > Indemnity button should target the indemnity document');
 } else console.log("ok  Profile > Indemnity button targets the indemnity document");
-for (const heading of [
-  "Health declaration",
-  "Participation at my own risk",
-  "Release &amp; indemnity",
-  "Emergency contact",
-]) {
-  if (!indemnityPageHtml.includes(heading)) {
+for (const clause of ["1", "2", "3", "4", "5", "6", "7", "8", "9", "10"]) {
+  if (!indemnityPageHtml.includes(`data-clause="${clause}"`)) {
     failures++;
-    console.error(`FAIL Profile > Indemnity card missing heading "${heading}" after DRY refactor`);
+    console.error(`FAIL Profile > Indemnity card missing clause marker ${clause}`);
   }
 }
-console.log("ok  Profile > Indemnity card still renders all four section headings (DRY)");
+console.log("ok  Profile > Indemnity card exposes clause markers");
 store.acceptIndemnity(store.currentUser().id);
 if (!(await views.viewAccount()).includes("Indemnity confirmed on")) {
   failures++;
@@ -834,6 +829,14 @@ await check("checkout (member)", () => views.viewCheckout(paid.id));
 // --- document registry (indemnity + privacy + guidelines) ---
 const docsModule = await import("./js/documents.js");
 const DOCS = docsModule.DOCUMENTS;
+if (docsModule.INDEMNITY_VERSION !== "v1") {
+  failures++;
+  console.error(`FAIL indemnity version should be v1, got ${docsModule.INDEMNITY_VERSION}`);
+}
+if (DOCS.indemnity?.title !== "Indemnity") {
+  failures++;
+  console.error(`FAIL indemnity title should be Indemnity, got ${DOCS.indemnity?.title}`);
+}
 for (const key of ["indemnity", "privacy", "guidelines"]) {
   if (!DOCS[key] || typeof DOCS[key].renderBody !== "function" || !DOCS[key].title) {
     failures++;
@@ -842,37 +845,48 @@ for (const key of ["indemnity", "privacy", "guidelines"]) {
 }
 console.log("ok  documents registry exposes indemnity + privacy + guidelines");
 
-const docExpectations = {
-  indemnity: [
-    "Health declaration",
-    "Participation at my own risk",
-    "Release &amp; indemnity",
-    "Emergency contact",
-  ],
-  privacy: [
-    "What we collect",
-    "Why we collect it",
-    "Who sees it",
-    "Your choices",
-  ],
-  guidelines: [
-    "Everyone is welcome",
-    "Respect and encouragement",
-    "Safety first",
-    "Photos and media",
-    "Conduct",
-  ],
-};
-for (const [key, headings] of Object.entries(docExpectations)) {
-  const body = DOCS[key]?.renderBody?.() || "";
-  for (const heading of headings) {
-    if (!body.includes(heading)) {
-      failures++;
-      console.error(`FAIL ${key} document missing heading "${heading}"`);
-    }
+const indemnityBody = DOCS.indemnity?.renderBody?.() || "";
+for (const marker of [
+  "ITC Hyrox Training - Liability Release &amp; Data Privacy Form",
+  "Hyrox Training from the date of signing to 31 December 2026",
+]) {
+  if (!indemnityBody.includes(marker)) {
+    failures++;
+    console.error(`FAIL indemnity document missing opening marker "${marker}"`);
   }
 }
-console.log("ok  all three documents render their section headings");
+for (const [clause, phrase] of [
+  ["1", "to assume and accept all and any risks"],
+  ["2", "to waive any and all claims"],
+  ["3", "to release:"],
+  ["4", "to hold harmless and indemnify:"],
+  ["5", "that appropriate insurance shall be taken out by me"],
+  ["6", "the leaders of ITC and/or IECC have the right"],
+  ["7", "that my level of physical fitness is adequate"],
+  ["8", "that this Form shall be effective and binding"],
+  ["9", "that I agree to the personal data privacy statement"],
+  ["10", "that the laws of Hong Kong shall govern this Form"],
+]) {
+  if (!indemnityBody.includes(`data-clause="${clause}"`) || !indemnityBody.includes(phrase)) {
+    failures++;
+    console.error(`FAIL indemnity document missing clause ${clause}: "${phrase}"`);
+  }
+}
+if (!indemnityBody.includes("https://www.islandecc.hk/privacy-policy/")) {
+  failures++;
+  console.error("FAIL indemnity document missing the IECC privacy-policy URL");
+}
+for (const removed of [
+  "Health declaration",
+  "Participation at my own risk",
+  "Draft — pending ITC leadership review",
+]) {
+  if (indemnityBody.includes(removed)) {
+    failures++;
+    console.error(`FAIL indemnity document still contains draft marker "${removed}"`);
+  }
+}
+console.log("ok  indemnity registry exposes versioned Hyrox legal copy");
 
 // --- modal component: scroll-end math (Task 2) ---
 const components = await import("./js/components.js");
