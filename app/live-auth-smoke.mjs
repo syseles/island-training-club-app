@@ -172,8 +172,8 @@ const operationalSubscriptions = [];
 const operationalTableRows = {
   operational_sessions: [],
   operational_activity_templates: [
-    { activity_id: "hyrox", name: "ITC HYROX", venue: "BFT Causeway Bay", weekday: 6, start_time: "11:15:00", duration_minutes: 60, capacity: 20, price_hkd: 180, default_open: true, active: true },
-    { activity_id: "hyrox-midtown", name: "ITC HYROX", venue: "Midtown 28", weekday: 6, start_time: "11:00:00", duration_minutes: 60, capacity: 12, price_hkd: 180, default_open: false, active: true },
+    { activity_id: "hyrox", name: "ITC HYROX", venue: "BFT Causeway Bay", weekday: 6, start_time: "11:15:00", duration_minutes: 60, capacity: 20, price_hkd: 180, default_open: true, active: true, category: "HYROX", maps_query: null },
+    { activity_id: "hyrox-midtown", name: "ITC HYROX", venue: "Midtown 28", weekday: 6, start_time: "11:00:00", duration_minutes: 60, capacity: 12, price_hkd: 180, default_open: false, active: true, category: "HYROX", maps_query: null },
   ],
   operational_bookings: [],
   operational_queue_entries: [],
@@ -616,6 +616,65 @@ operationalRpcHandler = (name, args) => {
   operationalAuthSubOverride = null;
   const now = new Date().toISOString();
   const actingProfile = override || authUser.id;
+  if (name === "create_operational_event") {
+    const activityId = `event-${operationalTableRows.operational_activity_templates.length + 1}`;
+    operationalTableRows.operational_activity_templates.push({
+      activity_id: activityId,
+      name: args.p_name,
+      venue: args.p_venue,
+      weekday: new Date(`${args.p_session_date}T00:00:00`).getDay(),
+      start_time: args.p_start_time,
+      duration_minutes: args.p_duration_minutes,
+      capacity: args.p_capacity,
+      price_hkd: args.p_price_hkd,
+      default_open: true,
+      active: false,
+      category: args.p_category || "Other",
+      maps_query: args.p_maps_query || null,
+    });
+    const session = {
+      id: `${activityId}-${args.p_session_date}`,
+      activity_id: activityId,
+      session_date: args.p_session_date,
+      start_time: args.p_start_time,
+      duration_minutes: args.p_duration_minutes,
+      venue: args.p_venue,
+      capacity: args.p_capacity,
+      price_hkd: args.p_price_hkd,
+      is_open: true,
+      venue_tbc: false,
+      notice: null,
+      cancelled_at: null,
+      cancelled_by: null,
+      cancelled_source: null,
+      cancel_reason: null,
+      gym_confirmed_at: null,
+      gym_confirmed_by: null,
+      gym_note: null,
+      created_at: now,
+      updated_at: now,
+    };
+    operationalTableRows.operational_sessions.push(session);
+    return Promise.resolve({ data: session, error: null });
+  }
+  if (name === "delete_operational_event") {
+    const idx = operationalTableRows.operational_sessions.findIndex((s) => s.id === args.p_session_id);
+    const row = operationalTableRows.operational_sessions[idx];
+    if (!row) return Promise.resolve({ data: null, error: { message: "Session not found." } });
+    if (!row.activity_id.startsWith("event-")) {
+      return Promise.resolve({ data: null, error: { message: "Only one-off events can be deleted; cancel recurring sessions instead." } });
+    }
+    const hasBookings = operationalTableRows.operational_bookings.some(
+      (b) => b.session_id === args.p_session_id && ["reserved", "confirmed"].includes(b.status)
+    );
+    if (hasBookings) {
+      return Promise.resolve({ data: null, error: { message: "Event has active bookings — cancel the session instead." } });
+    }
+    operationalTableRows.operational_sessions.splice(idx, 1);
+    const tIdx = operationalTableRows.operational_activity_templates.findIndex((t) => t.activity_id === row.activity_id);
+    if (tIdx >= 0) operationalTableRows.operational_activity_templates.splice(tIdx, 1);
+    return Promise.resolve({ data: null, error: null });
+  }
   if (name === "reserve_operational_session") {
     const id = "b-" + (operationalTableRows.operational_bookings.length + 1);
     const booking = {
@@ -1363,6 +1422,48 @@ if (!liveHistoryHtml.includes("11:15 AM") || liveHistoryHtml.includes("undefined
   throw new Error("live booking history must render the snapshot start_time, not undefined");
 }
 console.log("ok  live booking history renders snapshot start_time without crashing");
+
+// --- One-off events (live) ---
+const freeEventRow = await store.createOneOffEvent({
+  name: "Charity Gala Workout", dateISO: "2026-09-12", time: "09:00",
+  durationMin: 45, location: "Sun Yat Sen Memorial Park", mapsQuery: "",
+  category: "Other", price: 0, capacity: 30,
+});
+const freeEventSession = store.getSession(freeEventRow.id);
+if (!freeEventSession || !freeEventSession.oneOff
+    || freeEventSession.name !== "Charity Gala Workout"
+    || freeEventSession.kind !== "free" || freeEventSession.weekday !== 6) {
+  throw new Error("live one-off free event must hydrate with template name and free kind");
+}
+if (!store.upcomingSessions(30).some((s) => s.id === freeEventRow.id)) {
+  throw new Error("live one-off event must appear in upcoming sessions");
+}
+const paidEventRow = await store.createOneOffEvent({
+  name: "Pop-up HYROX", dateISO: "2026-09-19", time: "08:30",
+  durationMin: 60, location: "BFT Central", mapsQuery: "BFT Central",
+  category: "HYROX", price: 200, capacity: 10,
+});
+const paidEventSession = store.getSession(paidEventRow.id);
+if (!paidEventSession || paidEventSession.kind !== "paid" || paidEventSession.price !== 200
+    || paidEventSession.category !== "HYROX" || paidEventSession.mapsQuery !== "BFT Central") {
+  throw new Error("live paid one-off event must hydrate with price, category and maps query");
+}
+await store.deleteOneOffEvent(paidEventRow.id);
+if (store.getSession(paidEventRow.id)) {
+  throw new Error("deleted one-off event must leave the live cache");
+}
+const keptEventRow = await store.createOneOffEvent({
+  name: "Sunset Social Run", dateISO: "2026-09-20", time: "18:00",
+  durationMin: 60, location: "Harbourfront", category: "Run", price: 150, capacity: 12,
+});
+await store.reserveSession(authUser.id, keptEventRow.id, Date.now());
+try {
+  await store.deleteOneOffEvent(keptEventRow.id);
+  throw new Error("delete must refuse one-off events with active bookings");
+} catch (err) {
+  if (!/cancel the session instead/i.test(err.message)) throw err;
+}
+console.log("ok  live one-off events create, hydrate, delete, and guard booked deletion");
 
 // A live Admin must compose the Supabase UUID directory with device-local
 // Payment operations without copying editable identity records into storage.

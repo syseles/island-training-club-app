@@ -1705,8 +1705,8 @@ store.resetLocalData();
   localStorage.setItem("itc.prototype.v1", JSON.stringify(locationV13));
   store.load();
   const migratedV13 = JSON.parse(localStorage.getItem("itc.prototype.v1"));
-  if (migratedV13.version !== 14) {
-    throw new Error("v14 migration must persist version 14");
+  if (migratedV13.version !== 15) {
+    throw new Error("v15 migration must persist version 15");
   }
   const repairedWater = store.activities().find((activity) => activity.id === "water");
   if (repairedWater.location !== "TBC" || repairedWater.mapsQuery !== ""
@@ -2125,8 +2125,14 @@ store.signIn("member@example.test");
   store.markBookingPaid(b.id, "FPS", "9921");
   store.signIn("admin@example.test");
   const ops = await views.viewAdmin("payments");
-  if (!ops.includes("HYROX") || (ops.match(/aria-current="page"/g) || []).length !== 1)
-    throw new Error("Admin payments tab should be labeled and expose one active tab");
+  if (!ops.includes(">Payments</a>") || ops.includes(">HYROX</a>")
+      || (ops.match(/aria-current="page"/g) || []).length !== 1)
+    throw new Error("Admin payments tab should be labeled Payments and expose one active tab");
+  if (ops.includes("Weekly Session Overrides") || ops.includes("form-cancel-week")
+      || ops.includes("midtown-toggle"))
+    throw new Error("payments tab must not carry weekly session controls");
+  if (!ops.includes('<details class="admin-section') || !ops.includes("<summary>"))
+    throw new Error("payments tab sections must collapse behind their headers");
   if (!ops.includes("Pending payments") || !ops.includes("9921"))
     throw new Error("ops should list pending payments with references");
   if (!ops.includes('data-action="confirm-payment"'))
@@ -2140,6 +2146,65 @@ store.signIn("member@example.test");
   const conf = store.confirmBookingPayment(b.id);
   if (!conf) throw new Error("collector confirm failed from ops flow");
   console.log("ok  collector confirms payment from ops");
+}
+
+// --- One-off events (local mode) ---
+store.resetLocalData();
+installLocalFixtures();
+store.signIn("member@example.test");
+try {
+  await store.createOneOffEvent({ name: "Nope", dateISO: "2026-09-05", time: "10:00", durationMin: 60, location: "Somewhere" });
+  throw new Error("members must not create one-off events");
+} catch (err) {
+  if (!/admin/i.test(err.message)) throw new Error(`expected admin guard, got: ${err.message}`);
+}
+store.signIn("admin@example.test");
+{
+  const paidEvent = await store.createOneOffEvent({
+    name: "HYROX Race Day Send-off", dateISO: "2026-09-05", time: "10:00",
+    durationMin: 90, location: "Kai Tak", mapsQuery: "", category: "HYROX",
+    price: 250, capacity: 12,
+  });
+  if (!paidEvent.oneOff || paidEvent.kind !== "paid" || !paidEvent.id.startsWith("event-"))
+    throw new Error("paid one-off event should be flagged, priced and event-prefixed");
+  if (!store.upcomingSessions(30).some((s) => s.id === paidEvent.id))
+    throw new Error("one-off event should appear in upcoming sessions");
+  if (!store.getSession(paidEvent.id)) throw new Error("getSession must resolve one-off events");
+  const eventHtml = views.viewActivity(paidEvent.id);
+  if (!eventHtml.includes("Book & pay") || !eventHtml.includes("HK$250"))
+    throw new Error("paid one-off activity page should offer booking");
+  const freeEvent = await store.createOneOffEvent({
+    name: "Community Picnic", dateISO: "2026-09-06", time: "15:00",
+    durationMin: 120, location: "Tamar Park", category: "Other",
+  });
+  if (freeEvent.kind !== "free") throw new Error("zero-price one-off should be free");
+  const freeEventHtml = views.viewActivity(freeEvent.id);
+  if (!freeEventHtml.includes("Free · No booking needed"))
+    throw new Error("free one-off should render the free banner");
+  const adminActivitiesHtml = await views.viewAdmin("activities");
+  if (!adminActivitiesHtml.includes("One-off Events")
+      || !adminActivitiesHtml.includes("form-one-off-event")
+      || !adminActivitiesHtml.includes("HYROX Race Day Send-off"))
+    throw new Error("Activities tab should list one-off events and the add form");
+  // Deletion is refused once a booking exists; cancellation still works and
+  // voids the booking (no same-activity follow-up session to defer to).
+  store.signIn("member@example.test");
+  const oneOffBooking = store.reserveSession("fixture-member", paidEvent.id);
+  store.signIn("admin@example.test");
+  try {
+    await store.deleteOneOffEvent(paidEvent.id);
+    throw new Error("delete must refuse events with active bookings");
+  } catch (err) {
+    if (!/cancel the session instead/.test(err.message)) throw err;
+  }
+  await store.deleteOneOffEvent(freeEvent.id);
+  if (store.getSession(freeEvent.id)) throw new Error("deleted free event should be gone");
+  store.cancelSessionWeek(paidEvent.id, "Venue unavailable");
+  if (store.getBooking(oneOffBooking.id).status !== "cancelled")
+    throw new Error("cancelling a one-off should void its reservations");
+  if (store.getSession(paidEvent.id)?.cancelled !== true)
+    throw new Error("cancelled one-off should read as cancelled");
+  console.log("ok  one-off events: create, list, book, delete guard, cancel");
 }
 
 // --- Reset ---
@@ -2283,10 +2348,10 @@ console.log("ok  reset");
     failures++;
     console.error("FAIL v10 migration must clear session tied to a removed demo user");
   } else console.log("ok  v10 migration clears removed session");
-  if (migrated.version !== 14) {
+  if (migrated.version !== 15) {
     failures++;
-    console.error(`FAIL integrated migration must advance version to 14, got ${migrated.version}`);
-  } else console.log("ok  integrated migration advances genuine v9 state to v14");
+    console.error(`FAIL integrated migration must advance version to 15, got ${migrated.version}`);
+  } else console.log("ok  integrated migration advances genuine v9 state to v15");
 }
 
 {
@@ -2305,7 +2370,7 @@ console.log("ok  reset");
   store.load();
   const v14 = JSON.parse(mem.get("itc.prototype.v1"));
   const migratedUser = v14.users.find((user) => user.id === "real-v13-member");
-  if (v14.version !== 14 || !migratedUser) throw new Error("v14 migration lost the genuine member");
+  if (v14.version !== 15 || !migratedUser) throw new Error("v15 migration lost the genuine member");
   for (const field of ["indemnitySignature", "indemnitySignedAt", "indemnityFormVersion", "emergencyRelationship"]) {
     if (!(field in migratedUser) || migratedUser[field] !== null) {
       throw new Error(`v14 migration should initialize ${field} to null`);
@@ -2757,11 +2822,11 @@ for (const fixture of sourceSnapshots) {
     && !Array.isArray(migrated.paymentPayouts);
   const suppliedPayoutsPreserved = fixture.version !== 12
     || migrated.paymentPayouts["real-admin"]?.fpsPhone === "+852 6000 0000";
-  if (migrated.version !== 14 || suppliedIds.some((id) => !serialized.includes(id))
+  if (migrated.version !== 15 || suppliedIds.some((id) => !serialized.includes(id))
       || !payoutMapValid || !suppliedPayoutsPreserved) {
     failures++;
-    console.error(`FAIL genuine v${fixture.version} fixture must reach v14 intact`);
-  } else console.log(`ok  genuine v${fixture.version} fixture reaches v14 intact`);
+    console.error(`FAIL genuine v${fixture.version} fixture must reach v15 intact`);
+  } else console.log(`ok  genuine v${fixture.version} fixture reaches v15 intact`);
 }
 
 for (const invalidCounter of [null, -1, 1.5, "broken"]) {
@@ -3150,13 +3215,32 @@ if (!activitiesHtml.includes("Current venue: <strong>Victoria Park Swimming Pool
     || !activitiesHtml.includes("Recurring default: <strong>TBC</strong>")) {
   throw new Error("Activities must show distinct current and recurring venues for overridden Swimming");
 }
+if (!activitiesHtml.includes("Weekly Session Overrides")
+    || !activitiesHtml.includes("form-cancel-week")
+    || !activitiesHtml.includes('data-action="midtown-toggle"')
+    || !activitiesHtml.includes('data-action="venue-tbc-toggle"')) {
+  throw new Error("Activities must carry the weekly paid-session controls");
+}
+const sectionOrder = ["Recurring Activity Defaults", "Weekly Venue Overrides", "Weekly Session Overrides"];
+const sectionPositions = sectionOrder.map((label) => activitiesHtml.indexOf(label));
+if (sectionPositions.some((p) => p === -1)
+    || !(sectionPositions[0] < sectionPositions[1] && sectionPositions[1] < sectionPositions[2])) {
+  throw new Error("Activities sections must be ordered: defaults, venue overrides, session overrides");
+}
+if (!activitiesHtml.includes("Club operations") || activitiesHtml.includes("Club ops.")) {
+  throw new Error("Admin heading must read Club operations");
+}
+if (!activitiesHtml.includes('<details class="admin-section') || !activitiesHtml.includes("<summary>")) {
+  throw new Error("Activities sections must collapse behind their headers");
+}
 if (hyroxAdminHtml.includes("Weekly Venue Overrides")
     || hyroxAdminHtml.includes('data-action="form-week-venue"')) {
   throw new Error("HYROX must not contain free-event weekly venue controls");
 }
-if (!hyroxAdminHtml.includes(">HYROX</a>")
+if (!hyroxAdminHtml.includes(">Payments</a>")
+    || hyroxAdminHtml.includes(">HYROX</a>")
     || hyroxAdminHtml.includes("Payments / Ops")) {
-  throw new Error("the final Admin tab must be HYROX");
+  throw new Error("the final Admin tab must be Payments");
 }
 store.signOut();
 // Members cannot set a weekly venue.

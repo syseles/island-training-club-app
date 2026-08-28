@@ -30,7 +30,7 @@ const STORAGE_KEY = "itc.prototype.v1";
 const APPLY_DEVICE_KEY = "itc.device.id";
 const APPLY_DRAFT_KEY = "itc.apply.draft.v1";
 const APPLY_DRAFT_VERSION = 1;
-const STATE_VERSION = 14;
+const STATE_VERSION = 15;
 
 // Live-mode (Supabase) session cache. Avoids hammering the DB on every
 // page load. The TTL is short so role flips and welcome notifications
@@ -59,6 +59,7 @@ function freshState() {
     campaigns: [],
     donations: [],
     prayers: [],
+    oneOffEvents: [],
     sessionOverrides: {},
     queues: {},
     notifications: [],
@@ -108,7 +109,7 @@ function normalizeReceiptCounter() {
 function migrate() {
   // Persisted prototypes may predate individual collections or contain null
   // values. Normalize every collection before a legacy step or early return.
-  for (const key of ["users", "activities", "bookings", "receipts", "campaigns", "donations", "prayers", "notifications"]) {
+  for (const key of ["users", "activities", "bookings", "receipts", "campaigns", "donations", "prayers", "notifications", "oneOffEvents"]) {
     if (!Array.isArray(state[key])) state[key] = [];
   }
   if (!state.queues || typeof state.queues !== "object" || Array.isArray(state.queues)) {
@@ -134,6 +135,13 @@ function migrate() {
 
   const v = state.version || 0;
   if (v >= STATE_VERSION) return;
+  if (v < 15) {
+    // v15: admin-created one-off events live in state.oneOffEvents
+    // (activity-shaped entries with oneOff + dateISO). The collection
+    // normalization above guarantees the array; this step only documents
+    // the version boundary.
+    if (!Array.isArray(state.oneOffEvents)) state.oneOffEvents = [];
+  }
   if (v < 2) {
     // v2: Sunday Trail Run removed; HYROX moved to Sat 11:15 at Causeway Bay
     // BFT (HK$180) and a second Saturday session added at Midtown 28 (11:00).
@@ -1263,7 +1271,11 @@ export function getSession(sessionId) {
     return null;
   }
   const s = findSession(state.activities, sessionId);
-  if (!s) return null;
+  if (!s) {
+    const event = state.oneOffEvents.find((e) => `${e.id}-${e.dateISO}` === sessionId);
+    if (!event) return null;
+    return decorateSession(oneOffSessionFor(event));
+  }
   return decorateSession(s);
 }
 
@@ -1352,14 +1364,25 @@ export function upcomingSessions(days = 14) {
     return [...freeSessions, ...livePaid];
   }
   const today = todayLocal();
-  return sessionsInRange(state.activities, today, days).map((s) => {
+  const todayStart = today.getTime();
+  const horizon = todayStart + days * 24 * 60 * 60 * 1000;
+  const oneOffs = state.oneOffEvents
+    .map(oneOffSessionFor)
+    .filter((s) => s.date.getTime() >= todayStart && s.date.getTime() < horizon)
+    .map((s) => {
+      const decorated = decorateSession(s);
+      return { ...decorated, spots: spotsLeft(decorated), past: false };
+    });
+  return [...sessionsInRange(state.activities, today, days).map((s) => {
     const decorated = decorateSession(s);
     return {
       ...decorated,
       spots: spotsLeft(decorated),
       past: false,
     };
-  });
+  }), ...oneOffs].sort((a, b) =>
+    a.dateISO.localeCompare(b.dateISO) || String(a.time).localeCompare(String(b.time))
+  );
 }
 
 export function nextSession() {
@@ -1557,6 +1580,82 @@ export function deferBooking(bookingId, targetSessionId, now = Date.now()) {
 }
 
 // --- Per-week session admin --------------------------------------------------
+
+// --- One-off events -----------------------------------------------------------
+// Admin-created single-date events. Live mode stores them in Supabase (an
+// inactive template + one session row via RPC); local mode keeps them in
+// state.oneOffEvents as activity-shaped entries with a fixed dateISO.
+
+function oneOffSessionFor(event) {
+  const date = parseISO(event.dateISO);
+  return {
+    ...event,
+    id: `${event.id}-${event.dateISO}`,
+    activityId: event.id,
+    date,
+  };
+}
+
+export async function createOneOffEvent(fields) {
+  const name = String(fields.name ?? "").trim();
+  const dateISO = String(fields.dateISO ?? "").trim();
+  const time = String(fields.time ?? "").trim();
+  const durationMin = Number(fields.durationMin);
+  const location = String(fields.location ?? "").trim();
+  const mapsQuery = String(fields.mapsQuery ?? "").trim();
+  const category = String(fields.category ?? "").trim() || "Other";
+  const price = Math.max(0, Number(fields.price) || 0);
+  const capacity = Math.max(1, Number(fields.capacity) || 20);
+  if (!name) throw new Error("Enter the event name.");
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(dateISO)) throw new Error("Pick the event date.");
+  if (!time) throw new Error("Pick the start time.");
+  if (!Number.isFinite(durationMin) || durationMin <= 0) throw new Error("Enter a positive duration.");
+  if (!location) throw new Error("Enter the venue.");
+  const payload = { name, dateISO, time, durationMin, location, mapsQuery, category, price, capacity };
+  if (isLive()) {
+    return liveOps.liveCreateEvent(payload);
+  }
+  requirePaymentAdminActor();
+  const event = {
+    id: uid("event"),
+    oneOff: true,
+    dateISO,
+    name,
+    kind: price > 0 ? "paid" : "free",
+    category,
+    weekday: parseISO(dateISO).getDay(),
+    time,
+    durationMin,
+    location,
+    mapsQuery: mapsQuery || location,
+    photo: "../assets/itc/main.webp",
+    price,
+    capacity,
+    blurb: "",
+    memberNote: "",
+    published: true,
+  };
+  state.oneOffEvents.push(event);
+  save();
+  return oneOffSessionFor(event);
+}
+
+export async function deleteOneOffEvent(sessionId) {
+  if (isLive()) {
+    return liveOps.liveDeleteEvent(sessionId);
+  }
+  requirePaymentAdminActor();
+  const event = state.oneOffEvents.find((e) => `${e.id}-${e.dateISO}` === sessionId);
+  if (!event) throw new Error("Event not found.");
+  const active = state.bookings.filter(
+    (b) => b.sessionId === sessionId && (b.status === "reserved" || b.status === "confirmed")
+  );
+  if (active.length) {
+    throw new Error("Event has active bookings — cancel the session instead.");
+  }
+  state.oneOffEvents = state.oneOffEvents.filter((e) => e.id !== event.id);
+  save();
+}
 
 export function cancelSessionWeek(sessionId, reason, now = Date.now()) {
   if (isLive()) {

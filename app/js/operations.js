@@ -69,15 +69,19 @@ function buildTemplateRow(row) {
     price_hkd: row.price_hkd,
     default_open: row.default_open,
     active: row.active,
+    category: row.category || null,
+    maps_query: row.maps_query || null,
   };
 }
 
-function buildSessionRow(row) {
+function buildSessionRow(row, templatesById = null) {
   const dateISO = typeof row.session_date === "string"
     ? row.session_date.slice(0, 10)
     : new Date(row.session_date).toISOString().slice(0, 10);
   const date = new Date(`${dateISO}T00:00:00`);
   const metadata = PAID_ACTIVITY_METADATA.get(row.activity_id);
+  const template = templatesById?.get(row.activity_id) ?? null;
+  const oneOff = String(row.activity_id).startsWith("event-");
   const legacyMidtown = row.activity_id === "hyrox-midtown"
     && row.venue === "Midtown 28";
   const venue = legacyMidtown
@@ -85,14 +89,17 @@ function buildSessionRow(row) {
     : row.venue;
   const mapsQuery = legacyMidtown
     ? (metadata?.mapsQuery || row.venue)
-    : row.venue;
+    : (template?.maps_query || row.venue);
   return {
     id: row.id,
     activityId: row.activity_id,
-    name: row.activity_id === "hyrox-midtown" ? "ITC HYROX" : "ITC HYROX",
-    kind: "paid",
-    category: "HYROX",
-    weekday: 6,
+    // One-off events take their display name/category from their template;
+    // the recurring HYROX templates keep the historical labels.
+    name: template?.name || "ITC HYROX",
+    kind: Number(row.price_hkd) > 0 ? "paid" : "free",
+    category: template?.category || (oneOff ? "Other" : "HYROX"),
+    weekday: date.getDay(),
+    oneOff,
     dateISO,
     date,
     time: String(row.start_time || "").slice(0, 5),
@@ -289,15 +296,19 @@ async function fetchOperationalState() {
     supabase.from("operational_receipts").select("*").order("issued_at", { ascending: false }),
     supabase.from("collector_assignments").select("*"),
     supabase.from("collector_payout_profiles").select("*"),
-    supabase.from("operational_activity_templates").select("*").eq("active", true).order("activity_id"),
+    supabase.from("operational_activity_templates").select("*").order("activity_id"),
     supabase.from("operational_session_venue_overrides").select("*"),
   ]);
   for (const result of [sessions, bookings, queues, receipts, assignments, payouts, templates, venueOverrides]) {
     if (result.error) throw operationalProblem(result.error);
   }
+  // Templates hydrate before sessions so one-off event rows (inactive
+  // templates) can lend their name, category and maps query to the session.
+  const templateRows = (templates.data || []).map(buildTemplateRow);
+  const templatesById = new Map(templateRows.map((t) => [t.activity_id, t]));
   return {
-    sessions: (sessions.data || []).map(buildSessionRow),
-    templates: (templates.data || []).map(buildTemplateRow),
+    sessions: (sessions.data || []).map((row) => buildSessionRow(row, templatesById)),
+    templates: templateRows,
     bookings: (bookings.data || []).map(buildBookingRow),
     queues: (queues.data || []).map(buildQueueRow),
     receipts: (receipts.data || []).map(buildReceiptRow),
@@ -517,6 +528,30 @@ export async function liveCancelSession(sessionId, reason) {
   return runOperationalRpc("cancel_operational_session", {
     p_session_id: sessionId,
     p_reason: reason,
+  });
+}
+
+// One-off events: an inactive template + a single session row, created and
+// removed atomically server-side. Deletion is only allowed while the event
+// has no active bookings; afterwards admins cancel instead.
+export async function liveCreateEvent(payload) {
+  const row = await runOperationalRpc("create_operational_event", {
+    p_name: payload.name,
+    p_session_date: payload.dateISO,
+    p_start_time: payload.time,
+    p_duration_minutes: payload.durationMin,
+    p_venue: payload.location,
+    p_maps_query: payload.mapsQuery || null,
+    p_category: payload.category || "Other",
+    p_price_hkd: payload.price ?? 0,
+    p_capacity: payload.capacity ?? 20,
+  });
+  return row;
+}
+
+export async function liveDeleteEvent(sessionId) {
+  return runOperationalRpc("delete_operational_event", {
+    p_session_id: sessionId,
   });
 }
 
