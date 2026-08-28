@@ -583,15 +583,60 @@ for (const banned of ["spots left", "Book & pay", "capacity", "Confirm booking",
 console.log("ok  free activity has no booking/capacity language");
 
 // paid activity must show price + free/paid badges everywhere
+const freeDetailHtml = views.viewActivity(free.id);
+const freeBadgeMatch = freeDetailHtml.match(/<span class="badge free">([^<]*)<\/span>/);
+if (freeBadgeMatch?.[1] !== "Free") {
+  failures++;
+  console.error("FAIL free activity badge should read only Free");
+} else console.log("ok  free activity badge reads only Free");
 const paidHtml = views.viewActivity(paid.id);
 if (!paidHtml.includes("HK$") || !paidHtml.includes("badge paid")) {
   failures++;
   console.error("FAIL paid activity missing price or paid badge");
 } else console.log("ok  paid activity shows price + badge");
-if (!paidHtml.includes("HK$180 per session") || paidHtml.includes("Paid · HK$180")) {
+if (!paidHtml.includes('badge paid">HK$180</span>') || paidHtml.includes("per session") || paidHtml.includes("Paid · HK$180")) {
   failures++;
-  console.error("FAIL paid activity badge should describe the session price without implying payment is complete");
-} else console.log("ok  paid activity badge clearly describes the session price");
+  console.error("FAIL unbooked paid activity badge should read only its price");
+} else console.log("ok  unbooked paid activity badge reads only its price");
+const unpaidBadgeSession = allUpcoming.find((s) => s.kind === "paid" && s.activityId === "hyrox" && !data.sessionStarted(s));
+installLocalFixtures();
+store.signIn("member@example.test");
+if (!unpaidBadgeSession) {
+  failures++;
+  console.error("FAIL smoke needs an upcoming HYROX session for badge state checks");
+} else {
+  const unpaidReservation = store.reserveSession("fixture-member", unpaidBadgeSession.id);
+  const unpaidBadgeHtml = views.viewActivity(unpaidBadgeSession.id);
+  if (!unpaidBadgeHtml.includes('badge warn">To be paid</span>')) {
+    failures++;
+    console.error("FAIL reserved unpaid paid activity should show To be paid");
+  } else console.log("ok  reserved unpaid paid activity shows To be paid");
+  if (store.markBookingPaid(unpaidReservation.id, "FPS", "BADGE-STATE")) {
+    const awaitingBadgeHtml = views.viewActivity(unpaidBadgeSession.id);
+    if (!awaitingBadgeHtml.includes('badge warn">Awaiting confirmation</span>')) {
+      failures++;
+      console.error("FAIL marked-paid paid activity should show Awaiting confirmation");
+    } else console.log("ok  marked-paid paid activity shows Awaiting confirmation");
+  } else {
+    failures++;
+    console.error("FAIL badge-state fixture should mark its reservation paid");
+  }
+  store.signOut();
+  store.signIn("admin@example.test");
+  if (!store.confirmBookingPayment(unpaidReservation.id)) {
+    failures++;
+    console.error("FAIL badge-state fixture should confirm its paid reservation");
+  } else {
+    store.signOut();
+    store.signIn("member@example.test");
+    const confirmedBadgeHtml = views.viewActivity(unpaidBadgeSession.id);
+    if (!confirmedBadgeHtml.includes('badge free">Paid</span>')) {
+      failures++;
+      console.error("FAIL confirmed paid activity should show Paid");
+    } else console.log("ok  confirmed paid activity shows Paid");
+  }
+}
+store.signOut();
 const paidDirectionsSession = allUpcoming.find((s) => s.kind === "paid" && s.activityId === "hyrox" && !data.sessionStarted(s));
 const paidDirectionsHtml = paidDirectionsSession ? views.viewActivity(paidDirectionsSession.id) : "";
 if (!paidDirectionsHtml.includes("Get directions")) {

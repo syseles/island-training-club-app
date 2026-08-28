@@ -74,10 +74,12 @@ const fmtMonthYear = (ts) =>
 
 // --- Shared fragments ---------------------------------------------------------
 
-function badgeFor(s) {
-  return s.kind === "free"
-    ? `<span class="badge free">Free · No booking</span>`
-    : `<span class="badge paid">${fmtMoney(s.price)} per session</span>`;
+function badgeFor(s, booking = null, reservation = null) {
+  if (s.kind === "free") return `<span class="badge free">Free</span>`;
+  if (booking) return `<span class="badge free">Paid</span>`;
+  if (reservation?.paymentMarkedAt) return `<span class="badge warn">Awaiting confirmation</span>`;
+  if (reservation) return `<span class="badge warn">To be paid</span>`;
+  return `<span class="badge paid">${fmtMoney(s.price)}</span>`;
 }
 
 function spotsLabel(s) {
@@ -560,7 +562,7 @@ export function viewActivity(sessionId) {
   return `
     <a class="back-link" href="#/schedule">← Schedule</a>
     <img class="detail-photo" src="${esc(photo)}" alt="${esc(s.name)}" data-photo-fallback="${photoFallback}">
-    <div class="mt16">${badgeFor(s)}</div>
+    <div class="mt16">${badgeFor(s, booking, reservation)}</div>
     <h1 class="display sm">${esc(s.name)}</h1>
     <div class="meta-grid">
       <div><small>When</small><strong>${esc(fmtDate(s.date))}<br>${fmtTime(s.time)}</strong></div>
