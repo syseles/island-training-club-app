@@ -304,22 +304,22 @@ console.log("ok  signed-out Home uses the correct live/local sign-in action");
 await check("home (visitor)", () => views.viewHome());
 await check("schedule", () => views.viewSchedule());
 
-// Schedule filters: Free/Paid kind filters restored; all chips render.
+// Schedule filters: only chronological activity categories remain.
 {
   const schedHtml = views.viewSchedule();
-  for (const kept of ['data-filter="all"', 'data-filter="free"', 'data-filter="paid"', 'data-filter="Run"', 'data-filter="Strength"', 'data-filter="HYROX"', 'data-filter="Water"']) {
-    if (!schedHtml.includes(kept)) {
-      failures++;
-      console.error(`FAIL Schedule should render the ${kept} filter chip`);
-    }
-  }
+  const expectedFilterOrder = ["all", "Run", "Water", "Strength", "HYROX"];
   const renderedFilterOrder = [...schedHtml.matchAll(/data-filter="([^"]+)"/g)].map((match) => match[1]);
-  const expectedFilterOrder = ["all", "free", "paid", "Run", "Water", "Strength", "HYROX"];
   if (JSON.stringify(renderedFilterOrder) !== JSON.stringify(expectedFilterOrder)) {
     failures++;
     console.error(`FAIL Schedule filter order should be ${expectedFilterOrder.join(", ")}; got ${renderedFilterOrder.join(", ")}`);
-  } else console.log("ok  Schedule filters follow access type then weekly event order");
-  console.log("ok  Schedule renders All + Free/Paid + category filter chips");
+  } else console.log("ok  Schedule filters follow weekly event order without Free/Paid chips");
+  for (const removed of ['data-filter="free"', 'data-filter="paid"']) {
+    if (schedHtml.includes(removed)) {
+      failures++;
+      console.error(`FAIL Schedule should not render the ${removed} filter chip`);
+    }
+  }
+  console.log("ok  Schedule keeps chronological category filters only");
 }
 const hyroxSid = store.nextSession().kind === "paid" ? store.nextSession().id : null;
 await check("activity paid (visitor)", () => views.viewActivity(paid.id));
