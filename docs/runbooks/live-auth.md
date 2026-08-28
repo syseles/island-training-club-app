@@ -16,11 +16,11 @@ identity, notifications, Giving, Admin, and approval workflows.
   profile that the on-duty admin edits locally. Operations state is never
   stored in `localStorage` once live mode is enabled.
 - **Navigation:** Notification bell plus a signed-in-only Giving tab.
-- **Admin tabs:** Approvals, Members, Activities, Giving, and Payments / Ops.
+- **Admin tabs:** Approvals, Members, Activities, Giving, and HYROX.
   Each Admin route exposes exactly one active tab.
-- **State compatibility:** the current local state is v13; v9, v10, v11, and
-  v12 persisted snapshots are accepted and migrated while preserving genuine
-  records.
+- **State compatibility:** the current local state is v14; v9, v10, v11, v12,
+  and v13 persisted snapshots are accepted and migrated while preserving
+  genuine records.
 
 Pending and declined profiles can browse public surfaces but cannot render or
 invoke Payment reservation, queue, or pay controls, and cannot use Giving
@@ -133,6 +133,65 @@ migrations with:
 bash supabase/tests/verify_giving_campaigns.sh --safety-check-only
 bash supabase/tests/verify_giving_campaigns_safety.sh
 ```
+
+## Free-event venue overrides
+
+Weekly free-event venues (`wnt`, `run`, `water`) live in the new
+`operational_session_venue_overrides` table and the
+`set_session_venue(p_session_id text, p_location text, p_maps_query text,
+p_was_tbc boolean)` RPC. The RPC is the only mutation path. HYROX sessions
+are rejected with `Activity venue is fixed.`. Members see the first
+confirmation per session; Admins see an audit notification on every actual
+save/reset, excluding the actor.
+
+The Admin UI exposes these controls at **Admin Tools → Activities → Weekly
+Venue Overrides**.
+
+Recurring Swimming remains `TBC` in the activity template. Only dated weekly
+free-event overrides are shared through `set_session_venue`.
+
+Mapping privacy: Nominatim receives the venue text submitted for geocoding and
+the browser's IP address. The browser cache is device-local and stores only
+venue coordinates; it does not contain member or attendance data.
+
+Deploy the location updates after the operational backend chain in this order:
+
+1. `20260813000001_free_event_venue_overrides.sql`
+2. `20260813000002_midtown28_fitness.sql`
+
+Then verify against a fresh disposable database:
+
+```bash
+export ITC_OPERATIONS_TEST_DATABASE_URL='postgresql://...disposable database...'
+export ITC_ALLOW_DATABASE_RESET=1
+bash supabase/tests/verify_operational_backend.sh
+```
+
+If `set_session_venue` returns `Could not find 'public.operational_session_venue_overrides' in the schema cache` even though the migration was applied, reload PostgREST's schema cache for the calling role:
+
+```sql
+notify pgrst, 'reload schema';
+```
+
+Run it once per Supabase role (`anon`, `authenticated`, `service_role`) the
+client uses. After this the new table is visible to the PostgREST query path.
+Run it via the Supabase SQL editor or `psql` against the live database URL.
+
+Browser-level acceptance on the deployed environment:
+
+1. As an Admin, sign in and open **Admin Tools → Activities → Weekly Venue
+   Overrides**. Save a dated display location and geocode query.
+2. Open the dated activity page with `localStorage.removeItem("itc.geocode.v1")`.
+   Confirm the Leaflet marker, attribution, and external Get directions link.
+3. Confirm an approved member receives **Venue confirmed** and another Admin
+   receives **Session venue updated**. The actor must not receive a duplicate
+   notification.
+4. Edit and then reset the venue; members are not notified again.
+5. Block `unpkg.com` and `nominatim.openstreetmap.org` separately. Both
+   failure paths must settle on the fallback copy without breaking the
+   external Get directions link.
+6. Open both HYROX activity pages. Get directions must appear without a
+   weekly venue form.
 
 Applying the migrations to the real remote target remains a manual deployment
 operation; confirm the selected project and backups before running

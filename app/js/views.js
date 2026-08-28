@@ -10,6 +10,11 @@ import { isLive } from "./config.js";
 import * as liveOps from "./operations.js";
 import { sessionCancellationCopy } from "./operations.js";
 import {
+  normalizeMeetingPoint,
+  normalizeVenueLocation,
+  venuePresentationFor,
+} from "./venue.js";
+import {
   LEADERS,
   CULTURE,
   ANNOUNCEMENTS,
@@ -393,6 +398,33 @@ export function viewSchedule() {
 
 // --- Activity detail ------------------------------------------------------------------
 
+function venuePresentationHTML(presentation) {
+  if (presentation.kind === "image") return `
+    <figure class="venue-guide activity-map-section">
+      <img class="venue-guide-image" src="${esc(presentation.src)}"
+        alt="${esc(presentation.alt)}" data-venue-image
+        data-fallback-query="${esc(presentation.fallbackQuery)}">
+      <figcaption>${esc(presentation.caption)}</figcaption>
+    </figure>`;
+  if (presentation.kind === "coordinates") return `
+    <section class="activity-map-section" aria-label="Venue map">
+      <div class="activity-map" id="activity-map"
+        data-map-lat="${presentation.lat}" data-map-lng="${presentation.lng}"
+        data-marker-label="${esc(presentation.markerLabel)}">
+        <p class="muted small" role="status">Loading map…</p>
+      </div>
+    </section>`;
+  if (presentation.kind === "geocode") return `
+    <section class="activity-map-section" aria-label="Venue map">
+      <div class="activity-map" id="activity-map"
+        data-maps-query="${esc(presentation.query)}"
+        data-marker-label="${esc(presentation.markerLabel)}">
+        <p class="muted small" role="status">Loading map…</p>
+      </div>
+    </section>`;
+  return "";
+}
+
 export function viewActivity(sessionId) {
   const s = store.getSession(sessionId);
   if (!s) return viewNotFound("That session doesn’t exist.");
@@ -408,6 +440,16 @@ export function viewActivity(sessionId) {
   const collectorName = collector ? (collector.preferredName || collector.fullName) : "the on-duty collector";
 
   let actionBlock = "";
+  const markerLabel = `${s.name} · ${fmtDate(s.date)} · ${fmtTime(s.time)}`;
+  const venuePresentation = venuePresentationFor({ ...s, markerLabel });
+  const showDirections = !s.cancelled && !past
+    && (venuePresentation.kind === "coordinates" || Boolean(s.mapsQuery));
+  const directionsLink = showDirections
+    ? `<a class="btn ghost" href="${mapsHref(s)}" target="_blank" rel="noopener">Get directions</a>`
+    : "";
+  const venueVisual = !s.cancelled && !past && s.kind === "free"
+    ? venuePresentationHTML(venuePresentation)
+    : "";
   if (s.cancelled) {
     actionBlock = `
       <div class="banner warn mt16">
@@ -423,27 +465,34 @@ export function viewActivity(sessionId) {
         ${ICONS.pin}
         <div><strong>Free · No booking needed.</strong><br><span class="muted small">Everyone is welcome — just show up${s.id.startsWith("wnt") ? " and look for the lime ITC flag" : ""}.</span></div>
       </div>
-      <div class="btn-row ${s.mapsQuery ? "two" : ""}">
+      <div class="btn-row ${showDirections ? "two" : ""}">
         <button class="btn" type="button" data-action="ics" data-session="${s.id}">Add to calendar</button>
-        ${s.mapsQuery ? `<a class="btn ghost" href="${mapsHref(s)}" target="_blank" rel="noopener">Get directions</a>` : ""}
+        ${directionsLink}
       </div>`;
   } else if (midtownClosed) {
     const pos = user ? store.interestPosition(user.id, s.id) : null;
-    actionBlock = isMember
+    const actionInner = isMember
       ? pos
         ? `
         <div class="banner mt16">
           <span class="kicker">Waiting for Midtown</span>
           <p>You’re #${pos} in line. When the collector opens this session, the first ${s.capacity} in line get spots automatically.</p>
         </div>
-        <div class="btn-row"><button class="btn ghost" type="button" data-action="leave-interest" data-session="${s.id}">Leave the list</button></div>`
+        <div class="btn-row">
+          <button class="btn ghost" type="button" data-action="leave-interest" data-session="${s.id}">Leave the list</button>
+          ${directionsLink}
+        </div>`
         : `
         <div class="banner mt16">
           <span class="kicker">Midtown not open yet</span>
           <p>BFT fills first — the collector opens Midtown when demand justifies it. Join the list and you’ll auto-convert in order.</p>
         </div>
-        <div class="btn-row"><button class="btn" type="button" data-action="join-interest" data-session="${s.id}">Wait for Midtown</button></div>`
+        <div class="btn-row">
+          <button class="btn" type="button" data-action="join-interest" data-session="${s.id}">Wait for Midtown</button>
+          ${directionsLink}
+        </div>`
       : membersOnlyGate();
+    actionBlock = actionInner;
   } else if (booking) {
     actionBlock = `
       <div class="banner mt16">
@@ -452,24 +501,36 @@ export function viewActivity(sessionId) {
       </div>
       <div class="btn-row">
         <a class="btn" href="#/booking/${booking.id}">Manage booking</a>
+        ${directionsLink}
       </div>`;
   } else if (spots <= 0) {
-    actionBlock = `<button class="btn mt16" disabled>Session full</button>`;
+    actionBlock = `
+      <div class="btn-row">
+        <button class="btn" disabled>Session full</button>
+        ${directionsLink}
+      </div>`;
   } else if (isMember) {
     actionBlock = `
-      <a class="btn mt16" href="#/checkout/${s.id}">Book & pay · ${fmtMoney(s.price)}</a>
+      <div class="btn-row">
+        <a class="btn" href="#/checkout/${s.id}">Book & pay · ${fmtMoney(s.price)}</a>
+        ${directionsLink}
+      </div>
       <p class="muted small mt8 center">Paid per session · receipt issued instantly · manage from your account</p>`;
   } else if (user && user.status === "pending") {
     actionBlock = `
       <div class="banner warn mt16">
         <span class="kicker">Booking locked</span>
         <p>Paid sessions unlock once an ITC leader approves your membership.</p>
-      </div>`;
+      </div>
+      ${directionsLink ? `<div class="btn-row">${directionsLink}</div>` : ""}`;
   } else if (user && user.status === "declined") {
     actionBlock = `
-      <div class="banner mt16"><p>Your application wasn’t approved. Contact an ITC leader if you think this is a mistake.</p></div>`;
+      <div class="banner mt16"><p>Your application wasn’t approved. Contact an ITC leader if you think this is a mistake.</p></div>
+      ${directionsLink ? `<div class="btn-row">${directionsLink}</div>` : ""}`;
   } else {
-    actionBlock = membersOnlyGate();
+    actionBlock = `
+      ${membersOnlyGate()}
+      ${directionsLink ? `<div class="btn-row">${directionsLink}</div>` : ""}`;
   }
 
   const metaPaid =
@@ -507,11 +568,16 @@ export function viewActivity(sessionId) {
     </div>
     <p class="subcopy mt16">${esc(s.blurb)}</p>
     ${leaderNote}
+    ${venueVisual}
     ${actionBlock}
     ${attendees}`;
 }
 
 function mapsHref(s) {
+  const presentation = venuePresentationFor(s);
+  if (presentation.kind === "coordinates") {
+    return `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(`${presentation.lat},${presentation.lng}`)}`;
+  }
   const q = s.mapsQuery || s.location;
   return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(q)}`;
 }
@@ -1902,7 +1968,7 @@ export async function viewAdmin(tab = "approvals") {
         ["members", "Members"],
         ["activities", "Activities"],
         ["giving", "Giving"],
-        ["payments", "Payments / Ops"],
+        ["payments", "HYROX"],
       ]
         .map(([key, label]) => `<a href="#/admin/${key}" class="${key === canonicalTab ? "active" : ""}"${key === canonicalTab ? ' aria-current="page"' : ""}>${label}</a>`)
         .join("")}
@@ -2050,6 +2116,58 @@ function adminOps(viewer, memberUsers) {
     ${pendingCard}
     <div class="section-head mt24"><h2>HYROX sessions</h2></div>
     ${sessionCards}`;
+}
+
+function adminFreeEventVenues() {
+  const upcoming = store.upcomingSessions(21)
+    .filter((s) => s.kind === "free" && !sessionStarted(s));
+  if (!upcoming.length) return "";
+  return `
+    <div class="section-head mt24"><h2>Weekly Venue Overrides</h2></div>
+    <p class="muted small">Set a venue for one dated free event. Later weeks keep the recurring default.</p>
+    ${upcoming.map((s) => {
+      const override = store.weekVenueOverride(s.id);
+      const recurring = store.getActivity(s.activityId);
+      const safeId = esc(s.id);
+      const locationId = `week-venue-location-${safeId}`;
+      const mapsId = `week-venue-maps-${safeId}`;
+      const point = normalizeMeetingPoint(override.meetingLat, override.meetingLng);
+      const isTamar = normalizeVenueLocation(override.location || s.location) === "tamar park";
+      const picker = s.activityId === "wnt" ? `
+        <input type="hidden" name="meetingLat" value="${point?.lat ?? ""}">
+        <input type="hidden" name="meetingLng" value="${point?.lng ?? ""}">
+        <div class="venue-picker-shell ${isTamar ? "" : "hidden"}" data-venue-picker-shell>
+          <p class="kicker dim">Meeting point · Only this session</p>
+          <div class="venue-picker" data-venue-picker data-session="${safeId}">
+            <p class="muted small" role="status">Loading map…</p>
+          </div>
+        </div>` : "";
+      return `
+        <div class="card mt16 free-event-venue-card"><div class="card-body">
+          <div class="kicker dim" style="margin-top:0">${esc(fmtDate(s.dateISO))} · ${fmtTime(s.time)}</div>
+          <h3 class="mt8">${esc(s.name)}</h3>
+          <span class="badge neutral">Only this session</span>
+          <p class="muted small mt8">Current venue: <strong>${esc(s.location || "TBC")}</strong></p>
+          <p class="muted small">Recurring default: <strong>${esc(recurring?.location || "TBC")}</strong></p>
+          <form class="mt8" data-action="form-week-venue" data-session="${safeId}">
+            <div class="field-row">
+              <div class="field">
+                <label for="${locationId}">Display location</label>
+                <input id="${locationId}" name="location" value="${esc(override.location || '')}" placeholder="e.g. Central Harbourfront — 7pm sharp">
+              </div>
+              <div class="field">
+                <label for="${mapsId}">Google Maps search</label>
+                <input id="${mapsId}" name="mapsQuery" value="${esc(override.mapsQuery || '')}" placeholder="e.g. Central Harbourfront, Hong Kong">
+              </div>
+            </div>
+            ${picker}
+            <div class="btn-row">
+              <button class="btn ghost sm" type="submit">Save Weekly Venue</button>
+              <button class="btn ghost sm" type="button" data-action="reset-week-venue" data-session="${safeId}">Reset to Recurring Default</button>
+            </div>
+          </form>
+        </div></div>`;
+    }).join("")}`;
 }
 
 function adminApprovals(pending) {
@@ -2202,11 +2320,9 @@ export async function viewAdminCampaign(id) {
 
 function adminActivities() {
   const acts = store.activities();
-  return `
-    <div class="session-list">
-      ${acts
-        .map(
-          (a) => `
+  const activityRows = acts
+    .map(
+      (a) => `
         <a class="session-row" href="#/admin/activity/${a.id}">
           <time>${["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][a.weekday]}<small>${a.time}</small></time>
           <div>
@@ -2218,10 +2334,16 @@ function adminActivities() {
             ${a.published ? "" : '<span class="badge neutral">Hidden</span>'}
           </div>
         </a>`
-        )
-        .join("")}
-    </div>
-    <a class="btn ghost mt16" href="#/admin/activity/new">+ New activity</a>`;
+    )
+    .join("");
+  return `
+    <div class="section-head"><h2>Recurring Activity Defaults</h2></div>
+    <p class="muted small">${isLive()
+      ? "Live deployment — recurring defaults are bundled with the app build and read-only. Set a venue for one week with the dated overrides below."
+      : "Changes here affect all future weeks unless a dated override is set below."}</p>
+    <div class="session-list">${activityRows}</div>
+    ${isLive() ? "" : `<a class="btn ghost mt16" href="#/admin/activity/new">+ New activity</a>`}
+    ${adminFreeEventVenues()}`;
 }
 
 function adminMembers(viewer, users) {
@@ -2315,13 +2437,22 @@ export function viewAdminActivity(id) {
     : store.getActivity(id);
   if (!a) return viewNotFound("Activity not found.");
 
+  // Live deployments: recurring defaults are seed/SQL-administered. Editing
+  // them here would write device-local state behind a success toast while the
+  // shared schedule never changes — so the editor is read-only on live.
+  const liveReadOnly = isLive();
+
   const paidOnly = (inner) => `<div class="paid-only ${a.kind === "paid" ? "" : "hidden"}">${inner}</div>`;
 
   return `
     <a class="back-link" href="#/admin/activities">← Activities</a>
     <div class="kicker mt16">Admin · Activity</div>
     <h1 class="display sm">${isNew ? "New activity." : "Edit activity."}</h1>
+    ${liveReadOnly ? `
+      <p class="badge neutral mt16">Live deployment — recurring defaults are bundled with the app build.</p>
+      <p class="muted small mt8">To change the venue for one week, use Weekly Venue Overrides on the Activities tab. Paid venues are administered in Supabase. This form is read-only here.</p>` : ""}
     <form id="form-activity" class="mt16" data-activity="${esc(a.id)}" novalidate>
+      ${liveReadOnly ? `<fieldset class="form-fieldset" disabled>` : ""}
       <div class="field"><label for="ac-name">Name *</label><input id="ac-name" name="name" value="${esc(a.name)}" required></div>
       <div class="field-row">
         <div class="field">
@@ -2363,7 +2494,8 @@ export function viewAdminActivity(id) {
       <div class="field"><label for="ac-note">Leader note (members only)</label><textarea id="ac-note" name="memberNote" rows="2">${esc(a.memberNote || "")}</textarea></div>
       <label class="check"><input type="checkbox" name="published" ${a.published ? "checked" : ""}>
         <span>Published — visible on the schedule</span></label>
-      <button class="btn mt24" type="submit">${isNew ? "Create activity" : "Save changes"}</button>
+      <button class="btn mt24" type="submit" ${liveReadOnly ? "hidden" : ""}>${isNew ? "Create activity" : "Save changes"}</button>
+      ${liveReadOnly ? `</fieldset>` : ""}
     </form>`;
 }
 
@@ -2426,7 +2558,7 @@ export async function viewNotifications(now = new Date(), prefetchedRows = null)
         data-action="notification-open"
         data-notification-id="${esc(notification?.id)}"
         data-notification-read="${unread ? "false" : "true"}"
-        data-destination="${esc(notificationDestination(kind))}">
+        data-destination="${esc(notificationDestination(kind, notification?.destination))}">
         <span class="notification-unread" ${unread ? `aria-label="Unread"` : `aria-hidden="true"`}></span>
         <span class="notification-copy">
           <span class="notification-kind-badge">${esc(NOTIFICATION_CATEGORY_LABELS[category])}</span>

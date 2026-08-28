@@ -166,6 +166,7 @@ let givingCampaignListError = null;
 let givingCampaignRows = [];
 let operationalRpcHandler = null;
 let operationalAuthSubOverride = null;
+let operationalVenueOverrideReadError = null;
 const operationalRpcCalls = [];
 const operationalSubscriptions = [];
 const operationalTableRows = {
@@ -179,6 +180,17 @@ const operationalTableRows = {
   operational_receipts: [],
   collector_assignments: [],
   collector_payout_profiles: [],
+  operational_session_venue_overrides: [{
+    session_id: "wnt-2026-08-26",
+    activity_id: "wnt",
+    location: "Tamar Park",
+    maps_query: "Tamar Park",
+    meeting_lat: 22.2825,
+    meeting_lng: 114.1659,
+    set_by: "live-admin",
+    set_at: "2026-08-05T02:00:00.000Z",
+    member_notified_at: "2026-08-05T02:00:00.000Z",
+  }],
 };
 let authStateChangeHandler = null;
 let authCallbackLocked = false;
@@ -188,6 +200,7 @@ let releaseOAuth = null;
 let signOutCalls = 0;
 let releaseSignOut = null;
 const deferredAuthTasks = [];
+const LIVE_TABLES_COUNT = 7;
 const fixedIso = "2026-08-05T02:00:00.000Z";
 const RealDate = Date;
 globalThis.Date = class extends RealDate {
@@ -444,7 +457,16 @@ const fakeSupabase = {
     }
     if (table in operationalTableRows) {
       const rows = operationalTableRows[table];
-      const thenable = () => Promise.resolve({ data: rows.slice(), error: null });
+      const result = () => {
+        const error = table === "operational_session_venue_overrides"
+          ? operationalVenueOverrideReadError
+          : null;
+        if (table === "operational_session_venue_overrides") {
+          operationalVenueOverrideReadError = null;
+        }
+        return { data: error ? null : rows.slice(), error };
+      };
+      const thenable = () => Promise.resolve(result());
       const chain = {
         order: thenable,
         gte: () => chain,
@@ -455,7 +477,7 @@ const fakeSupabase = {
         is: () => chain,
         match: () => chain,
         then(resolve, reject) {
-          return Promise.resolve({ data: rows.slice(), error: null }).then(resolve, reject);
+          return Promise.resolve(result()).then(resolve, reject);
         },
       };
       return { select: () => chain };
@@ -684,6 +706,36 @@ operationalRpcHandler = (name, args) => {
     session.gym_note = args.p_note || null;
     return Promise.resolve({ data: session, error: null });
   }
+  if (name === "set_session_venue") {
+    const sessionId = args.p_session_id;
+    const activityId = String(sessionId || "").replace(/-\d{4}-\d{2}-\d{2}$/, "");
+    if (!["wnt", "run", "water"].includes(activityId)) {
+      return Promise.resolve({ data: null, error: { message: "Activity venue is fixed." } });
+    }
+    const existing = operationalTableRows.operational_session_venue_overrides
+      .find((row) => row.session_id === sessionId);
+    const location = String(args.p_location || "").trim() || null;
+    const normalizedLocation = String(location || "").trim().toLowerCase().replace(/\s+/g, " ");
+    const acceptsPoint = activityId === "wnt"
+      && ["tamar park", "tamar park, admiralty"].includes(normalizedLocation);
+    const next = {
+      session_id: sessionId,
+      activity_id: activityId,
+      location,
+      maps_query: String(args.p_maps_query || "").trim() || null,
+      meeting_lat: acceptsPoint ? args.p_meeting_lat ?? null : null,
+      meeting_lng: acceptsPoint ? args.p_meeting_lng ?? null : null,
+      set_by: actingProfile,
+      set_at: now,
+      member_notified_at: existing?.member_notified_at || null,
+    };
+    if (args.p_was_tbc && !existing?.member_notified_at && next.location && next.maps_query) {
+      next.member_notified_at = now;
+    }
+    if (existing) Object.assign(existing, next);
+    else operationalTableRows.operational_session_venue_overrides.push(next);
+    return Promise.resolve({ data: next, error: null });
+  }
   return Promise.resolve({ data: null, error: null });
 };
 
@@ -694,6 +746,42 @@ const operations = await import("./js/operations.js");
 const todayISO = data.isoDate(data.todayLocal());
 store.load();
 await store.hydrateLiveOperations();
+
+const hydratedWntPoint = store.getSession("wnt-2026-08-26");
+assert.equal(hydratedWntPoint.meetingLat, 22.2825);
+assert.equal(hydratedWntPoint.meetingLng, 114.1659);
+const hydratedBft = store.upcomingSessions(21)
+  .find((session) => session.activityId === "hyrox");
+const hydratedMidtown = store.upcomingSessions(21)
+  .find((session) => session.activityId === "hyrox-midtown");
+assert.equal(hydratedBft.photo, "../assets/itc/hyrox.webp");
+assert.equal(hydratedMidtown.photo, "../assets/itc/hyrox.webp");
+assert.equal(hydratedMidtown.location, "Midtown28 Fitness");
+assert.equal(hydratedMidtown.venue, "Midtown28 Fitness");
+assert.equal(hydratedMidtown.mapsQuery, "Midtown28 Fitness, Hong Kong");
+for (const html of [
+  views.viewActivity(hydratedBft.id),
+  views.viewActivity(hydratedMidtown.id),
+]) {
+  assert.match(html, /class="detail-photo" src="\.\.\/assets\/itc\/hyrox\.webp"/);
+}
+
+const customMidtownFixture = operationalTableRows.operational_sessions
+  .find((row) => row.id === hydratedMidtown.id);
+assert.ok(customMidtownFixture, "live smoke needs a Midtown fixture to mutate");
+customMidtownFixture.venue = "Custom Midtown Venue";
+try {
+  await operations.refreshOperationalState();
+  const customMidtown = store.upcomingSessions(21)
+    .find((session) => session.id === hydratedMidtown.id);
+  assert.equal(customMidtown.location, "Custom Midtown Venue");
+  assert.equal(customMidtown.venue, "Custom Midtown Venue");
+  assert.equal(customMidtown.mapsQuery, "Custom Midtown Venue");
+  assert.equal(customMidtown.photo, "../assets/itc/hyrox.webp");
+} finally {
+  customMidtownFixture.venue = "Midtown 28";
+  await operations.refreshOperationalState();
+}
 
 const appSource = readFileSync(resolve(__dirnameSmoke, "js/app.js"), "utf8");
 assert.match(appSource, /form\.dataset\.form === "apply"/);
@@ -713,6 +801,102 @@ assert.match(appSource, /case "save-draft"/);
 assert.match(appSource, /case "discard-draft"/);
 assert.match(appSource, /store\.saveApplyDraft/);
 assert.match(appSource, /store\.clearApplyDraft/);
+
+await store.setWeekVenue("wnt-2026-08-05", {
+  location: "Central Harbourfront — 7pm sharp",
+  mapsQuery: "Central Harbourfront, Hong Kong",
+  wasTBC: true,
+});
+await operations.refreshOperationalState();
+const lastVenueCall = operationalRpcCalls
+  .filter((call) => call.name === "set_session_venue")
+  .at(-1);
+assert.equal(lastVenueCall.args.p_session_id, "wnt-2026-08-05");
+assert.equal(lastVenueCall.args.p_location, "Central Harbourfront — 7pm sharp");
+assert.equal(lastVenueCall.args.p_maps_query, "Central Harbourfront, Hong Kong");
+assert.equal(lastVenueCall.args.p_was_tbc, true);
+assert.equal(lastVenueCall.args.p_meeting_lat, null);
+assert.equal(lastVenueCall.args.p_meeting_lng, null);
+assert.equal(lastVenueCall.name, "set_session_venue");
+assert.deepEqual(operations.getLiveVenueOverride("wnt-2026-08-05"), {
+  sessionId: "wnt-2026-08-05",
+  activityId: "wnt",
+  location: "Central Harbourfront — 7pm sharp",
+  mapsQuery: "Central Harbourfront, Hong Kong",
+  meetingLat: null,
+  meetingLng: null,
+  setBy: authUser.id,
+  setAt: Date.parse(fixedIso),
+  memberNotifiedAt: Date.parse(fixedIso),
+});
+const venueChannel = operationalSubscriptions
+  .flatMap((channel) => channel.handlers)
+  .filter((handler) => handler);
+assert.ok(
+  operationalSubscriptions.some((channel) =>
+    channel.handlers.length >= LIVE_TABLES_COUNT),
+  "Realtime channel should subscribe to every operational table including venue overrides"
+);
+assert.equal(operations.operationalStateStatus().loaded, true);
+
+// The mutation result is authoritative even when the best-effort full refresh
+// immediately after it fails. A rerender must see the just-saved override.
+const cacheFirstSessionId = "water-2026-08-11";
+operationalVenueOverrideReadError = { message: "simulated venue override refresh failure" };
+const refreshWarnings = [];
+const consoleWarnBeforeCacheTest = console.warn;
+console.warn = (...args) => refreshWarnings.push(args);
+await store.setWeekVenue(cacheFirstSessionId, {
+  location: "Victoria Park Swimming Pool",
+  mapsQuery: "Victoria Park Swimming Pool, Hong Kong",
+});
+console.warn = consoleWarnBeforeCacheTest;
+assert.ok(
+  refreshWarnings.some(([message]) => message === "operations refresh after rpc failed"),
+  "the live regression must exercise the failed best-effort refresh path"
+);
+assert.deepEqual(operations.getLiveVenueOverride(cacheFirstSessionId), {
+  sessionId: cacheFirstSessionId,
+  activityId: "water",
+  location: "Victoria Park Swimming Pool",
+  mapsQuery: "Victoria Park Swimming Pool, Hong Kong",
+  meetingLat: null,
+  meetingLng: null,
+  setBy: authUser.id,
+  setAt: Date.parse(fixedIso),
+  memberNotifiedAt: Date.parse(fixedIso),
+});
+const cacheFirstDecoratedSession = store.getSession(cacheFirstSessionId);
+assert.equal(cacheFirstDecoratedSession.location, "Victoria Park Swimming Pool");
+assert.equal(cacheFirstDecoratedSession.mapsQuery, "Victoria Park Swimming Pool, Hong Kong");
+await operations.refreshOperationalState();
+assert.equal(
+  operations.operationalStateStatus().error,
+  null,
+  "a one-shot refresh failure must not poison later operational refreshes"
+);
+console.log("ok  successful venue RPC updates live cache before a failed refresh");
+
+const partialLiveSessionId = "water-2026-08-18";
+await store.setWeekVenue(partialLiveSessionId, {
+  location: "",
+  mapsQuery: "Sun Yat Sen Pool, Hong Kong",
+});
+const partialLiveOverride = operations.getLiveVenueOverride(partialLiveSessionId);
+const partialLiveSession = store.getSession(partialLiveSessionId);
+assert.equal(partialLiveOverride.memberNotifiedAt, null);
+assert.equal(partialLiveSession.location, "TBC");
+assert.notEqual(partialLiveSession.venueTBC, false);
+await store.setWeekVenue(partialLiveSessionId, {
+  location: "Sun Yat Sen Memorial Park Swimming Pool",
+  mapsQuery: "Sun Yat Sen Pool, Hong Kong",
+});
+assert.equal(
+  operations.getLiveVenueOverride(partialLiveSessionId).memberNotifiedAt,
+  Date.parse(fixedIso),
+  "completing a live partial override must consume member dedupe only then"
+);
+console.log("ok  live partial venue remains TBC until both values confirm it");
 
 const signedOutHome = views.viewHome();
 assert.match(signedOutHome, /data-action="sign-in-google"[^>]*>Continue with Google</);
@@ -1597,6 +1781,7 @@ const makeElement = () => {
   className: "",
   innerHTML: "",
   textContent: "",
+  dataset: {},
   hidden: false,
   attributes: new Map(),
   classList: {
@@ -2174,6 +2359,128 @@ assert.match(viewEl.innerHTML, /Confirmed with gym/);
 assert.match(viewEl.innerHTML, /Confirmed 18 with BFT/);
 console.log("ok  delegated gym confirmation persists and rerenders confirmed state");
 
+const swimmingSession = store.upcomingSessions(21)
+  .find((session) => session.activityId === "water" && !data.sessionStarted(session));
+assert.ok(swimmingSession, "live smoke needs an upcoming Swimming session");
+
+const weeklyVenueForm = new HTMLFormElement();
+weeklyVenueForm.id = "";
+weeklyVenueForm.dataset = {
+  action: "form-week-venue",
+  session: swimmingSession.id,
+};
+weeklyVenueForm.fields = {
+  location: "  Victoria Park Swimming Pool  ",
+  mapsQuery: "",
+};
+const weeklySubmit = makeElement();
+weeklySubmit.type = "submit";
+weeklySubmit.closest = () => weeklyVenueForm;
+weeklyVenueForm.querySelector = (selector) => selector === '[type="submit"]' ? weeklySubmit : null;
+weeklyVenueForm.querySelectorAll = () => [weeklySubmit];
+
+// A click on the nested submit control must be left to the browser so it can
+// emit the form's submit event. The form's own data-action must not make the
+// generic click delegate cancel that default behavior first.
+let weeklyClickPrevented = false;
+await click({
+  target: weeklySubmit,
+  preventDefault() { weeklyClickPrevented = true; },
+});
+assert.equal(weeklyClickPrevented, false,
+  "weekly venue submit click must not be cancelled by the click delegate");
+
+await domListeners.get("submit")({ target: weeklyVenueForm, preventDefault() {} });
+await new Promise(setImmediate);
+const weeklyVenueCall = operationalRpcCalls
+  .filter((call) => call.name === "set_session_venue")
+  .at(-1);
+assert.equal(weeklyVenueCall.args.p_session_id, swimmingSession.id);
+assert.equal(weeklyVenueCall.args.p_location, "Victoria Park Swimming Pool");
+assert.equal(weeklyVenueCall.args.p_maps_query, "Victoria Park Swimming Pool");
+const savedSwimming = store.getSession(swimmingSession.id);
+assert.equal(savedSwimming.location, "Victoria Park Swimming Pool");
+assert.equal(savedSwimming.mapsQuery, "Victoria Park Swimming Pool");
+console.log("ok  delegated weekly venue submit copies location into blank map queries");
+
+const wntVenueForm = new HTMLFormElement();
+wntVenueForm.id = "";
+wntVenueForm.dataset = {
+  action: "form-week-venue",
+  session: "wnt-2026-08-26",
+};
+wntVenueForm.fields = {
+  location: "Tamar Park",
+  mapsQuery: "Tamar Park",
+  meetingLat: "22.2827",
+  meetingLng: "114.1661",
+};
+const wntVenueSubmit = makeElement();
+wntVenueSubmit.type = "submit";
+wntVenueForm.querySelector = (selector) => selector === '[type="submit"]' ? wntVenueSubmit : null;
+wntVenueForm.querySelectorAll = () => [wntVenueSubmit];
+await domListeners.get("submit")({ target: wntVenueForm, preventDefault() {} });
+await new Promise(setImmediate);
+const wntVenueCall = operationalRpcCalls
+  .filter((call) => call.name === "set_session_venue")
+  .at(-1);
+assert.deepEqual({
+  p_session_id: wntVenueCall.args.p_session_id,
+  p_location: wntVenueCall.args.p_location,
+  p_maps_query: wntVenueCall.args.p_maps_query,
+  p_meeting_lat: wntVenueCall.args.p_meeting_lat,
+  p_meeting_lng: wntVenueCall.args.p_meeting_lng,
+}, {
+  p_session_id: "wnt-2026-08-26",
+  p_location: "Tamar Park",
+  p_maps_query: "Tamar Park",
+  p_meeting_lat: 22.2827,
+  p_meeting_lng: 114.1661,
+});
+const savedWntPoint = store.getSession("wnt-2026-08-26");
+assert.equal(savedWntPoint.meetingLat, 22.2827);
+assert.equal(savedWntPoint.meetingLng, 114.1661);
+console.log("ok  delegated WNT venue submit persists exact meeting coordinates");
+
+const weeklyVenueFailureForm = new HTMLFormElement();
+weeklyVenueFailureForm.id = "";
+weeklyVenueFailureForm.dataset = {
+  action: "form-week-venue",
+  session: "wnt-2026-08-26",
+};
+weeklyVenueFailureForm.fields = {
+  location: "Tamar Park",
+  mapsQuery: "Tamar Park",
+  meetingLat: "22.2829",
+  meetingLng: "114.1663",
+};
+const weeklyVenueFailureSubmit = makeElement();
+weeklyVenueFailureSubmit.type = "submit";
+weeklyVenueFailureForm.querySelector = (selector) => selector === '[type="submit"]' ? weeklyVenueFailureSubmit : null;
+weeklyVenueFailureForm.querySelectorAll = () => [weeklyVenueFailureSubmit];
+const htmlBeforeVenueFailure = viewEl.innerHTML;
+const baseOperationalRpcHandler = operationalRpcHandler;
+let rejectNextVenueSave = true;
+operationalRpcHandler = (name, args) => {
+  if (rejectNextVenueSave && name === "set_session_venue") {
+    rejectNextVenueSave = false;
+    operationalRpcCalls.push({ name, args: structuredClone(args) });
+    return Promise.resolve({ data: null, error: { message: "Venue override setup unavailable" } });
+  }
+  return baseOperationalRpcHandler(name, args);
+};
+await domListeners.get("submit")({ target: weeklyVenueFailureForm, preventDefault() {} });
+await new Promise(setImmediate);
+assert.equal(viewEl.innerHTML, htmlBeforeVenueFailure);
+assert.equal(weeklyVenueFailureForm.fields.location, "Tamar Park");
+assert.equal(weeklyVenueFailureForm.fields.meetingLat, "22.2829");
+assert.equal(weeklyVenueFailureForm.fields.meetingLng, "114.1663");
+assert.equal(weeklyVenueFailureSubmit.disabled, false);
+assert.ok(toastStack.children.some((item) =>
+  item.textContent === "Venue override setup unavailable"
+));
+console.log("ok  failed weekly venue submit preserves form state without rerendering");
+
 // Legacy member-management URLs canonicalize instead of rendering the removed
 // row/avatar implementation.
 location.hash = "#/admin/users";
@@ -2562,3 +2869,205 @@ if (!activityHtml.includes("Session cancelled by ITC — HYROX race weekend")) {
   throw new Error("Activity view must render the canonical cancellation copy");
 }
 console.log("ok  live cancellation copy renders 'Session cancelled by ITC — <reason>' everywhere");
+
+// Location-map surface: a non-cancelled paid HYROX exposes Get directions
+// without the inline map host.
+const liveNonCancelledHyrox = store.upcomingSessions(21)
+  .filter((s) => s.activityId === "hyrox" && !data.sessionStarted(s))
+  .find((s) => s.id !== "hyrox-2026-08-15");
+if (!liveNonCancelledHyrox) throw new Error("live smoke needs an upcoming non-cancelled hyrox session");
+const liveHyroxDetail = views.viewActivity(liveNonCancelledHyrox.id);
+if (!liveHyroxDetail.includes("Get directions") || liveHyroxDetail.includes('id="activity-map"')) {
+  throw new Error("paid HYROX activity must surface Get directions without the inline map");
+}
+console.log("ok  live paid HYROX surfaces Get directions without the inline map");
+
+// app.js owns the browser-relative lazy import. Exercise that real import from
+// app/js/app.js so a duplicated "js/" path cannot pass through the smoke file's
+// different base URL.
+const browserRelativeMap = await app.loadActivityMapModule();
+assert.equal(
+  typeof browserRelativeMap.mountActivityMap,
+  "function",
+  "app.js must resolve the map module relative to its own app/js URL"
+);
+
+// Admin Tamar picker: map click and marker drag emit exact selected points.
+const pickerLeafletBefore = globalThis.L;
+let pickerMapClick;
+let pickerMarkerDrag;
+let pickerMarkerPoint = { lat: 22.2816182, lng: 114.1655613 };
+let pickerRemoved = 0;
+const pickerSetViews = [];
+const pickerChanges = [];
+const pickerMap = {
+  setView(coords, zoom) { pickerSetViews.push([coords, zoom]); },
+  on(type, callback) { if (type === "click") pickerMapClick = callback; },
+  remove() { pickerRemoved += 1; },
+};
+const pickerMarker = {
+  addTo() { return this; },
+  setLatLng(coords) { pickerMarkerPoint = { lat: coords[0], lng: coords[1] }; },
+  getLatLng() { return pickerMarkerPoint; },
+  on(type, callback) { if (type === "dragend") pickerMarkerDrag = callback; },
+};
+globalThis.L = {
+  map: () => pickerMap,
+  tileLayer: () => ({ addTo() {} }),
+  marker: () => pickerMarker,
+};
+const pickerHost = makeElement();
+pickerHost.isConnected = true;
+const pickerController = await browserRelativeMap.mountVenuePicker(pickerHost, {
+  initialPoint: { lat: 22.2816182, lng: 114.1655613 },
+  onChange: (point) => pickerChanges.push(point),
+  loadLeaflet: async () => {},
+});
+assert.deepEqual(pickerSetViews, [[ [22.2816182, 114.1655613], 17 ]]);
+pickerMapClick({ latlng: { lat: 22.2825, lng: 114.1659 } });
+assert.deepEqual(pickerChanges.at(-1), { lat: 22.2825, lng: 114.1659 });
+pickerMarkerPoint = { lat: 22.2827, lng: 114.1661 };
+pickerMarkerDrag();
+assert.deepEqual(pickerChanges.at(-1), { lat: 22.2827, lng: 114.1661 });
+pickerController.destroy();
+assert.equal(pickerRemoved, 1);
+globalThis.L = pickerLeafletBefore;
+
+// Form synchronization reveals Tamar, seeds defaults, retains marker changes,
+// and clears/destroys the picker after changing to an indoor venue.
+const pickerForm = new HTMLFormElement();
+pickerForm.dataset = { session: "wnt-2026-08-26" };
+const pickerLocation = { value: "Tamar Park" };
+const pickerLat = { value: "" };
+const pickerLng = { value: "" };
+const pickerShell = makeElement();
+pickerShell.classList.toggle("hidden", true);
+const pickerFormHost = makeElement();
+pickerFormHost.isConnected = true;
+pickerForm.querySelector = (selector) => ({
+  '[name="location"]': pickerLocation,
+  '[name="meetingLat"]': pickerLat,
+  '[name="meetingLng"]': pickerLng,
+  "[data-venue-picker-shell]": pickerShell,
+  "[data-venue-picker]": pickerFormHost,
+})[selector] || null;
+let pickerFormChange;
+let pickerFormDestroyed = 0;
+let pickerInitialPoint;
+assert.equal(await app.syncWeekVenuePicker(pickerForm, {
+  ownsGeneration: () => true,
+  loadModule: async () => ({
+    mountVenuePicker: async (_host, options) => {
+      pickerInitialPoint = options.initialPoint;
+      pickerFormChange = options.onChange;
+      return { destroy() { pickerFormDestroyed += 1; } };
+    },
+  }),
+}), true);
+assert.equal(pickerShell.classList.contains("hidden"), false);
+assert.deepEqual(pickerInitialPoint, { lat: 22.2816182, lng: 114.1655613 });
+assert.equal(pickerLat.value, "22.2816182");
+assert.equal(pickerLng.value, "114.1655613");
+pickerFormChange({ lat: 22.2825, lng: 114.1659 });
+assert.equal(pickerLat.value, "22.2825");
+assert.equal(pickerLng.value, "114.1659");
+pickerLocation.value = "Island ECC 9/F";
+assert.equal(await app.syncWeekVenuePicker(pickerForm), false);
+assert.equal(pickerShell.classList.contains("hidden"), true);
+assert.equal(pickerLat.value, "");
+assert.equal(pickerLng.value, "");
+assert.equal(pickerFormDestroyed, 1);
+console.log("ok  Admin Tamar picker click, drag, default, and clear behavior");
+
+// A rejected lazy import must settle the host on the public fallback instead
+// of escaping as an unhandled rejection or leaving "Loading map…" forever.
+const rejectedImportHost = {
+  id: "activity-map",
+  isConnected: true,
+  dataset: { mapsQuery: "Causeway Bay, Hong Kong", markerLabel: "Rejected import" },
+  innerHTML: "<p>Loading map…</p>",
+};
+const rejectedImportResult = await app.mountCommittedActivityMap(rejectedImportHost, {
+  loadModule: async () => { throw new Error("simulated map import rejection"); },
+});
+assert.equal(rejectedImportResult, false, "a rejected map import must resolve to false");
+assert.match(rejectedImportHost.innerHTML, /Couldn.t find the venue on the map/);
+assert.doesNotMatch(rejectedImportHost.innerHTML, /Loading map/);
+console.log("ok  app-relative map import resolves and import rejection renders fallback");
+
+// A failed ECC guide image must be replaced with the generic map host while
+// route ownership is current; stale routes must leave their figure untouched.
+let venueImageError;
+let replacedVenueFigure = null;
+let mountedFallbackHost = null;
+const venueFigure = {
+  replaceWith(node) { replacedVenueFigure = node; },
+};
+const venueImage = {
+  dataset: { fallbackQuery: "Island ECC" },
+  isConnected: true,
+  closest: () => venueFigure,
+  addEventListener(type, callback) {
+    if (type === "error") venueImageError = callback;
+  },
+};
+assert.equal(app.mountVenueImageFallback(venueImage, {
+  mountMap: async (host) => { mountedFallbackHost = host; return true; },
+}), true);
+assert.equal(replacedVenueFigure, null);
+await venueImageError();
+assert.ok(replacedVenueFigure, "image error must replace the guide figure");
+assert.equal(mountedFallbackHost?.dataset?.mapsQuery, "Island ECC");
+
+let noQueryError;
+let noQueryRemoved = false;
+const noQueryImage = {
+  dataset: { fallbackQuery: "" },
+  isConnected: true,
+  closest: () => ({ remove() { noQueryRemoved = true; } }),
+  addEventListener(type, callback) { if (type === "error") noQueryError = callback; },
+};
+assert.equal(app.mountVenueImageFallback(noQueryImage), true);
+noQueryError();
+assert.equal(noQueryRemoved, true, "failed guide without a map query must be removed");
+
+let staleReplaced = false;
+let staleImageError;
+const staleImage = {
+  dataset: { fallbackQuery: "Island ECC" },
+  isConnected: true,
+  closest: () => ({ replaceWith() { staleReplaced = true; } }),
+  addEventListener(type, callback) { if (type === "error") staleImageError = callback; },
+};
+assert.equal(app.mountVenueImageFallback(staleImage, {
+  ownsGeneration: () => false,
+}), false);
+assert.equal(staleImageError, undefined);
+assert.equal(staleReplaced, false);
+console.log("ok  ECC guide failure falls back to map only for the current route");
+
+// Mount contract: stale activity hosts must not be remounted after navigation.
+let lateMounted = false;
+const lateMap = await import("./js/map.js");
+globalThis.window.__lateMapLoader = () => {
+  lateMounted = true;
+  return Promise.resolve();
+};
+const lateHost = {
+  id: "activity-map",
+  isConnected: false,
+  dataset: { mapsQuery: "Causeway Bay, Hong Kong", markerLabel: "Late" },
+  innerHTML: "<p>Loading\u2026</p>",
+};
+const lateResult = await lateMap.mountActivityMap(lateHost, {
+  ownsGeneration: () => false,
+  fetchImpl: async () => ({ ok: true, json: async () => [] }),
+  loadLeaflet: globalThis.window.__lateMapLoader,
+});
+if (lateResult !== false) {
+  throw new Error("stale activity host must resolve to false");
+}
+if (lateMounted) {
+  throw new Error("stale activity host must not load Leaflet");
+}
+console.log("ok  inline map mount respects stale generation ownership");

@@ -53,8 +53,8 @@ export const SEED_ACTIVITIES = [
     weekday: 2, // Tuesday
     time: "19:30",
     durationMin: 90,
-    location: "Victoria Park",
-    mapsQuery: "Victoria Park, Hong Kong",
+    location: "TBC",
+    mapsQuery: "",
     photo: PH + "water.webp",
     blurb:
       "Community water session — skills, games and a good workout. Kit is provided, just bring a towel.",
@@ -69,8 +69,8 @@ export const SEED_ACTIVITIES = [
     weekday: 6, // Saturday
     time: "11:00",
     durationMin: 75,
-    location: "Midtown 28",
-    mapsQuery: "Midtown 28, Hong Kong",
+    location: "Midtown28 Fitness",
+    mapsQuery: "Midtown28 Fitness, Hong Kong",
     photo: PH + "hyrox.webp",
     blurb:
       "Weekly hybrid race training: ski, sled, burpees and running intervals. Every session is purchased separately at one fixed price.",
@@ -410,6 +410,7 @@ const NOTIFICATION_CATEGORIES = new Map([
   // specific role kinds were introduced.
   ["admin_role_changed", "role"],
   ["giving_campaign_published", "club"],
+  ["operational_session_venue_updated", "club"],
 ]);
 
 export function notificationCategory(kind) {
@@ -446,10 +447,12 @@ export function notificationHktTime(value) {
   return `${formatted.replace(/\b(am|pm)\b/i, (period) => period.toUpperCase())} HKT`;
 }
 
-export function notificationDestination(kind) {
+export function notificationDestination(kind, destination = null) {
+  if (typeof destination === "string" && destination.startsWith("#/")) return destination;
   const normalizedKind = notificationKind(kind);
   if (normalizedKind === "admin_application_submitted") return "#/admin/approvals";
   if (normalizedKind.startsWith("admin_")) return "#/admin/members";
+  if (normalizedKind === "operational_session_venue_updated") return "#/schedule";
   if (normalizedKind === "giving_campaign_published") return "#/giving";
   return "#/account";
 }
