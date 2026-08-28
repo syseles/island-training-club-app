@@ -30,7 +30,7 @@ const STORAGE_KEY = "itc.prototype.v1";
 const APPLY_DEVICE_KEY = "itc.device.id";
 const APPLY_DRAFT_KEY = "itc.apply.draft.v1";
 const APPLY_DRAFT_VERSION = 1;
-const STATE_VERSION = 15;
+const STATE_VERSION = 16;
 
 // Live-mode (Supabase) session cache. Avoids hammering the DB on every
 // page load. The TTL is short so role flips and welcome notifications
@@ -135,6 +135,15 @@ function migrate() {
 
   const v = state.version || 0;
   if (v >= STATE_VERSION) return;
+  if (v < 16) {
+    // v16: the recurring post-training lunch (RSVP kind, Meals category)
+    // joins the seed activities. Existing states get it appended without
+    // touching admin edits.
+    if (Array.isArray(state.activities) && !state.activities.some((a) => a.id === "lunch")) {
+      const lunch = SEED_ACTIVITIES.find((a) => a.id === "lunch");
+      if (lunch) state.activities.push(structuredClone(lunch));
+    }
+  }
   if (v < 15) {
     // v15: admin-created one-off events live in state.oneOffEvents
     // (activity-shaped entries with oneOff + dateISO). The collection
@@ -792,10 +801,10 @@ export function activeBookingsForSession(sessionId) {
 export function spotsLeft(session) {
   if (!session) return null;
   if (isLive()) {
-    if (session.kind !== "paid") return null;
+    if (session.kind === "free") return null;
     return Math.max(0, session.capacity - liveOps.liveHeldBookingsForSession(session.id).length);
   }
-  if (session.kind !== "paid") return null;
+  if (session.kind === "free") return null;
   return Math.max(0, session.capacity - heldBookingsForSession(session.id).length);
 }
 
@@ -1594,6 +1603,62 @@ function oneOffSessionFor(event) {
     activityId: event.id,
     date,
   };
+}
+
+// --- RSVP events ------------------------------------------------------------
+// Price-0 sessions that still need a headcount (e.g. the post-training
+// lunch): joining confirms instantly — no reserve/pay/confirm pipeline.
+
+export async function rsvpSession(userId, sessionOrId, now = Date.now()) {
+  const sessionId = typeof sessionOrId === "string" ? sessionOrId : sessionOrId?.id;
+  if (isLive()) {
+    // The reserve RPC branches on price_hkd = 0 and confirms immediately.
+    return liveOps.liveReserveSession(sessionId);
+  }
+  requireAuthorizedPaymentOwner(userId);
+  const session = getSession(sessionId);
+  if (!session) throw new Error("Unknown session");
+  if (session.kind !== "rsvp") throw new Error("Session is not an RSVP event");
+  if (session.cancelled) throw new Error("Session is cancelled");
+  if (sessionStarted(session)) throw new Error("Session has already started");
+  if (spotsLeft(session) <= 0) throw new Error("Session is full");
+  if (userBookingFor(userId, session.id)) throw new Error("Already booked");
+  const booking = {
+    id: uid("b"),
+    userId,
+    sessionId: session.id,
+    status: "confirmed",
+    createdAt: now,
+    reservedAt: now,
+    payDeadlineAt: now,
+    paymentMarkedAt: null,
+    paidAt: now,
+    paidMethod: null,
+    paymentRef: null,
+    confirmedBy: null,
+    deferredTo: null,
+    deferredFrom: null,
+    reminderSentAt: null,
+    snapshot: snapshotFor(session),
+  };
+  state.bookings.push(booking);
+  save();
+  return booking;
+}
+
+// Withdrawing an RSVP is member self-service: no money ever moved, so no
+// admin involvement is needed (unlike paid confirmed bookings).
+export async function withdrawRsvp(bookingId) {
+  if (isLive()) {
+    return liveOps.liveWithdrawRsvp(bookingId);
+  }
+  const booking = getBooking(bookingId);
+  if (!booking || booking.status !== "confirmed") return null;
+  if (Number(booking.snapshot?.price) > 0) return null;
+  requireAuthorizedPaymentOwner(booking.userId);
+  booking.status = "cancelled";
+  save();
+  return booking;
 }
 
 export async function createOneOffEvent(fields) {

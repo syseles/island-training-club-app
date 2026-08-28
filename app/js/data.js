@@ -97,6 +97,24 @@ export const SEED_ACTIVITIES = [
     capacity: 20,
     published: true,
   },
+  {
+    id: "lunch",
+    name: "Post-Training Lunch",
+    kind: "rsvp",
+    category: "Meals",
+    weekday: 6, // Saturday — follows the morning HYROX sessions
+    time: "12:45",
+    durationMin: 75,
+    location: "Announced weekly",
+    mapsQuery: "", // venue posted in the weekly session note
+    photo: PH + "community.webp",
+    blurb:
+      "The other half of Saturday: refuel together after training. Everyone pays their own bill — tap Count me in so the organizer can book a table.",
+    memberNote: "Venue is posted in the session note once the table is booked.",
+    price: 0,
+    capacity: 12,
+    published: true,
+  },
 ];
 
 export const ANNOUNCEMENTS = [

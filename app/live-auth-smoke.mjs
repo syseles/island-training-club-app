@@ -172,8 +172,9 @@ const operationalSubscriptions = [];
 const operationalTableRows = {
   operational_sessions: [],
   operational_activity_templates: [
-    { activity_id: "hyrox", name: "ITC HYROX", venue: "BFT Causeway Bay", weekday: 6, start_time: "11:15:00", duration_minutes: 60, capacity: 20, price_hkd: 180, default_open: true, active: true, category: "HYROX", maps_query: null },
-    { activity_id: "hyrox-midtown", name: "ITC HYROX", venue: "Midtown 28", weekday: 6, start_time: "11:00:00", duration_minutes: 60, capacity: 12, price_hkd: 180, default_open: false, active: true, category: "HYROX", maps_query: null },
+    { activity_id: "hyrox", name: "ITC HYROX", venue: "BFT Causeway Bay", weekday: 6, start_time: "11:15:00", duration_minutes: 60, capacity: 20, price_hkd: 180, default_open: true, active: true, category: "HYROX", maps_query: null, requires_rsvp: false },
+    { activity_id: "hyrox-midtown", name: "ITC HYROX", venue: "Midtown 28", weekday: 6, start_time: "11:00:00", duration_minutes: 60, capacity: 12, price_hkd: 180, default_open: false, active: true, category: "HYROX", maps_query: null, requires_rsvp: false },
+    { activity_id: "lunch", name: "Post-Training Lunch", venue: "Announced weekly", weekday: 6, start_time: "12:45:00", duration_minutes: 75, capacity: 12, price_hkd: 0, default_open: true, active: true, category: "Meals", maps_query: null, requires_rsvp: true },
   ],
   operational_bookings: [],
   operational_queue_entries: [],
@@ -540,6 +541,28 @@ for (let i = 0; i < 4; i++) {
     updated_at: today.toISOString(),
   });
   operationalTableRows.operational_sessions.push({
+    id: `lunch-${iso}`,
+    activity_id: "lunch",
+    session_date: iso,
+    start_time: "12:45:00",
+    duration_minutes: 75,
+    venue: "Announced weekly",
+    capacity: 12,
+    price_hkd: 0,
+    is_open: true,
+    venue_tbc: false,
+    notice: null,
+    cancelled_at: null,
+    cancelled_by: null,
+    cancelled_source: null,
+    cancel_reason: null,
+    gym_confirmed_at: null,
+    gym_confirmed_by: null,
+    gym_note: null,
+    created_at: today.toISOString(),
+    updated_at: today.toISOString(),
+  });
+  operationalTableRows.operational_sessions.push({
     id: `hyrox-midtown-${iso}`,
     activity_id: "hyrox-midtown",
     session_date: iso,
@@ -676,29 +699,49 @@ operationalRpcHandler = (name, args) => {
     return Promise.resolve({ data: null, error: null });
   }
   if (name === "reserve_operational_session") {
+    const sessionRow = operationalTableRows.operational_sessions.find((s) => s.id === args.p_session_id);
+    const templateRow = operationalTableRows.operational_activity_templates.find((t) => t.activity_id === sessionRow?.activity_id);
+    const isRsvp = sessionRow && Number(sessionRow.price_hkd) === 0;
     const id = "b-" + (operationalTableRows.operational_bookings.length + 1);
     const booking = {
       id,
       profile_id: actingProfile,
       session_id: args.p_session_id,
-      status: "reserved",
+      status: isRsvp ? "confirmed" : "reserved",
       reserved_at: now,
       pay_deadline_at: now,
       payment_marked_at: null,
       payment_method: null,
       payment_reference: null,
-      paid_at: null,
+      paid_at: isRsvp ? now : null,
       confirmed_by: null,
-      snapshot: {
-        name: "ITC HYROX",
-        session_date: "2026-08-22",
-        start_time: "11:15:00",
-        venue: "BFT Causeway Bay",
-        price_hkd: 180,
-      },
+      snapshot: isRsvp && sessionRow
+        ? {
+          name: templateRow?.name || sessionRow.activity_id,
+          session_date: sessionRow.session_date,
+          start_time: sessionRow.start_time,
+          venue: sessionRow.venue,
+          price_hkd: 0,
+        }
+        : {
+          name: "ITC HYROX",
+          session_date: "2026-08-22",
+          start_time: "11:15:00",
+          venue: "BFT Causeway Bay",
+          price_hkd: 180,
+        },
     };
     operationalTableRows.operational_bookings.push(booking);
     return Promise.resolve({ data: booking, error: null });
+  }
+  if (name === "withdraw_operational_rsvp") {
+    const row = operationalTableRows.operational_bookings.find((b) => b.id === args.p_booking_id);
+    const sRow = operationalTableRows.operational_sessions.find((s) => s.id === row?.session_id);
+    if (!row || row.profile_id !== actingProfile || !sRow || Number(sRow.price_hkd) > 0 || row.status !== "confirmed") {
+      return Promise.resolve({ data: null, error: { message: "Only your own confirmed RSVP can be withdrawn." } });
+    }
+    row.status = "cancelled";
+    return Promise.resolve({ data: row, error: null });
   }
   if (name === "mark_operational_payment") {
     const row = operationalTableRows.operational_bookings.find((b) => b.id === args.p_booking_id);
@@ -1464,6 +1507,29 @@ try {
   if (!/cancel the session instead/i.test(err.message)) throw err;
 }
 console.log("ok  live one-off events create, hydrate, delete, and guard booked deletion");
+
+// --- RSVP events (live): price-0 sessions confirm instantly, no payment ---
+const lunchSession = store.upcomingSessions(21).find((s) => s.kind === "rsvp");
+if (!lunchSession || lunchSession.category !== "Meals" || lunchSession.name !== "Post-Training Lunch") {
+  throw new Error("live RSVP lunch session must hydrate with rsvp kind and Meals category");
+}
+const lunchHtml = views.viewActivity(lunchSession.id);
+if (!lunchHtml.includes('data-action="rsvp-join"') || lunchHtml.includes("Book & pay")) {
+  throw new Error("live RSVP activity should offer Count me in, not checkout");
+}
+const rsvpBooking = await store.rsvpSession(authUser.id, lunchSession.id);
+if (rsvpBooking.status !== "confirmed") {
+  throw new Error("live RSVP should confirm instantly without payment");
+}
+const goingHtml = views.viewActivity(lunchSession.id);
+if (!goingHtml.includes("rsvp-withdraw")) {
+  throw new Error("RSVP'd member should see a withdraw action");
+}
+await store.withdrawRsvp(rsvpBooking.id);
+if (store.getBooking(rsvpBooking.id).status !== "cancelled") {
+  throw new Error("withdraw should cancel the RSVP");
+}
+console.log("ok  live RSVP events confirm instantly and withdraw cleanly");
 
 // A live Admin must compose the Supabase UUID directory with device-local
 // Payment operations without copying editable identity records into storage.

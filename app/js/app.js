@@ -951,6 +951,33 @@ document.addEventListener("click", async (e) => {
       break;
     }
 
+    case "rsvp-join": {
+      withBusyControl(el, "Counting you in…", async () => {
+        try {
+          await store.rsvpSession(store.currentUser()?.id, el.dataset.session);
+          toast("You're in — see you at lunch");
+          await renderWithFeedback();
+        } catch (err) {
+          toast(err.message || "Unable to RSVP", true);
+        }
+      }, { busyKey: el });
+      break;
+    }
+
+    case "rsvp-withdraw": {
+      if (!confirm("Withdraw your RSVP? The organizer is counting heads.")) return;
+      withBusyControl(el, "Withdrawing…", async () => {
+        try {
+          await store.withdrawRsvp(el.dataset.booking);
+          toast("RSVP withdrawn");
+          await renderWithFeedback();
+        } catch (err) {
+          toast(err.message || "Unable to withdraw", true);
+        }
+      }, { busyKey: el });
+      break;
+    }
+
     case "reset-week-venue": {
       const control = el;
       withBusyControl(control, "Resetting\u2026", async () => {

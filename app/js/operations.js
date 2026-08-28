@@ -71,6 +71,7 @@ function buildTemplateRow(row) {
     active: row.active,
     category: row.category || null,
     maps_query: row.maps_query || null,
+    requires_rsvp: !!row.requires_rsvp,
   };
 }
 
@@ -96,7 +97,10 @@ function buildSessionRow(row, templatesById = null) {
     // One-off events take their display name/category from their template;
     // the recurring HYROX templates keep the historical labels.
     name: template?.name || "ITC HYROX",
-    kind: Number(row.price_hkd) > 0 ? "paid" : "free",
+    // Paid sessions take the reserve/pay pipeline; price-0 sessions are RSVP
+    // (headcount needed, e.g. the post-training lunch) when the template says
+    // so, otherwise plain free show-up events.
+    kind: Number(row.price_hkd) > 0 ? "paid" : (template?.requires_rsvp ? "rsvp" : "free"),
     category: template?.category || (oneOff ? "Other" : "HYROX"),
     weekday: date.getDay(),
     oneOff,
@@ -552,6 +556,13 @@ export async function liveCreateEvent(payload) {
 export async function liveDeleteEvent(sessionId) {
   return runOperationalRpc("delete_operational_event", {
     p_session_id: sessionId,
+  });
+}
+
+// RSVP withdraw is member self-service on price-0 sessions only.
+export async function liveWithdrawRsvp(bookingId) {
+  return runOperationalRpc("withdraw_operational_rsvp", {
+    p_booking_id: bookingId,
   });
 }
 

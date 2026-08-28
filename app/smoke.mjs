@@ -333,7 +333,7 @@ await check("schedule", () => views.viewSchedule());
 // Schedule filters: only chronological activity categories remain.
 {
   const schedHtml = views.viewSchedule();
-  const expectedFilterOrder = ["all", "Run", "Water", "Strength", "HYROX"];
+  const expectedFilterOrder = ["all", "Run", "Water", "Strength", "HYROX", "Meals"];
   const renderedFilterOrder = [...schedHtml.matchAll(/data-filter="([^"]+)"/g)].map((match) => match[1]);
   if (JSON.stringify(renderedFilterOrder) !== JSON.stringify(expectedFilterOrder)) {
     failures++;
@@ -358,8 +358,8 @@ if (!commHtml.includes("Find your place in the crew.")) {
 } else console.log("ok  visitor Community heading is personalized");
 for (const required of [
   "Next connection",
-  "Post-training dinner",
-  "Count me in",
+  "Post-training lunch",
+  "See the next lunch",
   "Latest from ITC",
   "Island Training Club turns 2",
   "Ways to connect",
@@ -370,9 +370,9 @@ for (const required of [
     console.error(`FAIL Community Pulse missing ${required}`);
   }
 }
-if (!commHtml.includes('data-action="connect-interest"')) {
+if (!commHtml.includes('href="#/schedule"')) {
   failures++;
-  console.error("FAIL Community Pulse meal CTA should use the existing interest action");
+  console.error("FAIL Community Pulse meal CTA should link to the Schedule tab");
 }
 const coexistenceSurface = `${integratedViewSource}\n${localVisitorHome}\n${commHtml}`;
 for (const marker of ["Home", "notificationBellHTML", '#/giving', "community-pulse", "HYROX"]) {
@@ -386,7 +386,7 @@ let commOk = true;
 for (const link of [
   "#/community/prayers",
   "#/community/fellowship",
-  "#/community/meals",
+  "#/schedule",
   "#/community/announcements",
   "#/community/about",
 ]) {
@@ -407,7 +407,12 @@ if (commHtml.includes("Arnold Wong") || commHtml.includes("Our foundation")) {
 } else console.log("ok  leaders & culture live behind the About card");
 await check("community > prayers", () => views.viewCommunity("prayers"));
 await check("community > fellowship", () => views.viewCommunity("fellowship"));
-await check("community > meals", () => views.viewCommunity("meals"));
+await check("community > meals -> redirect", () => views.viewCommunity("meals"));
+const mealsRoute = views.viewCommunity("meals");
+if (mealsRoute?.redirect !== "#/schedule") {
+  failures++;
+  console.error("FAIL community meals should redirect to the Schedule tab");
+} else console.log("ok  community meals redirects to Schedule");
 await check("community > announcements", () => views.viewCommunity("announcements"));
 const announcementHtml = views.viewCommunity("announcements");
 for (const required of [
@@ -454,7 +459,6 @@ if (!views.viewCommunity("prayers").includes('id="form-prayer"')) {
 for (const [section, title] of [
   ["prayers", "Prayers."],
   ["fellowship", "Fellowship."],
-  ["meals", "Ad-Hoc Meals."],
   ["announcements", "Island Training Club turns 2."],
   ["about", "More than a workout."],
 ]) {
@@ -1705,8 +1709,8 @@ store.resetLocalData();
   localStorage.setItem("itc.prototype.v1", JSON.stringify(locationV13));
   store.load();
   const migratedV13 = JSON.parse(localStorage.getItem("itc.prototype.v1"));
-  if (migratedV13.version !== 15) {
-    throw new Error("v15 migration must persist version 15");
+  if (migratedV13.version !== 16) {
+    throw new Error("v16 migration must persist version 16");
   }
   const repairedWater = store.activities().find((activity) => activity.id === "water");
   if (repairedWater.location !== "TBC" || repairedWater.mapsQuery !== ""
@@ -2207,6 +2211,43 @@ store.signIn("admin@example.test");
   console.log("ok  one-off events: create, list, book, delete guard, cancel");
 }
 
+// --- RSVP events (local): the recurring post-training lunch ---
+store.resetLocalData();
+installLocalFixtures();
+{
+  const lunch = store.upcomingSessions(21).find((s) => s.kind === "rsvp");
+  if (!lunch || lunch.category !== "Meals" || lunch.name !== "Post-Training Lunch")
+    throw new Error("local seeds must include the recurring RSVP lunch");
+  store.signIn("member@example.test");
+  const lunchHtml = views.viewActivity(lunch.id);
+  if (!lunchHtml.includes("Count me in") || lunchHtml.includes("Book & pay"))
+    throw new Error("RSVP activity should offer Count me in, not checkout");
+  const rsvp = await store.rsvpSession("fixture-member", lunch.id);
+  if (rsvp.status !== "confirmed" || rsvp.snapshot.price !== 0)
+    throw new Error("RSVP should confirm instantly with no payment");
+  const goingHtml = views.viewActivity(lunch.id);
+  if (!goingHtml.includes("You're going") || !goingHtml.includes("rsvp-withdraw"))
+    throw new Error("RSVP'd member should see the Going state and a withdraw action");
+  const bookingPage = views.viewBooking(rsvp.id);
+  if (!bookingPage.includes("You’re going") || bookingPage.includes("Can’t make it? Defer")
+      || bookingPage.includes("View receipt"))
+    throw new Error("RSVP booking page must not offer payment deferral or receipts");
+  const checkout = views.viewCheckout(lunch.id);
+  if (typeof checkout !== "string" || !checkout.includes("doesn’t exist"))
+    throw new Error("RSVP sessions must not render checkout");
+  await store.withdrawRsvp(rsvp.id);
+  if (store.getBooking(rsvp.id).status !== "cancelled")
+    throw new Error("withdraw should cancel the RSVP booking");
+  const schedHtml = views.viewSchedule();
+  if (!schedHtml.includes(">Meals<"))
+    throw new Error("Schedule should offer a Meals filter chip");
+  const badgeHtml = views.viewActivity(lunch.id);
+  if (!badgeHtml.includes('badge free">RSVP</span>'))
+    throw new Error("unbooked RSVP session badge should read RSVP");
+  store.signOut();
+  console.log("ok  RSVP lunch: join, going state, withdraw, Meals filter, no checkout");
+}
+
 // --- Reset ---
 store.resetLocalData();
 console.log("ok  reset");
@@ -2231,6 +2272,14 @@ console.log("ok  reset");
     failures++;
     console.error("FAIL v14 fresh state must have an empty UUID-keyed payout map");
   } else console.log("ok  v14 fresh state has an empty UUID-keyed payout map");
+  if (!Array.isArray(fresh.oneOffEvents) || fresh.oneOffEvents.length) {
+    failures++;
+    console.error("FAIL fresh state must have an empty one-off events list");
+  } else console.log("ok  fresh state has an empty one-off events list");
+  if (!fresh.activities.some((a) => a.id === "lunch" && a.kind === "rsvp" && a.category === "Meals")) {
+    failures++;
+    console.error("FAIL fresh state must seed the recurring RSVP lunch");
+  } else console.log("ok  fresh state seeds the recurring RSVP lunch");
   if (Array.isArray(fresh.activities)) {
     for (const a of fresh.activities) {
       if ("baseBooked" in a) {
@@ -2348,10 +2397,10 @@ console.log("ok  reset");
     failures++;
     console.error("FAIL v10 migration must clear session tied to a removed demo user");
   } else console.log("ok  v10 migration clears removed session");
-  if (migrated.version !== 15) {
+  if (migrated.version !== 16) {
     failures++;
-    console.error(`FAIL integrated migration must advance version to 15, got ${migrated.version}`);
-  } else console.log("ok  integrated migration advances genuine v9 state to v15");
+    console.error(`FAIL integrated migration must advance version to 16, got ${migrated.version}`);
+  } else console.log("ok  integrated migration advances genuine v9 state to v16");
 }
 
 {
@@ -2370,7 +2419,7 @@ console.log("ok  reset");
   store.load();
   const v14 = JSON.parse(mem.get("itc.prototype.v1"));
   const migratedUser = v14.users.find((user) => user.id === "real-v13-member");
-  if (v14.version !== 15 || !migratedUser) throw new Error("v15 migration lost the genuine member");
+  if (v14.version !== 16 || !migratedUser) throw new Error("v16 migration lost the genuine member");
   for (const field of ["indemnitySignature", "indemnitySignedAt", "indemnityFormVersion", "emergencyRelationship"]) {
     if (!(field in migratedUser) || migratedUser[field] !== null) {
       throw new Error(`v14 migration should initialize ${field} to null`);
@@ -2822,11 +2871,11 @@ for (const fixture of sourceSnapshots) {
     && !Array.isArray(migrated.paymentPayouts);
   const suppliedPayoutsPreserved = fixture.version !== 12
     || migrated.paymentPayouts["real-admin"]?.fpsPhone === "+852 6000 0000";
-  if (migrated.version !== 15 || suppliedIds.some((id) => !serialized.includes(id))
+  if (migrated.version !== 16 || suppliedIds.some((id) => !serialized.includes(id))
       || !payoutMapValid || !suppliedPayoutsPreserved) {
     failures++;
-    console.error(`FAIL genuine v${fixture.version} fixture must reach v15 intact`);
-  } else console.log(`ok  genuine v${fixture.version} fixture reaches v15 intact`);
+    console.error(`FAIL genuine v${fixture.version} fixture must reach v16 intact`);
+  } else console.log(`ok  genuine v${fixture.version} fixture reaches v16 intact`);
 }
 
 for (const invalidCounter of [null, -1, 1.5, "broken"]) {

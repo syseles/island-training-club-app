@@ -76,6 +76,11 @@ const fmtMonthYear = (ts) =>
 
 function badgeFor(s, booking = null, reservation = null) {
   if (s.kind === "free") return `<span class="badge free">Free</span>`;
+  if (s.kind === "rsvp") {
+    return booking
+      ? `<span class="badge free">Going</span>`
+      : `<span class="badge free">RSVP</span>`;
+  }
   if (booking) return `<span class="badge free">Paid</span>`;
   if (reservation?.paymentMarkedAt) return `<span class="badge warn">Awaiting confirmation</span>`;
   if (reservation) return `<span class="badge warn">To be paid</span>`;
@@ -105,9 +110,12 @@ function sessionRow(s, { past, showDate = true, highlight } = {}) {
   if (s.cancelled) {
     end = `<span class="badge danger">Cancelled</span>`;
   } else if (booked) {
-    end = `<span class="badge free booked">Booked</span>`;
+    end = `<span class="badge free booked">${s.kind === "rsvp" ? "Going" : "Booked"}</span>`;
   } else if (reserved) {
     end = `<span class="badge warn">Pay by ${fmtDeadline(reserved.payDeadlineAt)}</span>`;
+  } else if (s.kind === "rsvp") {
+    const going = store.attendeesFor(s).length;
+    end = `<span class="badge free">RSVP</span><span class="spots">${going} going</span>`;
   } else if (s.kind === "free") {
     end = `<span class="badge free">Free</span><span class="spots">Just show up</span>`;
   } else if (midtownClosed) {
@@ -315,6 +323,7 @@ const FILTERS = [
   ["Water", "Water"],
   ["Strength", "Strength"],
   ["HYROX", "HYROX"],
+  ["Meals", "Meals"],
 ];
 
 function matchesFilter(s, filter) {
@@ -471,6 +480,35 @@ export function viewActivity(sessionId) {
         <button class="btn" type="button" data-action="ics" data-session="${s.id}">Add to calendar</button>
         ${directionsLink}
       </div>`;
+  } else if (s.kind === "rsvp") {
+    // RSVP sessions (e.g. the post-training lunch): no payment moves in-app,
+    // but the organizer needs a headcount — joining confirms instantly.
+    const goingCount = store.attendeesFor(s).length;
+    if (booking) {
+      actionBlock = `
+        <div class="banner mt16">
+          <span class="kicker">You're going</span>
+          <p>${goingCount} going — see you there. Everyone pays their own bill at the venue.</p>
+        </div>
+        <div class="btn-row ${showDirections ? "two" : ""}">
+          <button class="btn ghost" type="button" data-action="rsvp-withdraw" data-booking="${booking.id}">Can't make it</button>
+          ${directionsLink}
+        </div>`;
+    } else if (isMember) {
+      actionBlock = `
+        <div class="free-banner">
+          ${ICONS.pin}
+          <div><strong>Free to join — pay your own bill.</strong><br><span class="muted small">${goingCount} going so far · the organizer books a table from this list, so only tap if you're coming.</span></div>
+        </div>
+        <div class="btn-row ${showDirections ? "two" : ""}">
+          <button class="btn" type="button" data-action="rsvp-join" data-session="${s.id}">Count me in</button>
+          ${directionsLink}
+        </div>`;
+    } else if (user && user.status === "pending") {
+      actionBlock = `<div class="banner mt16"><p>Your membership is being reviewed — you can RSVP once you're approved.</p></div>`;
+    } else {
+      actionBlock = membersOnlyGate();
+    }
   } else if (midtownClosed) {
     const pos = user ? store.interestPosition(user.id, s.id) : null;
     const actionInner = isMember
@@ -795,7 +833,8 @@ export function viewCommunity(section) {
     case "fellowship":
       return communityFellowship();
     case "meals":
-      return communityMeals();
+      // Meals moved to the Schedule tab (recurring RSVP lunch).
+      return { redirect: "#/schedule" };
     case "announcements":
       return communityAnnouncements();
     case "about":
@@ -823,11 +862,10 @@ function communityHome() {
 
       <section class="community-feature" aria-labelledby="next-connection-title">
         <span class="kicker">Next connection</span>
-        <h2 id="next-connection-title">Post-training dinner</h2>
-        <p>Date and venue are announced in the session WhatsApp group a few days ahead.</p>
+        <h2 id="next-connection-title">Post-training lunch</h2>
+        <p>Every Saturday after HYROX. Everyone pays their own bill — RSVP so the organizer can book a table.</p>
         <div class="community-feature-actions">
-          <button class="btn sm" type="button" data-action="connect-interest" data-topic="the next ad-hoc meal">Count me in</button>
-          <a class="btn ghost sm" href="#/community/meals">View details</a>
+          <a class="btn sm" href="#/schedule">See the next lunch</a>
         </div>
       </section>
 
@@ -859,7 +897,7 @@ function communityHome() {
 
       <div class="community-section-head"><h2>Explore</h2></div>
       <nav class="community-explore" aria-label="Explore the ITC community">
-        <a href="#/community/meals">Meals</a>
+        <a href="#/schedule">Meals</a>
         <a href="#/community/announcements">Announcements</a>
         <a href="#/community/about">About ITC</a>
       </nav>
@@ -936,21 +974,6 @@ function communityFellowship() {
     </div></div>
     <button class="btn mt16" type="button" data-action="connect-interest" data-topic="fellowship groups">I’m interested — tell me more</button>
     <p class="muted small mt16 center">Draft content — fellowship details to be confirmed with ITC leadership.</p>`;
-}
-
-function communityMeals() {
-  return `
-    <a class="back-link" href="#/community">← Community</a>
-    <div class="kicker mt16">Community · Ad-Hoc Meals</div>
-    <h1 class="display sm">Ad-Hoc Meals.</h1>
-    <p class="subcopy mt8">The best conversations happen over food. After some sessions we head straight to a nearby cha chaan teng — no programme, no agenda, just dinner. First-timers especially welcome.</p>
-    <div class="card mt16"><div class="card-body">
-      <span class="kicker">Next meal</span>
-      <h3 class="mt8">Post-training dinner — details TBC</h3>
-      <p class="hero-meta">Date and venue are announced in the session WhatsApp group a few days ahead. Pay for your own meal; the company is free.</p>
-    </div></div>
-    <button class="btn mt16" type="button" data-action="connect-interest" data-topic="the next ad-hoc meal">Count me in</button>
-    <p class="muted small mt16 center">Prototype placeholder — meal scheduling will plug in here.</p>`;
 }
 
 function communityAnnouncements() {
@@ -1858,6 +1881,14 @@ export function viewBooking(bookingId) {
     head = `
       <h1 class="display sm mt16">Payment being confirmed.</h1>
       <p class="subcopy mt8">${cname} is checking your ${esc(b.paidMethod || "payment")}${b.paymentRef ? ` (ref ${esc(b.paymentRef)})` : ""} — your spot is held meanwhile.</p>`;
+  } else if (b.status === "confirmed" && !sessionStarted(s) && Number(s.price) === 0) {
+    head = `
+      <div class="confirm-mark">${ICONS.check}</div>
+      <h1 class="display sm center mt16">You’re going.</h1>
+      <p class="subcopy center mt8">No payment needed — everyone pays their own bill at the venue.</p>`;
+    actions = `
+      <button class="btn ghost" type="button" data-action="ics-booking" data-booking="${b.id}">Add to calendar</button>
+      ${mine ? `<button class="btn ghost" type="button" data-action="rsvp-withdraw" data-booking="${b.id}">Can’t make it</button>` : ""}`;
   } else if (b.status === "confirmed" && !sessionStarted(s)) {
     head = `
       <div class="confirm-mark">${ICONS.check}</div>
@@ -1900,7 +1931,7 @@ export function viewBooking(bookingId) {
         <div class="line"><span>When</span><strong>${esc(fmtDate(s.dateISO))} · ${fmtTime(s.time)}</strong></div>
         <div class="line"><span>Where</span><strong>${esc(s.location)}</strong></div>
         <div class="line"><span>Status</span><strong>${esc(b.status)}</strong></div>
-        <div class="line total"><span>Price</span><strong>${fmtMoney(s.price)}</strong></div>
+        <div class="line total"><span>Price</span><strong>${Number(s.price) > 0 ? fmtMoney(s.price) : "Pay your own bill"}</strong></div>
       </div>
     </div></div>
     <div class="btn-row">
@@ -2077,7 +2108,9 @@ function adminOps(viewer, memberUsers) {
 // on the Activities tab alongside the recurring defaults and free-event venue
 // overrides — setup and scheduling in one place.
 function adminWeeklySessions() {
-  const upcoming = store.upcomingSessions(21).filter((s) => s.category === "HYROX" && !sessionStarted(s));
+  const upcoming = store.upcomingSessions(21).filter(
+    (s) => (s.category === "HYROX" || s.kind === "rsvp") && !sessionStarted(s)
+  );
   if (!upcoming.length) return "";
   const sessionCards = upcoming.map((s) => {
     const confirmed = store.heldBookingsForSession(s.id).filter((b) => b.status === "confirmed");
@@ -2091,7 +2124,9 @@ function adminWeeklySessions() {
         <h3 class="mt8">${esc(s.location)}${isMid ? " (Midtown)" : " (BFT)"}</h3>
         ${override.cancelled ? `<p class="badge danger">${esc(sessionCancellationCopy(override))}</p>` : ""}
         ${isMid && !open && !override.cancelled ? `<p class="badge neutral">Not open</p>` : ""}
-        <p class="muted small mt8">${confirmed.length} confirmed in-app · ${atRisk.length} awaiting payment · cap ${s.capacity}</p>
+        <p class="muted small mt8">${s.kind === "rsvp"
+          ? `${confirmed.length} going · cap ${s.capacity}`
+          : `${confirmed.length} confirmed in-app · ${atRisk.length} awaiting payment · cap ${s.capacity}`}</p>
         ${!override.cancelled ? `
         <details class="mt8">
           <summary>Session controls</summary>
