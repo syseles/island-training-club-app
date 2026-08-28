@@ -115,6 +115,23 @@ export function mountVenueImageFallback(image, options = {}) {
   return true;
 }
 
+export function mountDetailPhotoFallback(image, options = {}) {
+  const ownsGeneration = options.ownsGeneration || (() => true);
+  const fallbackSrc = String(image?.dataset?.photoFallback || "").trim();
+  if (!image || !fallbackSrc || !ownsGeneration()) return false;
+  let fallbackAttempted = false;
+  image.addEventListener("error", () => {
+    if (!ownsGeneration() || !image.isConnected) return;
+    if (!fallbackAttempted && image.getAttribute("src") !== fallbackSrc) {
+      fallbackAttempted = true;
+      image.src = fallbackSrc;
+      return;
+    }
+    image.remove();
+  });
+  return true;
+}
+
 // --- Toasts --------------------------------------------------------------------
 
 export function toast(msg, isErr = false) {
@@ -459,6 +476,8 @@ async function render(generation = renderGeneration) {
     }
     const venueImage = viewEl.querySelector("[data-venue-image]");
     if (venueImage) mountVenueImageFallback(venueImage, { ownsGeneration });
+    const detailPhoto = viewEl.querySelector(".detail-photo");
+    if (detailPhoto) mountDetailPhotoFallback(detailPhoto, { ownsGeneration });
   }
   if (page === "admin" && arg === "activities") {
     const ownsGeneration = () => generation === renderGeneration;
