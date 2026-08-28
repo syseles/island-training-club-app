@@ -2080,8 +2080,14 @@ store.signIn("member@example.test");
   store.markBookingPaid(b.id, "FPS", "9921");
   store.signIn("admin@example.test");
   const ops = await views.viewAdmin("payments");
-  if (!ops.includes("HYROX") || (ops.match(/aria-current="page"/g) || []).length !== 1)
-    throw new Error("Admin payments tab should be labeled and expose one active tab");
+  if (!ops.includes(">Payments</a>") || ops.includes(">HYROX</a>")
+      || (ops.match(/aria-current="page"/g) || []).length !== 1)
+    throw new Error("Admin payments tab should be labeled Payments and expose one active tab");
+  if (ops.includes("Weekly Session Overrides") || ops.includes("form-cancel-week")
+      || ops.includes("midtown-toggle"))
+    throw new Error("payments tab must not carry weekly session controls");
+  if (!ops.includes('<details class="admin-section') || !ops.includes("<summary>"))
+    throw new Error("payments tab sections must collapse behind their headers");
   if (!ops.includes("Pending payments") || !ops.includes("9921"))
     throw new Error("ops should list pending payments with references");
   if (!ops.includes('data-action="confirm-payment"'))
@@ -3105,13 +3111,32 @@ if (!activitiesHtml.includes("Current venue: <strong>Victoria Park Swimming Pool
     || !activitiesHtml.includes("Recurring default: <strong>TBC</strong>")) {
   throw new Error("Activities must show distinct current and recurring venues for overridden Swimming");
 }
+if (!activitiesHtml.includes("Weekly Session Overrides")
+    || !activitiesHtml.includes("form-cancel-week")
+    || !activitiesHtml.includes('data-action="midtown-toggle"')
+    || !activitiesHtml.includes('data-action="venue-tbc-toggle"')) {
+  throw new Error("Activities must carry the weekly paid-session controls");
+}
+const sectionOrder = ["Recurring Activity Defaults", "Weekly Venue Overrides", "Weekly Session Overrides"];
+const sectionPositions = sectionOrder.map((label) => activitiesHtml.indexOf(label));
+if (sectionPositions.some((p) => p === -1)
+    || !(sectionPositions[0] < sectionPositions[1] && sectionPositions[1] < sectionPositions[2])) {
+  throw new Error("Activities sections must be ordered: defaults, venue overrides, session overrides");
+}
+if (!activitiesHtml.includes("Club operations") || activitiesHtml.includes("Club ops.")) {
+  throw new Error("Admin heading must read Club operations");
+}
+if (!activitiesHtml.includes('<details class="admin-section') || !activitiesHtml.includes("<summary>")) {
+  throw new Error("Activities sections must collapse behind their headers");
+}
 if (hyroxAdminHtml.includes("Weekly Venue Overrides")
     || hyroxAdminHtml.includes('data-action="form-week-venue"')) {
   throw new Error("HYROX must not contain free-event weekly venue controls");
 }
-if (!hyroxAdminHtml.includes(">HYROX</a>")
+if (!hyroxAdminHtml.includes(">Payments</a>")
+    || hyroxAdminHtml.includes(">HYROX</a>")
     || hyroxAdminHtml.includes("Payments / Ops")) {
-  throw new Error("the final Admin tab must be HYROX");
+  throw new Error("the final Admin tab must be Payments");
 }
 store.signOut();
 // Members cannot set a weekly venue.
