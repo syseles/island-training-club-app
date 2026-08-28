@@ -2002,7 +2002,7 @@ export async function viewAdmin(tab = "approvals") {
 
   return `
     <div class="kicker">Admin</div>
-    <h1 class="display">Club operations</h1>
+    <h1 class="display">Club Operations</h1>
     ${tabs}
     ${body}`;
 }

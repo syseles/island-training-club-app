@@ -3227,8 +3227,8 @@ if (sectionPositions.some((p) => p === -1)
     || !(sectionPositions[0] < sectionPositions[1] && sectionPositions[1] < sectionPositions[2])) {
   throw new Error("Activities sections must be ordered: defaults, venue overrides, session overrides");
 }
-if (!activitiesHtml.includes("Club operations") || activitiesHtml.includes("Club ops.")) {
-  throw new Error("Admin heading must read Club operations");
+if (!activitiesHtml.includes("Club Operations") || activitiesHtml.includes("Club ops.")) {
+  throw new Error("Admin heading must read Club Operations");
 }
 if (!activitiesHtml.includes('<details class="admin-section') || !activitiesHtml.includes("<summary>")) {
   throw new Error("Activities sections must collapse behind their headers");
