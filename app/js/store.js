@@ -1488,20 +1488,33 @@ export function setDuty(userId, saturdayISO) {
 }
 
 export function collectorPayoutsFor(userId) {
+  const profile = paymentUserById(userId);
+  const profilePhone = String(profile?.phone || "").trim();
   if (isLive()) {
     const live = liveOps.livePayoutFor(userId);
-    if (live) return { paymeLink: live.paymeLink || "", fpsPhone: live.fpsPhone || "" };
-    return { paymeLink: "", fpsPhone: "" };
+    if (live) return { paymeLink: live.paymeLink || "", fpsPhone: live.fpsPhone || profilePhone };
+    return { paymeLink: "", fpsPhone: profilePhone };
   }
-  return { paymeLink: "", fpsPhone: "", ...(state.paymentPayouts[userId] || {}) };
+  const saved = state.paymentPayouts[userId] || {};
+  return {
+    paymeLink: "",
+    fpsPhone: profilePhone || saved.fpsPhone || "",
+    ...saved,
+    // Membership Details is the source of truth whenever the local profile
+    // has a phone number.
+    ...(profilePhone ? { fpsPhone: profilePhone } : {}),
+  };
 }
 
 export function updateCollectorPayouts(userId, { paymeLink, fpsPhone }) {
+  const profile = paymentUserById(userId);
+  const profilePhone = String(profile?.phone || "").trim();
+  const resolvedFpsPhone = profilePhone || String(fpsPhone ?? "").trim();
   if (isLive()) {
-    const live = liveOps.liveUpdatePayout(userId, paymeLink, fpsPhone);
+    const live = liveOps.liveUpdatePayout(userId, paymeLink, resolvedFpsPhone);
     state.paymentPayouts[userId] = {
       paymeLink: String(paymeLink ?? "").trim(),
-      fpsPhone: String(fpsPhone ?? "").trim(),
+      fpsPhone: resolvedFpsPhone,
     };
     save();
     return live;
@@ -1511,7 +1524,7 @@ export function updateCollectorPayouts(userId, { paymeLink, fpsPhone }) {
   if (!target || target.status !== "approved" || !PAYMENT_ADMIN_ROLES.has(target.role)) return null;
   state.paymentPayouts[target.id] = {
     paymeLink: String(paymeLink ?? "").trim(),
-    fpsPhone: String(fpsPhone ?? "").trim(),
+    fpsPhone: profilePhone || String(fpsPhone ?? "").trim(),
   };
   save();
   return collectorPayoutsFor(target.id);

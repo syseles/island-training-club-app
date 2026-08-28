@@ -1286,9 +1286,12 @@ document.addEventListener("submit", async (e) => {
     case "form-payouts": {
       e.preventDefault();
       const fd = new FormData(form);
-      store.updateCollectorPayouts(store.currentUser().id, {
+      const member = store.currentUser();
+      const application = await store.getMyApplication();
+      const profilePhone = String(application?.mobile || application?.phone || member?.phone || "").trim();
+      store.updateCollectorPayouts(member.id, {
         paymeLink: fd.get("paymeLink"),
-        fpsPhone: fd.get("fpsPhone"),
+        fpsPhone: profilePhone,
       });
       toast("Payout details saved");
       render();

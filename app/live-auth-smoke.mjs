@@ -1562,26 +1562,28 @@ operationalAuthSubOverride = null;
 if (!await store.markBookingPaid(memberUuidBooking.id, "FPS", "LIVE-MEMBER-REF", Date.now())) {
   throw new Error("Live member UUID booking must enter pending Payment Ops");
 }
-store.setDuty(authUser.id, gatedPaidSession.dateISO);
+await store.setDuty(authUser.id, gatedPaidSession.dateISO);
 await store.updateCollectorPayouts(authUser.id, {
   paymeLink: "https://payme.example/live-admin",
-  fpsPhone: "+852 6999 0000",
+  fpsPhone: "+852 6123 4567",
 });
 let liveOpsHtml = await views.viewAdmin("payments");
-for (const marker of ["Micah Member", "LIVE-MEMBER-REF", "Riley Runner", "https://payme.example/live-admin", "+852 6999 0000"]) {
+for (const marker of ["Micah Member", "LIVE-MEMBER-REF", "Riley", "https://payme.example/live-admin", "+852 6123 4567"]) {
   if (!liveOpsHtml.includes(marker)) {
     throw new Error(`Live Payment Ops composition missing ${marker}`);
   }
 }
 const persistedLiveOps = JSON.parse(mem.get("itc.prototype.v1"));
 if (persistedLiveOps.users.length !== 0
-    || persistedLiveOps.paymentPayouts?.[authUser.id]?.fpsPhone !== "+852 6999 0000") {
+    || persistedLiveOps.paymentPayouts?.[authUser.id]?.fpsPhone !== "+852 6123 4567") {
   throw new Error("Live Payment Ops must persist UUID-keyed details without a local identity directory");
 }
 store.load();
 liveOpsHtml = await views.viewAdmin("payments");
 if (!liveOpsHtml.includes("https://payme.example/live-admin")
-    || !liveOpsHtml.includes("LIVE-MEMBER-REF")) {
+    || !liveOpsHtml.includes("LIVE-MEMBER-REF")
+    || liveOpsHtml.includes('name="fpsPhone"')
+    || !liveOpsHtml.includes("+852 6123 4567")) {
   throw new Error("Live Payment Ops details must survive a local state reload");
 }
 
@@ -1614,7 +1616,7 @@ await signOutForMember;
 await store.getCurrentUser();
 store.load();
 const memberPayHtml = views.viewPay(memberPayBooking.id);
-for (const marker of ["On-duty collector", "https://payme.example/live-admin", "+852 6999 0000", 'data-action="copy-fps"']) {
+for (const marker of ["On-duty collector", "https://payme.example/live-admin", "+852 6123 4567", 'data-action="copy-fps"']) {
   if (typeof memberPayHtml !== "string" || !memberPayHtml.includes(marker)) {
     throw new Error(`Member payout route after auth transition missing ${marker}`);
   }
@@ -2534,10 +2536,10 @@ Object.defineProperty(globalThis.navigator, "clipboard", {
   value: { writeText: async (value) => { copiedFps = value; } },
 });
 const fpsControl = makeElement();
-fpsControl.dataset = { action: "copy-fps", phone: "+852 6999 0000" };
+fpsControl.dataset = { action: "copy-fps", phone: "+852 6123 4567" };
 fpsControl.closest = () => fpsControl;
 await click({ target: fpsControl, preventDefault() {} });
-assert.equal(copiedFps, "+852 6999 0000");
+assert.equal(copiedFps, "+852 6123 4567");
 console.log("ok  delegated release, deferral, and FPS copy controls execute prototype behavior");
 
 // Gym finalization must travel through the delegated submit seam, persist the

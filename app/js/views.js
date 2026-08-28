@@ -2028,8 +2028,16 @@ export async function viewAdmin(tab = "approvals") {
       if (!isGivingSchemaMissing(error)) throw error;
       body = adminGivingSetupRequired();
     }
-  } else if (["payments", "ops"].includes(tab)) body = adminOps(user, memberUsers);
-  else body = adminApprovals(await store.listApprovalCandidates());
+  } else if (["payments", "ops"].includes(tab)) {
+    let profilePhone = String(user.phone || "").trim();
+    try {
+      const application = await store.getMyApplication();
+      profilePhone = String(application?.mobile || application?.phone || profilePhone).trim();
+    } catch (error) {
+      console.warn("Unable to load Membership Details phone for payout form", error);
+    }
+    body = adminOps(user, memberUsers, profilePhone);
+  } else body = adminApprovals(await store.listApprovalCandidates());
 
   return `
     <div class="kicker">Admin</div>
@@ -2046,7 +2054,7 @@ function pendingPayments(memberUsers) {
   });
 }
 
-function adminOps(viewer, memberUsers) {
+function adminOps(viewer, memberUsers, profilePhone = "") {
   const upcoming = store.upcomingSessions(21).filter((s) => s.category === "HYROX" && !sessionStarted(s));
   const thisWeekSat = upcoming[0]?.dateISO;
   const dutyUser = thisWeekSat ? store.collectorFor(`hyrox-${thisWeekSat}`) : null;
@@ -2073,7 +2081,8 @@ function adminOps(viewer, memberUsers) {
       <form id="form-payouts" class="mt16">
         <h3>My payout details</h3>
         <div class="field"><label for="payme-link">PayMe link</label><input id="payme-link" name="paymeLink" value="${esc(viewerPayouts.paymeLink)}" placeholder="https://payme.hsbc.com.hk/…"></div>
-        <div class="field"><label for="fps-phone">FPS phone</label><input id="fps-phone" name="fpsPhone" value="${esc(viewerPayouts.fpsPhone)}" placeholder="+852 …"></div>
+        <p class="muted small mt8">FPS phone: <strong>${esc(profilePhone || "Not set")}</strong> — taken from your Membership Details.</p>
+        <p class="muted small">To change this number, update Membership Details first, then save your payout details here.</p>
         <button class="btn ghost sm mt8" type="submit">Save payout details</button>
       </form>
     </div></div>

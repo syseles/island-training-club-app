@@ -2033,16 +2033,18 @@ installLocalFixtures();
     throw new Error("dutyFor should record the handover");
   if (store.collectorFor(sess.id)?.id !== "fixture-super")
     throw new Error("collectorFor should follow the handover");
-  // Collector payout details save.
   store.updateCollectorPayouts("fixture-super", {
     paymeLink: "https://payme.hsbc.com.hk/test-super",
-    fpsPhone: "+852 1111 2222",
   });
+  store.signIn("super@example.test");
+  const payoutHtml = await views.viewAdmin("payments");
+  if (payoutHtml.includes('name="fpsPhone"') || !payoutHtml.includes("+852 5000 0003"))
+    throw new Error("payout form should show the Membership Details phone without an FPS input");
   const c = store.collectorFor(sess.id);
   if (c.paymeLink !== "https://payme.hsbc.com.hk/test-super"
-      || c.fpsPhone !== "+852 1111 2222")
-    throw new Error("collector payout details should save");
-  console.log("ok  duty switch changes whose PayMe/FPS details are shown");
+      || c.fpsPhone !== "+852 5000 0003")
+    throw new Error("collector payout details should use the profile phone");
+  console.log("ok  duty switch changes whose PayMe link and profile FPS phone are shown");
 }
 
 // --- HYROX payment system: schedule & activity surfacing (Task 8) ---
