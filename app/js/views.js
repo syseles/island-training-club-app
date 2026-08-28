@@ -10,6 +10,11 @@ import { isLive } from "./config.js";
 import * as liveOps from "./operations.js";
 import { sessionCancellationCopy } from "./operations.js";
 import {
+  normalizeMeetingPoint,
+  normalizeVenueLocation,
+  venuePresentationFor,
+} from "./venue.js";
+import {
   LEADERS,
   CULTURE,
   ANNOUNCEMENTS,
@@ -305,9 +310,9 @@ export function resetScheduleState() {
 const FILTERS = [
   ["all", "All"],
   ["Run", "Run"],
+  ["Water", "Water"],
   ["Strength", "Strength"],
   ["HYROX", "HYROX"],
-  ["Water", "Water"],
 ];
 
 function matchesFilter(s, filter) {
@@ -393,6 +398,33 @@ export function viewSchedule() {
 
 // --- Activity detail ------------------------------------------------------------------
 
+function venuePresentationHTML(presentation) {
+  if (presentation.kind === "image") return `
+    <figure class="venue-guide activity-map-section">
+      <img class="venue-guide-image" src="${esc(presentation.src)}"
+        alt="${esc(presentation.alt)}" data-venue-image
+        data-fallback-query="${esc(presentation.fallbackQuery)}">
+      <figcaption>${esc(presentation.caption)}</figcaption>
+    </figure>`;
+  if (presentation.kind === "coordinates") return `
+    <section class="activity-map-section" aria-label="Venue map">
+      <div class="activity-map" id="activity-map"
+        data-map-lat="${presentation.lat}" data-map-lng="${presentation.lng}"
+        data-marker-label="${esc(presentation.markerLabel)}">
+        <p class="muted small" role="status">Loading map…</p>
+      </div>
+    </section>`;
+  if (presentation.kind === "geocode") return `
+    <section class="activity-map-section" aria-label="Venue map">
+      <div class="activity-map" id="activity-map"
+        data-maps-query="${esc(presentation.query)}"
+        data-marker-label="${esc(presentation.markerLabel)}">
+        <p class="muted small" role="status">Loading map…</p>
+      </div>
+    </section>`;
+  return "";
+}
+
 export function viewActivity(sessionId) {
   const s = store.getSession(sessionId);
   if (!s) return viewNotFound("That session doesn’t exist.");
@@ -408,6 +440,16 @@ export function viewActivity(sessionId) {
   const collectorName = collector ? (collector.preferredName || collector.fullName) : "the on-duty collector";
 
   let actionBlock = "";
+  const markerLabel = `${s.name} · ${fmtDate(s.date)} · ${fmtTime(s.time)}`;
+  const venuePresentation = venuePresentationFor({ ...s, markerLabel });
+  const showDirections = !s.cancelled && !past
+    && (venuePresentation.kind === "coordinates" || Boolean(s.mapsQuery));
+  const directionsLink = showDirections
+    ? `<a class="btn ghost" href="${mapsHref(s)}" target="_blank" rel="noopener">Get directions</a>`
+    : "";
+  const venueVisual = !s.cancelled && !past && s.kind === "free"
+    ? venuePresentationHTML(venuePresentation)
+    : "";
   if (s.cancelled) {
     actionBlock = `
       <div class="banner warn mt16">
@@ -423,27 +465,34 @@ export function viewActivity(sessionId) {
         ${ICONS.pin}
         <div><strong>Free · No booking needed.</strong><br><span class="muted small">Everyone is welcome — just show up${s.id.startsWith("wnt") ? " and look for the lime ITC flag" : ""}.</span></div>
       </div>
-      <div class="btn-row ${s.mapsQuery ? "two" : ""}">
+      <div class="btn-row ${showDirections ? "two" : ""}">
         <button class="btn" type="button" data-action="ics" data-session="${s.id}">Add to calendar</button>
-        ${s.mapsQuery ? `<a class="btn ghost" href="${mapsHref(s)}" target="_blank" rel="noopener">Get directions</a>` : ""}
+        ${directionsLink}
       </div>`;
   } else if (midtownClosed) {
     const pos = user ? store.interestPosition(user.id, s.id) : null;
-    actionBlock = isMember
+    const actionInner = isMember
       ? pos
         ? `
         <div class="banner mt16">
           <span class="kicker">Waiting for Midtown</span>
           <p>You’re #${pos} in line. When the collector opens this session, the first ${s.capacity} in line get spots automatically.</p>
         </div>
-        <div class="btn-row"><button class="btn ghost" type="button" data-action="leave-interest" data-session="${s.id}">Leave the list</button></div>`
+        <div class="btn-row">
+          <button class="btn ghost" type="button" data-action="leave-interest" data-session="${s.id}">Leave the list</button>
+          ${directionsLink}
+        </div>`
         : `
         <div class="banner mt16">
           <span class="kicker">Midtown not open yet</span>
           <p>BFT fills first — the collector opens Midtown when demand justifies it. Join the list and you’ll auto-convert in order.</p>
         </div>
-        <div class="btn-row"><button class="btn" type="button" data-action="join-interest" data-session="${s.id}">Wait for Midtown</button></div>`
+        <div class="btn-row">
+          <button class="btn" type="button" data-action="join-interest" data-session="${s.id}">Wait for Midtown</button>
+          ${directionsLink}
+        </div>`
       : membersOnlyGate();
+    actionBlock = actionInner;
   } else if (booking) {
     actionBlock = `
       <div class="banner mt16">
@@ -452,24 +501,36 @@ export function viewActivity(sessionId) {
       </div>
       <div class="btn-row">
         <a class="btn" href="#/booking/${booking.id}">Manage booking</a>
+        ${directionsLink}
       </div>`;
   } else if (spots <= 0) {
-    actionBlock = `<button class="btn mt16" disabled>Session full</button>`;
+    actionBlock = `
+      <div class="btn-row">
+        <button class="btn" disabled>Session full</button>
+        ${directionsLink}
+      </div>`;
   } else if (isMember) {
     actionBlock = `
-      <a class="btn mt16" href="#/checkout/${s.id}">Book & pay · ${fmtMoney(s.price)}</a>
+      <div class="btn-row">
+        <a class="btn" href="#/checkout/${s.id}">Book & pay · ${fmtMoney(s.price)}</a>
+        ${directionsLink}
+      </div>
       <p class="muted small mt8 center">Paid per session · receipt issued instantly · manage from your account</p>`;
   } else if (user && user.status === "pending") {
     actionBlock = `
       <div class="banner warn mt16">
         <span class="kicker">Booking locked</span>
         <p>Paid sessions unlock once an ITC leader approves your membership.</p>
-      </div>`;
+      </div>
+      ${directionsLink ? `<div class="btn-row">${directionsLink}</div>` : ""}`;
   } else if (user && user.status === "declined") {
     actionBlock = `
-      <div class="banner mt16"><p>Your application wasn’t approved. Contact an ITC leader if you think this is a mistake.</p></div>`;
+      <div class="banner mt16"><p>Your application wasn’t approved. Contact an ITC leader if you think this is a mistake.</p></div>
+      ${directionsLink ? `<div class="btn-row">${directionsLink}</div>` : ""}`;
   } else {
-    actionBlock = membersOnlyGate();
+    actionBlock = `
+      ${membersOnlyGate()}
+      ${directionsLink ? `<div class="btn-row">${directionsLink}</div>` : ""}`;
   }
 
   const metaPaid =
@@ -507,11 +568,16 @@ export function viewActivity(sessionId) {
     </div>
     <p class="subcopy mt16">${esc(s.blurb)}</p>
     ${leaderNote}
+    ${venueVisual}
     ${actionBlock}
     ${attendees}`;
 }
 
 function mapsHref(s) {
+  const presentation = venuePresentationFor(s);
+  if (presentation.kind === "coordinates") {
+    return `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(`${presentation.lat},${presentation.lng}`)}`;
+  }
   const q = s.mapsQuery || s.location;
   return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(q)}`;
 }
@@ -895,6 +961,7 @@ function communityAnnouncements() {
   return `
     <a class="back-link" href="#/community">← Community</a>
     <article class="anniversary-story">
+    <article class="anniversary-story">
       <div class="kicker">${esc(fmtDay(announcement.postedAt))} · ITC Anniversary</div>
       <h1 class="display sm">${esc(announcement.title)}.</h1>
       <p class="subcopy mt8">${esc(announcement.lead)}</p>
@@ -912,7 +979,6 @@ function communityAnnouncements() {
       <p class="anniversary-message">${esc(announcement.body)}</p>
       <blockquote class="anniversary-commitment">${esc(announcement.commitment)}</blockquote>
     </article>`;
-
 }
 
 export async function viewAccount(section, sub) {
@@ -987,6 +1053,7 @@ async function hydrateLiveUser(user) {
       ...user,
       phone: app.mobile ?? user.phone ?? "",
       emergencyName: app.emergency_name ?? user.emergencyName ?? "",
+      emergencyRelationship: app.emergency_relationship ?? user.emergencyRelationship ?? "",
       emergencyPhone: app.emergency_phone ?? user.emergencyPhone ?? "",
       preferredName: (Object.prototype.hasOwnProperty.call(app, "preferred_name")) ? (app.preferred_name || "") : user.preferredName,
       heard: app.heard_source ?? user.heard ?? "",
@@ -998,6 +1065,9 @@ async function hydrateLiveUser(user) {
       emailReceipts: app.email_receipts !== undefined ? !!app.email_receipts : user.emailReceipts,
       communityNews: app.community_news !== undefined ? !!app.community_news : user.communityNews,
       indemnityAcceptedAt: app.waiver_accepted_at ?? user.indemnityAcceptedAt,
+      indemnitySignature: app.waiver_signature_text ?? user.indemnitySignature ?? "",
+      indemnitySignedAt: app.waiver_signed_at ?? user.indemnitySignedAt ?? "",
+      indemnityFormVersion: app.waiver_form_version ?? user.indemnityFormVersion ?? "",
       privacyAcceptedAt: app.privacy_accepted_at ?? user.privacyAcceptedAt,
       appliedAt: app.submitted_at ?? user.appliedAt,
     };
@@ -1043,8 +1113,44 @@ function accountVisitor() {
     </div></div>`;
 }
 
+function emergencyContactSummary(name, relationship, phone) {
+  return esc(
+    [name, relationship, phone]
+      .map((value) => String(value || "").trim())
+      .filter(Boolean)
+      .join(" · ") || "—"
+  );
+}
+
+function indemnityState(user) {
+  const acceptedAt = user?.indemnityAcceptedAt;
+  if (!acceptedAt) {
+    return {
+      kind: "missing",
+      row: "To be accepted",
+      kicker: "To be accepted",
+      body: "Please read the indemnity below, then accept and confirm — it’s required for joining ITC activities.",
+    };
+  }
+  if (store.isIndemnityCurrent(user)) {
+    return {
+      kind: "current",
+      row: `Indemnity confirmed on ${fmtDay(acceptedAt)}`,
+      kicker: `Indemnity confirmed on ${fmtDay(acceptedAt)}`,
+      body: "You’re confirmed to join ITC activities.",
+    };
+  }
+  return {
+    kind: "stale",
+    row: `Legacy acceptance recorded on ${fmtDay(acceptedAt)}`,
+    kicker: `Legacy acceptance recorded on ${fmtDay(acceptedAt)}`,
+    body: "Please review the current indemnity and confirm it again so your record includes the required signature, signing date, and emergency-contact relationship.",
+  };
+}
+
 async function accountPending(user) {
   const hydrated = await hydrateLiveUser(user);
+  const indemnity = indemnityState(hydrated);
   return `
     <div class="kicker">Profile · ${esc(user.email)}</div>
     <h1 class="display">Thanks, ${esc(hydrated.preferredName || user.fullName.split(" ")[0])}.</h1>
@@ -1054,10 +1160,10 @@ async function accountPending(user) {
       <div class="receipt-lines">
         <div class="line"><span>Name</span><strong>${esc(user.fullName)}</strong></div>
         <div class="line"><span>Phone</span><strong>${esc(hydrated.phone)}</strong></div>
-        <div class="line"><span>Emergency contact</span><strong>${esc(hydrated.emergencyName)} · ${esc(hydrated.emergencyPhone)}</strong></div>
+        <div class="line"><span>Emergency contact</span><strong>${emergencyContactSummary(hydrated.emergencyName, hydrated.emergencyRelationship, hydrated.emergencyPhone)}</strong></div>
         <div class="line"><span>Heard about ITC</span><strong>${esc(hydrated.heard)}</strong></div>
         ${user.donorId ? `<div class="line"><span>Donor ID</span><strong>${esc(user.donorId)}</strong></div>` : ""}
-        <div class="line"><span>Indemnity</span><strong>${hydrated.indemnityAcceptedAt ? "Accepted" : "—"}</strong></div>
+        <div class="line"><span>Indemnity</span><strong>${indemnity.kind === "current" ? "Accepted" : indemnity.kind === "stale" ? "Review & confirm" : "—"}</strong></div>
         <div class="line"><span>Photo consent</span><strong>${hydrated.mediaConsent ? "Yes" : "No"}</strong></div>
       </div>
     </div></div>
@@ -1083,6 +1189,7 @@ function accountDeclined(user) {
 
 async function accountMember(user) {
   const hydrated = await hydrateLiveUser(user);
+  const indemnity = indemnityState(hydrated);
   const normalized = normalizeRole(hydrated.role);
   if (user.role !== normalized) user.role = normalized;
   const isAdmin = isAdminRole(normalized);
@@ -1121,8 +1228,8 @@ async function accountMember(user) {
         "#/account/indemnity",
         ICONS.check,
         "Indemnity",
-        hydrated.indemnityAcceptedAt ? `Indemnity confirmed on ${fmtDay(hydrated.indemnityAcceptedAt)}` : "To be accepted",
-        { cls: hydrated.indemnityAcceptedAt ? "ok" : "todo" }
+        indemnity.row,
+        { cls: indemnity.kind === "current" ? "ok" : "todo" }
       )}
       ${profileRow("#/account/donor", ICONS.heart, "Donor Profile", "Donor ID and e-receipt details")}
       ${profileRow("#/account/payments", ICONS.dollar, "Payments & Receipts", "Bookings, donations and orders")}
@@ -1180,6 +1287,10 @@ async function accountDetailsEdit(user) {
         <input id="md-emergency_name" name="emergency_name" value="${esc(hydrated.emergencyName || "")}" required>
       </div>
       <div class="field">
+        <label for="md-emergency_relationship">Emergency contact relationship *</label>
+        <input id="md-emergency_relationship" name="emergency_relationship" value="${esc(hydrated.emergencyRelationship || "")}" required>
+      </div>
+      <div class="field">
         <label for="md-emergency_phone">Emergency contact phone *</label>
         <input id="md-emergency_phone" name="emergency_phone" type="tel" value="${esc(hydrated.emergencyPhone || "")}" required>
       </div>
@@ -1210,11 +1321,12 @@ async function accountDetails(user) {
         <div class="line"><span>Mobile / WhatsApp number</span><strong>${esc(hydrated.phone)}</strong></div>
         <div class="line"><span>Age status</span><strong>${ageStatus}</strong></div>
         <div class="line"><span>Emergency contact name</span><strong>${esc(hydrated.emergencyName)}</strong></div>
+        <div class="line"><span>Emergency contact relationship</span><strong>${esc(hydrated.emergencyRelationship)}</strong></div>
         <div class="line"><span>Emergency contact phone</span><strong>${esc(hydrated.emergencyPhone)}</strong></div>
         <div class="line"><span>How you heard about ITC</span><strong>${esc(hydrated.heard || "—")}</strong></div>
         <a class="btn ghost sm mt16" href="#/account/details/edit">Edit membership details</a>
       </div>
-      <p class="muted small mt16">Profile editing is stubbed in the prototype — fields come from the application form.</p>
+      <p class="muted small mt16">Keep these details current so ITC leaders can reach you in an emergency.</p>
     </div></div>`;
 }
 
@@ -1235,51 +1347,53 @@ function linkCard(href, title, status, { sub = "", cls = "" } = {}) {
     </a>`;
 }
 
-// Draft indemnity wording — final text to be confirmed with ITC leadership
-// before launch. The apply form captures acceptance at join time; this page
-// catches members who joined before that requirement existed.
 async function accountIndemnity(user) {
   const hydrated = await hydrateLiveUser(user);
-  const at = hydrated.indemnityAcceptedAt;
+  const current = store.isIndemnityCurrent(hydrated);
+  const hadAcceptance = !!hydrated.indemnityAcceptedAt;
+  const defaultDate = todayISO();
   return `
     <a class="back-link" href="#/account">← Profile</a>
     <div class="kicker mt16">Profile · Indemnity</div>
-    <h1 class="display sm">Health &amp; Liability Indemnity.</h1>
-    ${
-      at
-        ? `
+    <h1 class="display sm">Indemnity.</h1>
+    ${current ? `
       <div class="banner mt16">
-        <span class="kicker">Indemnity confirmed on ${fmtDay(at)}</span>
+        <span class="kicker">Indemnity confirmed on ${fmtDay(hydrated.indemnityAcceptedAt)}</span>
         <p>You’re confirmed to join ITC activities.</p>
-      </div>`
-        : `
+      </div>` : `
       <div class="banner warn mt16">
         <span class="kicker">To be accepted</span>
-        <p>Please read the indemnity below, then accept and confirm — it’s required for joining ITC activities.</p>
-      </div>`
-    }
-    <div class="card mt16"><div class="card-body prose">
-      <h3>Health declaration</h3>
-      <p>I confirm that I am physically fit and in good health, and I know of no medical reason I should not take part in Island Training Club (ITC) activities. If my health changes, I will seek professional medical advice before taking part again.</p>
-      <h3>Participation at my own risk</h3>
-      <p>I understand that ITC activities are recreational, may be volunteer-led, and involve inherent physical risk. I take part at my own risk, will work within my own limits, and will follow the instructions of ITC leaders at all times.</p>
-      <h3>Release &amp; indemnity</h3>
-      <p>To the fullest extent permitted by law, I release and indemnify ITC, its leaders, members and volunteers against any claim, loss, injury or damage arising from my participation in ITC activities.</p>
-      <h3>Emergency contact</h3>
-      <p>I confirm the emergency contact details in my membership application are accurate, and I will keep them up to date.</p>
-    </div></div>
-    ${
-      at
-        ? ""
-        : `
-      <form id="form-indemnity" class="mt16" novalidate>
-        <label class="check"><input type="checkbox" name="indemnityAccept" required>
-          <span>I have read and accept the health &amp; liability indemnity above. *</span></label>
-        <div id="indemnity-error"></div>
-        <button class="btn mt16" type="submit">Accept &amp; Confirm</button>
-      </form>`
-    }
-    <p class="muted small mt16">Draft wording — the final indemnity will be confirmed with ITC leadership before launch.</p>`;
+        <p>${hadAcceptance
+          ? "A new version of the Indemnity is available. Please read and re-sign."
+          : "Please read the Indemnity, then accept and confirm."}</p>
+      </div>`}
+    ${current ? `
+      <a class="btn ghost sm mt16" href="#" data-action="open-doc" data-doc="indemnity">View as full document</a>
+      <div class="card mt16"><div class="card-body receipt-lines">
+        <div class="line"><span>Signed by</span><strong>${esc(hydrated.indemnitySignature)}</strong></div>
+        <div class="line"><span>Date of signing</span><strong>${fmtDay(parseISO(hydrated.indemnitySignedAt))}</strong></div>
+        <div class="line"><span>Emergency contact name</span><strong>${esc(hydrated.emergencyName)}</strong></div>
+        <div class="line"><span>Emergency contact relationship</span><strong>${esc(hydrated.emergencyRelationship)}</strong></div>
+        <div class="line"><span>Emergency contact phone</span><strong>${esc(hydrated.emergencyPhone)}</strong></div>
+        <div class="line"><span>Document version</span><strong>${esc(hydrated.indemnityFormVersion)}</strong></div>
+      </div></div>` : `
+      <div data-doc-accept="indemnity">
+        <a class="btn ghost sm mt16" href="#" data-action="open-doc" data-doc="indemnity">View as full document</a>
+        <p class="muted small" data-doc-hint>Read the document to enable acceptance.</p>
+        <form id="form-indemnity" class="mt16" novalidate>
+          <div class="field"><label for="indemnity-signature">Participant's full name as signature *</label><input id="indemnity-signature" name="signature" required autocomplete="name"></div>
+          <div class="field"><label for="indemnity-signed-at">Date of signing *</label><input id="indemnity-signed-at" name="signedAt" type="date" value="${defaultDate}" max="${defaultDate}" required></div>
+          <div class="card"><div class="card-body receipt-lines">
+            <div class="line"><span>Emergency contact name</span><strong>${esc(hydrated.emergencyName || "Not provided")}</strong></div>
+            <div class="line"><span>Emergency contact phone</span><strong>${esc(hydrated.emergencyPhone || "Not provided")}</strong></div>
+          </div></div>
+          <div class="field"><label for="indemnity-relationship">Emergency contact relationship *</label><input id="indemnity-relationship" name="emergencyRelationship" value="${esc(hydrated.emergencyRelationship || "")}" required></div>
+          <a class="btn ghost sm" href="#/account/details/edit">Edit in Membership Details →</a>
+          <div id="indemnity-error"></div>
+          <button class="btn mt16" type="submit" data-doc-submit disabled>Accept &amp; Confirm</button>
+        </form>
+      </div>`}
+  `;
 }
 
 function accountDonor(user, application) {
@@ -1467,11 +1581,11 @@ function ageStatusField(isMinor) {
     </div>`;
 }
 
-function applyField(type, name, label, required, value = "") {
+function applyField(type, name, label, required, value = "", attrs = "") {
   return `
     <label class="field">
       <span class="field-label">${esc(label)}${required ? " *" : ""}</span>
-      <input type="${type}" name="${name}" value="${esc(value || "")}" ${required ? "required" : ""}>
+      <input type="${type}" name="${name}" value="${esc(value || "")}" ${required ? "required" : ""}${attrs ? ` ${attrs}` : ""}>
     </label>`;
 }
 
@@ -1516,15 +1630,30 @@ function applyFormHtml(cu, draft) {
           ${applyField("text", "guardian_phone", "Guardian phone", savedAge === true, fields.guardian_phone)}
         </div>
         ${applyField("text", "emergency_name", "Emergency contact name", true, fields.emergency_name)}
+        ${applyField("text", "emergency_relationship", "Relationship to participant", true, fields.emergency_relationship)}
         ${applyField("text", "emergency_phone", "Emergency contact phone", true, fields.emergency_phone)}
         ${applySelect("heard_source", "How did you hear about ITC?", ["friend", "family", "search", "social", "event", "other"], true, fields.heard_source)}
         ${applyField("text", "heard_detail", "Detail (optional)", false, fields.heard_detail)}
         ${applyField("text", "preferred_name", "Preferred name (optional)", false, fields.preferred_name)}
         <label class="check"><input type="checkbox" name="photo_consent" ${checked("photo_consent")} required> I consent to photos/videos of me being used on ITC channels. *</label>
         <p class="muted small">Please contact ITC Committee if you have any questions/concerns about this.</p>
-        <label class="check"><input type="checkbox" name="waiver" ${checked("waiver")} required> I accept the participation waiver. (⏳ text pending ITC review)</label>
-        <label class="check"><input type="checkbox" name="privacy" ${checked("privacy")} required> I accept the privacy policy. (⏳ text pending ITC review)</label>
-        <label class="check"><input type="checkbox" name="guidelines" ${checked("guidelines")} required> I accept the community guidelines. (⏳ text pending ITC review)</label>
+        <div data-doc-accept="indemnity">
+          <label class="check"><input type="checkbox" name="waiver" ${checked("waiver")} required disabled data-doc-checkbox>
+            <span>I accept the <a href="#" class="modal-link" data-action="open-doc" data-doc="indemnity">Indemnity</a> form. *</span></label>
+          <p class="muted small" data-doc-hint>Read the document to enable acceptance.</p>
+        </div>
+        ${applyField("text", "waiver_signature_text", "Participant's full name as signature", true, fields.waiver_signature_text)}
+        ${applyField("date", "waiver_signed_at", "Date of signing", true, fields.waiver_signed_at || todayISO(), `max="${todayISO()}"`)}
+        <div data-doc-accept="privacy">
+          <label class="check"><input type="checkbox" name="privacy" ${checked("privacy")} required disabled data-doc-checkbox>
+            <span>I accept the <a href="#" class="modal-link" data-action="open-doc" data-doc="privacy">privacy policy</a>. *</span></label>
+          <p class="muted small" data-doc-hint>Read the document to enable acceptance.</p>
+        </div>
+        <div data-doc-accept="guidelines">
+          <label class="check"><input type="checkbox" name="guidelines" ${checked("guidelines")} required disabled data-doc-checkbox>
+            <span>I accept the <a href="#" class="modal-link" data-action="open-doc" data-doc="guidelines">community guidelines</a>. *</span></label>
+          <p class="muted small" data-doc-hint>Read the document to enable acceptance.</p>
+        </div>
         <button class="btn btn-primary" type="submit">Submit application</button>
         <div class="draft-controls mt16">
           <button class="btn ghost sm" type="button" data-action="save-draft">Save draft now</button>
@@ -1554,6 +1683,7 @@ function viewApplyLocal() {
       <div class="field"><label for="ap-phone">Mobile / WhatsApp *</label><input id="ap-phone" name="phone" type="tel" required autocomplete="tel" placeholder="+852 …"></div>
       <div class="field-row">
         <div class="field"><label for="ap-en">Emergency contact name *</label><input id="ap-en" name="emergencyName" required></div>
+        <div class="field"><label for="ap-er">Relationship to participant *</label><input id="ap-er" name="emergencyRelationship" required></div>
         <div class="field"><label for="ap-ep">Emergency contact phone *</label><input id="ap-ep" name="emergencyPhone" type="tel" required></div>
       </div>
       <div class="field">
@@ -1573,18 +1703,34 @@ function viewApplyLocal() {
       </div>
       <label class="check"><input type="checkbox" name="ageConfirmed" required>
         <span>I confirm I am 18 or over, or that a parent/guardian will accompany me to sessions. *</span></label>
-      <label class="check"><input type="checkbox" name="indemnity" required>
-        <span>I accept the health &amp; liability indemnity — I confirm I am fit to take part, I join ITC activities at my own risk, and I release ITC and its leaders from liability. *</span></label>
-      <label class="check"><input type="checkbox" name="guidelines" required>
-        <span>I accept the ITC community guidelines. *</span></label>
-      <label class="check"><input type="checkbox" name="privacy" required>
-        <span>I accept the privacy policy. *</span></label>
+      <div data-doc-accept="indemnity">
+        <label class="check"><input type="checkbox" name="indemnity" required disabled data-doc-checkbox>
+          <span>I accept the <a href="#" class="modal-link" data-action="open-doc" data-doc="indemnity">Indemnity</a> form. *</span></label>
+        <p class="muted small" data-doc-hint>Read the document to enable acceptance.</p>
+      </div>
+      <div class="field">
+        <label for="ap-signature">Participant's full name as signature *</label>
+        <input id="ap-signature" name="indemnitySignature" required autocomplete="name">
+      </div>
+      <div class="field">
+        <label for="ap-signed-at">Date of signing *</label>
+        <input id="ap-signed-at" name="indemnitySignedAt" type="date" value="${todayISO()}" max="${todayISO()}" required>
+      </div>
+      <div data-doc-accept="guidelines">
+        <label class="check"><input type="checkbox" name="guidelines" required disabled data-doc-checkbox>
+          <span>I accept the <a href="#" class="modal-link" data-action="open-doc" data-doc="guidelines">community guidelines</a>. *</span></label>
+        <p class="muted small" data-doc-hint>Read the document to enable acceptance.</p>
+      </div>
+      <div data-doc-accept="privacy">
+        <label class="check"><input type="checkbox" name="privacy" required disabled data-doc-checkbox>
+          <span>I accept the <a href="#" class="modal-link" data-action="open-doc" data-doc="privacy">privacy policy</a>. *</span></label>
+        <p class="muted small" data-doc-hint>Read the document to enable acceptance.</p>
+      </div>
       <label class="check"><input type="checkbox" name="mediaConsent" required>
         <span>I consent to being included in ITC photos and videos. *</span></label>
       <p class="muted small">Please contact ITC Committee if you have any questions/concerns about this.</p>
       <div id="apply-error"></div>
       <button class="btn mt24" type="submit">Submit application</button>
-      <p class="muted small mt8">Draft form — final fields and waiver wording to be confirmed with ITC leadership.</p>
     </form>`;
 }
 
@@ -1666,6 +1812,7 @@ export function viewPay(bookingId) {
         <div class="field-row">
           <label class="chip"><input type="radio" name="method" value="PayMe" checked> PayMe</label>
           <label class="chip"><input type="radio" name="method" value="FPS"> FPS</label>
+        </div>
         </div>
         <div class="field"><label for="pay-ref">Reference (optional)</label><input id="pay-ref" name="ref" placeholder="e.g. last 4 digits"></div>
         <p class="muted small mt8">${cname} confirms in-app when the money lands — your spot is held meanwhile.</p>
@@ -1823,7 +1970,7 @@ export async function viewAdmin(tab = "approvals") {
         ["members", "Members"],
         ["activities", "Activities"],
         ["giving", "Giving"],
-        ["payments", "Payments / Ops"],
+        ["payments", "HYROX"],
       ]
         .map(([key, label]) => `<a href="#/admin/${key}" class="${key === canonicalTab ? "active" : ""}"${key === canonicalTab ? ' aria-current="page"' : ""}>${label}</a>`)
         .join("")}
@@ -1973,6 +2120,58 @@ function adminOps(viewer, memberUsers) {
     ${sessionCards}`;
 }
 
+function adminFreeEventVenues() {
+  const upcoming = store.upcomingSessions(21)
+    .filter((s) => s.kind === "free" && !sessionStarted(s));
+  if (!upcoming.length) return "";
+  return `
+    <div class="section-head mt24"><h2>Weekly Venue Overrides</h2></div>
+    <p class="muted small">Set a venue for one dated free event. Later weeks keep the recurring default.</p>
+    ${upcoming.map((s) => {
+      const override = store.weekVenueOverride(s.id);
+      const recurring = store.getActivity(s.activityId);
+      const safeId = esc(s.id);
+      const locationId = `week-venue-location-${safeId}`;
+      const mapsId = `week-venue-maps-${safeId}`;
+      const point = normalizeMeetingPoint(override.meetingLat, override.meetingLng);
+      const isTamar = normalizeVenueLocation(override.location || s.location) === "tamar park";
+      const picker = s.activityId === "wnt" ? `
+        <input type="hidden" name="meetingLat" value="${point?.lat ?? ""}">
+        <input type="hidden" name="meetingLng" value="${point?.lng ?? ""}">
+        <div class="venue-picker-shell ${isTamar ? "" : "hidden"}" data-venue-picker-shell>
+          <p class="kicker dim">Meeting point · Only this session</p>
+          <div class="venue-picker" data-venue-picker data-session="${safeId}">
+            <p class="muted small" role="status">Loading map…</p>
+          </div>
+        </div>` : "";
+      return `
+        <div class="card mt16 free-event-venue-card"><div class="card-body">
+          <div class="kicker dim" style="margin-top:0">${esc(fmtDate(s.dateISO))} · ${fmtTime(s.time)}</div>
+          <h3 class="mt8">${esc(s.name)}</h3>
+          <span class="badge neutral">Only this session</span>
+          <p class="muted small mt8">Current venue: <strong>${esc(s.location || "TBC")}</strong></p>
+          <p class="muted small">Recurring default: <strong>${esc(recurring?.location || "TBC")}</strong></p>
+          <form class="mt8" data-action="form-week-venue" data-session="${safeId}">
+            <div class="field-row">
+              <div class="field">
+                <label for="${locationId}">Display location</label>
+                <input id="${locationId}" name="location" value="${esc(override.location || '')}" placeholder="e.g. Central Harbourfront — 7pm sharp">
+              </div>
+              <div class="field">
+                <label for="${mapsId}">Google Maps search</label>
+                <input id="${mapsId}" name="mapsQuery" value="${esc(override.mapsQuery || '')}" placeholder="e.g. Central Harbourfront, Hong Kong">
+              </div>
+            </div>
+            ${picker}
+            <div class="btn-row">
+              <button class="btn ghost sm" type="submit">Save Weekly Venue</button>
+              <button class="btn ghost sm" type="button" data-action="reset-week-venue" data-session="${safeId}">Reset to Recurring Default</button>
+            </div>
+          </form>
+        </div></div>`;
+    }).join("")}`;
+}
+
 function adminApprovals(pending) {
   if (!pending.length) {
     return `<div class="empty">No pending members. New signups will land here.</div>`;
@@ -1988,6 +2187,11 @@ function adminApprovals(pending) {
   const decisionButton = (u, action, extraClass = "") => `
     <button class="btn ${extraClass}sm" type="button" data-action="${action}" data-user="${esc(u.id)}" data-applicant-name="${esc(u.fullName)}">${action === "approve" ? "Approve" : "Decline"}</button>`;
   const joinedDate = (u) => new Date(u.appliedAt).toLocaleDateString("en-HK", { day: "numeric", month: "short" });
+  const indemnityStatus = (u) => !u.indemnityAcceptedAt
+    ? "—"
+    : store.isIndemnityCurrent(u)
+      ? "Accepted"
+      : "Review required";
   const readyCard = (u) => `
     <div class="card booking-card applicant" id="approval-${esc(u.id)}" data-approval-card data-applicant-name="${esc(u.fullName)}"><div class="card-body">
       <header>
@@ -2000,10 +2204,10 @@ function adminApprovals(pending) {
       <dl>
         <dt>Email</dt><dd>${esc(u.email)}</dd>
         <dt>Phone</dt><dd>${esc(u.phone)}</dd>
-        <dt>Emergency</dt><dd>${esc(u.emergencyName)} · ${esc(u.emergencyPhone)}</dd>
+        <dt>Emergency</dt><dd>${emergencyContactSummary(u.emergencyName, u.emergencyRelationship, u.emergencyPhone)}</dd>
         <dt>Heard via</dt><dd>${esc(u.heard)}</dd>
         <dt>Age 18+ / guardian</dt><dd>${u.isMinor ? "Under 18 · guardian required" : "18 or over"}</dd>
-        <dt>Indemnity</dt><dd>${u.indemnityAcceptedAt ? "Accepted" : "—"}</dd>
+        <dt>Indemnity</dt><dd>${indemnityStatus(u)}</dd>
         <dt>Photo consent</dt><dd>${u.mediaConsent ? "Yes" : "No"}</dd>
       </dl>
       <div class="actions">
@@ -2118,11 +2322,9 @@ export async function viewAdminCampaign(id) {
 
 function adminActivities() {
   const acts = store.activities();
-  return `
-    <div class="session-list">
-      ${acts
-        .map(
-          (a) => `
+  const activityRows = acts
+    .map(
+      (a) => `
         <a class="session-row" href="#/admin/activity/${a.id}">
           <time>${["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][a.weekday]}<small>${a.time}</small></time>
           <div>
@@ -2134,10 +2336,16 @@ function adminActivities() {
             ${a.published ? "" : '<span class="badge neutral">Hidden</span>'}
           </div>
         </a>`
-        )
-        .join("")}
-    </div>
-    <a class="btn ghost mt16" href="#/admin/activity/new">+ New activity</a>`;
+    )
+    .join("");
+  return `
+    <div class="section-head"><h2>Recurring Activity Defaults</h2></div>
+    <p class="muted small">${isLive()
+      ? "Live deployment — recurring defaults are bundled with the app build and read-only. Set a venue for one week with the dated overrides below."
+      : "Changes here affect all future weeks unless a dated override is set below."}</p>
+    <div class="session-list">${activityRows}</div>
+    ${isLive() ? "" : `<a class="btn ghost mt16" href="#/admin/activity/new">+ New activity</a>`}
+    ${adminFreeEventVenues()}`;
 }
 
 function adminMembers(viewer, users) {
@@ -2231,13 +2439,22 @@ export function viewAdminActivity(id) {
     : store.getActivity(id);
   if (!a) return viewNotFound("Activity not found.");
 
+  // Live deployments: recurring defaults are seed/SQL-administered. Editing
+  // them here would write device-local state behind a success toast while the
+  // shared schedule never changes — so the editor is read-only on live.
+  const liveReadOnly = isLive();
+
   const paidOnly = (inner) => `<div class="paid-only ${a.kind === "paid" ? "" : "hidden"}">${inner}</div>`;
 
   return `
     <a class="back-link" href="#/admin/activities">← Activities</a>
     <div class="kicker mt16">Admin · Activity</div>
     <h1 class="display sm">${isNew ? "New activity." : "Edit activity."}</h1>
+    ${liveReadOnly ? `
+      <p class="badge neutral mt16">Live deployment — recurring defaults are bundled with the app build.</p>
+      <p class="muted small mt8">To change the venue for one week, use Weekly Venue Overrides on the Activities tab. Paid venues are administered in Supabase. This form is read-only here.</p>` : ""}
     <form id="form-activity" class="mt16" data-activity="${esc(a.id)}" novalidate>
+      ${liveReadOnly ? `<fieldset class="form-fieldset" disabled>` : ""}
       <div class="field"><label for="ac-name">Name *</label><input id="ac-name" name="name" value="${esc(a.name)}" required></div>
       <div class="field-row">
         <div class="field">
@@ -2279,7 +2496,8 @@ export function viewAdminActivity(id) {
       <div class="field"><label for="ac-note">Leader note (members only)</label><textarea id="ac-note" name="memberNote" rows="2">${esc(a.memberNote || "")}</textarea></div>
       <label class="check"><input type="checkbox" name="published" ${a.published ? "checked" : ""}>
         <span>Published — visible on the schedule</span></label>
-      <button class="btn mt24" type="submit">${isNew ? "Create activity" : "Save changes"}</button>
+      <button class="btn mt24" type="submit" ${liveReadOnly ? "hidden" : ""}>${isNew ? "Create activity" : "Save changes"}</button>
+      ${liveReadOnly ? `</fieldset>` : ""}
     </form>`;
 }
 
@@ -2342,7 +2560,7 @@ export async function viewNotifications(now = new Date(), prefetchedRows = null)
         data-action="notification-open"
         data-notification-id="${esc(notification?.id)}"
         data-notification-read="${unread ? "false" : "true"}"
-        data-destination="${esc(notificationDestination(kind))}">
+        data-destination="${esc(notificationDestination(kind, notification?.destination))}">
         <span class="notification-unread" ${unread ? `aria-label="Unread"` : `aria-hidden="true"`}></span>
         <span class="notification-copy">
           <span class="notification-kind-badge">${esc(NOTIFICATION_CATEGORY_LABELS[category])}</span>

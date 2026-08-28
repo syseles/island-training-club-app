@@ -60,6 +60,17 @@ begin
   if to_regclass('public.collector_payout_profiles') is null then
     raise notice 'FAIL: collector_payout_profiles missing'; failures := failures + 1;
   end if;
+  if to_regclass('public.operational_session_venue_overrides') is null then
+    raise notice 'FAIL: operational_session_venue_overrides missing'; failures := failures + 1;
+  end if;
+  if not exists (
+    select 1 from information_schema.columns
+     where table_schema = 'public'
+       and table_name = 'notifications'
+       and column_name = 'destination'
+  ) then
+    raise notice 'FAIL: notifications.destination missing'; failures := failures + 1;
+  end if;
   if not exists (
     select 1 from public.operational_activity_templates
     where activity_id = 'hyrox' and capacity = 20 and price_hkd = 180 and venue = 'BFT Causeway Bay'
@@ -68,14 +79,57 @@ begin
   end if;
   if not exists (
     select 1 from public.operational_activity_templates
-    where activity_id = 'hyrox-midtown' and capacity = 12 and price_hkd = 180 and venue = 'Midtown 28'
+    where activity_id = 'hyrox-midtown'
+      and capacity = 12
+      and price_hkd = 180
+      and venue = 'Midtown28 Fitness'
   ) then
-    raise notice 'FAIL: hyrox-midtown activity template seed missing'; failures := failures + 1;
+    raise notice 'FAIL: corrected hyrox-midtown activity template seed missing';
+    failures := failures + 1;
   end if;
   perform 1 from pg_class c join pg_namespace n on n.oid = c.relnamespace
            where n.nspname = 'public' and c.relname = 'operational_sessions' and c.relrowsecurity;
   if not found then
     raise notice 'FAIL: operational_sessions RLS not enabled'; failures := failures + 1;
+  end if;
+  perform 1 from pg_class c join pg_namespace n on n.oid = c.relnamespace
+           where n.nspname = 'public' and c.relname = 'operational_session_venue_overrides' and c.relrowsecurity;
+  if not found then
+    raise notice 'FAIL: operational_session_venue_overrides RLS not enabled'; failures := failures + 1;
+  end if;
+  if not has_function_privilege('authenticated', 'public.set_session_venue(text, text, text, boolean)', 'execute') then
+    raise notice 'FAIL: authenticated cannot execute set_session_venue'; failures := failures + 1;
+  end if;
+  if has_function_privilege('anon', 'public.set_session_venue(text, text, text, boolean)', 'execute') then
+    raise notice 'FAIL: anon should not execute set_session_venue'; failures := failures + 1;
+  end if;
+  if to_regprocedure('public.set_session_venue(text,text,text,boolean,double precision,double precision)') is null then
+    raise notice 'FAIL: six-argument meeting-point RPC missing'; failures := failures + 1;
+  elsif not has_function_privilege(
+    'authenticated',
+    'public.set_session_venue(text,text,text,boolean,double precision,double precision)',
+    'execute'
+  ) then
+    raise notice 'FAIL: authenticated cannot execute meeting-point RPC'; failures := failures + 1;
+  elsif has_function_privilege(
+    'anon',
+    'public.set_session_venue(text,text,text,boolean,double precision,double precision)',
+    'execute'
+  ) then
+    raise notice 'FAIL: anon should not execute meeting-point RPC'; failures := failures + 1;
+  end if;
+  if not exists (
+    select 1 from information_schema.columns
+     where table_schema = 'public'
+       and table_name = 'operational_session_venue_overrides'
+       and column_name = 'meeting_lat'
+  ) or not exists (
+    select 1 from information_schema.columns
+     where table_schema = 'public'
+       and table_name = 'operational_session_venue_overrides'
+       and column_name = 'meeting_lng'
+  ) then
+    raise notice 'FAIL: venue meeting-point columns missing'; failures := failures + 1;
   end if;
   if failures > 0 then raise exception 'schema failures: %', failures; end if;
   raise notice 'OK: operational schema foundations';
@@ -93,7 +147,8 @@ insert into auth.users (id, email, raw_user_meta_data) values
   ('bb000000-0000-0000-0000-00000000b001', 'member-test@itc.invalid', '{}'::jsonb),
   ('cc000000-0000-0000-0000-00000000c001', 'pending-test@itc.invalid', '{}'::jsonb),
   ('dd000000-0000-0000-0000-00000000d001', 'other-test@itc.invalid', '{}'::jsonb),
-  ('ee000000-0000-0000-0000-00000000e001', 'extra-member@itc.invalid', '{}'::jsonb);
+  ('ee000000-0000-0000-0000-00000000e001', 'extra-member@itc.invalid', '{}'::jsonb),
+  ('ff000000-0000-0000-0000-00000000f001', 'super-test@itc.invalid', '{}'::jsonb);
 
 update public.profiles set full_name = 'Admin Test', role = 'admin'
   where id = 'aa000000-0000-0000-0000-00000000a001';
@@ -105,6 +160,8 @@ update public.profiles set full_name = 'Other Test', role = 'member'
   where id = 'dd000000-0000-0000-0000-00000000d001';
 update public.profiles set full_name = 'Extra Member', role = 'member'
   where id = 'ee000000-0000-0000-0000-00000000e001';
+update public.profiles set full_name = 'Super Test', role = 'super_admin'
+  where id = 'ff000000-0000-0000-0000-00000000f001';
 
 -- generate sessions and pre-cancel 15 August.
 select ensure_operational_sessions(date '2026-08-01', 5);
@@ -405,6 +462,542 @@ begin
   end;
   reset role;
 end $$;
+
+-- =====================================================================
+-- Free-event venue overrides (Task 1)
+-- =====================================================================
+
+do $$
+declare
+  v_admin     constant uuid := 'aa000000-0000-0000-0000-00000000a001';
+  v_super     constant uuid := 'ff000000-0000-0000-0000-00000000f001';
+  v_member_a  constant uuid := 'bb000000-0000-0000-0000-00000000b001';
+  v_member_b  constant uuid := 'dd000000-0000-0000-0000-00000000d001';
+  v_member_c  constant uuid := 'ee000000-0000-0000-0000-00000000e001';
+  v_pending   constant uuid := 'cc000000-0000-0000-0000-00000000c001';
+  v_session   constant text := 'wnt-2026-08-19';
+  v_other_session constant text := 'wnt-2026-08-26';
+  v_non_tamar_session constant text := 'wnt-2026-09-02';
+  v_reset_only_session constant text := 'water-2026-08-18';
+  v_partial_session constant text := 'water-2026-08-25';
+  v_initial_count integer;
+  v_after_edit_count integer;
+  v_after_reset_count integer;
+  v_after_reconfirm_count integer;
+  v_member_notified_at timestamptz;
+  v_partial_member_count integer;
+  v_member_before_point integer;
+  v_admin_before_point integer;
+  v_retained_notified_at timestamptz;
+begin
+  perform ensure_operational_sessions(date '2026-08-01', 5);
+
+  perform set_config('request.jwt.claim.sub', v_admin::text, true);
+  set local role authenticated;
+
+  -- Reset with no retained override is a true no-op: no blank row and no
+  -- audit notification are created.
+  select count(*) into v_initial_count from public.notifications
+    where kind = 'operational_session_venue_updated';
+  perform public.set_session_venue(v_reset_only_session, null, null, false);
+  perform pg_temp.op_assert(
+    not exists (
+      select 1 from public.operational_session_venue_overrides
+       where session_id = v_reset_only_session
+    ),
+    'first blank reset does not create an override row'
+  );
+  perform pg_temp.op_assert(
+    (select count(*) from public.notifications
+      where kind = 'operational_session_venue_updated') = v_initial_count,
+    'first blank reset does not create audit notifications'
+  );
+
+  -- First confirmation: TBC -> real venue. Members should be notified once,
+  -- other Admins should be notified once, actor excluded.
+  perform public.set_session_venue(
+    v_session,
+    'Central Harbourfront — 7pm sharp',
+    'Central Harbourfront, Hong Kong',
+    true
+  );
+
+  perform pg_temp.op_assert(
+    (select location from public.operational_session_venue_overrides where session_id = v_session)
+      = 'Central Harbourfront — 7pm sharp',
+    'dated free-event venue stored'
+  );
+  perform pg_temp.op_assert(
+    (select activity_id from public.operational_session_venue_overrides where session_id = v_session) = 'wnt',
+    'venue override records the derived activity'
+  );
+  perform pg_temp.op_assert(
+    (select member_notified_at from public.operational_session_venue_overrides where session_id = v_session)
+      is not null,
+    'member notification timestamp recorded on first transition'
+  );
+  perform pg_temp.op_assert(
+    (select count(*) from public.notifications
+       where kind = 'operational_session_venue_updated'
+         and profile_id in (v_member_a, v_member_b, v_member_c)) = 3,
+    'first confirmation notifies approved members once'
+  );
+  perform pg_temp.op_assert(
+    (select count(*) from public.notifications
+       where kind = 'operational_session_venue_updated'
+         and profile_id = v_super) = 1,
+    'other admins receive audit notification'
+  );
+  perform pg_temp.op_assert(
+    not exists (select 1 from public.notifications
+       where kind = 'operational_session_venue_updated'
+         and profile_id in (v_admin, v_pending)),
+    'actor and pending profiles are excluded'
+  );
+  perform pg_temp.op_assert(
+    (select count(*) from public.notifications
+       where kind = 'operational_session_venue_updated'
+         and destination = '#/activity/' || v_session) >= 4,
+    'every notification carries the dated activity destination'
+  );
+  perform pg_temp.op_assert(
+    exists (
+      select 1 from public.notifications
+       where kind = 'operational_session_venue_updated'
+         and profile_id = v_member_a
+         and body = 'Wednesday Night Training on 2026-08-19 is at Central Harbourfront — 7pm sharp. Check the activity page for details.'
+    ),
+    'member copy uses the activity display name and dated venue'
+  );
+  perform pg_temp.op_assert(
+    exists (
+      select 1 from public.notifications
+       where kind = 'operational_session_venue_updated'
+         and profile_id = v_super
+         and body = 'Admin Test set the venue for wnt-2026-08-19 to Central Harbourfront — 7pm sharp.'
+    ),
+    'admin audit copy identifies the acting profile'
+  );
+
+  -- Subsequent edit (also TBC flag): only Admins receive a new audit row.
+  select count(*) into v_initial_count from public.notifications
+    where kind = 'operational_session_venue_updated';
+  perform public.set_session_venue(
+    v_session,
+    'Wan Chai Promenade — 7pm sharp',
+    'Wan Chai Promenade, Hong Kong',
+    false
+  );
+  select count(*) into v_after_edit_count from public.notifications
+    where kind = 'operational_session_venue_updated';
+  perform pg_temp.op_assert(
+    v_after_edit_count - v_initial_count = 1,
+    'second save fans out only to other admins'
+  );
+
+  -- No-op save: no new notification rows.
+  select count(*) into v_initial_count from public.notifications
+    where kind = 'operational_session_venue_updated';
+  perform public.set_session_venue(
+    v_session,
+    'Wan Chai Promenade — 7pm sharp',
+    'Wan Chai Promenade, Hong Kong',
+    false
+  );
+  select count(*) into v_after_edit_count from public.notifications
+    where kind = 'operational_session_venue_updated';
+  perform pg_temp.op_assert(
+    v_after_edit_count = v_initial_count,
+    'no-op save does not notify anyone'
+  );
+
+  -- Reset clears location/maps_query but preserves member_notified_at.
+  select member_notified_at into v_member_notified_at
+    from public.operational_session_venue_overrides where session_id = v_session;
+  perform public.set_session_venue(v_session, null, null, false);
+  select count(*) into v_after_reset_count from public.notifications
+    where kind = 'operational_session_venue_updated';
+  perform pg_temp.op_assert(
+    v_after_reset_count - v_initial_count = 1,
+    'reset fans out only to other admins'
+  );
+  perform pg_temp.op_assert(
+    (select location from public.operational_session_venue_overrides where session_id = v_session) is null,
+    'reset clears the override location'
+  );
+  perform pg_temp.op_assert(
+    (select member_notified_at from public.operational_session_venue_overrides where session_id = v_session)
+      = v_member_notified_at,
+    'reset preserves member_notified_at so members are not re-notified'
+  );
+
+  -- Reconfirmation after reset does not re-notify members.
+  perform public.set_session_venue(
+    v_session,
+    'Causeway Bay Promenade — 7pm sharp',
+    'Causeway Bay Promenade, Hong Kong',
+    false
+  );
+  select count(*) into v_after_reconfirm_count from public.notifications
+    where kind = 'operational_session_venue_updated';
+  perform pg_temp.op_assert(
+    v_after_reconfirm_count - v_after_reset_count = 1,
+    'reconfirmation after reset notifies only other admins'
+  );
+
+  -- A partial row does not consume member dedupe or create blank copy. Once
+  -- both usable values are present, that same session confirms exactly once.
+  perform public.set_session_venue(
+    v_partial_session,
+    null,
+    'Victoria Park Swimming Pool, Hong Kong',
+    true
+  );
+  perform pg_temp.op_assert(
+    (select member_notified_at from public.operational_session_venue_overrides
+      where session_id = v_partial_session) is null,
+    'partial override does not consume member_notified_at'
+  );
+  perform pg_temp.op_assert(
+    not exists (
+      select 1 from public.notifications
+       where kind = 'operational_session_venue_updated'
+         and destination = '#/activity/' || v_partial_session
+         and profile_id in (v_member_a, v_member_b, v_member_c)
+    ),
+    'partial override creates no member notification copy'
+  );
+  perform public.set_session_venue(
+    v_partial_session,
+    'Victoria Park Swimming Pool',
+    'Victoria Park Swimming Pool, Hong Kong',
+    true
+  );
+  select count(*) into v_partial_member_count
+    from public.notifications
+   where kind = 'operational_session_venue_updated'
+     and destination = '#/activity/' || v_partial_session
+     and profile_id in (v_member_a, v_member_b, v_member_c);
+  perform pg_temp.op_assert(
+    v_partial_member_count = 3,
+    'completing a partial override notifies approved members exactly once'
+  );
+  perform pg_temp.op_assert(
+    exists (
+      select 1 from public.notifications
+       where kind = 'operational_session_venue_updated'
+         and profile_id = v_member_a
+         and destination = '#/activity/' || v_partial_session
+         and body = 'ITC Swimming on 2026-08-25 is at Victoria Park Swimming Pool. Check the activity page for details.'
+    ),
+    'completed partial override uses Swimming display copy'
+  );
+
+  -- A six-argument WNT Tamar save stores the dated point.
+  perform public.set_session_venue(
+    v_other_session, 'Tamar Park', 'Tamar Park', true,
+    22.2825, 114.1659
+  );
+  perform pg_temp.op_assert(
+    (select meeting_lat = 22.2825 and meeting_lng = 114.1659
+       from public.operational_session_venue_overrides
+      where session_id = v_other_session),
+    'dated WNT meeting point is stored'
+  );
+
+  -- Moving only the point audits Admins once without repeating members.
+  select count(*) into v_member_before_point
+    from public.notifications
+   where kind = 'operational_session_venue_updated'
+     and destination = '#/activity/' || v_other_session
+     and profile_id in (v_member_a, v_member_b, v_member_c);
+  select count(*) into v_admin_before_point
+    from public.notifications
+   where kind = 'operational_session_venue_updated'
+     and destination = '#/activity/' || v_other_session
+     and profile_id = v_super;
+  perform public.set_session_venue(
+    v_other_session, 'Tamar Park', 'Tamar Park', false,
+    22.2827, 114.1661
+  );
+  perform pg_temp.op_assert(
+    (select count(*) from public.notifications
+      where kind = 'operational_session_venue_updated'
+        and destination = '#/activity/' || v_other_session
+        and profile_id in (v_member_a, v_member_b, v_member_c)) = v_member_before_point,
+    'coordinate-only edit does not repeat member fan-out'
+  );
+  perform pg_temp.op_assert(
+    (select count(*) from public.notifications
+      where kind = 'operational_session_venue_updated'
+        and destination = '#/activity/' || v_other_session
+        and profile_id = v_super) = v_admin_before_point + 1,
+    'coordinate-only edit creates one Admin audit notification'
+  );
+
+  -- Partial and out-of-range Tamar points are rejected before persistence.
+  begin
+    perform public.set_session_venue(
+      'wnt-2026-09-09', 'Tamar Park', 'Tamar Park', true,
+      22.28, null
+    );
+    raise exception 'partial point should fail';
+  exception when others then
+    if sqlerrm not like '%Meeting point must include valid latitude and longitude.%' then raise; end if;
+  end;
+  begin
+    perform public.set_session_venue(
+      'wnt-2026-09-09', 'Tamar Park', 'Tamar Park', true,
+      91, 114.16
+    );
+    raise exception 'latitude should fail';
+  exception when others then
+    if sqlerrm not like '%Meeting point must include valid latitude and longitude.%' then raise; end if;
+  end;
+  begin
+    perform public.set_session_venue(
+      'wnt-2026-09-09', 'Tamar Park', 'Tamar Park', true,
+      22.28, -181
+    );
+    raise exception 'longitude should fail';
+  exception when others then
+    if sqlerrm not like '%Meeting point must include valid latitude and longitude.%' then raise; end if;
+  end;
+
+  -- Stale arguments never attach specialized points to another activity or venue.
+  perform public.set_session_venue(
+    'run-2026-09-14', 'Tamar Park', 'Tamar Park', true,
+    22.2825, 114.1659
+  );
+  perform pg_temp.op_assert(
+    (select meeting_lat is null and meeting_lng is null
+       from public.operational_session_venue_overrides
+      where session_id = 'run-2026-09-14'),
+    'non-WNT save clears stale coordinates'
+  );
+  perform public.set_session_venue(
+    v_non_tamar_session, 'Island ECC 9/F', 'Island ECC', true,
+    22.2825, 114.1659
+  );
+  perform pg_temp.op_assert(
+    (select meeting_lat is null and meeting_lng is null
+       from public.operational_session_venue_overrides
+      where session_id = v_non_tamar_session),
+    'non-Tamar save clears stale coordinates'
+  );
+
+  -- The old signature remains usable and reset clears the point while retaining dedupe.
+  select member_notified_at into v_retained_notified_at
+    from public.operational_session_venue_overrides
+   where session_id = v_other_session;
+  perform public.set_session_venue(v_other_session, null, null, false);
+  perform pg_temp.op_assert(
+    (select meeting_lat is null and meeting_lng is null
+        and member_notified_at = v_retained_notified_at
+       from public.operational_session_venue_overrides
+      where session_id = v_other_session),
+    'four-argument reset clears point and retains member dedupe'
+  );
+
+  reset role;
+end $$;
+
+-- Public venue details are selectable through the actual anon and
+-- authenticated roles, while every direct mutation privilege is denied.
+do $$
+declare
+  v_anon_count integer;
+  v_authenticated_count integer;
+begin
+  set local role anon;
+  select count(*) into v_anon_count
+    from public.operational_session_venue_overrides;
+  reset role;
+  perform pg_temp.op_assert(v_anon_count > 0, 'anon can select venue overrides');
+
+  perform set_config('request.jwt.claim.sub', 'bb000000-0000-0000-0000-00000000b001', true);
+  set local role authenticated;
+  select count(*) into v_authenticated_count
+    from public.operational_session_venue_overrides;
+  reset role;
+  perform pg_temp.op_assert(
+    v_authenticated_count = v_anon_count,
+    'authenticated clients can select the same public venue overrides'
+  );
+end $$;
+
+do $$
+declare
+  v_denials integer := 0;
+begin
+  perform set_config('request.jwt.claim.sub', 'ff000000-0000-0000-0000-00000000f001', true);
+  set local role authenticated;
+  begin
+    insert into public.operational_session_venue_overrides
+      (session_id, activity_id, location, maps_query)
+    values ('run-2026-09-07', 'run', 'Direct insert', 'Direct insert');
+  exception when insufficient_privilege then
+    v_denials := v_denials + 1;
+  end;
+  begin
+    update public.operational_session_venue_overrides
+       set location = 'Direct update'
+     where session_id = 'wnt-2026-08-19';
+  exception when insufficient_privilege then
+    v_denials := v_denials + 1;
+  end;
+  begin
+    delete from public.operational_session_venue_overrides
+     where session_id = 'wnt-2026-08-19';
+  exception when insufficient_privilege then
+    v_denials := v_denials + 1;
+  end;
+  reset role;
+  perform pg_temp.op_assert(
+    v_denials = 3,
+    'authenticated direct insert/update/delete are all denied'
+  );
+end $$;
+
+-- Super Admins mutate successfully through the trusted RPC.
+do $$
+begin
+  perform set_config('request.jwt.claim.sub', 'ff000000-0000-0000-0000-00000000f001', true);
+  set local role authenticated;
+  perform public.set_session_venue(
+    'run-2026-09-07',
+    'Tamar Park',
+    'Tamar Park, Hong Kong',
+    true
+  );
+  reset role;
+  perform pg_temp.op_assert(
+    exists (
+      select 1 from public.operational_session_venue_overrides
+       where session_id = 'run-2026-09-07'
+         and set_by = 'ff000000-0000-0000-0000-00000000f001'
+         and member_notified_at is not null
+    ),
+    'Super Admin RPC saves and records first member fan-out'
+  );
+end $$;
+
+-- Denial: ordinary members cannot call the RPC.
+do $$
+begin
+  perform set_config('request.jwt.claim.sub', 'bb000000-0000-0000-0000-00000000b001', true);
+  set local role authenticated;
+  begin
+    perform public.set_session_venue('wnt-2026-08-19', 'x', 'y', true);
+    raise exception 'member should not set_session_venue';
+  exception when others then
+    if sqlerrm not like '%Administrator access required%' then
+      raise;
+    end if;
+  end;
+  reset role;
+end $$;
+
+-- Denial: pending cannot call the RPC.
+do $$
+begin
+  perform set_config('request.jwt.claim.sub', 'cc000000-0000-0000-0000-00000000c001', true);
+  set local role authenticated;
+  begin
+    perform public.set_session_venue('wnt-2026-08-19', 'x', 'y', true);
+    raise exception 'pending should not set_session_venue';
+  exception when others then
+    if sqlerrm not like '%Administrator access required%' then
+      raise;
+    end if;
+  end;
+  reset role;
+end $$;
+
+-- Denial: HYROX session id is rejected with the exact spec message.
+do $$
+begin
+  perform ensure_operational_sessions(date '2026-08-01', 5);
+  perform set_config('request.jwt.claim.sub', 'aa000000-0000-0000-0000-00000000a001', true);
+  set local role authenticated;
+  begin
+    perform public.set_session_venue('hyrox-2026-08-22', 'x', 'y', true);
+    raise exception 'hyrox should be rejected';
+  exception when others then
+    if sqlerrm not like '%Activity venue is fixed.%' then
+      raise;
+    end if;
+  end;
+  reset role;
+end $$;
+
+-- Anon must not execute the RPC at all.
+do $$
+begin
+  set local role anon;
+  begin
+    perform public.set_session_venue('wnt-2026-08-19', 'x', 'y', true);
+    raise exception 'anon should not set_session_venue';
+  exception when others then
+    if sqlerrm not like '%permission denied%' and sqlerrm not like '%42501%' then
+      raise;
+    end if;
+  end;
+  reset role;
+end $$;
+
+update public.operational_activity_templates
+   set venue = 'Midtown 28'
+ where activity_id = 'hyrox-midtown';
+
+update public.operational_sessions
+   set venue = case id
+     when 'hyrox-midtown-2026-08-22' then 'Midtown 28'
+     when 'hyrox-midtown-2026-08-29' then 'Custom Midtown Venue'
+   end
+ where id in ('hyrox-midtown-2026-08-22', 'hyrox-midtown-2026-08-29');
+
+insert into public.operational_bookings
+  (profile_id, session_id, status, pay_deadline_at, snapshot)
+values
+  ('bb000000-0000-0000-0000-00000000b001',
+   'hyrox-midtown-2026-08-22', 'reserved', now() + interval '1 day',
+   '{"name":"hyrox-midtown","venue":"Midtown 28","price_hkd":180}'::jsonb),
+  ('dd000000-0000-0000-0000-00000000d001',
+   'hyrox-midtown-2026-08-29', 'reserved', now() + interval '1 day',
+   '{"name":"hyrox-midtown","venue":"Custom Midtown Venue","price_hkd":180}'::jsonb);
+
+\ir ../migrations/20260813000002_midtown28_fitness.sql
+
+select pg_temp.op_assert(
+  (select venue = 'Midtown28 Fitness'
+     from public.operational_activity_templates where activity_id = 'hyrox-midtown'),
+  'migration must correct the exact old Midtown template venue'
+);
+select pg_temp.op_assert(
+  (select venue = 'Midtown28 Fitness'
+     from public.operational_sessions where id = 'hyrox-midtown-2026-08-22'),
+  'migration must correct an exact old Midtown session venue'
+);
+select pg_temp.op_assert(
+  (select venue = 'Custom Midtown Venue'
+     from public.operational_sessions where id = 'hyrox-midtown-2026-08-29'),
+  'migration must preserve a custom Midtown session venue'
+);
+select pg_temp.op_assert(
+  (select snapshot ->> 'venue' = 'Midtown28 Fitness'
+     from public.operational_bookings
+    where profile_id = 'bb000000-0000-0000-0000-00000000b001'
+      and session_id = 'hyrox-midtown-2026-08-22'),
+  'migration must correct an exact old Midtown booking snapshot'
+);
+select pg_temp.op_assert(
+  (select snapshot ->> 'venue' = 'Custom Midtown Venue'
+     from public.operational_bookings
+    where profile_id = 'dd000000-0000-0000-0000-00000000d001'
+      and session_id = 'hyrox-midtown-2026-08-29'),
+  'migration must preserve a custom Midtown booking snapshot'
+);
 
 rollback;
 

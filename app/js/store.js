@@ -22,13 +22,15 @@ import {
   donorIdProblem,
 } from "./data.js";
 import { supabase, isLive } from "./config.js";
+import { INDEMNITY_VERSION } from "./documents.js";
+import { normalizeMeetingPoint, normalizeVenueLocation } from "./venue.js";
 import * as liveOps from "./operations.js";
 
 const STORAGE_KEY = "itc.prototype.v1";
 const APPLY_DEVICE_KEY = "itc.device.id";
 const APPLY_DRAFT_KEY = "itc.apply.draft.v1";
 const APPLY_DRAFT_VERSION = 1;
-const STATE_VERSION = 13;
+const STATE_VERSION = 14;
 
 // Live-mode (Supabase) session cache. Avoids hammering the DB on every
 // page load. The TTL is short so role flips and welcome notifications
@@ -119,8 +121,8 @@ function migrate() {
   if (!state.duty || typeof state.duty !== "object" || Array.isArray(state.duty)) state.duty = {};
   if (!state.paymentPayouts || typeof state.paymentPayouts !== "object"
       || Array.isArray(state.paymentPayouts)) state.paymentPayouts = {};
-  // v13 is not released yet: move legacy payout fields into the additive
-  // UUID-keyed operations map for every accepted v9-v13 snapshot.
+  // v14 carries forward the additive UUID-keyed operations map for every
+  // accepted v9-v13 snapshot.
   for (const user of state.users) {
     if (!user?.id || state.paymentPayouts[user.id] || (!user.paymeLink && !user.fpsPhone)) continue;
     state.paymentPayouts[user.id] = {
@@ -300,6 +302,79 @@ function migrate() {
     const seedDonationIds = new Set(["d-seed-1", "d-seed-2"]);
     state.donations = state.donations.filter((donation) => !seedDonationIds.has(donation.id));
   }
+  if (v < 9) {
+    // v9: remove only the exact identities shipped by the historical local
+    // demo. Matching by normalized email also catches records whose IDs were
+    // changed locally. Everything not owned by those identities is retained.
+    const demoIds = new Set(["u-super", "u-admin", "u-member", "u-pend-1", "u-pend-2"]);
+    const demoEmails = new Set([
+      "owner@itc.hk",
+      "admin@itc.hk",
+      "member@itc.hk",
+      "marco.santos@example.com",
+      "jenny.wu@example.com",
+    ]);
+    const users = Array.isArray(state.users) ? state.users : [];
+    const removedUserIds = new Set(demoIds);
+    state.users = users.filter((user) => {
+      const matches = demoIds.has(user.id)
+        || demoEmails.has(String(user.email ?? "").trim().toLowerCase());
+      if (matches) removedUserIds.add(user.id);
+      return !matches;
+    });
+    if (removedUserIds.has(state.sessionUserId)) state.sessionUserId = null;
+
+    const bookings = Array.isArray(state.bookings) ? state.bookings : [];
+    const removedBookingIds = new Set();
+    state.bookings = bookings.filter((booking) => {
+      const remove = removedUserIds.has(booking.userId);
+      if (remove) removedBookingIds.add(booking.id);
+      return !remove;
+    });
+    const receipts = Array.isArray(state.receipts) ? state.receipts : [];
+    state.receipts = receipts.filter(
+      (receipt) => !removedUserIds.has(receipt.userId)
+        && !removedBookingIds.has(receipt.bookingId)
+    );
+    const activities = Array.isArray(state.activities) ? state.activities : [];
+    for (const activity of activities) delete activity.baseBooked;
+    state.activities = activities;
+  }
+  if (v < 14) {
+    for (const user of state.users) {
+      for (const field of [
+        "indemnitySignature",
+        "indemnitySignedAt",
+        "indemnityFormVersion",
+        "emergencyRelationship",
+      ]) {
+        if (!Object.prototype.hasOwnProperty.call(user, field)) user[field] = null;
+      }
+    }
+    const water = state.activities.find((activity) => activity.id === "water");
+    if (water) {
+      if (["Victoria Park", "Victoria Park Swimming Pool"].includes(water.location)) {
+        water.location = "TBC";
+      }
+      if (["Victoria Park, Hong Kong", "Victoria Park Swimming Pool, Hong Kong", "TBC"].includes(water.mapsQuery)) {
+        water.mapsQuery = "";
+      }
+      if (water.photo === "../assets/itc/main.webp") {
+        water.photo = "../assets/itc/water.webp";
+      }
+    }
+
+    const midtown = state.activities.find((activity) => activity.id === "hyrox-midtown");
+    if (midtown?.location === "Midtown 28") midtown.location = "Midtown28 Fitness";
+    if (midtown?.mapsQuery === "Midtown 28, Hong Kong") {
+      midtown.mapsQuery = "Midtown28 Fitness, Hong Kong";
+    }
+    for (const booking of state.bookings) {
+      if (booking.snapshot?.location === "Midtown 28") {
+        booking.snapshot.location = "Midtown28 Fitness";
+      }
+    }
+  }
   state.version = STATE_VERSION;
 }
 
@@ -457,11 +532,80 @@ export function clearApplyDraft() {
 
 // --- Signup / approval ---------------------------------------------------------
 
+function normalizeEmergencyContact({
+  emergencyName,
+  emergencyRelationship,
+  emergencyPhone,
+} = {}) {
+  const name = String(emergencyName || "").trim();
+  const relationship = String(emergencyRelationship || "").trim();
+  const phone = String(emergencyPhone || "").trim();
+  if (!name || !relationship || !phone) {
+    throw new Error("Enter emergency contact name, relationship and phone");
+  }
+  return { name, relationship, phone };
+}
+
+function normalizeIndemnityAcceptance({
+  signature,
+  signedAt,
+  emergencyName,
+  emergencyRelationship,
+  emergencyPhone,
+  formVersion = INDEMNITY_VERSION,
+} = {}) {
+  const normalizedSignature = String(signature || "").trim();
+  const normalizedSignedAt = String(signedAt || "").trim();
+  const emergency = normalizeEmergencyContact({
+    emergencyName,
+    emergencyRelationship,
+    emergencyPhone,
+  });
+  if (normalizedSignature.length < 2) {
+    throw new Error("Type your full name as your signature");
+  }
+  const validDate = /^\d{4}-\d{2}-\d{2}$/.test(normalizedSignedAt)
+    && isoDate(parseISO(normalizedSignedAt)) === normalizedSignedAt;
+  if (!validDate) throw new Error("Enter a valid signing date");
+  if (normalizedSignedAt > isoDate(todayLocal())) {
+    throw new Error("Signing date cannot be in the future");
+  }
+  if (formVersion !== INDEMNITY_VERSION) {
+    throw new Error("The Indemnity has changed. Reload and review the current document");
+  }
+  return {
+    signature: normalizedSignature,
+    signedAt: normalizedSignedAt,
+    emergencyName: emergency.name,
+    emergencyRelationship: emergency.relationship,
+    emergencyPhone: emergency.phone,
+    formVersion: INDEMNITY_VERSION,
+  };
+}
+
+export function isIndemnityCurrent(user) {
+  if (!user?.indemnityAcceptedAt || user.indemnityFormVersion !== INDEMNITY_VERSION) return false;
+  if (String(user.indemnitySignature || "").trim().length < 2) return false;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(user.indemnitySignedAt || ""))) return false;
+  return !!String(user.emergencyName || "").trim()
+    && !!String(user.emergencyRelationship || "").trim()
+    && !!String(user.emergencyPhone || "").trim();
+}
+
 export function applyForMembership(form) {
   const email = String(form.email).trim().toLowerCase();
   if (state.users.some((u) => u.email.toLowerCase() === email)) {
     return { ok: false, reason: "duplicate" };
   }
+  if (!form.indemnity) throw new Error("Read and accept the Indemnity");
+  const acceptance = normalizeIndemnityAcceptance({
+    signature: form.indemnitySignature,
+    signedAt: form.indemnitySignedAt,
+    emergencyName: form.emergencyName,
+    emergencyRelationship: form.emergencyRelationship,
+    emergencyPhone: form.emergencyPhone,
+  });
+  const acceptedAt = Date.now();
   const user = {
     id: uid("u"),
     role: "pending",
@@ -471,14 +615,16 @@ export function applyForMembership(form) {
     email,
     phone: form.phone.trim(),
     ageConfirmed: !!form.ageConfirmed,
-    emergencyName: form.emergencyName.trim(),
-    emergencyPhone: form.emergencyPhone.trim(),
+    emergencyName: acceptance.emergencyName,
+    emergencyRelationship: acceptance.emergencyRelationship,
+    emergencyPhone: acceptance.emergencyPhone,
     heard: form.heard.trim(),
     mediaConsent: !!form.mediaConsent,
     donorId: normalizeDonorId(form.donorId),
-    // Joining requires accepting the health & liability indemnity; the
-    // timestamp is the member's acceptance record (Profile > Indemnity).
-    indemnityAcceptedAt: form.indemnity ? Date.now() : null,
+    indemnityAcceptedAt: acceptedAt,
+    indemnitySignature: acceptance.signature,
+    indemnitySignedAt: acceptance.signedAt,
+    indemnityFormVersion: acceptance.formVersion,
     appliedAt: Date.now(),
   };
   state.users.push(user);
@@ -548,15 +694,20 @@ export async function updateMyDonorId(raw) {
   return data.donor_id;
 }
 
-// Records the member's acceptance of the health & liability indemnity.
-// Idempotent — the first acceptance timestamp is the record that matters.
-export function acceptIndemnity(userId) {
-  const user = state.users.find((u) => u.id === userId);
+export function acceptIndemnity(userId, payload) {
+  const user = state.users.find((candidate) => candidate.id === userId);
   if (!user) return null;
-  if (!user.indemnityAcceptedAt) {
-    user.indemnityAcceptedAt = Date.now();
-    save();
-  }
+  const acceptance = normalizeIndemnityAcceptance({
+    ...payload,
+    emergencyName: user.emergencyName,
+    emergencyPhone: user.emergencyPhone,
+  });
+  user.indemnityAcceptedAt = Date.now();
+  user.indemnitySignature = acceptance.signature;
+  user.indemnitySignedAt = acceptance.signedAt;
+  user.indemnityFormVersion = acceptance.formVersion;
+  user.emergencyRelationship = acceptance.emergencyRelationship;
+  save();
   return user.indemnityAcceptedAt;
 }
 
@@ -575,6 +726,7 @@ export function saveActivity(draft) {
   const existing = state.activities.find((a) => a.id === draft.id);
   const record = {
     ...draft,
+    photo: existing?.photo || draft.photo || "../assets/itc/main.webp",
     price: draft.kind === "paid" ? Number(draft.price) || 0 : undefined,
     capacity: draft.kind === "paid" ? Number(draft.capacity) || 0 : undefined,
     durationMin: Number(draft.durationMin) || 60,
@@ -643,7 +795,7 @@ export function attendeesFor(session) {
   const names = [];
   for (const b of activeBookingsForSession(session.id)) {
     const u = state.users.find((x) => x.id === b.userId);
-    if (u) names.unshift(`${u.preferredName || u.fullName} ${u.fullName.split(" ").pop()[0]}.`);
+    if (u) names.push(`${u.preferredName || u.fullName} ${u.fullName.split(" ").pop()[0]}.`);
   }
   return names;
 }
@@ -1107,12 +1259,19 @@ export function getSession(sessionId) {
     if (live) return live;
     // Free events live only in local state; the live cache has no row.
     const local = findSession(state.activities, sessionId);
-    if (local) return decorateSession(local);
+    if (local) return decorateFreeSession(local);
     return null;
   }
   const s = findSession(state.activities, sessionId);
   if (!s) return null;
   return decorateSession(s);
+}
+
+function hasConfirmedVenue(location, mapsQuery) {
+  const display = String(location || "").trim();
+  const query = String(mapsQuery || "").trim();
+  return Boolean(display && display.toUpperCase() !== "TBC"
+    && query && query.toUpperCase() !== "TBC");
 }
 
 function decorateSession(s) {
@@ -1126,7 +1285,42 @@ function decorateSession(s) {
   if (o.midtownOpen) out.midtownOpen = true;
   if (o.gymConfirmedAt) out.gymConfirmedAt = o.gymConfirmedAt;
   if (o.gymNote) out.gymNote = o.gymNote;
+  if (o.location) out.location = o.location;
+  if (o.mapsQuery) out.mapsQuery = o.mapsQuery;
+  const point = normalizeMeetingPoint(o.meetingLat, o.meetingLng);
+  if (point) Object.assign(out, { meetingLat: point.lat, meetingLng: point.lng });
+  if (hasConfirmedVenue(out.location, out.mapsQuery)) out.venueTBC = false;
   return out;
+}
+
+function decorateFreeSession(s) {
+  const o = liveOps.getLiveVenueOverride(s.id);
+  if (!o) return s;
+  const out = { ...s };
+  if (o.location) out.location = o.location;
+  if (o.mapsQuery) out.mapsQuery = o.mapsQuery;
+  const point = normalizeMeetingPoint(o.meetingLat, o.meetingLng);
+  if (point) Object.assign(out, { meetingLat: point.lat, meetingLng: point.lng });
+  if (hasConfirmedVenue(out.location, out.mapsQuery)) out.venueTBC = false;
+  return out;
+}
+
+export function weekVenueOverride(sessionId) {
+  const value = isLive()
+    ? liveOps.getLiveVenueOverride(sessionId)
+    : state.sessionOverrides[sessionId];
+  if (!value) return { location: "", mapsQuery: "", meetingLat: "", meetingLng: "" };
+  const notifiedAt = isLive()
+    ? value.memberNotifiedAt
+    : value.venueMemberNotifiedAt;
+  const point = normalizeMeetingPoint(value.meetingLat, value.meetingLng);
+  return {
+    location: value.location || "",
+    mapsQuery: value.mapsQuery || "",
+    meetingLat: point?.lat ?? "",
+    meetingLng: point?.lng ?? "",
+    ...(notifiedAt ? { venueMemberNotifiedAt: notifiedAt } : {}),
+  };
 }
 
 // --- Next relevant activity (home) ---------------------------------------------------
@@ -1147,19 +1341,25 @@ export function upcomingSessions(days = 14) {
       state.activities.filter((a) => a.kind === "free"),
       todayLocal(),
       days
-    ).map((s) => ({
-      ...s,
-      spots: spotsLeft(s),
-      past: false,
-    }));
+    ).map((s) => {
+      const decorated = decorateFreeSession(s);
+      return {
+        ...decorated,
+        spots: spotsLeft(decorated),
+        past: false,
+      };
+    });
     return [...freeSessions, ...livePaid];
   }
   const today = todayLocal();
-  return sessionsInRange(state.activities, today, days).map((s) => ({
-    ...s,
-    spots: spotsLeft(s),
-    past: false,
-  }));
+  return sessionsInRange(state.activities, today, days).map((s) => {
+    const decorated = decorateSession(s);
+    return {
+      ...decorated,
+      spots: spotsLeft(decorated),
+      past: false,
+    };
+  });
 }
 
 export function nextSession() {
@@ -1432,6 +1632,125 @@ export function confirmGymBooking(sessionId, note, now = Date.now()) {
   override.gymNote = String(note || "").trim() || undefined;
   save();
   return override;
+}
+
+// Per-week free-event venue overrides. Admin only. Local mode fans out
+// notifications and dedupes per member; live mode delegates both to the
+// trusted `set_session_venue` RPC.
+export function setWeekVenue(sessionId, {
+  location, mapsQuery, meetingLat = null, meetingLng = null,
+} = {}) {
+  const cleanLocation = String(location || "").trim();
+  const cleanMapsQuery = String(mapsQuery || "").trim();
+  const overrideActivityId = String(sessionId).replace(/-\d{4}-\d{2}-\d{2}$/, "");
+  if (!new Set(["wnt", "run", "water"]).has(overrideActivityId)) {
+    throw new Error("Activity venue is fixed.");
+  }
+  const rawPointProvided = ![meetingLat, meetingLng].every(
+    (value) => value === null || value === undefined || value === ""
+  );
+  const normalizedPoint = normalizeMeetingPoint(meetingLat, meetingLng);
+  const acceptsPoint = overrideActivityId === "wnt"
+    && normalizeVenueLocation(cleanLocation) === "tamar park";
+  if (acceptsPoint && rawPointProvided && !normalizedPoint) {
+    throw new Error("Choose a valid meeting point.");
+  }
+  const meetingPoint = acceptsPoint ? normalizedPoint : null;
+  const before = getSession(sessionId);
+  if (isLive()) {
+    const wasTBC = before?.location === "TBC"
+      || !hasConfirmedVenue(before?.location, before?.mapsQuery);
+    return liveOps.liveSetWeekVenue(sessionId, {
+      location: cleanLocation,
+      mapsQuery: cleanMapsQuery,
+      meetingLat: meetingPoint?.lat ?? null,
+      meetingLng: meetingPoint?.lng ?? null,
+      wasTBC,
+    });
+  }
+  if (!before || before.kind !== "free") throw new Error("Session not found.");
+  const wasTBC = before.location === "TBC"
+    || !hasConfirmedVenue(before.location, before.mapsQuery);
+  requirePaymentAdminActor();
+  const actor = currentUser();
+  const existingOverride = state.sessionOverrides[sessionId];
+  const cleared = cleanLocation === "" && cleanMapsQuery === "";
+  if (!existingOverride && cleared) {
+    return { sessionId, activityId: overrideActivityId, unchanged: true };
+  }
+  const override = existingOverride || (state.sessionOverrides[sessionId] = {});
+  const previousLocation = override.location || "";
+  const previousMapsQuery = override.mapsQuery || "";
+  const previousPoint = normalizeMeetingPoint(override.meetingLat, override.meetingLng);
+  const previousNotified = override.venueMemberNotifiedAt || null;
+  const recurring = getActivity(overrideActivityId);
+  const effectiveLocation = cleanLocation || recurring?.location || "";
+  const effectiveMapsQuery = cleanMapsQuery || recurring?.mapsQuery || "";
+  const confirmed = hasConfirmedVenue(effectiveLocation, effectiveMapsQuery);
+  const nextVenueTBC = cleared || confirmed ? false : Boolean(override.venueTBC);
+  const pointChanged = (previousPoint?.lat ?? null) !== (meetingPoint?.lat ?? null)
+    || (previousPoint?.lng ?? null) !== (meetingPoint?.lng ?? null);
+  const changed = previousLocation !== cleanLocation
+    || previousMapsQuery !== cleanMapsQuery
+    || Boolean(override.venueTBC) !== nextVenueTBC
+    || pointChanged;
+  if (!changed) {
+    return { sessionId, activityId: overrideActivityId, ...override, unchanged: true };
+  }
+  override.location = cleanLocation || undefined;
+  override.mapsQuery = cleanMapsQuery || undefined;
+  if (meetingPoint) {
+    override.meetingLat = meetingPoint.lat;
+    override.meetingLng = meetingPoint.lng;
+  } else {
+    delete override.meetingLat;
+    delete override.meetingLng;
+  }
+  override.venueTBC = nextVenueTBC;
+  override.setAt = Date.now();
+  override.setBy = actor?.id || null;
+  override.venueMemberNotifiedAt = previousNotified;
+  const destination = `#/activity/${sessionId}`;
+  const sessionLabel = `${before.name || recurring?.name || overrideActivityId} on ${before.dateISO}`;
+  if (wasTBC && !cleared && confirmed && !override.venueMemberNotifiedAt) {
+    override.venueMemberNotifiedAt = Date.now();
+    for (const user of state.users) {
+      if (user?.status !== "approved" || user.role !== "member") continue;
+      state.notifications.push({
+        id: uid("n"),
+        userId: user.id,
+        kind: "operational_session_venue_updated",
+        title: "Venue confirmed",
+        body: `${sessionLabel} is at ${effectiveLocation}. Check the activity page for details.`,
+        link: destination,
+        destination,
+        read: false,
+        createdAt: Date.now(),
+      });
+    }
+  }
+  const actorLabel = actor?.fullName || actor?.preferredName || actor?.email || "Admin";
+  for (const user of state.users) {
+    if (user?.status !== "approved") continue;
+    if (user.role !== "admin" && user.role !== "superadmin" && user.role !== "super_admin") continue;
+    if (actor && user.id === actor.id) continue;
+    const body = cleared
+      ? `${actorLabel} reset the venue for ${sessionId} to the activity default.`
+      : `${actorLabel} set the venue for ${sessionId} to ${effectiveLocation}.`;
+    state.notifications.push({
+      id: uid("n"),
+      userId: user.id,
+      kind: "operational_session_venue_updated",
+      title: "Session venue updated",
+      body,
+      link: destination,
+      destination,
+      read: false,
+      createdAt: Date.now(),
+    });
+  }
+  save();
+  return { sessionId, activityId: overrideActivityId, ...override };
 }
 
 // --- Giving (FPS donations) -----------------------------------------------------
@@ -1816,12 +2135,16 @@ function localApplication(user) {
     guardian_name: user.guardianName || null,
     guardian_phone: user.guardianPhone || null,
     emergency_name: user.emergencyName || "",
+    emergency_relationship: user.emergencyRelationship || null,
     emergency_phone: user.emergencyPhone || "",
     heard_source: user.heard || "other",
     heard_detail: user.heardDetail || null,
     preferred_name: user.preferredName || null,
     photo_consent: !!user.mediaConsent,
     waiver_accepted_at: user.indemnityAcceptedAt || null,
+    waiver_signature_text: user.indemnitySignature || null,
+    waiver_signed_at: user.indemnitySignedAt || null,
+    waiver_form_version: user.indemnityFormVersion || null,
     privacy_accepted_at: user.privacyAcceptedAt || null,
     guidelines_accepted_at: user.guidelinesAcceptedAt || user.appliedAt || null,
     submitted_at: user.appliedAt || null,
@@ -1834,22 +2157,25 @@ function localApplication(user) {
 function membershipPatch(form) {
   const isMinor = parseAgeOver18(form.age_over_18);
   const guardian = guardianFields(isMinor, form.guardian_name, form.guardian_phone);
+  const emergency = normalizeEmergencyContact({
+    emergencyName: form.emergency_name,
+    emergencyRelationship: form.emergency_relationship,
+    emergencyPhone: form.emergency_phone,
+  });
   const patch = {
     mobile: String(form.mobile || "").trim(),
     is_minor: isMinor,
     date_of_birth: null,
     guardian_name: guardian.name,
     guardian_phone: guardian.phone,
-    emergency_name: String(form.emergency_name || "").trim(),
-    emergency_phone: String(form.emergency_phone || "").trim(),
+    emergency_name: emergency.name,
+    emergency_relationship: emergency.relationship,
+    emergency_phone: emergency.phone,
     heard_source: String(form.heard_source || "").trim(),
     heard_detail: String(form.heard_detail || "").trim() || null,
     preferred_name: String(form.preferred_name || "").trim() || null,
   };
   if (!patch.mobile) throw new Error("Enter mobile number");
-  if (!patch.emergency_name || !patch.emergency_phone) {
-    throw new Error("Enter emergency contact name and phone");
-  }
   if (!patch.heard_source) throw new Error("Choose how you heard about ITC");
   return patch;
 }
@@ -1898,6 +2224,15 @@ export async function saveMyApplication(form) {
   if (!cu) throw new Error("Not signed in");
   const isMinor = parseAgeOver18(form.age_over_18);
   const guardian = guardianFields(isMinor, form.guardian_name, form.guardian_phone);
+  if (!form.waiver) throw new Error("Read and accept the Indemnity");
+  const acceptance = normalizeIndemnityAcceptance({
+    signature: form.waiver_signature_text,
+    signedAt: form.waiver_signed_at,
+    emergencyName: form.emergency_name,
+    emergencyRelationship: form.emergency_relationship,
+    emergencyPhone: form.emergency_phone,
+  });
+  const acceptedAt = new Date().toISOString();
   const row = {
     profile_id: cu.id,
     mobile: form.mobile,
@@ -1905,15 +2240,19 @@ export async function saveMyApplication(form) {
     is_minor: isMinor,
     guardian_name: guardian.name,
     guardian_phone: guardian.phone,
-    emergency_name: form.emergency_name,
-    emergency_phone: form.emergency_phone,
+    emergency_name: acceptance.emergencyName,
+    emergency_relationship: acceptance.emergencyRelationship,
+    emergency_phone: acceptance.emergencyPhone,
     heard_source: form.heard_source,
     heard_detail: form.heard_detail || null,
     preferred_name: form.preferred_name || null,
     photo_consent: !!form.photo_consent,
-    waiver_accepted_at: new Date().toISOString(),
-    privacy_accepted_at: new Date().toISOString(),
-    guidelines_accepted_at: new Date().toISOString(),
+    waiver_accepted_at: acceptedAt,
+    waiver_signature_text: acceptance.signature,
+    waiver_signed_at: acceptance.signedAt,
+    waiver_form_version: acceptance.formVersion,
+    privacy_accepted_at: acceptedAt,
+    guidelines_accepted_at: acceptedAt,
   };
   const { error } = await supabase.from("applications").upsert(row);
   if (error) throw error;
@@ -1930,6 +2269,7 @@ export async function updateMyMembershipDetails(form) {
     user.guardianName = patch.guardian_name;
     user.guardianPhone = patch.guardian_phone;
     user.emergencyName = patch.emergency_name;
+    user.emergencyRelationship = patch.emergency_relationship;
     user.emergencyPhone = patch.emergency_phone;
     user.heard = patch.heard_source;
     user.heardDetail = patch.heard_detail;
@@ -1973,25 +2313,42 @@ export async function updateMyPrivacyPreferences(form) {
   return data;
 }
 
-export async function acceptMyIndemnity() {
+export async function acceptMyIndemnity(payload) {
   if (!isLive() || !supabase) {
     const user = currentUser();
     if (!user) throw new Error("Not signed in");
-    if (!user.indemnityAcceptedAt) {
-      user.indemnityAcceptedAt = Date.now();
-      save();
-    }
-    return user.indemnityAcceptedAt;
+    return acceptIndemnity(user.id, payload);
   }
   const cu = await getCurrentUser();
   if (!cu) throw new Error("Not signed in");
   const app = await getMyApplication();
   if (!app) throw new Error("Application not found");
-  if (app.waiver_accepted_at) return app.waiver_accepted_at;
+  const mapped = {
+    indemnityAcceptedAt: app.waiver_accepted_at,
+    indemnitySignature: app.waiver_signature_text,
+    indemnitySignedAt: app.waiver_signed_at,
+    indemnityFormVersion: app.waiver_form_version,
+    emergencyName: app.emergency_name,
+    emergencyRelationship: app.emergency_relationship,
+    emergencyPhone: app.emergency_phone,
+  };
+  if (isIndemnityCurrent(mapped)) return app.waiver_accepted_at;
+  const acceptance = normalizeIndemnityAcceptance({
+    ...payload,
+    emergencyName: app.emergency_name,
+    emergencyPhone: app.emergency_phone,
+  });
   const waiver_accepted_at = new Date().toISOString();
+  const patch = {
+    waiver_accepted_at,
+    waiver_signature_text: acceptance.signature,
+    waiver_signed_at: acceptance.signedAt,
+    waiver_form_version: acceptance.formVersion,
+    emergency_relationship: acceptance.emergencyRelationship,
+  };
   const { data, error } = await supabase
     .from("applications")
-    .update({ waiver_accepted_at })
+    .update(patch)
     .eq("profile_id", cu.id)
     .select()
     .single();
@@ -2032,11 +2389,15 @@ export async function listPendingApplications() {
       email: a.profiles.email,
       phone: a.mobile,
       emergencyName: a.emergency_name,
+      emergencyRelationship: a.emergency_relationship,
       emergencyPhone: a.emergency_phone,
       heard: a.heard_source,
       appliedAt: a.submitted_at,
       isMinor: !!a.is_minor,
       indemnityAcceptedAt: a.waiver_accepted_at,
+      indemnitySignature: a.waiver_signature_text,
+      indemnitySignedAt: a.waiver_signed_at,
+      indemnityFormVersion: a.waiver_form_version,
       mediaConsent: a.photo_consent,
     }));
 }

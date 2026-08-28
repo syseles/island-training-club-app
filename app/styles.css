@@ -821,6 +821,8 @@ a.profile-row:hover .pr-text strong { color: var(--accent); }
 
 /* ---- Forms ------------------------------------------------------------ */
 
+.form-fieldset { border: 0; margin: 0; padding: 0; min-width: 0; }
+
 .field { margin-top: 14px; }
 
 .field label {
@@ -1448,4 +1450,205 @@ a.profile-row:hover .pr-text strong { color: var(--accent); }
 @keyframes toast-in {
   from { opacity: 0; transform: translateY(8px); }
   to { opacity: 1; transform: translateY(0); }
+}
+
+/* ---- Modal: read-and-accept document ------------------------------ */
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  background: rgba(3, 5, 4, .72);
+  backdrop-filter: blur(6px);
+  display: grid;
+  place-items: center;
+  padding: 16px;
+  animation: backdrop-in .18s ease-out;
+}
+
+.modal-dialog {
+  width: min(640px, 100%);
+  max-height: 85vh;
+  background: var(--surface-3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: 0 24px 64px rgba(0, 0, 0, .55);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  color: var(--ink);
+}
+
+.modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--line);
+}
+
+.modal-header .display { margin: 0; }
+
+.modal-close {
+  background: none;
+  border: 0;
+  color: var(--muted);
+  font-size: 22px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: var(--radius-sm);
+}
+.modal-close:hover { color: var(--accent); }
+
+.modal-doc {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
+.modal-doc-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 24px 28px;
+  background: #fafaf7;
+  color: #15181a;
+  line-height: 1.55;
+  font-size: 14.5px;
+  position: relative;
+  overscroll-behavior: contain;
+}
+
+.modal-doc-body.doc-provisional::after {
+  content: "Draft — pending ITC leadership review";
+  position: sticky;
+  display: block;
+  bottom: 8px;
+  left: 0;
+  right: 0;
+  text-align: center;
+  font-size: 10.5px;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  color: rgba(0, 0, 0, .25);
+  pointer-events: none;
+  margin-top: 24px;
+}
+
+.modal-doc-body .doc-content h3 {
+  font-size: 14px;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+  margin: 18px 0 6px;
+  color: #15181a;
+}
+.modal-doc-body .doc-content h3:first-child { margin-top: 0; }
+.modal-doc-body .doc-content p { margin: 0 0 12px; }
+
+.doc-content .doc-clauses,
+.doc-content .doc-subclauses {
+  padding-left: 1.4rem;
+}
+.doc-content .doc-clauses > li,
+.doc-content .doc-subclauses > li {
+  margin: 0 0 12px;
+  padding-left: 4px;
+}
+.doc-content .doc-subclauses {
+  margin-top: 12px;
+  list-style: none;
+  counter-reset: doc-subclause;
+}
+.doc-content .doc-subclauses > li {
+  position: relative;
+  counter-increment: doc-subclause;
+}
+.doc-content .doc-subclauses > li::before {
+  content: "(" counter(doc-subclause, lower-alpha) ")";
+  position: absolute;
+  right: calc(100% + 6px);
+}
+
+.modal-doc-ack {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 14px 20px;
+  border-top: 1px solid var(--line);
+  background: var(--surface-3);
+}
+.modal-doc-ack .btn { align-self: flex-end; }
+.modal-doc-ack .btn[disabled] { opacity: .45; cursor: not-allowed; }
+.modal-doc-ack [data-modal-hint] { margin: 0; }
+
+@keyframes backdrop-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+/* ---- Underlined link inside checkbox labels ----------------------- */
+
+.modal-link {
+  color: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  text-decoration-thickness: 1px;
+}
+.modal-link:hover { color: var(--accent); }
+
+/* ---- Disabled checkbox with hint ---------------------------------- */
+
+.check input[disabled] + span { opacity: .55; }
+.check input[disabled] + span .modal-link { opacity: 1; }
+
+/* ---- Free-event venue override + activity map ----------------------- */
+.activity-map-section { margin-top: 16px; }
+.venue-guide { margin-right: 0; margin-bottom: 0; margin-left: 0; }
+.venue-guide-image {
+  display: block;
+  width: 100%;
+  height: auto;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius);
+  background: #fff;
+}
+.venue-guide figcaption {
+  margin-top: 8px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+.activity-map {
+  min-height: 260px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface-3);
+}
+.activity-map > [role="status"],
+.activity-map-fallback {
+  min-height: 260px;
+  display: grid;
+  place-items: center;
+  margin: 0;
+  padding: 24px;
+  text-align: center;
+}
+.activity-map:focus-within { outline: 2px solid var(--accent); outline-offset: 2px; }
+.activity-map .leaflet-control-attribution { color: #111; background: rgba(255,255,255,.85); }
+.activity-map .leaflet-popup-content { color: #111; }
+.free-event-venue-card { border: 1px solid var(--line-soft); }
+.venue-picker-shell { margin-top: 14px; }
+.venue-picker {
+  height: 240px;
+  overflow: hidden;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+}
+.venue-picker:focus-within { outline: 2px solid var(--accent); outline-offset: 2px; }
+@media (max-width: 560px) {
+  .free-event-venue-card .field-row { grid-template-columns: 1fr; }
 }

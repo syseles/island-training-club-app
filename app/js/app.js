@@ -6,12 +6,114 @@ import * as store from "./store.js";
 import { buildICS, findSession, todayLocal, mondayOf, addDays, isoDate, donorIdProblem } from "./data.js";
 import * as views from "./views.js";
 import { isLive, supabase } from "./config.js";
+import * as components from "./components.js";
+import {
+  normalizeMeetingPoint,
+  normalizeVenueLocation,
+  TAMAR_DEFAULT_MEETING_POINT,
+} from "./venue.js";
 
 const viewEl = document.getElementById("view");
 const navEl = document.getElementById("bottom-nav");
 const notificationEl = document.getElementById("top-notifications");
 const avatarEl = document.getElementById("top-avatar");
 const toastStack = document.getElementById("toast-stack");
+const MAP_FALLBACK_HTML = `<p class="muted small activity-map-fallback" role="status">Couldn't find the venue on the map — tap Get directions instead.</p>`;
+
+export function loadActivityMapModule() {
+  return import("./map.js");
+}
+
+export async function mountCommittedActivityMap(host, options = {}) {
+  const {
+    ownsGeneration = () => true,
+    loadModule = loadActivityMapModule,
+  } = options;
+  try {
+    const { mountActivityMap } = await loadModule();
+    return await mountActivityMap(host, { ownsGeneration });
+  } catch (_err) {
+    if (ownsGeneration() && host?.isConnected) host.innerHTML = MAP_FALLBACK_HTML;
+    return false;
+  }
+}
+
+export async function syncWeekVenuePicker(form, options = {}) {
+  const ownsGeneration = options.ownsGeneration || (() => true);
+  if (!(form instanceof HTMLFormElement) || !String(form.dataset.session || "").startsWith("wnt-")) {
+    return false;
+  }
+  const locationField = form.querySelector('[name="location"]');
+  const latField = form.querySelector('[name="meetingLat"]');
+  const lngField = form.querySelector('[name="meetingLng"]');
+  const shell = form.querySelector("[data-venue-picker-shell]");
+  const host = form.querySelector("[data-venue-picker]");
+  if (!locationField || !latField || !lngField || !shell || !host) return false;
+  const isTamar = normalizeVenueLocation(locationField.value) === "tamar park";
+  shell.classList.toggle("hidden", !isTamar);
+  if (!isTamar) {
+    latField.value = "";
+    lngField.value = "";
+    venuePickerControllers.get(form)?.destroy();
+    venuePickerControllers.delete(form);
+    return false;
+  }
+  const initialPoint = normalizeMeetingPoint(latField.value, lngField.value)
+    || TAMAR_DEFAULT_MEETING_POINT;
+  latField.value = String(initialPoint.lat);
+  lngField.value = String(initialPoint.lng);
+  if (venuePickerControllers.has(form)) return true;
+  const { mountVenuePicker } = await (options.loadModule || loadActivityMapModule)();
+  const controller = await mountVenuePicker(host, {
+    initialPoint,
+    ownsGeneration,
+    onChange(point) {
+      latField.value = String(point.lat);
+      lngField.value = String(point.lng);
+    },
+  });
+  const stillTamar = normalizeVenueLocation(locationField.value) === "tamar park";
+  if (!controller || !ownsGeneration() || !stillTamar) {
+    controller?.destroy();
+    return false;
+  }
+  venuePickerControllers.set(form, controller);
+  return true;
+}
+
+export function mountVenueImageFallback(image, options = {}) {
+  const {
+    ownsGeneration = () => true,
+    mountMap = mountCommittedActivityMap,
+  } = options;
+  if (!image || !ownsGeneration()) return false;
+  const query = String(image.dataset.fallbackQuery || "").trim();
+  image.addEventListener("error", () => {
+    if (!ownsGeneration() || !image.isConnected) return;
+    const figure = image.closest("figure");
+    if (!figure) return;
+    if (!query) {
+      figure.remove();
+      return;
+    }
+    const section = document.createElement("section");
+    section.className = "activity-map-section";
+    section.setAttribute("aria-label", "Venue map");
+    const host = document.createElement("div");
+    host.className = "activity-map";
+    host.id = "activity-map";
+    host.dataset.mapsQuery = query;
+    const status = document.createElement("p");
+    status.className = "muted small";
+    status.setAttribute("role", "status");
+    status.textContent = "Loading map…";
+    host.appendChild(status);
+    section.appendChild(host);
+    figure.replaceWith(section);
+    void mountMap(host, { ownsGeneration });
+  }, { once: true });
+  return true;
+}
 
 // --- Toasts --------------------------------------------------------------------
 
@@ -54,6 +156,7 @@ let renderGeneration = 0;
 let notificationRouteRows = null;
 let pendingNotificationRouteRequest = null;
 const controlBusy = new WeakSet();
+const venuePickerControllers = new WeakMap();
 const APPLY_DRAFT_DEBOUNCE_MS = 500;
 let applyDraftTimer = null;
 
@@ -175,6 +278,16 @@ function showFieldError(form, field, errorHost, message) {
     [field.getAttribute("aria-describedby"), alert.id].filter(Boolean).join(" ")
   );
   field.focus();
+}
+
+function showInlineFormError(host, message) {
+  if (!host) return;
+  host.innerHTML = "";
+  const alert = document.createElement("div");
+  alert.className = "form-error";
+  alert.setAttribute("role", "alert");
+  alert.textContent = message;
+  host.appendChild(alert);
 }
 
 export async function maybeRedirectToApply() {
@@ -338,6 +451,20 @@ async function render(generation = renderGeneration) {
   avatarEl.classList.toggle("is-empty", !user);
   avatarEl.innerHTML = views.avatarHTML(user);
   if (!notificationsActive) renderNotificationChrome(user, false, generation);
+  if (page === "activity") {
+    const ownsGeneration = () => generation === renderGeneration;
+    const mapHost = viewEl.querySelector("#activity-map");
+    if (mapHost) {
+      void mountCommittedActivityMap(mapHost, { ownsGeneration });
+    }
+    const venueImage = viewEl.querySelector("[data-venue-image]");
+    if (venueImage) mountVenueImageFallback(venueImage, { ownsGeneration });
+  }
+  if (page === "admin" && arg === "activities") {
+    const ownsGeneration = () => generation === renderGeneration;
+    const venueForms = viewEl.querySelectorAll?.('form[data-action="form-week-venue"]') || [];
+    [...venueForms].forEach((form) => { void syncWeekVenuePicker(form, { ownsGeneration }); });
+  }
   window.scrollTo({ top: 0 });
   viewEl.focus({ preventScroll: true });
   prevPage = page;
@@ -346,6 +473,15 @@ async function render(generation = renderGeneration) {
 document.addEventListener("input", async (e) => {
   const field = e.target;
   if (field?.getAttribute?.("aria-invalid") === "true") clearFieldError(field);
+  if (field?.name === "location") {
+    const venueForm = field.closest?.('form[data-action="form-week-venue"]');
+    if (venueForm) {
+      const generation = renderGeneration;
+      void syncWeekVenuePicker(venueForm, {
+        ownsGeneration: () => generation === renderGeneration,
+      });
+    }
+  }
   if (field?.dataset?.input === "member-search") {
     views.adminMemberFilters.query = field.value;
     const cursor = field.selectionStart;
@@ -424,7 +560,10 @@ function downloadICS(session) {
 
 document.addEventListener("click", async (e) => {
   const el = e.target.closest("[data-action]");
-  if (!el) return;
+  // Repeated forms route through the submit delegate via data-action. If a
+  // nested submit button resolves to its parent form here, preventDefault()
+  // below cancels the browser's submit event before that handler can run.
+  if (!el || el instanceof HTMLFormElement) return;
   const { action } = el.dataset;
   e.preventDefault?.();
 
@@ -465,6 +604,18 @@ document.addEventListener("click", async (e) => {
       clearTimeout(applyDraftTimer);
       const draft = saveApplyDraftForm(form);
       toast(draft ? "Draft saved on this device" : "Unable to save draft", !draft);
+      break;
+    }
+    case "open-doc": {
+      const docKey = el.dataset.doc;
+      if (!docKey) break;
+      components.openReadAndAcceptModal({
+        docKey,
+        trigger: el,
+        onAccept: (openingTrigger) => {
+          components.applyDocumentAcceptance(openingTrigger || el);
+        },
+      });
       break;
     }
     case "discard-draft":
@@ -620,7 +771,6 @@ document.addEventListener("click", async (e) => {
       }
       break;
     }
-
     case "cancel-booking":
       if (confirm("Cancel this booking? A full refund will be issued (prototype rule).")) {
         try {
@@ -768,6 +918,22 @@ document.addEventListener("click", async (e) => {
       render();
       break;
 
+    case "reset-week-venue": {
+      const control = el;
+      withBusyControl(control, "Resetting\u2026", async () => {
+        try {
+          await store.setWeekVenue(el.dataset.session, {
+            location: null, mapsQuery: null, meetingLat: null, meetingLng: null,
+          });
+          toast("Venue reset to the activity default");
+          await renderWithFeedback();
+        } catch (err) {
+          toast(err.message || "Unable to reset venue", true);
+        }
+      }, { busyKey: control });
+      break;
+    }
+
     case "copy-fps":
       if (el.dataset.phone && navigator.clipboard?.writeText) {
         await navigator.clipboard.writeText(el.dataset.phone);
@@ -802,6 +968,7 @@ document.addEventListener("submit", async (e) => {
       const fd = new FormData(form);
       const payload = Object.fromEntries(fd.entries());
       payload.photo_consent = !!fd.get("photo_consent");
+      payload.waiver = !!fd.get("waiver");
       try {
         await store.saveMyApplication(payload);
         toast(form.dataset.toast || "Application submitted.");
@@ -814,7 +981,26 @@ document.addEventListener("submit", async (e) => {
     return;
   }
 
-  switch (form.id) {
+  if (form.dataset.form === "membership-details") {
+    e.preventDefault();
+    if (!form.reportValidity()) return;
+    const control = form.querySelector('[type="submit"]');
+    await withBusyControl(control, "Saving…", async () => {
+      try {
+        await store.updateMyMembershipDetails(Object.fromEntries(new FormData(form).entries()));
+        toast("Membership details saved");
+        location.hash = "#/account/details";
+        await renderWithFeedback();
+      } catch (err) {
+        toast(err.message || "Unable to save membership details", true);
+      }
+    });
+    return;
+  }
+
+  const formAction = form.id || form.dataset.action;
+
+  switch (formAction) {
     case "form-signin": {
       e.preventDefault();
       const email = new FormData(form).get("email");
@@ -836,24 +1022,33 @@ document.addEventListener("submit", async (e) => {
       const fd = new FormData(form);
       const errEl = form.querySelector("#apply-error");
       if (donorIdProblem(fd.get("donorId"))) {
-        errEl.innerHTML = `<div class="form-error">That Donor ID doesn’t look right — it needs a hyphen between your last name and the 4- or 5-digit number (e.g. CHUI-08879 or CHUI-8879). Please enter it again, or leave it blank if you don’t have one.</div>`;
+        showInlineFormError(errEl, "That Donor ID doesn’t look right — it needs a hyphen between your last name and the 4- or 5-digit number (e.g. CHUI-08879 or CHUI-8879). Please enter it again, or leave it blank if you don’t have one.");
         return;
       }
-      const res = store.applyForMembership({
+      const payload = {
         fullName: fd.get("fullName") || "",
         preferredName: fd.get("preferredName") || "",
         email: fd.get("email") || "",
         phone: fd.get("phone") || "",
         emergencyName: fd.get("emergencyName") || "",
+        emergencyRelationship: fd.get("emergencyRelationship") || "",
         emergencyPhone: fd.get("emergencyPhone") || "",
         heard: fd.get("heard") || "",
         ageConfirmed: fd.get("ageConfirmed") === "on",
         mediaConsent: fd.get("mediaConsent") === "on",
         donorId: fd.get("donorId") || "",
         indemnity: fd.get("indemnity") === "on",
-      });
-      if (!res.ok) {
-        errEl.innerHTML = `<div class="form-error">An application already exists for that email — try signing in instead.</div>`;
+        indemnitySignature: fd.get("indemnitySignature") || "",
+        indemnitySignedAt: fd.get("indemnitySignedAt") || "",
+      };
+      try {
+        const res = store.applyForMembership(payload);
+        if (!res.ok) {
+          showInlineFormError(errEl, "An application already exists for that email — try signing in instead.");
+          return;
+        }
+      } catch (err) {
+        showInlineFormError(errEl, err.message || "Unable to submit application");
         return;
       }
       toast("Application submitted — a leader will review it");
@@ -934,11 +1129,24 @@ document.addEventListener("submit", async (e) => {
     case "form-indemnity": {
       e.preventDefault();
       if (!form.reportValidity()) return;
-      const user = store.currentUser();
-      if (!user) return;
-      store.acceptIndemnity(user.id);
-      toast("Indemnity accepted & confirmed");
-      render();
+      const fd = new FormData(form);
+      const errorEl = form.querySelector("#indemnity-error");
+      const acceptButton = form.querySelector("[data-doc-submit]");
+      if (!acceptButton || acceptButton.disabled) {
+        showInlineFormError(errorEl, "Read the full Indemnity before confirming");
+        return;
+      }
+      try {
+        await store.acceptMyIndemnity({
+          signature: fd.get("signature") || "",
+          signedAt: fd.get("signedAt") || "",
+          emergencyRelationship: fd.get("emergencyRelationship") || "",
+        });
+        toast("Indemnity accepted & confirmed");
+        await renderWithFeedback();
+      } catch (err) {
+        showInlineFormError(errorEl, err.message || "Unable to accept the Indemnity");
+      }
       break;
     }
 
@@ -1008,6 +1216,31 @@ document.addEventListener("submit", async (e) => {
       } catch (err) {
         toast(err.message || "Unable to record gym confirmation", true);
       }
+      break;
+    }
+
+    case "form-week-venue": {
+      e.preventDefault();
+      const control = form.querySelector('[type="submit"]');
+      const controls = [...form.querySelectorAll("input, button")];
+      const fd = new FormData(form);
+      const location = String(fd.get("location") || "").trim();
+      const enteredMapsQuery = String(fd.get("mapsQuery") || "").trim();
+      const mapsQuery = enteredMapsQuery || location;
+      await withBusyControl(control, "Saving\u2026", async () => {
+        try {
+          await store.setWeekVenue(form.dataset.session, {
+            location,
+            mapsQuery,
+            meetingLat: fd.get("meetingLat"),
+            meetingLng: fd.get("meetingLng"),
+          });
+          toast("Venue saved for this week");
+          await renderWithFeedback();
+        } catch (err) {
+          toast(err.message || "Unable to save venue", true);
+        }
+      }, { busyKey: form, controls });
       break;
     }
 

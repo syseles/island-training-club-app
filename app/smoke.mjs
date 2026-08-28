@@ -60,6 +60,7 @@ for (const relativePath of [
   "live-auth-smoke.mjs",
   "../supabase/migrations/20260804000000_profiles.sql",
   "../supabase/migrations/20260805000007_admin_application_decisions.sql",
+  "../supabase/migrations/20260827000001_hyrox_indemnity_fields.sql",
 ]) {
   const absolutePath = resolve(__dirnameSmoke, relativePath);
   if (!existsSync(absolutePath)) {
@@ -72,6 +73,20 @@ const profilesMigrationSource = readFileSync(
   resolve(__dirnameSmoke, "../supabase/migrations/20260804000000_profiles.sql"),
   "utf8"
 );
+const indemnityMigrationSource = readFileSync(
+  resolve(__dirnameSmoke, "../supabase/migrations/20260827000001_hyrox_indemnity_fields.sql"),
+  "utf8"
+);
+for (const column of [
+  "waiver_signature_text",
+  "waiver_signed_at",
+  "waiver_form_version",
+  "emergency_relationship",
+]) {
+  if (!indemnityMigrationSource.includes(column)) {
+    throw new Error(`Hyrox indemnity migration missing ${column}`);
+  }
+}
 const liveAuthRunbookSource = readFileSync(
   resolve(__dirnameSmoke, "../docs/runbooks/live-auth.md"),
   "utf8"
@@ -134,7 +149,7 @@ for (const marker of [
   "notification-filter",
   "Giving &amp; Fundraising",
   "ITC Anniversary",
-  "Payments / Ops",
+  "HYROX",
 ]) {
   if (!combinedRuntimeSource.includes(marker)) {
     throw new Error(`testing integration missing ${marker}`);
@@ -147,7 +162,7 @@ for (const marker of [
   "Privacy &amp; Notifications",
   "Approvals",
   "Members",
-  "Payments / Ops",
+  "HYROX",
   "Duty",
   "Session controls",
 ]) {
@@ -188,6 +203,21 @@ for (const marker of [
   }
 }
 console.log("ok  latest Notification domain markers coexist");
+{
+  // Live deployments: recurring activity defaults are seed/SQL-administered,
+  // so the Admin activity editor must render read-only with an honest note
+  // instead of silently writing device-local state behind a success toast.
+  if (!/export function viewAdminActivity[\s\S]*?isLive\(\)/.test(integratedViewSource)) {
+    throw new Error("viewAdminActivity must gate the recurring editor on isLive()");
+  }
+  if (!integratedViewSource.includes("form-fieldset")) {
+    throw new Error("live activity editor must disable the form via a fieldset");
+  }
+  if (!integratedViewSource.includes("recurring defaults are bundled with the app build")) {
+    throw new Error("live activity editor must explain that recurring defaults are bundled");
+  }
+  console.log("ok  live deployments render the recurring activity editor read-only");
+}
 
 const anniversary = data.ANNOUNCEMENTS[0];
 if (
@@ -277,6 +307,17 @@ assertRenderedActivityLinksAreFree(localVisitorHome, "visitor Home");
       throw new Error("visitor Home should not list session names when the current week has no free sessions");
     }
   }
+  if (localVisitorHome.includes("This week — open to all") && localVisitorHome.includes(paid.name)) {
+    throw new Error("visitor Home must show free sessions only");
+  }
+  if (!localVisitorHome.includes("This week — open to all")
+      && !localVisitorHome.includes("No open sessions this week")) {
+    throw new Error("visitor Home must fall back to the no-sessions copy");
+  }
+}
+if (!localVisitorHome.includes("This week — open to all")
+    && !localVisitorHome.includes("No open sessions this week")) {
+  throw new Error("visitor Home must fall back to the no-sessions copy");
 }
 assertPrimaryNav(null, ["Home", "Schedule", "Community", "Account"], "visitor");
 if (!localVisitorHome.includes('href="#/account">Sign in or join</a>')) {
@@ -289,22 +330,22 @@ console.log("ok  signed-out Home uses the correct live/local sign-in action");
 await check("home (visitor)", () => views.viewHome());
 await check("schedule", () => views.viewSchedule());
 
-// Schedule filters: Free/Paid kind filters removed; category filters remain.
+// Schedule filters: only chronological activity categories remain.
 {
   const schedHtml = views.viewSchedule();
+  const expectedFilterOrder = ["all", "Run", "Water", "Strength", "HYROX"];
+  const renderedFilterOrder = [...schedHtml.matchAll(/data-filter="([^"]+)"/g)].map((match) => match[1]);
+  if (JSON.stringify(renderedFilterOrder) !== JSON.stringify(expectedFilterOrder)) {
+    failures++;
+    console.error(`FAIL Schedule filter order should be ${expectedFilterOrder.join(", ")}; got ${renderedFilterOrder.join(", ")}`);
+  } else console.log("ok  Schedule filters follow weekly event order without Free/Paid chips");
   for (const removed of ['data-filter="free"', 'data-filter="paid"']) {
     if (schedHtml.includes(removed)) {
       failures++;
       console.error(`FAIL Schedule should not render the ${removed} filter chip`);
     }
   }
-  for (const kept of ['data-filter="all"', 'data-filter="Run"', 'data-filter="Strength"', 'data-filter="HYROX"', 'data-filter="Water"']) {
-    if (!schedHtml.includes(kept)) {
-      failures++;
-      console.error(`FAIL Schedule should keep the ${kept} filter chip`);
-    }
-  }
-  console.log("ok  Schedule drops Free/Paid filters, keeps category filters");
+  console.log("ok  Schedule keeps chronological category filters only");
 }
 const hyroxSid = store.nextSession().kind === "paid" ? store.nextSession().id : null;
 await check("activity paid (visitor)", () => views.viewActivity(paid.id));
@@ -334,13 +375,13 @@ if (!commHtml.includes('data-action="connect-interest"')) {
   console.error("FAIL Community Pulse meal CTA should use the existing interest action");
 }
 const coexistenceSurface = `${integratedViewSource}\n${localVisitorHome}\n${commHtml}`;
-for (const marker of ["Home", "notificationBellHTML", '#/giving', "community-pulse", "Payments / Ops"]) {
+for (const marker of ["Home", "notificationBellHTML", '#/giving', "community-pulse", "HYROX"]) {
   if (!coexistenceSurface.includes(marker)) {
     failures++;
     console.error(`FAIL combined domain coexistence missing ${marker}`);
   }
 }
-console.log("ok  Home, Notification bell, Giving nav, Community pulse, and Payment Ops coexist");
+console.log("ok  Home, Notification bell, Giving nav, Community pulse, and HYROX admin coexist");
 let commOk = true;
 for (const link of [
   "#/community/prayers",
@@ -433,6 +474,100 @@ if (!views.viewApply().includes('name="donorId"')) {
   failures++;
   console.error("FAIL apply form missing optional Donor ID field");
 } else console.log("ok  apply form collects optional Donor ID");
+
+// --- apply form checkboxes render the read-and-accept links (all three docs) ---
+// local mode: viewApply() dispatches to viewApplyLocal when isLive() is false
+const applyLocalHtml = views.viewApply();
+for (const [key, label] of [
+  ["indemnity", "Indemnity"],
+  ["privacy", "privacy policy"],
+  ["guidelines", "community guidelines"],
+]) {
+  if (!applyLocalHtml.includes(`data-action="open-doc" data-doc="${key}"`)) {
+    failures++;
+    console.error(`FAIL local-mode apply form missing modal trigger for "${key}"`);
+  }
+  if (!applyLocalHtml.includes(`data-doc-accept="${key}"`)) {
+    failures++;
+    console.error(`FAIL local-mode apply form missing doc-accept container for "${key}"`);
+  }
+  if (!applyLocalHtml.includes(label)) {
+    failures++;
+    console.error(`FAIL local-mode apply form missing label text "${label}"`);
+  }
+}
+if (!applyLocalHtml.includes("data-doc-checkbox")) {
+  failures++;
+  console.error("FAIL local-mode apply form checkboxes missing data-doc-checkbox attribute");
+}
+if (!applyLocalHtml.includes("Read the document to enable acceptance")) {
+  failures++;
+  console.error("FAIL local-mode apply form missing the read-first hint copy");
+}
+if (!applyLocalHtml.includes('name="mediaConsent" required') || applyLocalHtml.includes("(Optional) I consent")) {
+  failures++;
+  console.error("FAIL local-mode apply form photo consent should be required");
+}
+if (!applyLocalHtml.includes("Please contact ITC Committee if you have any questions/concerns about this.")) {
+  failures++;
+  console.error("FAIL apply form missing the ITC Committee contact line under photo consent");
+}
+if (!integratedViewSource.includes('name="photo_consent" ${checked("photo_consent")} required')) {
+  failures++;
+  console.error("FAIL live-mode apply form photo consent should be required");
+}
+console.log("ok  local-mode apply form wires all three documents (indemnity, privacy, guidelines)");
+for (const name of ["emergencyRelationship", "indemnitySignature", "indemnitySignedAt"]) {
+  if (!applyLocalHtml.includes(`name="${name}"`)) {
+    failures++;
+    console.error(`FAIL local apply form missing ${name}`);
+  }
+}
+if (!applyLocalHtml.includes("Participant's full name as signature")) {
+  failures++;
+  console.error("FAIL local apply form missing signature label");
+}
+if (!/name="indemnity"[^>]*disabled[^>]*data-doc-checkbox/.test(applyLocalHtml)) {
+  failures++;
+  console.error("FAIL local indemnity checkbox should stay disabled until the modal is read");
+}
+if (!applyLocalHtml.includes(`value="${data.isoDate(data.todayLocal())}"`)) {
+  failures++;
+  console.error("FAIL local signing date should default to today");
+}
+if (!applyLocalHtml.includes(`max="${data.isoDate(data.todayLocal())}"`)) {
+  failures++;
+  console.error("FAIL local signing date should be capped at today");
+}
+console.log("ok  local-mode apply form collects emergencyRelationship, signature, and signing date");
+for (const marker of [
+  'emergencyRelationship: fd.get("emergencyRelationship") || ""',
+  'indemnitySignature: fd.get("indemnitySignature") || ""',
+  'indemnitySignedAt: fd.get("indemnitySignedAt") || ""',
+]) {
+  if (!integratedAppSource.includes(marker)) {
+    failures++;
+    console.error(`FAIL local apply handler missing structured indemnity contract: ${marker}`);
+  }
+}
+console.log("ok  local apply handler bridges the structured indemnity contract");
+
+// Live-mode apply form: old plain-checkbox copy and indemnity-only attributes
+// must be gone. Source-level check: rendering viewApplyLive() requires
+// Supabase state, so we assert against the integrated source instead.
+for (const stale of [
+  "I accept the participation waiver",
+  "I accept the privacy policy. (⏳",
+  "I accept the community guidelines. (⏳",
+  'data-action="open-indemnity-doc"',
+  "data-indemnity-checkbox",
+]) {
+  if (combinedRuntimeSource.includes(stale)) {
+    failures++;
+    console.error(`FAIL stale pre-registry pattern still present: "${stale}"`);
+  }
+}
+console.log("ok  no stale plain-checkbox or indemnity-only patterns remain");
 await check("checkout (visitor) -> redirect", () => views.viewCheckout(paid.id));
 await check("admin (visitor) -> redirect", () => views.viewAdmin("approvals"));
 await check("notfound", () => views.viewNotFound());
@@ -461,12 +596,15 @@ const applyRes = store.applyForMembership({
   email: "test@example.com",
   phone: "+852 1234 5678",
   emergencyName: "E Person",
+  emergencyRelationship: "Sibling",
   emergencyPhone: "+852 8765 4321",
   heard: "A friend",
   ageConfirmed: true,
   mediaConsent: false,
   donorId: "Not applicable",
   indemnity: true,
+  indemnitySignature: "Test Person",
+  indemnitySignedAt: data.isoDate(data.todayLocal()),
 });
 if (!applyRes.ok) throw new Error("apply failed");
 if (applyRes.user.donorId !== null) {
@@ -477,6 +615,88 @@ if (!applyRes.user.indemnityAcceptedAt) {
   failures++;
   console.error("FAIL indemnity acceptance not recorded at application");
 } else console.log("ok  indemnity acceptance recorded at application");
+for (const [field, expected] of [
+  ["emergencyRelationship", "Sibling"],
+  ["indemnitySignature", "Test Person"],
+  ["indemnitySignedAt", data.isoDate(data.todayLocal())],
+  ["indemnityFormVersion", "v1"],
+]) {
+  if (applyRes.user[field] !== expected) {
+    failures++;
+    console.error(`FAIL application ${field} expected ${expected}, got ${applyRes.user[field]}`);
+  }
+}
+if (!store.isIndemnityCurrent(applyRes.user)) {
+  failures++;
+  console.error("FAIL signed v1 application should have current indemnity");
+}
+const localApplicationFixture = (email, overrides = {}) => ({
+  fullName: "Contact Check",
+  preferredName: "Contact",
+  email,
+  phone: "+852 1234 5678",
+  emergencyName: "E Person",
+  emergencyRelationship: "Sibling",
+  emergencyPhone: "+852 8765 4321",
+  heard: "A friend",
+  ageConfirmed: true,
+  mediaConsent: false,
+  donorId: "Not applicable",
+  indemnity: true,
+  indemnitySignature: "Contact Check",
+  indemnitySignedAt: data.isoDate(data.todayLocal()),
+  ...overrides,
+});
+for (const [label, email, overrides] of [
+  ["missing emergency name", "missing-emergency-name@example.test", { emergencyName: "" }],
+  ["missing emergency phone", "missing-emergency-phone@example.test", { emergencyPhone: "" }],
+]) {
+  let error = null;
+  try { store.applyForMembership(localApplicationFixture(email, overrides)); } catch (err) { error = err; }
+  if (!error || !/emergency contact name, relationship and phone/.test(error.message)) {
+    failures++;
+    console.error(`FAIL ${label} should reject with the canonical emergency-contact error`);
+  }
+}
+if (store.isIndemnityCurrent({ ...applyRes.user, emergencyPhone: "" })) {
+  failures++;
+  console.error("FAIL indemnity currentness should require canonical emergency contact phone");
+}
+for (const [label, payload, pattern] of [
+  ["short signature", { signature: "X", signedAt: data.isoDate(data.todayLocal()), emergencyRelationship: "Sibling" }, /full name as your signature/],
+  ["invalid date", { signature: "Test Person", signedAt: "2026-02-31", emergencyRelationship: "Sibling" }, /valid signing date/],
+  ["future date", { signature: "Test Person", signedAt: "2999-01-01", emergencyRelationship: "Sibling" }, /cannot be in the future/],
+  ["missing relationship", { signature: "Test Person", signedAt: data.isoDate(data.todayLocal()), emergencyRelationship: "" }, /relationship/],
+]) {
+  let error = null;
+  try { store.acceptIndemnity(applyRes.user.id, payload); } catch (err) { error = err; }
+  if (!error || !pattern.test(error.message)) {
+    failures++;
+    console.error(`FAIL ${label} should reject with ${pattern}`);
+  }
+}
+for (const [label, field] of [
+  ["missing canonical emergency name", "emergencyName"],
+  ["missing canonical emergency phone", "emergencyPhone"],
+]) {
+  const original = applyRes.user[field];
+  applyRes.user[field] = "";
+  let error = null;
+  try {
+    store.acceptIndemnity(applyRes.user.id, {
+      signature: "Test Person",
+      signedAt: data.isoDate(data.todayLocal()),
+      emergencyRelationship: "Sibling",
+    });
+  } catch (err) {
+    error = err;
+  }
+  applyRes.user[field] = original;
+  if (!error || !/emergency contact name, relationship and phone/.test(error.message)) {
+    failures++;
+    console.error(`FAIL ${label} should block re-sign acceptance`);
+  }
+}
 
 // --- Photo consent is required at application, with an ITC Committee contact line ---
 {
@@ -613,6 +833,12 @@ const pendingHome = views.viewHome();
       throw new Error("pending Home should not list session names when the current week has no free sessions");
     }
   }
+  if (!pendingHome.includes("My Week")) {
+    throw new Error("pending Home must show the My Week heading");
+  }
+  if (pendingHome.includes(free.name) && pendingHome.includes(paid.name)) {
+    throw new Error("pending Home must not include paid sessions");
+  }
 }
 assertRenderedActivityLinksAreFree(pendingHome, "pending Home");
 const pendingCommunity = views.viewCommunity();
@@ -701,6 +927,47 @@ if (!adminProfile.includes("Admin Tools") || !adminProfile.includes('href="#/adm
 }
 await check("admin activity edit", () => views.viewAdminActivity("hyrox"));
 await check("admin activity new", () => views.viewAdminActivity("new"));
+{
+  // Local prototype mode keeps the recurring editor fully editable; the
+  // read-only live gate must not leak into local renders.
+  const editHtml = views.viewAdminActivity("wnt");
+  if (!editHtml.includes('id="form-activity"') || editHtml.includes("form-fieldset\" disabled"))
+    throw new Error("local mode must keep the recurring activity editor editable");
+  const listHtml = await views.viewAdmin("activities");
+  if (!listHtml.includes('#/admin/activity/new'))
+    throw new Error("local mode must offer + New activity");
+  console.log("ok  recurring activity editor stays editable in local mode");
+}
+{
+  const swimmingBeforeEdit = structuredClone(store.getActivity("water"));
+  store.saveActivity({
+    ...swimmingBeforeEdit,
+    location: "TBC",
+    mapsQuery: "",
+    photo: "../assets/itc/main.webp",
+  });
+  if (store.getActivity("water").photo !== "../assets/itc/water.webp") {
+    throw new Error("editing Swimming must preserve its existing photo");
+  }
+
+  const activityId = "photo-regression-new";
+  store.saveActivity({
+    id: activityId,
+    title: "Photo Regression New",
+    kind: "paid",
+    location: "Main Hall",
+    mapsQuery: "Main Hall, Hong Kong",
+    photo: "../assets/itc/main.webp",
+    weekday: 2,
+    durationMin: 60,
+    price: 50,
+    capacity: 10,
+  });
+  if (store.getActivity(activityId).photo !== "../assets/itc/main.webp") {
+    throw new Error("new activities may keep the generic photo");
+  }
+  store.activities().splice(store.activities().findIndex((activity) => activity.id === activityId), 1);
+}
 const newApplicant = store.pendingApplicants().find((u) => u.email === "test@example.com");
 store.approveApplicant(newApplicant.id);
 console.log("ok  admin approved new applicant");
@@ -757,11 +1024,21 @@ await check("profile > donor", () => views.viewAccount("donor"));
 await check("profile > payments", () => views.viewAccount("payments"));
 await check("profile > privacy", () => views.viewAccount("privacy"));
 await check("profile > history", () => views.viewAccount("history"));
+const membershipDetailsHtml = await views.viewAccount("details");
+const membershipDetailsEditHtml = await views.viewAccount("details", "edit");
+if (!membershipDetailsHtml.includes("Emergency contact relationship")) {
+  failures++;
+  console.error("FAIL Membership Details summary missing emergency contact relationship");
+}
+if (!membershipDetailsEditHtml.includes('name="emergency_relationship"')) {
+  failures++;
+  console.error("FAIL Membership Details edit form missing emergency_relationship field");
+} else console.log("ok  Membership Details summary and edit include emergency relationship");
 
 // sub-page headings are title-cased to match the row titles
 for (const [section, title] of [
   ["details", "Membership Details."],
-  ["indemnity", "Health &amp; Liability Indemnity."],
+  ["indemnity", "Indemnity."],
   ["donor", "Donor Profile."],
   ["payments", "Payments &amp; Receipts."],
   ["privacy", "Privacy &amp; Notifications."],
@@ -779,13 +1056,70 @@ if (!(await views.viewAccount("nope")).includes("Page not found")) {
 } else console.log("ok  unknown Profile section 404s");
 
 // indemnity: accepted at application -> confirmed on Profile as a single
-// "Indemnity confirmed on [date]" line; a member who never accepted sees
-// "To be accepted" and can confirm from the sub-page
+// "Indemnity confirmed on [date]" line; stale consent must be detected from
+// store.isIndemnityCurrent(), not from the timestamp alone.
 if (!newMemberAcct.includes("Indemnity confirmed on") || newMemberAcct.includes("Accepted on")) {
   failures++;
   console.error("FAIL Profile should show a single indemnity-confirmed-on-date line");
 } else console.log("ok  Profile shows single-line indemnity confirmation");
+const currentIndemnityHtml = await views.viewAccount("indemnity");
+for (const marker of [
+  "Indemnity confirmed on",
+  "Signed by",
+  "Test Person",
+  "Date of signing",
+  "Emergency contact relationship",
+  "Sibling",
+  "Document version",
+  "v1",
+]) {
+  if (!currentIndemnityHtml.includes(marker)) {
+    failures++;
+    console.error(`FAIL current Indemnity page missing "${marker}"`);
+  }
+}
+console.log("ok  current indemnity page shows the stored consent record");
+store.currentUser().indemnityAcceptedAt = Date.now() - 86400000;
+store.currentUser().indemnityFormVersion = "v0";
+const legacyIndemnityProfile = await views.viewAccount();
+if (legacyIndemnityProfile.includes("Indemnity confirmed on") || !legacyIndemnityProfile.includes("Legacy acceptance recorded on")) {
+  failures++;
+  console.error("FAIL timestamp-only or stale indemnity should stay stale on Profile");
+} else console.log("ok  timestamp-only or stale indemnity stays stale on Profile");
+const staleIndemnityHtml = await views.viewAccount("indemnity");
+for (const marker of [
+  "A new version of the Indemnity is available",
+  'data-doc-accept="indemnity"',
+  'name="signature"',
+  'name="signedAt"',
+  'name="emergencyRelationship"',
+  "Accept &amp; Confirm",
+  "Edit in Membership Details",
+]) {
+  if (!staleIndemnityHtml.includes(marker)) {
+    failures++;
+    console.error(`FAIL stale Indemnity page missing "${marker}"`);
+  }
+}
+console.log("ok  stale indemnity page renders the re-sign flow");
+if (staleIndemnityHtml.includes('name="indemnityAccept"') || !/data-doc-submit[^>]*disabled/.test(staleIndemnityHtml)) {
+  failures++;
+  console.error("FAIL stale Indemnity should use one modal acknowledgement to unlock Accept & Confirm");
+} else console.log("ok  stale Indemnity uses one modal acknowledgement to unlock Accept & Confirm");
+for (const marker of [
+  'await store.acceptMyIndemnity({',
+  'signature: fd.get("signature") || ""',
+  'signedAt: fd.get("signedAt") || ""',
+  'emergencyRelationship: fd.get("emergencyRelationship") || ""',
+]) {
+  if (!integratedAppSource.includes(marker)) {
+    failures++;
+    console.error(`FAIL Profile > Indemnity handler missing structured contract: ${marker}`);
+  }
+}
+console.log("ok  Profile > Indemnity handler bridges the structured contract");
 store.currentUser().indemnityAcceptedAt = null;
+store.currentUser().indemnityFormVersion = null;
 if (!(await views.viewAccount()).includes("To be accepted")) {
   failures++;
   console.error('FAIL unaccepted indemnity should read "To be accepted"');
@@ -794,7 +1128,26 @@ if (!(await views.viewAccount("indemnity")).includes("Accept &amp; Confirm")) {
   failures++;
   console.error("FAIL indemnity page missing Accept & Confirm");
 } else console.log("ok  indemnity page offers Accept & Confirm");
-store.acceptIndemnity(store.currentUser().id);
+
+// --- Profile > Indemnity: one modal acknowledgement + full document button ---
+const indemnityPageHtml = await views.viewAccount("indemnity");
+if (!indemnityPageHtml.includes("View as full document")) {
+  failures++;
+  console.error('FAIL Profile > Indemnity should expose a "View as full document" button');
+} else console.log('ok  Profile > Indemnity exposes "View as full document" button');
+if (!indemnityPageHtml.includes('data-action="open-doc" data-doc="indemnity"')) {
+  failures++;
+  console.error('FAIL Profile > Indemnity button should target the indemnity document');
+} else console.log("ok  Profile > Indemnity button targets the indemnity document");
+if (indemnityPageHtml.includes('class="doc-content"')) {
+  failures++;
+  console.error("FAIL Profile > Indemnity should not duplicate the full document inline");
+} else console.log("ok  Profile > Indemnity uses the modal as its only document reader");
+store.acceptIndemnity(store.currentUser().id, {
+  signature: "Test Person",
+  signedAt: data.isoDate(data.todayLocal()),
+  emergencyRelationship: "Sibling",
+});
 if (!(await views.viewAccount()).includes("Indemnity confirmed on")) {
   failures++;
   console.error("FAIL acceptIndemnity did not confirm on Profile");
@@ -804,6 +1157,212 @@ if (!views.viewHome().includes("Nothing booked this week")) {
   console.error('FAIL "My week" should prompt when the member has no bookings');
 } else console.log('ok  "My week" empty state prompts to book');
 await check("checkout (member)", () => views.viewCheckout(paid.id));
+
+// --- document registry (indemnity + privacy + guidelines) ---
+const docsModule = await import("./js/documents.js");
+const DOCS = docsModule.DOCUMENTS;
+if (docsModule.INDEMNITY_VERSION !== "v1") {
+  failures++;
+  console.error(`FAIL indemnity version should be v1, got ${docsModule.INDEMNITY_VERSION}`);
+}
+if (DOCS.indemnity?.title !== "Indemnity") {
+  failures++;
+  console.error(`FAIL indemnity title should be Indemnity, got ${DOCS.indemnity?.title}`);
+}
+for (const key of ["indemnity", "privacy", "guidelines"]) {
+  if (!DOCS[key] || typeof DOCS[key].renderBody !== "function" || !DOCS[key].title) {
+    failures++;
+    console.error(`FAIL documents registry missing entry for "${key}"`);
+  }
+}
+console.log("ok  documents registry exposes indemnity + privacy + guidelines");
+for (const [key, expected] of [["indemnity", false], ["privacy", true], ["guidelines", true]]) {
+  if (!!DOCS[key]?.provisional !== expected) {
+    failures++;
+    console.error(`FAIL ${key} provisional watermark flag expected ${expected}, got ${!!DOCS[key]?.provisional}`);
+  }
+}
+console.log("ok  document registry scopes provisional watermarks by document");
+
+const indemnityBody = DOCS.indemnity?.renderBody?.() || "";
+for (const marker of [
+  "ITC Hyrox Training - Liability Release &amp; Data Privacy Form",
+  "Hyrox Training from the date of signing to 31 December 2026",
+]) {
+  if (!indemnityBody.includes(marker)) {
+    failures++;
+    console.error(`FAIL indemnity document missing opening marker "${marker}"`);
+  }
+}
+for (const [clause, phrase] of [
+  ["1", "to assume and accept all and any risks"],
+  ["2", "to waive any and all claims"],
+  ["3", "to release:"],
+  ["4", "to hold harmless and indemnify:"],
+  ["5", "that appropriate insurance shall be taken out by me"],
+  ["6", "the leaders of ITC and/or IECC have the right"],
+  ["7", "that my level of physical fitness is adequate"],
+  ["8", "that this Form shall be effective and binding"],
+  ["9", "that I agree to the personal data privacy statement"],
+  ["10", "that the laws of Hong Kong shall govern this Form"],
+]) {
+  if (!indemnityBody.includes(`data-clause="${clause}"`) || !indemnityBody.includes(phrase)) {
+    failures++;
+    console.error(`FAIL indemnity document missing clause ${clause}: "${phrase}"`);
+  }
+}
+if (!indemnityBody.includes("https://www.islandecc.hk/privacy-policy/")) {
+  failures++;
+  console.error("FAIL indemnity document missing the IECC privacy-policy URL");
+}
+for (const removed of [
+  "Health declaration",
+  "Participation at my own risk",
+  "Draft — pending ITC leadership review",
+]) {
+  if (indemnityBody.includes(removed)) {
+    failures++;
+    console.error(`FAIL indemnity document still contains draft marker "${removed}"`);
+  }
+}
+console.log("ok  indemnity registry exposes versioned Hyrox legal copy");
+
+for (const [key, headings] of Object.entries({
+  privacy: [
+    "What we collect",
+    "Why we collect it",
+    "Who sees it",
+    "Your choices",
+  ],
+  guidelines: [
+    "Everyone is welcome",
+    "Respect and encouragement",
+    "Safety first",
+    "Photos and media",
+    "Conduct",
+  ],
+})) {
+  const body = DOCS[key]?.renderBody?.() || "";
+  for (const heading of headings) {
+    if (!body.includes(heading)) {
+      failures++;
+      console.error(`FAIL ${key} document missing heading "${heading}"`);
+    }
+  }
+}
+console.log("ok  privacy and guidelines registry bodies still expose their section headings");
+
+// --- modal component: scroll-end math (Task 2) ---
+const components = await import("./js/components.js");
+if (components.SCROLL_END_THRESHOLD_PX !== 4) {
+  failures++;
+  console.error(`FAIL scroll-end threshold should be 4, got ${components.SCROLL_END_THRESHOLD_PX}`);
+} else console.log("ok  scroll-end threshold is 4px");
+
+const scrollCases = [
+  [100, 200, 300, true],   // 300 >= 296
+  [50, 200, 300, false],   // 250 < 296
+  [0, 200, 200, true],     // everything fits, 200 >= 196
+  [0, 100, 50, true],      // degenerate: doc smaller than viewport
+];
+for (const [top, height, scroll, expected] of scrollCases) {
+  const got = components.isAtScrollEnd(top, height, scroll);
+  if (got !== expected) {
+    failures++;
+    console.error(`FAIL isAtScrollEnd(${top},${height},${scroll}) expected ${expected}, got ${got}`);
+  }
+}
+console.log("ok  isAtScrollEnd math returns correct values for 4 cases");
+
+// --- generalized modal API ---
+if (typeof components.openReadAndAcceptModal !== "function") {
+  failures++;
+  console.error("FAIL components should export openReadAndAcceptModal");
+} else console.log("ok  components exports openReadAndAcceptModal");
+
+// --- applyDocumentAcceptance: scoped per document container ---
+const mkContainer = () => {
+  const checkbox = { disabled: true, checked: false };
+  const submit = { disabled: true };
+  const hint = { hidden: false };
+  return {
+    checkbox,
+    submit,
+    hint,
+    el: {
+      querySelector: (sel) =>
+        sel === "[data-doc-checkbox]" ? checkbox
+        : sel === "[data-doc-submit]" ? submit
+        : sel === "[data-doc-hint]" ? hint
+        : null,
+    },
+  };
+};
+const indemnityC = mkContainer();
+const privacyC = mkContainer();
+const guidelinesC = mkContainer();
+const privacyTrigger = { closest: (sel) => (sel === "[data-doc-accept]" ? privacyC.el : null) };
+if (components.applyDocumentAcceptance(privacyTrigger) !== true) {
+  failures++;
+  console.error("FAIL applyDocumentAcceptance should return true when a container is paired");
+}
+if (privacyC.checkbox.disabled !== false || privacyC.checkbox.checked !== true || privacyC.submit.disabled !== false || privacyC.hint.hidden !== true) {
+  failures++;
+  console.error("FAIL applyDocumentAcceptance did not unlock the privacy checkbox, submit button, and hint");
+}
+if (indemnityC.checkbox.checked || guidelinesC.checkbox.checked || indemnityC.submit.disabled !== true || guidelinesC.submit.disabled !== true || indemnityC.hint.hidden || guidelinesC.hint.hidden) {
+  failures++;
+  console.error("FAIL applyDocumentAcceptance mutated a container other than the trigger's");
+}
+const submitOnly = {
+  submit: { disabled: true },
+  hint: { hidden: false },
+  querySelector: (sel) =>
+    sel === "[data-doc-submit]" ? submitOnly.submit
+    : sel === "[data-doc-hint]" ? submitOnly.hint
+    : null,
+};
+const submitOnlyTrigger = { closest: (sel) => (sel === "[data-doc-accept]" ? submitOnly : null) };
+if (components.applyDocumentAcceptance(submitOnlyTrigger) !== true || submitOnly.submit.disabled || !submitOnly.hint.hidden) {
+  failures++;
+  console.error("FAIL applyDocumentAcceptance should unlock a submit-only document container");
+}
+console.log("ok  applyDocumentAcceptance mutates only the trigger's document container");
+
+// applyDocumentAcceptance: returns false when no container is paired (Profile trigger)
+const orphanTrigger = { closest: () => null };
+if (components.applyDocumentAcceptance(orphanTrigger) !== false) {
+  failures++;
+  console.error("FAIL applyDocumentAcceptance should return false when no container is found");
+} else console.log("ok  applyDocumentAcceptance returns false for orphan triggers");
+
+// --- modal CSS classes present (Task 3) ---
+const stylesSource = readFileSync(resolve(__dirnameSmoke, "styles.css"), "utf8");
+for (const cls of [
+  ".modal-backdrop",
+  ".modal-dialog",
+  ".modal-header",
+  ".modal-doc",
+  ".modal-doc-body",
+  ".modal-doc-ack",
+  ".modal-link",
+  ".check input[disabled] + span",
+]) {
+  if (!stylesSource.includes(cls)) {
+    failures++;
+    console.error(`FAIL styles.css missing rule for "${cls}"`);
+  }
+}
+if (!stylesSource.includes(".modal-doc-body.doc-provisional::after")) {
+  failures++;
+  console.error("FAIL modal document watermark should be scoped to provisional documents");
+}
+if (stylesSource.includes(".modal-doc-body::after {")) {
+  failures++;
+  console.error("FAIL modal document watermark should not apply to every document body");
+}
+console.log("ok  styles.css contains all modal-related class definitions");
+
 // --- HYROX payment system: reserve -> mark -> collector confirm (Task 2) ---
 const bftSession = allUpcoming.find(
   (s) => s.activityId === "hyrox" && !data.sessionStarted(s)
@@ -883,7 +1442,7 @@ if (!homeBooked.includes("Booked") || !homeBooked.includes("BFT Causeway Bay")) 
   failures++;
   console.error('FAIL home "My week" does not show the booked session');
 } else console.log('ok  home "My week" shows the booked session');
-if (homeBooked.includes("Midtown 28") || homeBooked.includes("Just show up")) {
+if (homeBooked.includes("Midtown28 Fitness") || homeBooked.includes("Just show up")) {
   failures++;
   console.error('FAIL home "My week" shows sessions the member has not booked');
 } else console.log('ok  home "My week" hides unbooked sessions');
@@ -972,7 +1531,7 @@ const memberHome = views.viewHome();
 const fixtureMember = store.currentUser();
 const fixtureBookings = store.bookingsForUser(fixtureMember.id);
 const bookedMarker = fixtureBookings[0]?.snapshot?.location ?? "BFT Causeway Bay";
-const otherMarker = "Midtown 28";
+const otherMarker = "Midtown28 Fitness";
 if (!memberHome.includes(bookedMarker) || memberHome.includes(otherMarker)) {
   failures++;
   console.error(`FAIL "My week" should show only the member's booked HYROX (${bookedMarker})`);
@@ -1040,6 +1599,18 @@ store.resetLocalData();
   console.log("ok  seeds: capacities 20/12");
 }
 {
+  const correctedWater = store.activities().find((activity) => activity.id === "water");
+  if (correctedWater.location !== "TBC" || correctedWater.mapsQuery !== ""
+      || correctedWater.photo !== "../assets/itc/water.webp") {
+    throw new Error("Swimming must start TBC with its water photo");
+  }
+  const correctedMidtown = store.activities().find((activity) => activity.id === "hyrox-midtown");
+  if (correctedMidtown.location !== "Midtown28 Fitness"
+      || correctedMidtown.mapsQuery !== "Midtown28 Fitness, Hong Kong") {
+    throw new Error("Midtown HYROX must use the precise Fitness venue");
+  }
+}
+{
   // v9 migration: persist a v8-shaped snapshot and reload
   const raw = localStorage.getItem("itc.prototype.v1");
   const snap = JSON.parse(raw);
@@ -1055,6 +1626,100 @@ store.resetLocalData();
   const mid2 = store.activities().find((a) => a.id === "hyrox-midtown");
   if (bft2.capacity !== 20 || mid2.capacity !== 12) throw new Error("v9 migration must fix capacities");
   console.log("ok  v9 migration: capacities fixed");
+}
+
+{
+  const locationV13 = {
+    version: 13,
+    sessionUserId: null,
+    activities: structuredClone(data.SEED_ACTIVITIES),
+    users: [],
+    bookings: [{
+      id: "old-midtown-booking",
+      snapshot: { location: "Midtown 28" },
+    }],
+    receipts: [],
+    campaigns: [],
+    donations: [],
+    prayers: [],
+    notifications: [],
+    sessionOverrides: {},
+    queues: {},
+    duty: {},
+    paymentPayouts: {},
+  };
+  const oldWater = locationV13.activities.find((activity) => activity.id === "water");
+  Object.assign(oldWater, {
+    location: "TBC",
+    mapsQuery: "TBC",
+    photo: "../assets/itc/main.webp",
+  });
+  const oldMidtown = locationV13.activities.find((activity) => activity.id === "hyrox-midtown");
+  Object.assign(oldMidtown, {
+    location: "Midtown 28",
+    mapsQuery: "Midtown 28, Hong Kong",
+  });
+  localStorage.setItem("itc.prototype.v1", JSON.stringify(locationV13));
+  store.load();
+  const migratedV13 = JSON.parse(localStorage.getItem("itc.prototype.v1"));
+  if (migratedV13.version !== 14) {
+    throw new Error("v14 migration must persist version 14");
+  }
+  const repairedWater = store.activities().find((activity) => activity.id === "water");
+  if (repairedWater.location !== "TBC" || repairedWater.mapsQuery !== ""
+      || repairedWater.photo !== "../assets/itc/water.webp") {
+    throw new Error("v14 migration must repair Swimming defaults");
+  }
+  const repairedMidtown = store.activities().find((activity) => activity.id === "hyrox-midtown");
+  if (repairedMidtown.location !== "Midtown28 Fitness"
+      || repairedMidtown.mapsQuery !== "Midtown28 Fitness, Hong Kong") {
+    throw new Error("v14 migration must repair Midtown HYROX defaults");
+  }
+  const repairedBooking = JSON.parse(localStorage.getItem("itc.prototype.v1")).bookings[0];
+  if (repairedBooking.snapshot.location !== "Midtown28 Fitness") {
+    throw new Error("v14 migration must repair exact Midtown booking snapshots");
+  }
+
+  const preservedV13 = {
+    version: 13,
+    sessionUserId: null,
+    activities: structuredClone(data.SEED_ACTIVITIES),
+    users: [],
+    bookings: [],
+    receipts: [],
+    campaigns: [],
+    donations: [],
+    prayers: [],
+    notifications: [],
+    sessionOverrides: {},
+    queues: {},
+    duty: {},
+    paymentPayouts: {},
+  };
+  const customWater = preservedV13.activities.find((activity) => activity.id === "water");
+  Object.assign(customWater, {
+    location: "Custom Pool",
+    mapsQuery: "Custom Pool, Hong Kong",
+    photo: "../assets/itc/custom-pool.webp",
+  });
+  const customMidtown = preservedV13.activities.find((activity) => activity.id === "hyrox-midtown");
+  Object.assign(customMidtown, {
+    location: "Custom Midtown Venue",
+    mapsQuery: "Custom Midtown Venue, Hong Kong",
+  });
+  localStorage.setItem("itc.prototype.v1", JSON.stringify(preservedV13));
+  store.load();
+  const preservedWater = store.activities().find((activity) => activity.id === "water");
+  if (preservedWater.location !== "Custom Pool"
+      || preservedWater.mapsQuery !== "Custom Pool, Hong Kong"
+      || preservedWater.photo !== "../assets/itc/custom-pool.webp") {
+    throw new Error("v14 migration must not overwrite custom swimming values");
+  }
+  const preservedMidtown = store.activities().find((activity) => activity.id === "hyrox-midtown");
+  if (preservedMidtown.location !== "Custom Midtown Venue"
+      || preservedMidtown.mapsQuery !== "Custom Midtown Venue, Hong Kong") {
+    throw new Error("v14 migration must not overwrite custom Midtown values");
+  }
 }
 
 // --- HYROX payment system: sweep + cascade (Task 3) ---
@@ -1254,6 +1919,36 @@ installLocalFixtures(); store.signIn("member@example.test");
     throw new Error("session overrides should decorate the session");
   console.log("ok  session overrides: time change, venue TBC, notice");
 }
+{
+  // Weekly venue override (free events): an Admin edit must surface on the
+  // Schedule row and the dated activity detail; reset restores the default.
+  const sess = store.upcomingSessions(21).find(
+    (s) => s.activityId === "wnt" && !data.sessionStarted(s)
+  );
+  const seedLocation = store.getSession(sess.id).location;
+  store.setWeekVenue(sess.id, {
+    location: "Central Harbourfront",
+    mapsQuery: "Central Harbourfront, Hong Kong",
+  });
+  const decorated = store.getSession(sess.id);
+  if (decorated.location !== "Central Harbourfront"
+    || decorated.mapsQuery !== "Central Harbourfront, Hong Kong")
+    throw new Error("weekly venue override should decorate the session");
+  views.scheduleState.weekOffset = Math.round(
+    (data.mondayOf(data.parseISO(sess.dateISO)) - data.mondayOf(data.todayLocal())) / (7 * 86400000)
+  );
+  views.scheduleState.selected = sess.dateISO;
+  views.scheduleState.filter = "all";
+  if (!views.viewSchedule().includes("Central Harbourfront"))
+    throw new Error("schedule row must show the overridden venue");
+  if (!views.viewActivity(sess.id).includes("Central Harbourfront"))
+    throw new Error("activity detail must show the overridden venue");
+  store.setWeekVenue(sess.id, { location: null, mapsQuery: null });
+  if (store.getSession(sess.id).location !== seedLocation)
+    throw new Error("reset should restore the recurring default venue");
+  views.scheduleState.weekOffset = 0;
+  console.log("ok  weekly venue override: schedule row + detail + reset");
+}
 
 // --- HYROX payment system: duty roster (Task 7) ---
 store.resetLocalData();
@@ -1387,7 +2082,7 @@ store.signIn("member@example.test");
   store.markBookingPaid(b.id, "FPS", "9921");
   store.signIn("admin@example.test");
   const ops = await views.viewAdmin("payments");
-  if (!ops.includes("Payments / Ops") || (ops.match(/aria-current="page"/g) || []).length !== 1)
+  if (!ops.includes("HYROX") || (ops.match(/aria-current="page"/g) || []).length !== 1)
     throw new Error("Admin payments tab should be labeled and expose one active tab");
   if (!ops.includes("Pending payments") || !ops.includes("9921"))
     throw new Error("ops should list pending payments with references");
@@ -1426,8 +2121,8 @@ console.log("ok  reset");
   if (!fresh.paymentPayouts || Array.isArray(fresh.paymentPayouts)
       || Object.keys(fresh.paymentPayouts).length) {
     failures++;
-    console.error("FAIL v13 fresh state must have an empty UUID-keyed payout map");
-  } else console.log("ok  v13 fresh state has an empty UUID-keyed payout map");
+    console.error("FAIL v14 fresh state must have an empty UUID-keyed payout map");
+  } else console.log("ok  v14 fresh state has an empty UUID-keyed payout map");
   if (Array.isArray(fresh.activities)) {
     for (const a of fresh.activities) {
       if ("baseBooked" in a) {
@@ -1545,10 +2240,41 @@ console.log("ok  reset");
     failures++;
     console.error("FAIL v10 migration must clear session tied to a removed demo user");
   } else console.log("ok  v10 migration clears removed session");
-  if (migrated.version !== 13) {
+  if (migrated.version !== 14) {
     failures++;
-    console.error(`FAIL integrated migration must advance version to 13, got ${migrated.version}`);
-  } else console.log("ok  integrated migration advances genuine v9 state to v13");
+    console.error(`FAIL integrated migration must advance version to 14, got ${migrated.version}`);
+  } else console.log("ok  integrated migration advances genuine v9 state to v14");
+}
+
+{
+  store.resetLocalData();
+  const v13 = JSON.parse(mem.get("itc.prototype.v1"));
+  v13.version = 13;
+  v13.users = [{
+    id: "real-v13-member",
+    role: "member",
+    status: "approved",
+    fullName: "Real Member",
+    email: "real-v13@example.test",
+    indemnityAcceptedAt: 123456789,
+  }];
+  mem.set("itc.prototype.v1", JSON.stringify(v13));
+  store.load();
+  const v14 = JSON.parse(mem.get("itc.prototype.v1"));
+  const migratedUser = v14.users.find((user) => user.id === "real-v13-member");
+  if (v14.version !== 14 || !migratedUser) throw new Error("v14 migration lost the genuine member");
+  for (const field of ["indemnitySignature", "indemnitySignedAt", "indemnityFormVersion", "emergencyRelationship"]) {
+    if (!(field in migratedUser) || migratedUser[field] !== null) {
+      throw new Error(`v14 migration should initialize ${field} to null`);
+    }
+  }
+  if (migratedUser.indemnityAcceptedAt !== 123456789) {
+    throw new Error("v14 migration must preserve indemnityAcceptedAt");
+  }
+  if (store.isIndemnityCurrent(migratedUser)) {
+    throw new Error("timestamp-only v13 acceptance must be stale in v14");
+  }
+  console.log("ok  v14 migration preserves legacy acceptance and initializes consent fields");
 }
 
 // --- Install neutral fixtures for local authenticated paths (no demo seeds) ---
@@ -1563,17 +2289,19 @@ function installLocalFixtures({ withMemberBooking = false } = {}) {
     {
       id: "fixture-admin", role: "admin", status: "approved", fullName: "Test Admin",
       preferredName: "Admin", email: "admin@example.test", phone: "+852 5000 0001",
-      emergencyName: "Test Contact", emergencyPhone: "+852 5000 9001", heard: "Test fixture",
+      emergencyName: "Test Contact", emergencyRelationship: "Sibling", emergencyPhone: "+852 5000 9001", heard: "Test fixture",
       isMinor: false, appliedAt: Date.now() - 86400000, indemnityAcceptedAt: Date.now() - 86400000,
+      indemnitySignature: "Test Admin", indemnitySignedAt: data.isoDate(data.todayLocal()), indemnityFormVersion: "v1",
       privacyAcceptedAt: Date.now() - 86400000, whatsappReminders: false, emailReceipts: false,
       communityNews: false,
     },
     {
       id: "fixture-member", role: "member", status: "approved", fullName: "Test Member",
       preferredName: "Tester", email: "member@example.test", phone: "+852 5000 0002",
-      emergencyName: "Test Contact", emergencyPhone: "+852 5000 9002", heard: "Test fixture",
+      emergencyName: "Test Contact", emergencyRelationship: "Sibling", emergencyPhone: "+852 5000 9002", heard: "Test fixture",
       mediaConsent: true, donorId: "TEST-1234", isMinor: false,
       appliedAt: Date.now() - 172800000, indemnityAcceptedAt: Date.now() - 172800000,
+      indemnitySignature: "Test Member", indemnitySignedAt: data.isoDate(data.todayLocal()), indemnityFormVersion: "v1",
       privacyAcceptedAt: Date.now() - 172800000, whatsappReminders: false,
       emailReceipts: false, communityNews: false,
     },
@@ -1986,11 +2714,11 @@ for (const fixture of sourceSnapshots) {
     && !Array.isArray(migrated.paymentPayouts);
   const suppliedPayoutsPreserved = fixture.version !== 12
     || migrated.paymentPayouts["real-admin"]?.fpsPhone === "+852 6000 0000";
-  if (migrated.version !== 13 || suppliedIds.some((id) => !serialized.includes(id))
+  if (migrated.version !== 14 || suppliedIds.some((id) => !serialized.includes(id))
       || !payoutMapValid || !suppliedPayoutsPreserved) {
     failures++;
-    console.error(`FAIL genuine v${fixture.version} fixture must reach v13 intact`);
-  } else console.log(`ok  genuine v${fixture.version} fixture reaches v13 intact`);
+    console.error(`FAIL genuine v${fixture.version} fixture must reach v14 intact`);
+  } else console.log(`ok  genuine v${fixture.version} fixture reaches v14 intact`);
 }
 
 for (const invalidCounter of [null, -1, 1.5, "broken"]) {
@@ -2041,6 +2769,617 @@ if (!migratedConfirmation?.receipt
   throw new Error("post-migration receipt issuance must use a valid normalized counter");
 }
 console.log("ok  v13 migration normalizes receiptCounter before real receipt issuance");
+
+// --- Free-event venue overrides (Task 3) ---
+store.resetLocalData();
+installLocalFixtures();
+// Add a second Admin and a pending user to exercise actor + non-member exclusions.
+{
+  const raw = JSON.parse(mem.get("itc.prototype.v1"));
+  raw.users.push({
+    id: "fixture-other-admin", role: "superadmin", status: "approved",
+    fullName: "Test Other Admin", preferredName: "Other",
+    email: "other-admin@example.test",
+    isMinor: false, appliedAt: Date.now() - 86400000,
+    indemnityAcceptedAt: Date.now() - 86400000,
+    privacyAcceptedAt: Date.now() - 86400000,
+    whatsappReminders: false, emailReceipts: false, communityNews: false,
+  });
+  raw.users.push({
+    id: "fixture-pending-user", role: "pending", status: "pending",
+    fullName: "Test Pending", preferredName: "Pending",
+    email: "pending-user@example.test",
+    isMinor: false, appliedAt: Date.now() - 3600000,
+    whatsappReminders: false, emailReceipts: false, communityNews: false,
+  });
+  mem.set("itc.prototype.v1", JSON.stringify(raw));
+  store.load();
+}
+const wntSession = store.upcomingSessions(21).find(
+  (s) => s.activityId === "wnt" && !data.sessionStarted(s)
+);
+if (!wntSession) throw new Error("expected an upcoming wnt session for venue tests");
+store.signIn("admin@example.test");
+
+// A partial TBC override remains incomplete: it may retain the independent
+// maps query, but it must not consume member dedupe or claim confirmation.
+const partialSwimmingSession = store.upcomingSessions(21).find(
+  (s) => s.activityId === "water" && !data.sessionStarted(s)
+);
+if (!partialSwimmingSession) throw new Error("expected an upcoming Swimming session for partial venue tests");
+store.setWeekVenue(partialSwimmingSession.id, {
+  location: "",
+  mapsQuery: "Victoria Park Swimming Pool, Hong Kong",
+});
+const partialSwimming = store.getSession(partialSwimmingSession.id);
+const partialSwimmingOverride = store.weekVenueOverride(partialSwimmingSession.id);
+const partialMemberNotes = store.notificationsFor("fixture-member").filter(
+  (n) => n.kind === "operational_session_venue_updated"
+    && n.destination === `#/activity/${partialSwimmingSession.id}`
+);
+if (partialSwimming.location !== "TBC" || partialSwimming.venueTBC === false) {
+  throw new Error("a maps-query-only Swimming override must remain TBC");
+}
+if (partialSwimmingOverride.venueMemberNotifiedAt || partialMemberNotes.length !== 0) {
+  throw new Error("an incomplete Swimming override must not consume member notification dedupe");
+}
+
+// Legacy free-event venueTBC flags must be superseded by both direct reset
+// and save-then-reset so the recurring default becomes visible again.
+const recurringRun = store.getActivity("run");
+store.saveActivity({
+  ...recurringRun,
+  location: "Recurring Run Venue",
+  mapsQuery: "Recurring Run Venue, Hong Kong",
+});
+const legacyRunSession = store.upcomingSessions(21).find(
+  (s) => s.activityId === "run" && !data.sessionStarted(s)
+);
+if (!legacyRunSession) throw new Error("expected an upcoming Run session for legacy venueTBC tests");
+store.setVenueTBC(legacyRunSession.id, true);
+store.setWeekVenue(legacyRunSession.id, { location: null, mapsQuery: null });
+let restoredLegacyRun = store.getSession(legacyRunSession.id);
+if (restoredLegacyRun.location !== "Recurring Run Venue" || restoredLegacyRun.venueTBC) {
+  throw new Error("reset must supersede a legacy venueTBC flag and restore the recurring venue");
+}
+store.setVenueTBC(legacyRunSession.id, true);
+store.setWeekVenue(legacyRunSession.id, {
+  location: "Dated Run Venue",
+  mapsQuery: "Dated Run Venue, Hong Kong",
+});
+store.setWeekVenue(legacyRunSession.id, { location: null, mapsQuery: null });
+restoredLegacyRun = store.getSession(legacyRunSession.id);
+if (restoredLegacyRun.location !== "Recurring Run Venue" || restoredLegacyRun.venueTBC) {
+  throw new Error("save then reset must not expose a legacy venueTBC flag");
+}
+
+store.setWeekVenue(wntSession.id, {
+  location: "Central Harbourfront — 7pm sharp",
+  mapsQuery: "Central Harbourfront, Hong Kong",
+});
+const decorated = store.getSession(wntSession.id);
+if (decorated.location !== "Central Harbourfront — 7pm sharp"
+    || decorated.mapsQuery !== "Central Harbourfront, Hong Kong"
+    || decorated.venueTBC) {
+  throw new Error("weekly venue must decorate the dated free session");
+}
+const venueNotesFor = (userId, sessionId) => store.notificationsFor(userId).filter(
+  (n) => n.kind === "operational_session_venue_updated"
+    && n.destination === `#/activity/${sessionId}`
+);
+const memberNotes = venueNotesFor("fixture-member", wntSession.id);
+const otherAdminNotes = venueNotesFor("fixture-other-admin", wntSession.id);
+const actorNotes = venueNotesFor("fixture-admin", wntSession.id);
+const pendingNotes = venueNotesFor("fixture-pending-user", wntSession.id);
+if (memberNotes.length !== 1) {
+  throw new Error("first confirmation must notify each member exactly once");
+}
+if (otherAdminNotes.length !== 1) {
+  throw new Error("other admin must receive audit notification on actual save");
+}
+if (actorNotes.length) {
+  throw new Error("actor must not receive its own audit notification");
+}
+if (pendingNotes.length) {
+  throw new Error("pending profile must not receive venue notifications");
+}
+const memberDestination = memberNotes[0];
+if (memberDestination?.destination !== `#/activity/${wntSession.id}`) {
+  throw new Error("member notification must point at the dated activity route");
+}
+if (memberDestination?.body !== `Wednesday Night Training on ${wntSession.dateISO} is at Central Harbourfront — 7pm sharp. Check the activity page for details.`) {
+  throw new Error(`member venue copy must use the activity display name; got: ${memberDestination?.body}`);
+}
+if (otherAdminNotes[0]?.body !== `Test Admin set the venue for ${wntSession.id} to Central Harbourfront — 7pm sharp.`) {
+  throw new Error(`admin venue copy must identify the actor; got: ${otherAdminNotes[0]?.body}`);
+}
+// No-op save must not notify anyone.
+store.setWeekVenue(wntSession.id, {
+  location: "Central Harbourfront — 7pm sharp",
+  mapsQuery: "Central Harbourfront, Hong Kong",
+});
+if (venueNotesFor("fixture-member", wntSession.id).length !== 1) {
+  throw new Error("no-op save must not duplicate member notification");
+}
+// Edit must notify only other Admins (not members).
+store.setWeekVenue(wntSession.id, {
+  location: "Wan Chai Promenade — 7pm sharp",
+  mapsQuery: "Wan Chai Promenade, Hong Kong",
+});
+if (venueNotesFor("fixture-member", wntSession.id).length !== 1) {
+  throw new Error("subsequent edits must not re-notify members");
+}
+if (venueNotesFor("fixture-other-admin", wntSession.id).length !== 2) {
+  throw new Error("second save must notify other Admins again");
+}
+// Reset clears location/mapsQuery but preserves venueMemberNotifiedAt.
+store.setWeekVenue(wntSession.id, { location: null, mapsQuery: null });
+const resetDecorated = store.getSession(wntSession.id);
+if (resetDecorated.location === "Central Harbourfront — 7pm sharp"
+    || resetDecorated.mapsQuery === "Central Harbourfront, Hong Kong") {
+  throw new Error("reset should restore the activity-template venue values");
+}
+if (venueNotesFor("fixture-member", wntSession.id).length !== 1) {
+  throw new Error("reset must not re-notify members");
+}
+// Reconfirmation does not re-notify members.
+store.setWeekVenue(wntSession.id, {
+  location: "Causeway Bay Promenade — 7pm sharp",
+  mapsQuery: "Causeway Bay Promenade, Hong Kong",
+});
+if (venueNotesFor("fixture-member", wntSession.id).length !== 1) {
+  throw new Error("reconfirmation after reset must not re-notify members");
+}
+const weekOverride = store.weekVenueOverride(wntSession.id);
+if (weekOverride.location !== "Causeway Bay Promenade — 7pm sharp"
+    || weekOverride.mapsQuery !== "Causeway Bay Promenade, Hong Kong") {
+  throw new Error("weekVenueOverride must expose the latest saved values");
+}
+
+const tamarSession = store.upcomingSessions(21).find(
+  (s) => s.activityId === "wnt" && s.id !== wntSession.id && !data.sessionStarted(s)
+);
+if (!tamarSession) throw new Error("expected another upcoming WNT for dated meeting-point tests");
+store.setWeekVenue(tamarSession.id, {
+  location: "Tamar Park",
+  mapsQuery: "Tamar Park",
+  meetingLat: 22.2825,
+  meetingLng: 114.1659,
+});
+let tamarDecorated = store.getSession(tamarSession.id);
+if (tamarDecorated.meetingLat !== 22.2825 || tamarDecorated.meetingLng !== 114.1659) {
+  throw new Error("dated Tamar point must decorate the session");
+}
+let tamarOverride = store.weekVenueOverride(tamarSession.id);
+if (tamarOverride.meetingLat !== 22.2825 || tamarOverride.meetingLng !== 114.1659) {
+  throw new Error("Admin override read must retain the dated Tamar point");
+}
+const otherWnt = store.upcomingSessions(21).find(
+  (s) => s.activityId === "wnt"
+    && s.id !== wntSession.id && s.id !== tamarSession.id
+    && !data.sessionStarted(s)
+);
+if (!otherWnt || "meetingLat" in store.getSession(otherWnt.id)) {
+  throw new Error("dated Tamar point must not leak into another WNT occurrence");
+}
+const memberBeforeMove = venueNotesFor("fixture-member", tamarSession.id).length;
+const adminBeforeMove = venueNotesFor("fixture-other-admin", tamarSession.id).length;
+store.setWeekVenue(tamarSession.id, {
+  location: "Tamar Park",
+  mapsQuery: "Tamar Park",
+  meetingLat: 22.2827,
+  meetingLng: 114.1661,
+});
+if (venueNotesFor("fixture-member", tamarSession.id).length !== memberBeforeMove) {
+  throw new Error("coordinate-only edit must not repeat member fan-out");
+}
+if (venueNotesFor("fixture-other-admin", tamarSession.id).length !== adminBeforeMove + 1) {
+  throw new Error("coordinate-only edit must create one Admin audit notification");
+}
+store.setWeekVenue(tamarSession.id, {
+  location: "Island ECC 9/F",
+  mapsQuery: "Island ECC",
+  meetingLat: 22.2827,
+  meetingLng: 114.1661,
+});
+tamarDecorated = store.getSession(tamarSession.id);
+if ("meetingLat" in tamarDecorated || "meetingLng" in tamarDecorated) {
+  throw new Error("non-Tamar save must clear stale meeting coordinates");
+}
+for (const point of [
+  { meetingLat: 22.28, meetingLng: null },
+  { meetingLat: 91, meetingLng: 114.16 },
+]) {
+  try {
+    store.setWeekVenue(tamarSession.id, {
+      location: "Tamar Park", mapsQuery: "Tamar Park", ...point,
+    });
+    throw new Error("invalid Tamar point must fail");
+  } catch (err) {
+    if (err.message !== "Choose a valid meeting point.") throw err;
+  }
+}
+store.setWeekVenue(tamarSession.id, {
+  location: null, mapsQuery: null, meetingLat: null, meetingLng: null,
+});
+if ("meetingLat" in store.getSession(tamarSession.id)) {
+  throw new Error("venue reset must remove the dated meeting point");
+}
+console.log("ok  local WNT override persists, clears, validates, and resets meeting coordinates");
+
+store.setWeekVenue(wntSession.id, {
+  location: "Island ECC 11/F", mapsQuery: "Island ECC",
+});
+let venueDetail = views.viewActivity(wntSession.id);
+if (!venueDetail.includes("island-ecc-11.jpg")
+    || !venueDetail.includes("The Well · 11/F Island ECC")
+    || venueDetail.includes('id="activity-map"')) {
+  throw new Error("11/F WNT detail must render only the 11/F guide");
+}
+store.setWeekVenue(wntSession.id, {
+  location: "Island ECC 9/F", mapsQuery: "Island ECC",
+});
+venueDetail = views.viewActivity(wntSession.id);
+if (!venueDetail.includes("island-ecc-9.jpg")
+    || !venueDetail.includes("Kid’s Club Hall · 9/F Island ECC")
+    || venueDetail.includes('id="activity-map"')) {
+  throw new Error("9/F WNT detail must render only the 9/F guide");
+}
+store.setWeekVenue(wntSession.id, {
+  location: "Tamar Park", mapsQuery: "Tamar Park",
+  meetingLat: 22.2825, meetingLng: 114.1659,
+});
+venueDetail = views.viewActivity(wntSession.id);
+if (!venueDetail.includes('data-map-lat="22.2825"')
+    || !venueDetail.includes('data-map-lng="114.1659"')
+    || !venueDetail.includes("destination=22.2825%2C114.1659")) {
+  throw new Error("Tamar detail and directions must use the exact dated point");
+}
+store.setWeekVenue(wntSession.id, {
+  location: "Causeway Bay Promenade — 7pm sharp",
+  mapsQuery: "Causeway Bay Promenade, Hong Kong",
+});
+console.log("ok  WNT Activity Details selects ECC guides and exact Tamar directions");
+
+// View: free event with a mapsQuery renders the inline map host + Get directions.
+const freeDetail = views.viewActivity(wntSession.id);
+if (!freeDetail.includes('id="activity-map"')
+    || !freeDetail.includes("Loading map")
+    || !freeDetail.includes("data-marker-label=")
+    || !freeDetail.includes("Get directions")) {
+  throw new Error("mapped free event must render the inline map host and directions");
+}
+const noMapsSession = store.upcomingSessions(21)
+  .filter((s) => s.activityId === "wnt" && !data.sessionStarted(s))
+  .find((s) => s.id !== wntSession.id);
+if (!noMapsSession) throw new Error("expected a second upcoming wnt session for the no-map case");
+store.setVenueTBC(noMapsSession.id, true);
+const tbcDetail = views.viewActivity(noMapsSession.id);
+if (tbcDetail.includes('id="activity-map"')) {
+  throw new Error("free events without mapsQuery must not render the inline map");
+}
+const hyroxDetailSample = store.upcomingSessions(21).find((s) => s.activityId === "hyrox" && !data.sessionStarted(s));
+const hyroxDetail = views.viewActivity(hyroxDetailSample.id);
+if (!hyroxDetail.includes("Get directions") || hyroxDetail.includes('id="activity-map"')) {
+  throw new Error("paid HYROX sessions must expose Get directions without the inline map");
+}
+const midtownSample = store.upcomingSessions(21).find((s) => s.activityId === "hyrox-midtown" && !data.sessionStarted(s));
+const midtownDetail = views.viewActivity(midtownSample.id);
+if (!midtownDetail.includes("Get directions") || midtownDetail.includes('id="activity-map"')) {
+  throw new Error("closed Midtown must expose Get directions without the inline map");
+}
+// Admin Activities separates recurring defaults from one-off free-session venue overrides.
+const swimmingSession = store.upcomingSessions(21).find(
+  (s) => s.activityId === "water" && !data.sessionStarted(s)
+);
+if (!swimmingSession) throw new Error("expected an upcoming swimming session for admin IA checks");
+store.setWeekVenue(swimmingSession.id, {
+  location: "Victoria Park Swimming Pool",
+  mapsQuery: "Victoria Park Swimming Pool, Hong Kong",
+});
+const completedSwimmingOverride = store.weekVenueOverride(swimmingSession.id);
+const completedSwimmingNotes = venueNotesFor("fixture-member", swimmingSession.id);
+if (!completedSwimmingOverride.venueMemberNotifiedAt || completedSwimmingNotes.length !== 1) {
+  throw new Error("completing a partial Swimming override must notify members exactly once");
+}
+if (completedSwimmingNotes[0].body !== `ITC Swimming on ${swimmingSession.dateISO} is at Victoria Park Swimming Pool. Check the activity page for details.`) {
+  throw new Error(`Swimming member copy must use its display name; got: ${completedSwimmingNotes[0].body}`);
+}
+store.signIn("admin@example.test");
+store.setWeekVenue(wntSession.id, {
+  location: "Tamar Park", mapsQuery: "Tamar Park",
+  meetingLat: 22.2825, meetingLng: 114.1659,
+});
+const activitiesHtml = await views.viewAdmin("activities");
+const hyroxAdminHtml = await views.viewAdmin("payments");
+if (!activitiesHtml.includes("Recurring Activity Defaults")
+    || !activitiesHtml.includes("Weekly Venue Overrides")
+    || !activitiesHtml.includes("Only this session")
+    || !activitiesHtml.includes("Google Maps search")
+    || !activitiesHtml.includes("Save Weekly Venue")
+    || !activitiesHtml.includes("Reset to Recurring Default")
+    || !activitiesHtml.includes("Meeting point · Only this session")
+    || !activitiesHtml.includes('name="meetingLat" value="22.2825"')
+    || !activitiesHtml.includes('name="meetingLng" value="114.1659"')) {
+  throw new Error("Activities must separate recurring defaults and render the dated WNT picker");
+}
+if (!activitiesHtml.includes("Current venue: <strong>Victoria Park Swimming Pool</strong>")
+    || !activitiesHtml.includes("Recurring default: <strong>TBC</strong>")) {
+  throw new Error("Activities must show distinct current and recurring venues for overridden Swimming");
+}
+if (hyroxAdminHtml.includes("Weekly Venue Overrides")
+    || hyroxAdminHtml.includes('data-action="form-week-venue"')) {
+  throw new Error("HYROX must not contain free-event weekly venue controls");
+}
+if (!hyroxAdminHtml.includes(">HYROX</a>")
+    || hyroxAdminHtml.includes("Payments / Ops")) {
+  throw new Error("the final Admin tab must be HYROX");
+}
+store.signOut();
+// Members cannot set a weekly venue.
+store.signIn("member@example.test");
+try {
+  store.setWeekVenue(wntSession.id, {
+    location: "Should not save",
+    mapsQuery: "Should not save",
+  });
+  throw new Error("members must not be allowed to set a weekly venue");
+} catch (err) {
+  if (!err.message.toLowerCase().includes("admin")) {
+    throw new Error(`member actor error should explain admin requirement, got: ${err.message}`);
+  }
+}
+// HYROX session id is rejected with the exact spec message.
+const hyroxSample = store.upcomingSessions(21).find(
+  (s) => s.activityId === "hyrox" && !data.sessionStarted(s)
+);
+if (!hyroxSample) throw new Error("expected an upcoming hyrox session for the guard test");
+try {
+  store.setWeekVenue(hyroxSample.id, {
+    location: "Should not save",
+    mapsQuery: "Should not save",
+  });
+  throw new Error("HYROX venues must not be overridable");
+} catch (err) {
+  if (err.message !== "Activity venue is fixed.") {
+    throw new Error(`HYROX error should match spec, got: ${err.message}`);
+  }
+}
+console.log("ok  free-event weekly venue state, fan-out, dedupe, and HYROX guard");
+
+// --- WNT venue-specific guidance ---
+const venue = await import("./js/venue.js");
+const sameVenueValue = (actual, expected, label) => {
+  if (JSON.stringify(actual) !== JSON.stringify(expected)) {
+    throw new Error(`${label}: ${JSON.stringify(actual)}`);
+  }
+};
+if (venue.normalizeVenueLocation("  ISLAND ECC 11 / F ") !== "island ecc 11/f") {
+  throw new Error("11/F venue formatting must canonicalize");
+}
+if (venue.normalizeVenueLocation("Island ECC 9F") !== "island ecc 9/f") {
+  throw new Error("9F venue formatting must canonicalize");
+}
+if (venue.normalizeVenueLocation("Tamar Park, Admiralty") !== "tamar park") {
+  throw new Error("Tamar alias must canonicalize");
+}
+if (venue.normalizeVenueLocation("Tamar Street") === "tamar park") {
+  throw new Error("unrelated Tamar text must not specialize");
+}
+sameVenueValue(
+  venue.normalizeMeetingPoint("22.2816182", "114.1655613"),
+  { lat: 22.2816182, lng: 114.1655613 },
+  "valid meeting point"
+);
+for (const [lat, lng] of [[null, 114], [91, 114], [22, -181], ["x", 114]]) {
+  if (venue.normalizeMeetingPoint(lat, lng) !== null) {
+    throw new Error(`invalid meeting point accepted: ${lat},${lng}`);
+  }
+}
+sameVenueValue(venue.venuePresentationFor({
+  id: "wnt-2026-09-02", activityId: "wnt", location: "Island ECC 11/F",
+  mapsQuery: "Island ECC", markerLabel: "WNT · 2 Sep · 7:30 PM",
+}), {
+  kind: "image",
+  src: "../assets/itc/venues/island-ecc-11.jpg",
+  alt: "Route to The Well on 11/F at Island ECC",
+  caption: "The Well · 11/F Island ECC",
+  fallbackQuery: "Island ECC",
+}, "11/F image presentation");
+sameVenueValue(venue.venuePresentationFor({
+  id: "wnt-2026-09-09", activityId: "wnt", location: "Island ECC 9F",
+  mapsQuery: "Island ECC", markerLabel: "WNT · 9 Sep · 7:30 PM",
+}), {
+  kind: "image",
+  src: "../assets/itc/venues/island-ecc-9.jpg",
+  alt: "Route to Kid’s Club Hall on 9/F at Island ECC",
+  caption: "Kid’s Club Hall · 9/F Island ECC",
+  fallbackQuery: "Island ECC",
+}, "9/F image presentation");
+sameVenueValue(venue.venuePresentationFor({
+  id: "wnt-2026-09-16", activityId: "wnt", location: "Tamar Park",
+  mapsQuery: "Tamar Park", markerLabel: "WNT · 16 Sep · 7:30 PM",
+}), {
+  kind: "coordinates", lat: 22.2816182, lng: 114.1655613,
+  markerLabel: "WNT · 16 Sep · 7:30 PM",
+}, "default Tamar presentation");
+sameVenueValue(venue.venuePresentationFor({
+  id: "run-2026-09-14", activityId: "run", location: "Island ECC 9/F",
+  mapsQuery: "Island ECC", markerLabel: "Run",
+}), { kind: "geocode", query: "Island ECC", markerLabel: "Run" },
+"non-WNT generic presentation");
+for (const path of [
+  "../assets/itc/venues/island-ecc-11.jpg",
+  "../assets/itc/venues/island-ecc-9.jpg",
+]) {
+  if (!existsSync(resolve(__dirnameSmoke, path))) throw new Error(`missing venue guide: ${path}`);
+}
+console.log("ok  WNT venue resolver selects ECC images, Tamar point, and generic fallback");
+
+// --- Inline free-event venue map (Task 5) ---
+const map = await import("./js/map.js");
+if (JSON.stringify(map.parseGeocodeCache('{"Central":{"lat":22.281,"lon":114.159}}'))
+  !== JSON.stringify({ Central: { lat: 22.281, lon: 114.159 } })) {
+  throw new Error("parseGeocodeCache should read valid entries");
+}
+if (JSON.stringify(map.parseGeocodeCache("not-json")) !== "{}") {
+  throw new Error("parseGeocodeCache should drop invalid JSON");
+}
+if (JSON.stringify(map.parseGeocodeCache('{"Bad":{"lat":"NaN","lon":114}}')) !== "{}") {
+  throw new Error("parseGeocodeCache should drop non-finite coords");
+}
+if (JSON.stringify(map.normalizeGeocodeResult([{ lat: "22.281", lon: "114.159" }]))
+  !== JSON.stringify({ lat: 22.281, lon: 114.159 })) {
+  throw new Error("normalizeGeocodeResult should coerce string coordinates");
+}
+if (map.normalizeGeocodeResult([]) !== null) {
+  throw new Error("normalizeGeocodeResult should reject empty arrays");
+}
+if (map.normalizeGeocodeResult([{ lat: "x", lon: "114" }]) !== null) {
+  throw new Error("normalizeGeocodeResult should reject non-finite coordinates");
+}
+
+// Exact meeting-point maps must bypass Nominatim and use the dated point.
+const originalDocument = globalThis.document;
+const originalLeaflet = globalThis.L;
+const exactSetViews = [];
+const exactMarkers = [];
+globalThis.document = {
+  createElement: () => ({ textContent: "", children: [], appendChild(child) { this.children.push(child); } }),
+};
+globalThis.L = {
+  map: () => ({ setView(coords, zoom) { exactSetViews.push([coords, zoom]); } }),
+  tileLayer: () => ({ addTo() {} }),
+  marker: (coords) => ({
+    addTo() { exactMarkers.push(coords); return this; },
+    bindPopup() {},
+  }),
+};
+const exactMapHost = {
+  id: "activity-map",
+  dataset: {
+    mapLat: "22.2825", mapLng: "114.1659", markerLabel: "WNT meeting point",
+  },
+  isConnected: true,
+  innerHTML: "<p>Loading map…</p>",
+};
+const exactMounted = await map.mountActivityMap(exactMapHost, {
+  fetchImpl: async () => { throw new Error("exact map must not geocode"); },
+  loadLeaflet: async () => {},
+});
+globalThis.document = originalDocument;
+globalThis.L = originalLeaflet;
+if (!exactMounted
+    || JSON.stringify(exactSetViews) !== JSON.stringify([[[22.2825, 114.1659], 15]])
+    || JSON.stringify(exactMarkers) !== JSON.stringify([[22.2825, 114.1659]])) {
+  throw new Error(`exact map must mount at the dated point without geocoding: mounted=${exactMounted} views=${JSON.stringify(exactSetViews)} markers=${JSON.stringify(exactMarkers)}`);
+}
+
+// mountActivityMap must start geocoding and Leaflet loading concurrently.
+let releaseGeocode;
+const geocodeGate = new Promise((resolve) => { releaseGeocode = resolve; });
+const starts = [];
+const concurrentHost = {
+  id: "activity-map",
+  dataset: {
+    mapsQuery: "task-5-concurrency-imaginary-place",
+    markerLabel: "ITC Swimming",
+  },
+  isConnected: true,
+  innerHTML: "<p>Loading map…</p>",
+};
+mem.set("itc.geocode.v1", "{}");
+const concurrentMount = map.mountActivityMap(concurrentHost, {
+  fetchImpl: async () => {
+    starts.push("geocode");
+    await geocodeGate;
+    return { ok: true, json: async () => [] };
+  },
+  loadLeaflet: async () => { starts.push("leaflet"); },
+});
+await Promise.resolve();
+const startedConcurrently = JSON.stringify(starts) === JSON.stringify(["geocode", "leaflet"]);
+releaseGeocode();
+const concurrentResult = await concurrentMount;
+if (!startedConcurrently) {
+  throw new Error(`geocoding and Leaflet must start concurrently; saw ${JSON.stringify(starts)}`);
+}
+if (concurrentResult !== false) {
+  throw new Error("empty geocode result must still resolve to false");
+}
+
+// mountActivityMap must resolve to false and render fallback when no result is found.
+const mapHost = {
+  id: "activity-map",
+  dataset: { mapsQuery: "nowhere-imaginary-place", markerLabel: "Test session" },
+  isConnected: true,
+  innerHTML: "<p>Loading map\u2026</p>",
+};
+mem.set("itc.geocode.v1", "{}");
+let emptyResultLoaderStarted = false;
+const mountedMissing = await map.mountActivityMap(mapHost, {
+  fetchImpl: async () => ({
+    ok: true,
+    json: async () => [],
+  }),
+  loadLeaflet: async () => { emptyResultLoaderStarted = true; },
+});
+if (mountedMissing !== false) {
+  throw new Error("missing geocode must not mount a map");
+}
+if (!emptyResultLoaderStarted) {
+  throw new Error("the concurrent Leaflet loader must start even when geocoding returns empty");
+}
+if (!/Couldn.t find the venue on the map/.test(mapHost.innerHTML)
+  || !/tap Get directions instead/.test(mapHost.innerHTML)) {
+  throw new Error(`fallback copy not rendered: ${mapHost.innerHTML}`);
+}
+
+// Leaflet loading rejection is independent from an empty geocode result and
+// must settle on the same fallback.
+const rejectedLoaderQuery = "loader-rejection-imaginary-place";
+mem.set("itc.geocode.v1", JSON.stringify({
+  [rejectedLoaderQuery]: { lat: 22.281, lon: 114.159 },
+}));
+const rejectedLoaderHost = {
+  id: "activity-map",
+  dataset: { mapsQuery: rejectedLoaderQuery, markerLabel: "Rejected loader" },
+  isConnected: true,
+  innerHTML: "<p>Loading map…</p>",
+};
+const rejectedLoaderResult = await map.mountActivityMap(rejectedLoaderHost, {
+  loadLeaflet: async () => { throw new Error("simulated Leaflet loader rejection"); },
+});
+if (rejectedLoaderResult !== false
+    || !/Couldn.t find the venue on the map/.test(rejectedLoaderHost.innerHTML)) {
+  throw new Error("Leaflet loader rejection must return false with fallback copy");
+}
+
+// Leaflet may load successfully and still throw while constructing the map.
+// That rendering exception must not be reported as a successful mount.
+const renderingExceptionQuery = "rendering-exception-imaginary-place";
+mem.set("itc.geocode.v1", JSON.stringify({
+  [renderingExceptionQuery]: { lat: 22.282, lon: 114.16 },
+}));
+const renderingExceptionHost = {
+  id: "activity-map",
+  dataset: { mapsQuery: renderingExceptionQuery, markerLabel: "Rendering exception" },
+  isConnected: true,
+  innerHTML: "<p>Loading map…</p>",
+};
+const previousLeafletGlobal = globalThis.L;
+globalThis.L = {
+  map() { throw new Error("simulated Leaflet rendering exception"); },
+};
+const renderingExceptionResult = await map.mountActivityMap(renderingExceptionHost, {
+  loadLeaflet: async () => {},
+});
+globalThis.L = previousLeafletGlobal;
+if (renderingExceptionResult !== false
+    || !/Couldn.t find the venue on the map/.test(renderingExceptionHost.innerHTML)) {
+  throw new Error("Leaflet rendering exceptions must return false with fallback copy");
+}
+console.log("ok  inline free-event map renders fallback for lookup, loader, and rendering failures");
 
 console.log(failures ? `\n${failures} FAILURE(S)` : "\nAll smoke tests passed.");
 process.exit(failures ? 1 : 0);

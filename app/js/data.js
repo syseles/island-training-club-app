@@ -53,8 +53,8 @@ export const SEED_ACTIVITIES = [
     weekday: 2, // Tuesday
     time: "19:30",
     durationMin: 90,
-    location: "Victoria Park",
-    mapsQuery: "Victoria Park, Hong Kong",
+    location: "TBC",
+    mapsQuery: "",
     photo: PH + "water.webp",
     blurb:
       "Community water session — skills, games and a good workout. Kit is provided, just bring a towel.",
@@ -69,8 +69,8 @@ export const SEED_ACTIVITIES = [
     weekday: 6, // Saturday
     time: "11:00",
     durationMin: 75,
-    location: "Midtown 28",
-    mapsQuery: "Midtown 28, Hong Kong",
+    location: "Midtown28 Fitness",
+    mapsQuery: "Midtown28 Fitness, Hong Kong",
     photo: PH + "hyrox.webp",
     blurb:
       "Weekly hybrid race training: ski, sled, burpees and running intervals. Every session is purchased separately at one fixed price.",
@@ -112,11 +112,12 @@ export const ANNOUNCEMENTS = [
       { value: "1", label: "clear mission" },
       { value: "1", label: "God who made this all possible" },
     ],
-    body: "On behalf of the ITC Leadership and Coaching Team, we are blessed to share this journey with you! We should all be proud of how far we’ve come and look forward to much more 👊",
+    body: "On behalf of the ITC Leadership and Coaching Team, we are blessed to share this journey with you! We should all be proud of how far we've come and look forward to much more 👊",
     commitment: "We will continue our commitment to serve our God and this community, doing our best to create and maintain a space where you grow in fitness, friendship, community and faith.",
   },
 ];
 
+// --- Leaders & culture (draft community content) ------------------------------
 // --- Leaders & culture (draft community content) ------------------------------
 
 export const LEADERS = [
@@ -180,10 +181,6 @@ function pad(n) {
 export function todayLocal() {
   const d = new Date();
   return new Date(d.getFullYear(), d.getMonth(), d.getDate());
-}
-
-export function daysAgo(n) {
-  return addDays(todayLocal(), -n).getTime();
 }
 
 export function addDays(date, n) {
@@ -413,6 +410,7 @@ const NOTIFICATION_CATEGORIES = new Map([
   // specific role kinds were introduced.
   ["admin_role_changed", "role"],
   ["giving_campaign_published", "club"],
+  ["operational_session_venue_updated", "club"],
 ]);
 
 export function notificationCategory(kind) {
@@ -449,10 +447,12 @@ export function notificationHktTime(value) {
   return `${formatted.replace(/\b(am|pm)\b/i, (period) => period.toUpperCase())} HKT`;
 }
 
-export function notificationDestination(kind) {
+export function notificationDestination(kind, destination = null) {
+  if (typeof destination === "string" && destination.startsWith("#/")) return destination;
   const normalizedKind = notificationKind(kind);
   if (normalizedKind === "admin_application_submitted") return "#/admin/approvals";
   if (normalizedKind.startsWith("admin_")) return "#/admin/members";
+  if (normalizedKind === "operational_session_venue_updated") return "#/schedule";
   if (normalizedKind === "giving_campaign_published") return "#/giving";
   return "#/account";
 }
