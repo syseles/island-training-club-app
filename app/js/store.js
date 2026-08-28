@@ -12,7 +12,6 @@ import {
   parseISO,
   findSession,
   todayLocal,
-  addDays,
   isoDate,
   saturdayOnOrAfter,
   fmtDate,
@@ -1349,11 +1348,9 @@ export function weekVenueOverride(sessionId) {
 
 export function upcomingSessions(days = 14) {
   if (isLive()) {
-    const today = todayLocal();
-    const todayISO = isoDate(today);
-    const endISO = isoDate(addDays(today, days));
+    const todayISO = isoDate(todayLocal());
     const livePaid = liveOps.listLiveSessions()
-      .filter((s) => s.dateISO >= todayISO && s.dateISO < endISO)
+      .filter((s) => s.dateISO >= todayISO)
       .sort((a, b) =>
         a.dateISO.localeCompare(b.dateISO) || String(a.time).localeCompare(String(b.time))
       )

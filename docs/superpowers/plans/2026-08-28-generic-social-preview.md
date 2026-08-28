@@ -4,7 +4,7 @@
 
 **Goal:** Make the Community feature card link directly to the earliest Socials event whose start time falls within the next seven days, using generic event copy.
 
-**Architecture:** Add `store.nextSocialSession()` as the single selection seam. First make `upcomingSessions(days)` honor its requested source window for all live sessions without truncating valid results; then read an eight-day source window, filter sessions to the rolling `[now, now + 7 days]` start-time interval and `category === "Socials"`. `communityHome()` will render the selected event and direct activity link, with a Schedule fallback when no result exists.
+**Architecture:** Add `store.nextSocialSession()` as the single selection seam. Preserve the existing broad future-live-session behavior while removing its arbitrary truncation; then read an eight-day local source window and filter candidates to the rolling `[now, now + 7 days]` start-time interval and `category === "Socials"`. `communityHome()` will render the selected event and direct activity link, with a Schedule fallback when no result exists.
 
 **Tech Stack:** Vanilla ES modules, hand-rendered HTML templates, localStorage-backed store, existing Node smoke tests.
 
@@ -29,7 +29,7 @@
 
 **Interfaces:**
 - Produces: `export function nextSocialSession()` returning the earliest matching session object or `null`.
-- Consumes: `upcomingSessions(8)`, which merges local/live sessions and sorts by `dateISO` and `time`; Task 1 also makes its live source window accurate without truncation.
+- Consumes: `upcomingSessions(8)`, which merges local/live sessions and sorts by `dateISO` and `time`; Task 1 preserves all future live sessions without arbitrary truncation.
 
 - [ ] **Step 1: Write the failing selector test**
 
@@ -105,9 +105,9 @@ Run: `node app/smoke.mjs`
 
 Expected: FAIL because `store.nextSocialSession` is not defined.
 
-- [ ] **Step 3: Make the shared live source window accurate and implement the selector**
+- [ ] **Step 3: Preserve the live source contract and implement the selector**
 
-In the live branch of `upcomingSessions(days)`, derive the source end date from `addDays(todayLocal(), days)`, keep live sessions with `dateISO >= todayISO && dateISO < endISO`, and remove the `.slice(0, days * 2)` truncation so a valid Socials event cannot be omitted behind other sessions. Preserve the existing date/time sort and free-session merge.
+In the live branch of `upcomingSessions(days)`, preserve its existing date filter for all future live sessions and remove the `.slice(0, days * 2)` truncation so a valid Socials event cannot be omitted behind other sessions. Preserve the existing date/time sort and free-session merge.
 
 Then add this export immediately after `nextSession()` in `app/js/store.js`, using the existing `parseISO` helper to compare local event start timestamps:
 
@@ -126,7 +126,7 @@ export function nextSocialSession() {
 }
 ```
 
-The eight-day source includes the next calendar Saturday when today’s event has already started; the timestamp filter then implements the rolling seven-day boundary. Existing chronological ordering ensures the first match is earliest.
+The eight-day local source includes the next calendar Saturday when today’s event has already started; the timestamp filter implements the rolling seven-day boundary for both local and live sessions. Existing chronological ordering ensures the first match is earliest.
 
 - [ ] **Step 4: Run the smoke test and verify it passes**
 
