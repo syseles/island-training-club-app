@@ -2254,6 +2254,12 @@ installLocalFixtures();
   const adminActsHtml = await views.viewAdmin("activities");
   if (!adminActsHtml.includes("Post-Training Lunch") || !adminActsHtml.includes(">RSVP</span>"))
     throw new Error("Activities list should badge the lunch as RSVP");
+  const weeklySection = adminActsHtml.split("Weekly Session Overrides")[1]?.split("One-off Events")[0] || "";
+  if (weeklySection.includes("lunch-") || weeklySection.includes("Post-Training Lunch"))
+    throw new Error("Weekly Session Overrides must stay HYROX-only — the lunch lives in Weekly Venue Overrides");
+  const venueSection = adminActsHtml.split("Weekly Venue Overrides")[1]?.split("Weekly Session Overrides")[0] || "";
+  if (!venueSection.includes("Post-Training Lunch") || !venueSection.includes("Cancel this week's event"))
+    throw new Error("the lunch venue card must offer the per-week cancel control");
   store.signIn("member@example.test");
   store.signOut();
   console.log("ok  RSVP lunch: join, going state, withdraw, Socials filter, no checkout");

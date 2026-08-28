@@ -2109,7 +2109,7 @@ function adminOps(viewer, memberUsers) {
 // overrides — setup and scheduling in one place.
 function adminWeeklySessions() {
   const upcoming = store.upcomingSessions(21).filter(
-    (s) => (s.category === "HYROX" || s.kind === "rsvp") && !sessionStarted(s)
+    (s) => s.category === "HYROX" && s.kind === "paid" && !sessionStarted(s)
   );
   if (!upcoming.length) return "";
   const sessionCards = upcoming.map((s) => {
@@ -2124,9 +2124,7 @@ function adminWeeklySessions() {
         <h3 class="mt8">${esc(s.location)}${isMid ? " (Midtown)" : " (BFT)"}</h3>
         ${override.cancelled ? `<p class="badge danger">${esc(sessionCancellationCopy(override))}</p>` : ""}
         ${isMid && !open && !override.cancelled ? `<p class="badge neutral">Not open</p>` : ""}
-        <p class="muted small mt8">${s.kind === "rsvp"
-          ? `${confirmed.length} going · cap ${s.capacity}`
-          : `${confirmed.length} confirmed in-app · ${atRisk.length} awaiting payment · cap ${s.capacity}`}</p>
+        <p class="muted small mt8">${confirmed.length} confirmed in-app · ${atRisk.length} awaiting payment · cap ${s.capacity}</p>
         ${!override.cancelled ? `
         <details class="mt8">
           <summary>Session controls</summary>
@@ -2244,6 +2242,12 @@ function adminFreeEventVenues() {
               <button class="btn ghost sm" type="button" data-action="reset-week-venue" data-session="${safeId}">Reset to Recurring Default</button>
             </div>
           </form>
+          ${s.kind === "rsvp" ? `
+          <p class="muted small mt8">${store.attendeesFor(s).length} going · cap ${s.capacity}</p>
+          <form id="form-cancel-week" data-session="${safeId}" class="mt8">
+            <div class="field"><label>Cancel this week — reason (required)</label><input name="reason" placeholder="e.g. Organizer away" required></div>
+            <button class="btn danger sm" type="submit">Cancel this week's event</button>
+          </form>` : ""}
         </div></div>`;
     }).join("")}
     </details>`;
