@@ -333,7 +333,7 @@ await check("schedule", () => views.viewSchedule());
 // Schedule filters: only chronological activity categories remain.
 {
   const schedHtml = views.viewSchedule();
-  const expectedFilterOrder = ["all", "Run", "Water", "Strength", "HYROX", "Meals"];
+  const expectedFilterOrder = ["all", "Run", "Water", "Strength", "HYROX", "Socials"];
   const renderedFilterOrder = [...schedHtml.matchAll(/data-filter="([^"]+)"/g)].map((match) => match[1]);
   if (JSON.stringify(renderedFilterOrder) !== JSON.stringify(expectedFilterOrder)) {
     failures++;
@@ -2216,7 +2216,7 @@ store.resetLocalData();
 installLocalFixtures();
 {
   const lunch = store.upcomingSessions(21).find((s) => s.kind === "rsvp");
-  if (!lunch || lunch.category !== "Meals" || lunch.name !== "Post-Training Lunch")
+  if (!lunch || lunch.category !== "Socials" || lunch.name !== "Post-Training Lunch")
     throw new Error("local seeds must include the recurring RSVP lunch");
   store.signIn("member@example.test");
   const lunchHtml = views.viewActivity(lunch.id);
@@ -2239,13 +2239,13 @@ installLocalFixtures();
   if (store.getBooking(rsvp.id).status !== "cancelled")
     throw new Error("withdraw should cancel the RSVP booking");
   const schedHtml = views.viewSchedule();
-  if (!schedHtml.includes(">Meals<"))
-    throw new Error("Schedule should offer a Meals filter chip");
+  if (!schedHtml.includes(">Socials<"))
+    throw new Error("Schedule should offer a Socials filter chip");
   const badgeHtml = views.viewActivity(lunch.id);
   if (!badgeHtml.includes('badge free">RSVP</span>'))
     throw new Error("unbooked RSVP session badge should read RSVP");
   store.signOut();
-  console.log("ok  RSVP lunch: join, going state, withdraw, Meals filter, no checkout");
+  console.log("ok  RSVP lunch: join, going state, withdraw, Socials filter, no checkout");
 }
 
 // --- Reset ---
@@ -2276,7 +2276,7 @@ console.log("ok  reset");
     failures++;
     console.error("FAIL fresh state must have an empty one-off events list");
   } else console.log("ok  fresh state has an empty one-off events list");
-  if (!fresh.activities.some((a) => a.id === "lunch" && a.kind === "rsvp" && a.category === "Meals")) {
+  if (!fresh.activities.some((a) => a.id === "lunch" && a.kind === "rsvp" && a.category === "Socials")) {
     failures++;
     console.error("FAIL fresh state must seed the recurring RSVP lunch");
   } else console.log("ok  fresh state seeds the recurring RSVP lunch");

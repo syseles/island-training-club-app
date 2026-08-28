@@ -323,7 +323,7 @@ const FILTERS = [
   ["Water", "Water"],
   ["Strength", "Strength"],
   ["HYROX", "HYROX"],
-  ["Meals", "Meals"],
+  ["Socials", "Socials"],
 ];
 
 function matchesFilter(s, filter) {
@@ -897,7 +897,7 @@ function communityHome() {
 
       <div class="community-section-head"><h2>Explore</h2></div>
       <nav class="community-explore" aria-label="Explore the ITC community">
-        <a href="#/schedule">Meals</a>
+        <a href="#/schedule">Socials</a>
         <a href="#/community/announcements">Announcements</a>
         <a href="#/community/about">About ITC</a>
       </nav>
@@ -2443,7 +2443,7 @@ function adminOneOffEvents() {
           <div class="field">
             <label for="oe-cat">Category</label>
             <select id="oe-cat" name="category">
-              ${["Other", "Strength", "Run", "HYROX", "Water"].map((c) => `<option>${c}</option>`).join("")}
+              ${["Other", "Strength", "Run", "HYROX", "Water", "Socials"].map((c) => `<option>${c}</option>`).join("")}
             </select>
           </div>
           <div class="field">
@@ -2616,7 +2616,7 @@ export function viewAdminActivity(id) {
         <div class="field">
           <label for="ac-cat">Category</label>
           <select id="ac-cat" name="category">
-            ${["Strength", "Run", "HYROX", "Water", "Other"].map((c) => `<option ${a.category === c ? "selected" : ""}>${c}</option>`).join("")}
+            ${["Strength", "Run", "HYROX", "Water", "Socials", "Other"].map((c) => `<option ${a.category === c ? "selected" : ""}>${c}</option>`).join("")}
           </select>
         </div>
       </div>

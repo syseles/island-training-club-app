@@ -31,7 +31,7 @@ insert into public.operational_activity_templates
    capacity, price_hkd, default_open, active, category, maps_query, requires_rsvp)
 values
   ('lunch', 'Post-Training Lunch', 'Announced weekly', 6, '12:45', 75,
-   12, 0, true, true, 'Meals', null, true)
+   12, 0, true, true, 'Socials', null, true)
 on conflict (activity_id) do nothing;
 
 -- =====================================================================

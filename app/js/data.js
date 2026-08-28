@@ -101,7 +101,7 @@ export const SEED_ACTIVITIES = [
     id: "lunch",
     name: "Post-Training Lunch",
     kind: "rsvp",
-    category: "Meals",
+    category: "Socials",
     weekday: 6, // Saturday — follows the morning HYROX sessions
     time: "12:45",
     durationMin: 75,
