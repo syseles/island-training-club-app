@@ -307,9 +307,9 @@ const FILTERS = [
   ["free", "Free"],
   ["paid", "Paid"],
   ["Run", "Run"],
+  ["Water", "Water"],
   ["Strength", "Strength"],
   ["HYROX", "HYROX"],
-  ["Water", "Water"],
 ];
 
 function matchesFilter(s, filter) {

@@ -298,6 +298,12 @@ await check("schedule", () => views.viewSchedule());
       console.error(`FAIL Schedule should render the ${kept} filter chip`);
     }
   }
+  const renderedFilterOrder = [...schedHtml.matchAll(/data-filter="([^"]+)"/g)].map((match) => match[1]);
+  const expectedFilterOrder = ["all", "free", "paid", "Run", "Water", "Strength", "HYROX"];
+  if (JSON.stringify(renderedFilterOrder) !== JSON.stringify(expectedFilterOrder)) {
+    failures++;
+    console.error(`FAIL Schedule filter order should be ${expectedFilterOrder.join(", ")}; got ${renderedFilterOrder.join(", ")}`);
+  } else console.log("ok  Schedule filters follow access type then weekly event order");
   console.log("ok  Schedule renders All + Free/Paid + category filter chips");
 }
 const hyroxSid = store.nextSession().kind === "paid" ? store.nextSession().id : null;
