@@ -1352,6 +1352,18 @@ console.log("ok  pending and declined live profiles cannot render Payment or Giv
 store.currentUser().role = "super_admin";
 store.currentUser().status = "approved";
 
+// Live booking snapshots come from the DB with start_time/session_date/
+// venue/price_hkd keys; Profile > History must render them (a missing
+// time mapping previously crashed fmtTime with undefined).
+const liveHistoryHtml = await views.viewAccount("history");
+if (typeof liveHistoryHtml !== "string") {
+  throw new Error("live booking history must render for the signed-in member");
+}
+if (!liveHistoryHtml.includes("11:15 AM") || liveHistoryHtml.includes("undefined")) {
+  throw new Error("live booking history must render the snapshot start_time, not undefined");
+}
+console.log("ok  live booking history renders snapshot start_time without crashing");
+
 // A live Admin must compose the Supabase UUID directory with device-local
 // Payment operations without copying editable identity records into storage.
 await views.viewAdmin("payments");

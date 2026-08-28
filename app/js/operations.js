@@ -142,6 +142,13 @@ function buildBookingRow(row) {
       price: row.snapshot?.price_hkd ?? row.snapshot?.price ?? null,
       location: row.snapshot?.venue ?? row.snapshot?.location ?? null,
       name: row.snapshot?.name || (row.snapshot?.activity_id === "hyrox-midtown" ? "ITC HYROX" : "ITC HYROX"),
+      // DB snapshots store start_time ("HH:MM:SS"); the UI expects time
+      // ("HH:MM"). Map it or fmtTime crashes on undefined.
+      time: row.snapshot?.start_time
+        ? String(row.snapshot.start_time).slice(0, 5)
+        : row.snapshot?.time ?? null,
+      durationMin: row.snapshot?.duration_min ?? row.snapshot?.durationMin ?? null,
+      kind: row.snapshot?.kind ?? "paid",
       dateISO,
     },
     dateISO,
