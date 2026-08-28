@@ -9,7 +9,6 @@ import * as store from "./store.js";
 import { isLive } from "./config.js";
 import * as liveOps from "./operations.js";
 import { sessionCancellationCopy } from "./operations.js";
-import * as indemnityDoc from "./documents.js";
 import {
   LEADERS,
   CULTURE,
@@ -1306,9 +1305,6 @@ async function accountIndemnity(user) {
           : "Please read the Indemnity, then accept and confirm."}</p>
       </div>`}
     <a class="btn ghost sm mt16" href="#" data-action="open-doc" data-doc="indemnity">View as full document</a>
-    <div class="card mt16"><div class="card-body prose">
-      ${indemnityDoc.renderIndemnityDocument()}
-    </div></div>
     ${current ? `
       <div class="card mt16"><div class="card-body receipt-lines">
         <div class="line"><span>Signed by</span><strong>${esc(hydrated.indemnitySignature)}</strong></div>

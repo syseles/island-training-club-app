@@ -1005,17 +1005,10 @@ if (!indemnityPageHtml.includes('data-action="open-doc" data-doc="indemnity"')) 
   failures++;
   console.error('FAIL Profile > Indemnity button should target the indemnity document');
 } else console.log("ok  Profile > Indemnity button targets the indemnity document");
-if (!indemnityPageHtml.includes("ITC Hyrox Training - Liability Release &amp; Data Privacy Form")) {
+if (indemnityPageHtml.includes('class="doc-content"')) {
   failures++;
-  console.error("FAIL Profile > Indemnity card missing Hyrox source title marker");
-} else console.log("ok  Profile > Indemnity card includes Hyrox source title marker");
-for (const clause of ["1", "2", "3", "4", "5", "6", "7", "8", "9", "10"]) {
-  if (!indemnityPageHtml.includes(`data-clause="${clause}"`)) {
-    failures++;
-    console.error(`FAIL Profile > Indemnity card missing clause marker ${clause}`);
-  }
-}
-console.log("ok  Profile > Indemnity card exposes source title and clause markers");
+  console.error("FAIL Profile > Indemnity should not duplicate the full document inline");
+} else console.log("ok  Profile > Indemnity uses the modal as its only document reader");
 store.acceptIndemnity(store.currentUser().id, {
   signature: "Test Person",
   signedAt: data.isoDate(data.todayLocal()),
