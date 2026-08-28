@@ -1635,7 +1635,8 @@ function applyFormHtml(cu, draft) {
         ${applySelect("heard_source", "How did you hear about ITC?", ["friend", "family", "search", "social", "event", "other"], true, fields.heard_source)}
         ${applyField("text", "heard_detail", "Detail (optional)", false, fields.heard_detail)}
         ${applyField("text", "preferred_name", "Preferred name (optional)", false, fields.preferred_name)}
-        <label class="check"><input type="checkbox" name="photo_consent" ${checked("photo_consent")}> I consent to photos/videos of me being used on ITC channels. (Optional)</label>
+        <label class="check"><input type="checkbox" name="photo_consent" ${checked("photo_consent")} required> I consent to photos/videos of me being used on ITC channels. *</label>
+        <p class="muted small">Please contact ITC Committee if you have any questions/concerns about this.</p>
         <div data-doc-accept="indemnity">
           <label class="check"><input type="checkbox" name="waiver" ${checked("waiver")} required disabled data-doc-checkbox>
             <span>I accept the <a href="#" class="modal-link" data-action="open-doc" data-doc="indemnity">Indemnity</a> form. *</span></label>
@@ -1725,8 +1726,9 @@ function viewApplyLocal() {
           <span>I accept the <a href="#" class="modal-link" data-action="open-doc" data-doc="privacy">privacy policy</a>. *</span></label>
         <p class="muted small" data-doc-hint>Read the document to enable acceptance.</p>
       </div>
-      <label class="check"><input type="checkbox" name="mediaConsent">
-        <span>(Optional) I consent to being included in ITC photos and videos.</span></label>
+      <label class="check"><input type="checkbox" name="mediaConsent" required>
+        <span>I consent to being included in ITC photos and videos. *</span></label>
+      <p class="muted small">Please contact ITC Committee if you have any questions/concerns about this.</p>
       <div id="apply-error"></div>
       <button class="btn mt24" type="submit">Submit application</button>
     </form>`;

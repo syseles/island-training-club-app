@@ -504,6 +504,18 @@ if (!applyLocalHtml.includes("Read the document to enable acceptance")) {
   failures++;
   console.error("FAIL local-mode apply form missing the read-first hint copy");
 }
+if (!applyLocalHtml.includes('name="mediaConsent" required') || applyLocalHtml.includes("(Optional) I consent")) {
+  failures++;
+  console.error("FAIL local-mode apply form photo consent should be required");
+}
+if (!applyLocalHtml.includes("Please contact ITC Committee if you have any questions/concerns about this.")) {
+  failures++;
+  console.error("FAIL apply form missing the ITC Committee contact line under photo consent");
+}
+if (!integratedViewSource.includes('name="photo_consent" ${checked("photo_consent")} required')) {
+  failures++;
+  console.error("FAIL live-mode apply form photo consent should be required");
+}
 console.log("ok  local-mode apply form wires all three documents (indemnity, privacy, guidelines)");
 for (const name of ["emergencyRelationship", "indemnitySignature", "indemnitySignedAt"]) {
   if (!applyLocalHtml.includes(`name="${name}"`)) {
