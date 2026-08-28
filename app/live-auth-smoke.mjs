@@ -3031,6 +3031,24 @@ assert.equal(app.mountVenueImageFallback(noQueryImage), true);
 noQueryError();
 assert.equal(noQueryRemoved, true, "failed guide without a map query must be removed");
 
+let detailPhotoError;
+let detailPhotoSrc = "/assets/itc/missing-hyrox.webp";
+let detailPhotoRemoved = false;
+const detailPhoto = {
+  dataset: { photoFallback: "/assets/itc/hyrox.webp" },
+  isConnected: true,
+  getAttribute(name) { return name === "src" ? detailPhotoSrc : null; },
+  set src(value) { detailPhotoSrc = value; },
+  remove() { detailPhotoRemoved = true; },
+  addEventListener(type, callback) { if (type === "error") detailPhotoError = callback; },
+};
+assert.equal(app.mountDetailPhotoFallback(detailPhoto), true);
+detailPhotoError();
+assert.equal(detailPhotoSrc, "/assets/itc/hyrox.webp", "failed HYROX image must retry the root asset");
+detailPhotoError();
+assert.equal(detailPhotoRemoved, true, "a failed HYROX fallback must not remain broken");
+console.log("ok  HYROX detail photo retries a root asset fallback");
+
 let staleReplaced = false;
 let staleImageError;
 const staleImage = {

@@ -77,7 +77,7 @@ const fmtMonthYear = (ts) =>
 function badgeFor(s) {
   return s.kind === "free"
     ? `<span class="badge free">Free · No booking</span>`
-    : `<span class="badge paid">Paid · ${fmtMoney(s.price)}</span>`;
+    : `<span class="badge paid">${fmtMoney(s.price)} per session</span>`;
 }
 
 function spotsLabel(s) {
@@ -443,7 +443,7 @@ export function viewActivity(sessionId) {
   const markerLabel = `${s.name} · ${fmtDate(s.date)} · ${fmtTime(s.time)}`;
   const venuePresentation = venuePresentationFor({ ...s, markerLabel });
   const showDirections = !s.cancelled && !past
-    && (venuePresentation.kind === "coordinates" || Boolean(s.mapsQuery));
+    && (venuePresentation.kind === "coordinates" || Boolean(s.mapsQuery || s.location));
   const directionsLink = showDirections
     ? `<a class="btn ghost" href="${mapsHref(s)}" target="_blank" rel="noopener">Get directions</a>`
     : "";
@@ -554,10 +554,12 @@ export function viewActivity(sessionId) {
       ? `<div class="banner mt16"><span class="kicker">Leader note</span><p>${esc(s.memberNote)}</p></div>`
       : memberOnlyNote("Leader notes (meet points, routes, kit) are shared with approved members.")
     : "";
+  const photoFallback = s.kind === "paid" ? "/assets/itc/hyrox.webp" : "/assets/itc/main.webp";
+  const photo = s.photo || photoFallback;
 
   return `
     <a class="back-link" href="#/schedule">← Schedule</a>
-    <img class="detail-photo" src="${s.photo}" alt="">
+    <img class="detail-photo" src="${esc(photo)}" alt="${esc(s.name)}" data-photo-fallback="${photoFallback}">
     <div class="mt16">${badgeFor(s)}</div>
     <h1 class="display sm">${esc(s.name)}</h1>
     <div class="meta-grid">

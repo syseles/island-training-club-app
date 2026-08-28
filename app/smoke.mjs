@@ -588,6 +588,31 @@ if (!paidHtml.includes("HK$") || !paidHtml.includes("badge paid")) {
   failures++;
   console.error("FAIL paid activity missing price or paid badge");
 } else console.log("ok  paid activity shows price + badge");
+if (!paidHtml.includes("HK$180 per session") || paidHtml.includes("Paid · HK$180")) {
+  failures++;
+  console.error("FAIL paid activity badge should describe the session price without implying payment is complete");
+} else console.log("ok  paid activity badge clearly describes the session price");
+const paidDirectionsSession = allUpcoming.find((s) => s.kind === "paid" && s.activityId === "hyrox" && !data.sessionStarted(s));
+const paidDirectionsHtml = paidDirectionsSession ? views.viewActivity(paidDirectionsSession.id) : "";
+if (!paidDirectionsHtml.includes("Get directions")) {
+  failures++;
+  console.error("FAIL paid activity should expose Get directions");
+} else console.log("ok  paid activity exposes Get directions");
+if (paidDirectionsSession) {
+  const paidActivity = store.activities().find((activity) => activity.id === paidDirectionsSession.activityId);
+  const originalMapsQuery = paidActivity?.mapsQuery;
+  if (paidActivity) paidActivity.mapsQuery = "";
+  const locationFallbackHtml = views.viewActivity(paidDirectionsSession.id);
+  if (paidActivity) paidActivity.mapsQuery = originalMapsQuery;
+  if (!locationFallbackHtml.includes("Get directions")) {
+    failures++;
+    console.error("FAIL paid activity should fall back to its location for Get directions");
+  } else console.log("ok  paid activity falls back to its location for Get directions");
+}
+if (!paidHtml.includes('data-photo-fallback="/assets/itc/hyrox.webp"')) {
+  failures++;
+  console.error("FAIL paid activity should provide a root asset fallback for its HYROX image");
+} else console.log("ok  paid activity provides a HYROX image fallback");
 
 // --- Application flow ---
 const applyRes = store.applyForMembership({
