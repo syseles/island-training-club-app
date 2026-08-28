@@ -2197,12 +2197,12 @@ function adminFinalizeGym() {
 
 function adminFreeEventVenues() {
   const upcoming = store.upcomingSessions(21)
-    .filter((s) => s.kind === "free" && !sessionStarted(s));
+    .filter((s) => s.kind !== "paid" && !sessionStarted(s));
   if (!upcoming.length) return "";
   return `
     <details class="admin-section mt24">
       <summary><h2>Weekly Venue Overrides</h2></summary>
-    <p class="muted small mt8">Set a venue for one dated free event. Later weeks keep the recurring default.</p>
+    <p class="muted small mt8">Set a venue for one dated free or RSVP event. Later weeks keep the recurring default.</p>
     ${upcoming.map((s) => {
       const override = store.weekVenueOverride(s.id);
       const recurring = store.getActivity(s.activityId);
@@ -2477,7 +2477,7 @@ function adminActivities() {
             <p>${esc(a.location)}${a.kind === "paid" ? ` · ${fmtMoney(a.price)} · cap ${a.capacity}` : " · open attendance"}</p>
           </div>
           <div class="row-end">
-            ${a.kind === "free" ? '<span class="badge free">Free</span>' : '<span class="badge paid">Paid</span>'}
+            ${a.kind === "free" ? '<span class="badge free">Free</span>' : a.kind === "rsvp" ? '<span class="badge free">RSVP</span>' : '<span class="badge paid">Paid</span>'}
             ${a.published ? "" : '<span class="badge neutral">Hidden</span>'}
           </div>
         </a>`

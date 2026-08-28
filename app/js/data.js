@@ -105,8 +105,8 @@ export const SEED_ACTIVITIES = [
     weekday: 6, // Saturday — follows the morning HYROX sessions
     time: "12:45",
     durationMin: 75,
-    location: "Announced weekly",
-    mapsQuery: "", // venue posted in the weekly session note
+    location: "TBC",
+    mapsQuery: "", // venue set per week by admins (weekly venue override)
     photo: PH + "community.webp",
     blurb:
       "The other half of Saturday: refuel together after training. Everyone pays their own bill — tap Count me in so the organizer can book a table.",

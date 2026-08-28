@@ -2244,6 +2244,17 @@ installLocalFixtures();
   const badgeHtml = views.viewActivity(lunch.id);
   if (!badgeHtml.includes('badge free">RSVP</span>'))
     throw new Error("unbooked RSVP session badge should read RSVP");
+  if (lunch.location !== "TBC")
+    throw new Error("lunch venue should seed as TBC until a weekly override is set");
+  store.signIn("admin@example.test");
+  await store.setWeekVenue(lunch.id, { location: "Cafe Deco, Central", mapsQuery: "Cafe Deco, Central" });
+  const overriddenLunch = store.getSession(lunch.id);
+  if (overriddenLunch.location !== "Cafe Deco, Central")
+    throw new Error("local weekly venue override must apply to the lunch session");
+  const adminActsHtml = await views.viewAdmin("activities");
+  if (!adminActsHtml.includes("Post-Training Lunch") || !adminActsHtml.includes(">RSVP</span>"))
+    throw new Error("Activities list should badge the lunch as RSVP");
+  store.signIn("member@example.test");
   store.signOut();
   console.log("ok  RSVP lunch: join, going state, withdraw, Socials filter, no checkout");
 }

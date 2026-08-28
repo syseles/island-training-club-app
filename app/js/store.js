@@ -1351,7 +1351,9 @@ export function upcomingSessions(days = 14) {
     const today = todayLocal().getTime();
     const livePaid = liveOps.listLiveSessions()
       .filter((s) => parseISO(s.dateISO).getTime() >= today)
-      .sort((a, b) => a.dateISO.localeCompare(b.dateISO))
+      .sort((a, b) =>
+        a.dateISO.localeCompare(b.dateISO) || String(a.time).localeCompare(String(b.time))
+      )
       .slice(0, days * 2)
       .map((s) => ({
         ...s,
@@ -1370,7 +1372,11 @@ export function upcomingSessions(days = 14) {
         past: false,
       };
     });
-    return [...freeSessions, ...livePaid];
+    // Free (local) and paid/RSVP (live) sessions interleave by start time so
+    // each day reads chronologically.
+    return [...freeSessions, ...livePaid].sort((a, b) =>
+      a.dateISO.localeCompare(b.dateISO) || String(a.time).localeCompare(String(b.time))
+    );
   }
   const today = todayLocal();
   const todayStart = today.getTime();
@@ -1807,7 +1813,7 @@ export function setWeekVenue(sessionId, {
   const cleanLocation = String(location || "").trim();
   const cleanMapsQuery = String(mapsQuery || "").trim();
   const overrideActivityId = String(sessionId).replace(/-\d{4}-\d{2}-\d{2}$/, "");
-  if (!new Set(["wnt", "run", "water"]).has(overrideActivityId)) {
+  if (!new Set(["wnt", "run", "water", "lunch"]).has(overrideActivityId)) {
     throw new Error("Activity venue is fixed.");
   }
   const rawPointProvided = ![meetingLat, meetingLng].every(
@@ -1832,7 +1838,7 @@ export function setWeekVenue(sessionId, {
       wasTBC,
     });
   }
-  if (!before || before.kind !== "free") throw new Error("Session not found.");
+  if (!before || (before.kind !== "free" && before.kind !== "rsvp")) throw new Error("Session not found.");
   const wasTBC = before.location === "TBC"
     || !hasConfirmedVenue(before.location, before.mapsQuery);
   requirePaymentAdminActor();

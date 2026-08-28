@@ -174,7 +174,7 @@ const operationalTableRows = {
   operational_activity_templates: [
     { activity_id: "hyrox", name: "ITC HYROX", venue: "BFT Causeway Bay", weekday: 6, start_time: "11:15:00", duration_minutes: 60, capacity: 20, price_hkd: 180, default_open: true, active: true, category: "HYROX", maps_query: null, requires_rsvp: false },
     { activity_id: "hyrox-midtown", name: "ITC HYROX", venue: "Midtown 28", weekday: 6, start_time: "11:00:00", duration_minutes: 60, capacity: 12, price_hkd: 180, default_open: false, active: true, category: "HYROX", maps_query: null, requires_rsvp: false },
-    { activity_id: "lunch", name: "Post-Training Lunch", venue: "Announced weekly", weekday: 6, start_time: "12:45:00", duration_minutes: 75, capacity: 12, price_hkd: 0, default_open: true, active: true, category: "Socials", maps_query: null, requires_rsvp: true },
+    { activity_id: "lunch", name: "Post-Training Lunch", venue: "TBC", weekday: 6, start_time: "12:45:00", duration_minutes: 75, capacity: 12, price_hkd: 0, default_open: true, active: true, category: "Socials", maps_query: null, requires_rsvp: true },
   ],
   operational_bookings: [],
   operational_queue_entries: [],
@@ -546,7 +546,7 @@ for (let i = 0; i < 4; i++) {
     session_date: iso,
     start_time: "12:45:00",
     duration_minutes: 75,
-    venue: "Announced weekly",
+    venue: "TBC",
     capacity: 12,
     price_hkd: 0,
     is_open: true,
@@ -811,7 +811,7 @@ operationalRpcHandler = (name, args) => {
   if (name === "set_session_venue") {
     const sessionId = args.p_session_id;
     const activityId = String(sessionId || "").replace(/-\d{4}-\d{2}-\d{2}$/, "");
-    if (!["wnt", "run", "water"].includes(activityId)) {
+    if (!["wnt", "run", "water", "lunch"].includes(activityId)) {
       return Promise.resolve({ data: null, error: { message: "Activity venue is fixed." } });
     }
     const existing = operationalTableRows.operational_session_venue_overrides
@@ -1530,6 +1530,25 @@ if (store.getBooking(rsvpBooking.id).status !== "cancelled") {
   throw new Error("withdraw should cancel the RSVP");
 }
 console.log("ok  live RSVP events confirm instantly and withdraw cleanly");
+
+// Same-day live sessions order by start time, and weekly venue overrides
+// apply to live RSVP sessions (not just locally-seeded free events).
+const saturdaySessions = store.upcomingSessions(14).filter((s) => s.dateISO === lunchSession.dateISO);
+const saturdayTimes = saturdaySessions.map((s) => s.time);
+const sortedTimes = [...saturdayTimes].sort();
+if (saturdayTimes.join(",") !== sortedTimes.join(",")) {
+  throw new Error(`same-day sessions must order by start time; got ${saturdayTimes.join(",")}`);
+}
+if (saturdaySessions.findIndex((s) => s.kind === "rsvp")
+    < saturdaySessions.findIndex((s) => s.activityId === "hyrox")) {
+  throw new Error("the post-training lunch must follow the morning HYROX sessions");
+}
+await store.setWeekVenue(lunchSession.id, { location: "Cafe Deco, Central", mapsQuery: "Cafe Deco, Central" });
+const overriddenLunch = store.getSession(lunchSession.id);
+if (overriddenLunch.location !== "Cafe Deco, Central" || overriddenLunch.mapsQuery !== "Cafe Deco, Central") {
+  throw new Error("weekly venue override must apply to live RSVP sessions");
+}
+console.log("ok  live sessions order by start time and lunch accepts weekly venue overrides");
 
 // A live Admin must compose the Supabase UUID directory with device-local
 // Payment operations without copying editable identity records into storage.

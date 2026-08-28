@@ -439,12 +439,34 @@ export async function runOperationalRpc(name, args, options = {}) {
   return data;
 }
 
+// Weekly venue overrides apply to live sessions too (e.g. the RSVP lunch),
+// not just locally-seeded free events. Read paths merge the override in so
+// every surface sees the current venue.
+function applyLiveVenueOverride(session) {
+  if (!session) return session;
+  const o = liveCache.venueOverrides.get(session.id);
+  if (!o) return session;
+  const out = { ...session };
+  if (o.location) out.location = o.location;
+  if (o.mapsQuery) out.mapsQuery = o.mapsQuery;
+  if (o.meetingLat != null && o.meetingLng != null) {
+    out.meetingLat = o.meetingLat;
+    out.meetingLng = o.meetingLng;
+  }
+  const display = String(out.location || "").trim();
+  const query = String(out.mapsQuery || "").trim();
+  if (display && display.toUpperCase() !== "TBC" && query && query.toUpperCase() !== "TBC") {
+    out.venueTBC = false;
+  }
+  return out;
+}
+
 export function getLiveSession(id) {
-  return liveCache.sessions.get(id) || null;
+  return applyLiveVenueOverride(liveCache.sessions.get(id)) || null;
 }
 
 export function listLiveSessions() {
-  return [...liveCache.sessions.values()];
+  return [...liveCache.sessions.values()].map(applyLiveVenueOverride);
 }
 
 export function liveActivityTemplates() {
