@@ -60,6 +60,7 @@ for (const relativePath of [
   "live-auth-smoke.mjs",
   "../supabase/migrations/20260804000000_profiles.sql",
   "../supabase/migrations/20260805000007_admin_application_decisions.sql",
+  "../supabase/migrations/20260827000001_hyrox_indemnity_fields.sql",
 ]) {
   const absolutePath = resolve(__dirnameSmoke, relativePath);
   if (!existsSync(absolutePath)) {
@@ -72,6 +73,20 @@ const profilesMigrationSource = readFileSync(
   resolve(__dirnameSmoke, "../supabase/migrations/20260804000000_profiles.sql"),
   "utf8"
 );
+const indemnityMigrationSource = readFileSync(
+  resolve(__dirnameSmoke, "../supabase/migrations/20260827000001_hyrox_indemnity_fields.sql"),
+  "utf8"
+);
+for (const column of [
+  "waiver_signature_text",
+  "waiver_signed_at",
+  "waiver_form_version",
+  "emergency_relationship",
+]) {
+  if (!indemnityMigrationSource.includes(column)) {
+    throw new Error(`Hyrox indemnity migration missing ${column}`);
+  }
+}
 const liveAuthRunbookSource = readFileSync(
   resolve(__dirnameSmoke, "../docs/runbooks/live-auth.md"),
   "utf8"
@@ -433,6 +448,88 @@ if (!views.viewApply().includes('name="donorId"')) {
   failures++;
   console.error("FAIL apply form missing optional Donor ID field");
 } else console.log("ok  apply form collects optional Donor ID");
+
+// --- apply form checkboxes render the read-and-accept links (all three docs) ---
+// local mode: viewApply() dispatches to viewApplyLocal when isLive() is false
+const applyLocalHtml = views.viewApply();
+for (const [key, label] of [
+  ["indemnity", "Indemnity"],
+  ["privacy", "privacy policy"],
+  ["guidelines", "community guidelines"],
+]) {
+  if (!applyLocalHtml.includes(`data-action="open-doc" data-doc="${key}"`)) {
+    failures++;
+    console.error(`FAIL local-mode apply form missing modal trigger for "${key}"`);
+  }
+  if (!applyLocalHtml.includes(`data-doc-accept="${key}"`)) {
+    failures++;
+    console.error(`FAIL local-mode apply form missing doc-accept container for "${key}"`);
+  }
+  if (!applyLocalHtml.includes(label)) {
+    failures++;
+    console.error(`FAIL local-mode apply form missing label text "${label}"`);
+  }
+}
+if (!applyLocalHtml.includes("data-doc-checkbox")) {
+  failures++;
+  console.error("FAIL local-mode apply form checkboxes missing data-doc-checkbox attribute");
+}
+if (!applyLocalHtml.includes("Read the document to enable acceptance")) {
+  failures++;
+  console.error("FAIL local-mode apply form missing the read-first hint copy");
+}
+console.log("ok  local-mode apply form wires all three documents (indemnity, privacy, guidelines)");
+for (const name of ["emergencyRelationship", "indemnitySignature", "indemnitySignedAt"]) {
+  if (!applyLocalHtml.includes(`name="${name}"`)) {
+    failures++;
+    console.error(`FAIL local apply form missing ${name}`);
+  }
+}
+if (!applyLocalHtml.includes("Participant's full name as signature")) {
+  failures++;
+  console.error("FAIL local apply form missing signature label");
+}
+if (!/name="indemnity"[^>]*disabled[^>]*data-doc-checkbox/.test(applyLocalHtml)) {
+  failures++;
+  console.error("FAIL local indemnity checkbox should stay disabled until the modal is read");
+}
+if (!applyLocalHtml.includes(`value="${data.isoDate(data.todayLocal())}"`)) {
+  failures++;
+  console.error("FAIL local signing date should default to today");
+}
+if (!applyLocalHtml.includes(`max="${data.isoDate(data.todayLocal())}"`)) {
+  failures++;
+  console.error("FAIL local signing date should be capped at today");
+}
+console.log("ok  local-mode apply form collects emergencyRelationship, signature, and signing date");
+for (const marker of [
+  'emergencyRelationship: fd.get("emergencyRelationship") || ""',
+  'indemnitySignature: fd.get("indemnitySignature") || ""',
+  'indemnitySignedAt: fd.get("indemnitySignedAt") || ""',
+]) {
+  if (!integratedAppSource.includes(marker)) {
+    failures++;
+    console.error(`FAIL local apply handler missing structured indemnity contract: ${marker}`);
+  }
+}
+console.log("ok  local apply handler bridges the structured indemnity contract");
+
+// Live-mode apply form: old plain-checkbox copy and indemnity-only attributes
+// must be gone. Source-level check: rendering viewApplyLive() requires
+// Supabase state, so we assert against the integrated source instead.
+for (const stale of [
+  "I accept the participation waiver",
+  "I accept the privacy policy. (⏳",
+  "I accept the community guidelines. (⏳",
+  'data-action="open-indemnity-doc"',
+  "data-indemnity-checkbox",
+]) {
+  if (combinedRuntimeSource.includes(stale)) {
+    failures++;
+    console.error(`FAIL stale pre-registry pattern still present: "${stale}"`);
+  }
+}
+console.log("ok  no stale plain-checkbox or indemnity-only patterns remain");
 await check("checkout (visitor) -> redirect", () => views.viewCheckout(paid.id));
 await check("admin (visitor) -> redirect", () => views.viewAdmin("approvals"));
 await check("notfound", () => views.viewNotFound());
@@ -461,12 +558,15 @@ const applyRes = store.applyForMembership({
   email: "test@example.com",
   phone: "+852 1234 5678",
   emergencyName: "E Person",
+  emergencyRelationship: "Sibling",
   emergencyPhone: "+852 8765 4321",
   heard: "A friend",
   ageConfirmed: true,
   mediaConsent: false,
   donorId: "Not applicable",
   indemnity: true,
+  indemnitySignature: "Test Person",
+  indemnitySignedAt: data.isoDate(data.todayLocal()),
 });
 if (!applyRes.ok) throw new Error("apply failed");
 if (applyRes.user.donorId !== null) {
@@ -477,6 +577,88 @@ if (!applyRes.user.indemnityAcceptedAt) {
   failures++;
   console.error("FAIL indemnity acceptance not recorded at application");
 } else console.log("ok  indemnity acceptance recorded at application");
+for (const [field, expected] of [
+  ["emergencyRelationship", "Sibling"],
+  ["indemnitySignature", "Test Person"],
+  ["indemnitySignedAt", data.isoDate(data.todayLocal())],
+  ["indemnityFormVersion", "v1"],
+]) {
+  if (applyRes.user[field] !== expected) {
+    failures++;
+    console.error(`FAIL application ${field} expected ${expected}, got ${applyRes.user[field]}`);
+  }
+}
+if (!store.isIndemnityCurrent(applyRes.user)) {
+  failures++;
+  console.error("FAIL signed v1 application should have current indemnity");
+}
+const localApplicationFixture = (email, overrides = {}) => ({
+  fullName: "Contact Check",
+  preferredName: "Contact",
+  email,
+  phone: "+852 1234 5678",
+  emergencyName: "E Person",
+  emergencyRelationship: "Sibling",
+  emergencyPhone: "+852 8765 4321",
+  heard: "A friend",
+  ageConfirmed: true,
+  mediaConsent: false,
+  donorId: "Not applicable",
+  indemnity: true,
+  indemnitySignature: "Contact Check",
+  indemnitySignedAt: data.isoDate(data.todayLocal()),
+  ...overrides,
+});
+for (const [label, email, overrides] of [
+  ["missing emergency name", "missing-emergency-name@example.test", { emergencyName: "" }],
+  ["missing emergency phone", "missing-emergency-phone@example.test", { emergencyPhone: "" }],
+]) {
+  let error = null;
+  try { store.applyForMembership(localApplicationFixture(email, overrides)); } catch (err) { error = err; }
+  if (!error || !/emergency contact name, relationship and phone/.test(error.message)) {
+    failures++;
+    console.error(`FAIL ${label} should reject with the canonical emergency-contact error`);
+  }
+}
+if (store.isIndemnityCurrent({ ...applyRes.user, emergencyPhone: "" })) {
+  failures++;
+  console.error("FAIL indemnity currentness should require canonical emergency contact phone");
+}
+for (const [label, payload, pattern] of [
+  ["short signature", { signature: "X", signedAt: data.isoDate(data.todayLocal()), emergencyRelationship: "Sibling" }, /full name as your signature/],
+  ["invalid date", { signature: "Test Person", signedAt: "2026-02-31", emergencyRelationship: "Sibling" }, /valid signing date/],
+  ["future date", { signature: "Test Person", signedAt: "2999-01-01", emergencyRelationship: "Sibling" }, /cannot be in the future/],
+  ["missing relationship", { signature: "Test Person", signedAt: data.isoDate(data.todayLocal()), emergencyRelationship: "" }, /relationship/],
+]) {
+  let error = null;
+  try { store.acceptIndemnity(applyRes.user.id, payload); } catch (err) { error = err; }
+  if (!error || !pattern.test(error.message)) {
+    failures++;
+    console.error(`FAIL ${label} should reject with ${pattern}`);
+  }
+}
+for (const [label, field] of [
+  ["missing canonical emergency name", "emergencyName"],
+  ["missing canonical emergency phone", "emergencyPhone"],
+]) {
+  const original = applyRes.user[field];
+  applyRes.user[field] = "";
+  let error = null;
+  try {
+    store.acceptIndemnity(applyRes.user.id, {
+      signature: "Test Person",
+      signedAt: data.isoDate(data.todayLocal()),
+      emergencyRelationship: "Sibling",
+    });
+  } catch (err) {
+    error = err;
+  }
+  applyRes.user[field] = original;
+  if (!error || !/emergency contact name, relationship and phone/.test(error.message)) {
+    failures++;
+    console.error(`FAIL ${label} should block re-sign acceptance`);
+  }
+}
 
 // --- Application draft persistence ---
 {
@@ -730,11 +912,21 @@ await check("profile > donor", () => views.viewAccount("donor"));
 await check("profile > payments", () => views.viewAccount("payments"));
 await check("profile > privacy", () => views.viewAccount("privacy"));
 await check("profile > history", () => views.viewAccount("history"));
+const membershipDetailsHtml = await views.viewAccount("details");
+const membershipDetailsEditHtml = await views.viewAccount("details", "edit");
+if (!membershipDetailsHtml.includes("Emergency contact relationship")) {
+  failures++;
+  console.error("FAIL Membership Details summary missing emergency contact relationship");
+}
+if (!membershipDetailsEditHtml.includes('name="emergency_relationship"')) {
+  failures++;
+  console.error("FAIL Membership Details edit form missing emergency_relationship field");
+} else console.log("ok  Membership Details summary and edit include emergency relationship");
 
 // sub-page headings are title-cased to match the row titles
 for (const [section, title] of [
   ["details", "Membership Details."],
-  ["indemnity", "Health &amp; Liability Indemnity."],
+  ["indemnity", "Indemnity."],
   ["donor", "Donor Profile."],
   ["payments", "Payments &amp; Receipts."],
   ["privacy", "Privacy &amp; Notifications."],
@@ -752,13 +944,70 @@ if (!(await views.viewAccount("nope")).includes("Page not found")) {
 } else console.log("ok  unknown Profile section 404s");
 
 // indemnity: accepted at application -> confirmed on Profile as a single
-// "Indemnity confirmed on [date]" line; a member who never accepted sees
-// "To be accepted" and can confirm from the sub-page
+// "Indemnity confirmed on [date]" line; stale consent must be detected from
+// store.isIndemnityCurrent(), not from the timestamp alone.
 if (!newMemberAcct.includes("Indemnity confirmed on") || newMemberAcct.includes("Accepted on")) {
   failures++;
   console.error("FAIL Profile should show a single indemnity-confirmed-on-date line");
 } else console.log("ok  Profile shows single-line indemnity confirmation");
+const currentIndemnityHtml = await views.viewAccount("indemnity");
+for (const marker of [
+  "Indemnity confirmed on",
+  "Signed by",
+  "Test Person",
+  "Date of signing",
+  "Emergency contact relationship",
+  "Sibling",
+  "Document version",
+  "v1",
+]) {
+  if (!currentIndemnityHtml.includes(marker)) {
+    failures++;
+    console.error(`FAIL current Indemnity page missing "${marker}"`);
+  }
+}
+console.log("ok  current indemnity page shows the stored consent record");
+store.currentUser().indemnityAcceptedAt = Date.now() - 86400000;
+store.currentUser().indemnityFormVersion = "v0";
+const legacyIndemnityProfile = await views.viewAccount();
+if (legacyIndemnityProfile.includes("Indemnity confirmed on") || !legacyIndemnityProfile.includes("Legacy acceptance recorded on")) {
+  failures++;
+  console.error("FAIL timestamp-only or stale indemnity should stay stale on Profile");
+} else console.log("ok  timestamp-only or stale indemnity stays stale on Profile");
+const staleIndemnityHtml = await views.viewAccount("indemnity");
+for (const marker of [
+  "A new version of the Indemnity is available",
+  'data-doc-accept="indemnity"',
+  'name="signature"',
+  'name="signedAt"',
+  'name="emergencyRelationship"',
+  "Accept &amp; Confirm",
+  "Edit in Membership Details",
+]) {
+  if (!staleIndemnityHtml.includes(marker)) {
+    failures++;
+    console.error(`FAIL stale Indemnity page missing "${marker}"`);
+  }
+}
+console.log("ok  stale indemnity page renders the re-sign flow");
+if (staleIndemnityHtml.includes('name="indemnityAccept"') || !/data-doc-submit[^>]*disabled/.test(staleIndemnityHtml)) {
+  failures++;
+  console.error("FAIL stale Indemnity should use one modal acknowledgement to unlock Accept & Confirm");
+} else console.log("ok  stale Indemnity uses one modal acknowledgement to unlock Accept & Confirm");
+for (const marker of [
+  'await store.acceptMyIndemnity({',
+  'signature: fd.get("signature") || ""',
+  'signedAt: fd.get("signedAt") || ""',
+  'emergencyRelationship: fd.get("emergencyRelationship") || ""',
+]) {
+  if (!integratedAppSource.includes(marker)) {
+    failures++;
+    console.error(`FAIL Profile > Indemnity handler missing structured contract: ${marker}`);
+  }
+}
+console.log("ok  Profile > Indemnity handler bridges the structured contract");
 store.currentUser().indemnityAcceptedAt = null;
+store.currentUser().indemnityFormVersion = null;
 if (!(await views.viewAccount()).includes("To be accepted")) {
   failures++;
   console.error('FAIL unaccepted indemnity should read "To be accepted"');
@@ -767,7 +1016,26 @@ if (!(await views.viewAccount("indemnity")).includes("Accept &amp; Confirm")) {
   failures++;
   console.error("FAIL indemnity page missing Accept & Confirm");
 } else console.log("ok  indemnity page offers Accept & Confirm");
-store.acceptIndemnity(store.currentUser().id);
+
+// --- Profile > Indemnity: one modal acknowledgement + full document button ---
+const indemnityPageHtml = await views.viewAccount("indemnity");
+if (!indemnityPageHtml.includes("View as full document")) {
+  failures++;
+  console.error('FAIL Profile > Indemnity should expose a "View as full document" button');
+} else console.log('ok  Profile > Indemnity exposes "View as full document" button');
+if (!indemnityPageHtml.includes('data-action="open-doc" data-doc="indemnity"')) {
+  failures++;
+  console.error('FAIL Profile > Indemnity button should target the indemnity document');
+} else console.log("ok  Profile > Indemnity button targets the indemnity document");
+if (indemnityPageHtml.includes('class="doc-content"')) {
+  failures++;
+  console.error("FAIL Profile > Indemnity should not duplicate the full document inline");
+} else console.log("ok  Profile > Indemnity uses the modal as its only document reader");
+store.acceptIndemnity(store.currentUser().id, {
+  signature: "Test Person",
+  signedAt: data.isoDate(data.todayLocal()),
+  emergencyRelationship: "Sibling",
+});
 if (!(await views.viewAccount()).includes("Indemnity confirmed on")) {
   failures++;
   console.error("FAIL acceptIndemnity did not confirm on Profile");
@@ -777,6 +1045,212 @@ if (!views.viewHome().includes("Nothing booked this week")) {
   console.error('FAIL "My week" should prompt when the member has no bookings');
 } else console.log('ok  "My week" empty state prompts to book');
 await check("checkout (member)", () => views.viewCheckout(paid.id));
+
+// --- document registry (indemnity + privacy + guidelines) ---
+const docsModule = await import("./js/documents.js");
+const DOCS = docsModule.DOCUMENTS;
+if (docsModule.INDEMNITY_VERSION !== "v1") {
+  failures++;
+  console.error(`FAIL indemnity version should be v1, got ${docsModule.INDEMNITY_VERSION}`);
+}
+if (DOCS.indemnity?.title !== "Indemnity") {
+  failures++;
+  console.error(`FAIL indemnity title should be Indemnity, got ${DOCS.indemnity?.title}`);
+}
+for (const key of ["indemnity", "privacy", "guidelines"]) {
+  if (!DOCS[key] || typeof DOCS[key].renderBody !== "function" || !DOCS[key].title) {
+    failures++;
+    console.error(`FAIL documents registry missing entry for "${key}"`);
+  }
+}
+console.log("ok  documents registry exposes indemnity + privacy + guidelines");
+for (const [key, expected] of [["indemnity", false], ["privacy", true], ["guidelines", true]]) {
+  if (!!DOCS[key]?.provisional !== expected) {
+    failures++;
+    console.error(`FAIL ${key} provisional watermark flag expected ${expected}, got ${!!DOCS[key]?.provisional}`);
+  }
+}
+console.log("ok  document registry scopes provisional watermarks by document");
+
+const indemnityBody = DOCS.indemnity?.renderBody?.() || "";
+for (const marker of [
+  "ITC Hyrox Training - Liability Release &amp; Data Privacy Form",
+  "Hyrox Training from the date of signing to 31 December 2026",
+]) {
+  if (!indemnityBody.includes(marker)) {
+    failures++;
+    console.error(`FAIL indemnity document missing opening marker "${marker}"`);
+  }
+}
+for (const [clause, phrase] of [
+  ["1", "to assume and accept all and any risks"],
+  ["2", "to waive any and all claims"],
+  ["3", "to release:"],
+  ["4", "to hold harmless and indemnify:"],
+  ["5", "that appropriate insurance shall be taken out by me"],
+  ["6", "the leaders of ITC and/or IECC have the right"],
+  ["7", "that my level of physical fitness is adequate"],
+  ["8", "that this Form shall be effective and binding"],
+  ["9", "that I agree to the personal data privacy statement"],
+  ["10", "that the laws of Hong Kong shall govern this Form"],
+]) {
+  if (!indemnityBody.includes(`data-clause="${clause}"`) || !indemnityBody.includes(phrase)) {
+    failures++;
+    console.error(`FAIL indemnity document missing clause ${clause}: "${phrase}"`);
+  }
+}
+if (!indemnityBody.includes("https://www.islandecc.hk/privacy-policy/")) {
+  failures++;
+  console.error("FAIL indemnity document missing the IECC privacy-policy URL");
+}
+for (const removed of [
+  "Health declaration",
+  "Participation at my own risk",
+  "Draft — pending ITC leadership review",
+]) {
+  if (indemnityBody.includes(removed)) {
+    failures++;
+    console.error(`FAIL indemnity document still contains draft marker "${removed}"`);
+  }
+}
+console.log("ok  indemnity registry exposes versioned Hyrox legal copy");
+
+for (const [key, headings] of Object.entries({
+  privacy: [
+    "What we collect",
+    "Why we collect it",
+    "Who sees it",
+    "Your choices",
+  ],
+  guidelines: [
+    "Everyone is welcome",
+    "Respect and encouragement",
+    "Safety first",
+    "Photos and media",
+    "Conduct",
+  ],
+})) {
+  const body = DOCS[key]?.renderBody?.() || "";
+  for (const heading of headings) {
+    if (!body.includes(heading)) {
+      failures++;
+      console.error(`FAIL ${key} document missing heading "${heading}"`);
+    }
+  }
+}
+console.log("ok  privacy and guidelines registry bodies still expose their section headings");
+
+// --- modal component: scroll-end math (Task 2) ---
+const components = await import("./js/components.js");
+if (components.SCROLL_END_THRESHOLD_PX !== 4) {
+  failures++;
+  console.error(`FAIL scroll-end threshold should be 4, got ${components.SCROLL_END_THRESHOLD_PX}`);
+} else console.log("ok  scroll-end threshold is 4px");
+
+const scrollCases = [
+  [100, 200, 300, true],   // 300 >= 296
+  [50, 200, 300, false],   // 250 < 296
+  [0, 200, 200, true],     // everything fits, 200 >= 196
+  [0, 100, 50, true],      // degenerate: doc smaller than viewport
+];
+for (const [top, height, scroll, expected] of scrollCases) {
+  const got = components.isAtScrollEnd(top, height, scroll);
+  if (got !== expected) {
+    failures++;
+    console.error(`FAIL isAtScrollEnd(${top},${height},${scroll}) expected ${expected}, got ${got}`);
+  }
+}
+console.log("ok  isAtScrollEnd math returns correct values for 4 cases");
+
+// --- generalized modal API ---
+if (typeof components.openReadAndAcceptModal !== "function") {
+  failures++;
+  console.error("FAIL components should export openReadAndAcceptModal");
+} else console.log("ok  components exports openReadAndAcceptModal");
+
+// --- applyDocumentAcceptance: scoped per document container ---
+const mkContainer = () => {
+  const checkbox = { disabled: true, checked: false };
+  const submit = { disabled: true };
+  const hint = { hidden: false };
+  return {
+    checkbox,
+    submit,
+    hint,
+    el: {
+      querySelector: (sel) =>
+        sel === "[data-doc-checkbox]" ? checkbox
+        : sel === "[data-doc-submit]" ? submit
+        : sel === "[data-doc-hint]" ? hint
+        : null,
+    },
+  };
+};
+const indemnityC = mkContainer();
+const privacyC = mkContainer();
+const guidelinesC = mkContainer();
+const privacyTrigger = { closest: (sel) => (sel === "[data-doc-accept]" ? privacyC.el : null) };
+if (components.applyDocumentAcceptance(privacyTrigger) !== true) {
+  failures++;
+  console.error("FAIL applyDocumentAcceptance should return true when a container is paired");
+}
+if (privacyC.checkbox.disabled !== false || privacyC.checkbox.checked !== true || privacyC.submit.disabled !== false || privacyC.hint.hidden !== true) {
+  failures++;
+  console.error("FAIL applyDocumentAcceptance did not unlock the privacy checkbox, submit button, and hint");
+}
+if (indemnityC.checkbox.checked || guidelinesC.checkbox.checked || indemnityC.submit.disabled !== true || guidelinesC.submit.disabled !== true || indemnityC.hint.hidden || guidelinesC.hint.hidden) {
+  failures++;
+  console.error("FAIL applyDocumentAcceptance mutated a container other than the trigger's");
+}
+const submitOnly = {
+  submit: { disabled: true },
+  hint: { hidden: false },
+  querySelector: (sel) =>
+    sel === "[data-doc-submit]" ? submitOnly.submit
+    : sel === "[data-doc-hint]" ? submitOnly.hint
+    : null,
+};
+const submitOnlyTrigger = { closest: (sel) => (sel === "[data-doc-accept]" ? submitOnly : null) };
+if (components.applyDocumentAcceptance(submitOnlyTrigger) !== true || submitOnly.submit.disabled || !submitOnly.hint.hidden) {
+  failures++;
+  console.error("FAIL applyDocumentAcceptance should unlock a submit-only document container");
+}
+console.log("ok  applyDocumentAcceptance mutates only the trigger's document container");
+
+// applyDocumentAcceptance: returns false when no container is paired (Profile trigger)
+const orphanTrigger = { closest: () => null };
+if (components.applyDocumentAcceptance(orphanTrigger) !== false) {
+  failures++;
+  console.error("FAIL applyDocumentAcceptance should return false when no container is found");
+} else console.log("ok  applyDocumentAcceptance returns false for orphan triggers");
+
+// --- modal CSS classes present (Task 3) ---
+const stylesSource = readFileSync(resolve(__dirnameSmoke, "styles.css"), "utf8");
+for (const cls of [
+  ".modal-backdrop",
+  ".modal-dialog",
+  ".modal-header",
+  ".modal-doc",
+  ".modal-doc-body",
+  ".modal-doc-ack",
+  ".modal-link",
+  ".check input[disabled] + span",
+]) {
+  if (!stylesSource.includes(cls)) {
+    failures++;
+    console.error(`FAIL styles.css missing rule for "${cls}"`);
+  }
+}
+if (!stylesSource.includes(".modal-doc-body.doc-provisional::after")) {
+  failures++;
+  console.error("FAIL modal document watermark should be scoped to provisional documents");
+}
+if (stylesSource.includes(".modal-doc-body::after {")) {
+  failures++;
+  console.error("FAIL modal document watermark should not apply to every document body");
+}
+console.log("ok  styles.css contains all modal-related class definitions");
+
 // --- HYROX payment system: reserve -> mark -> collector confirm (Task 2) ---
 const bftSession = allUpcoming.find(
   (s) => s.activityId === "hyrox" && !data.sessionStarted(s)
@@ -1399,8 +1873,8 @@ console.log("ok  reset");
   if (!fresh.paymentPayouts || Array.isArray(fresh.paymentPayouts)
       || Object.keys(fresh.paymentPayouts).length) {
     failures++;
-    console.error("FAIL v13 fresh state must have an empty UUID-keyed payout map");
-  } else console.log("ok  v13 fresh state has an empty UUID-keyed payout map");
+    console.error("FAIL v14 fresh state must have an empty UUID-keyed payout map");
+  } else console.log("ok  v14 fresh state has an empty UUID-keyed payout map");
   if (Array.isArray(fresh.activities)) {
     for (const a of fresh.activities) {
       if ("baseBooked" in a) {
@@ -1518,10 +1992,41 @@ console.log("ok  reset");
     failures++;
     console.error("FAIL v10 migration must clear session tied to a removed demo user");
   } else console.log("ok  v10 migration clears removed session");
-  if (migrated.version !== 13) {
+  if (migrated.version !== 14) {
     failures++;
-    console.error(`FAIL integrated migration must advance version to 13, got ${migrated.version}`);
-  } else console.log("ok  integrated migration advances genuine v9 state to v13");
+    console.error(`FAIL integrated migration must advance version to 14, got ${migrated.version}`);
+  } else console.log("ok  integrated migration advances genuine v9 state to v14");
+}
+
+{
+  store.resetLocalData();
+  const v13 = JSON.parse(mem.get("itc.prototype.v1"));
+  v13.version = 13;
+  v13.users = [{
+    id: "real-v13-member",
+    role: "member",
+    status: "approved",
+    fullName: "Real Member",
+    email: "real-v13@example.test",
+    indemnityAcceptedAt: 123456789,
+  }];
+  mem.set("itc.prototype.v1", JSON.stringify(v13));
+  store.load();
+  const v14 = JSON.parse(mem.get("itc.prototype.v1"));
+  const migratedUser = v14.users.find((user) => user.id === "real-v13-member");
+  if (v14.version !== 14 || !migratedUser) throw new Error("v14 migration lost the genuine member");
+  for (const field of ["indemnitySignature", "indemnitySignedAt", "indemnityFormVersion", "emergencyRelationship"]) {
+    if (!(field in migratedUser) || migratedUser[field] !== null) {
+      throw new Error(`v14 migration should initialize ${field} to null`);
+    }
+  }
+  if (migratedUser.indemnityAcceptedAt !== 123456789) {
+    throw new Error("v14 migration must preserve indemnityAcceptedAt");
+  }
+  if (store.isIndemnityCurrent(migratedUser)) {
+    throw new Error("timestamp-only v13 acceptance must be stale in v14");
+  }
+  console.log("ok  v14 migration preserves legacy acceptance and initializes consent fields");
 }
 
 // --- Install neutral fixtures for local authenticated paths (no demo seeds) ---
@@ -1536,17 +2041,19 @@ function installLocalFixtures({ withMemberBooking = false } = {}) {
     {
       id: "fixture-admin", role: "admin", status: "approved", fullName: "Test Admin",
       preferredName: "Admin", email: "admin@example.test", phone: "+852 5000 0001",
-      emergencyName: "Test Contact", emergencyPhone: "+852 5000 9001", heard: "Test fixture",
+      emergencyName: "Test Contact", emergencyRelationship: "Sibling", emergencyPhone: "+852 5000 9001", heard: "Test fixture",
       isMinor: false, appliedAt: Date.now() - 86400000, indemnityAcceptedAt: Date.now() - 86400000,
+      indemnitySignature: "Test Admin", indemnitySignedAt: data.isoDate(data.todayLocal()), indemnityFormVersion: "v1",
       privacyAcceptedAt: Date.now() - 86400000, whatsappReminders: false, emailReceipts: false,
       communityNews: false,
     },
     {
       id: "fixture-member", role: "member", status: "approved", fullName: "Test Member",
       preferredName: "Tester", email: "member@example.test", phone: "+852 5000 0002",
-      emergencyName: "Test Contact", emergencyPhone: "+852 5000 9002", heard: "Test fixture",
+      emergencyName: "Test Contact", emergencyRelationship: "Sibling", emergencyPhone: "+852 5000 9002", heard: "Test fixture",
       mediaConsent: true, donorId: "TEST-1234", isMinor: false,
       appliedAt: Date.now() - 172800000, indemnityAcceptedAt: Date.now() - 172800000,
+      indemnitySignature: "Test Member", indemnitySignedAt: data.isoDate(data.todayLocal()), indemnityFormVersion: "v1",
       privacyAcceptedAt: Date.now() - 172800000, whatsappReminders: false,
       emailReceipts: false, communityNews: false,
     },
@@ -1959,11 +2466,11 @@ for (const fixture of sourceSnapshots) {
     && !Array.isArray(migrated.paymentPayouts);
   const suppliedPayoutsPreserved = fixture.version !== 12
     || migrated.paymentPayouts["real-admin"]?.fpsPhone === "+852 6000 0000";
-  if (migrated.version !== 13 || suppliedIds.some((id) => !serialized.includes(id))
+  if (migrated.version !== 14 || suppliedIds.some((id) => !serialized.includes(id))
       || !payoutMapValid || !suppliedPayoutsPreserved) {
     failures++;
-    console.error(`FAIL genuine v${fixture.version} fixture must reach v13 intact`);
-  } else console.log(`ok  genuine v${fixture.version} fixture reaches v13 intact`);
+    console.error(`FAIL genuine v${fixture.version} fixture must reach v14 intact`);
+  } else console.log(`ok  genuine v${fixture.version} fixture reaches v14 intact`);
 }
 
 for (const invalidCounter of [null, -1, 1.5, "broken"]) {

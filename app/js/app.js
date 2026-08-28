@@ -6,6 +6,7 @@ import * as store from "./store.js";
 import { buildICS, findSession, todayLocal, mondayOf, addDays, isoDate, donorIdProblem } from "./data.js";
 import * as views from "./views.js";
 import { isLive, supabase } from "./config.js";
+import * as components from "./components.js";
 
 const viewEl = document.getElementById("view");
 const navEl = document.getElementById("bottom-nav");
@@ -175,6 +176,16 @@ function showFieldError(form, field, errorHost, message) {
     [field.getAttribute("aria-describedby"), alert.id].filter(Boolean).join(" ")
   );
   field.focus();
+}
+
+function showInlineFormError(host, message) {
+  if (!host) return;
+  host.innerHTML = "";
+  const alert = document.createElement("div");
+  alert.className = "form-error";
+  alert.setAttribute("role", "alert");
+  alert.textContent = message;
+  host.appendChild(alert);
 }
 
 export async function maybeRedirectToApply() {
@@ -465,6 +476,18 @@ document.addEventListener("click", async (e) => {
       clearTimeout(applyDraftTimer);
       const draft = saveApplyDraftForm(form);
       toast(draft ? "Draft saved on this device" : "Unable to save draft", !draft);
+      break;
+    }
+    case "open-doc": {
+      const docKey = el.dataset.doc;
+      if (!docKey) break;
+      components.openReadAndAcceptModal({
+        docKey,
+        trigger: el,
+        onAccept: (openingTrigger) => {
+          components.applyDocumentAcceptance(openingTrigger || el);
+        },
+      });
       break;
     }
     case "discard-draft":
@@ -801,6 +824,7 @@ document.addEventListener("submit", async (e) => {
       const fd = new FormData(form);
       const payload = Object.fromEntries(fd.entries());
       payload.photo_consent = !!fd.get("photo_consent");
+      payload.waiver = !!fd.get("waiver");
       try {
         await store.saveMyApplication(payload);
         toast(form.dataset.toast || "Application submitted.");
@@ -808,6 +832,23 @@ document.addEventListener("submit", async (e) => {
         await renderWithFeedback();
       } catch (err) {
         toast(err.message || "Submit failed", true);
+      }
+    });
+    return;
+  }
+
+  if (form.dataset.form === "membership-details") {
+    e.preventDefault();
+    if (!form.reportValidity()) return;
+    const control = form.querySelector('[type="submit"]');
+    await withBusyControl(control, "Saving…", async () => {
+      try {
+        await store.updateMyMembershipDetails(Object.fromEntries(new FormData(form).entries()));
+        toast("Membership details saved");
+        location.hash = "#/account/details";
+        await renderWithFeedback();
+      } catch (err) {
+        toast(err.message || "Unable to save membership details", true);
       }
     });
     return;
@@ -835,24 +876,33 @@ document.addEventListener("submit", async (e) => {
       const fd = new FormData(form);
       const errEl = form.querySelector("#apply-error");
       if (donorIdProblem(fd.get("donorId"))) {
-        errEl.innerHTML = `<div class="form-error">That Donor ID doesn’t look right — it needs a hyphen between your last name and the 4- or 5-digit number (e.g. CHUI-08879 or CHUI-8879). Please enter it again, or leave it blank if you don’t have one.</div>`;
+        showInlineFormError(errEl, "That Donor ID doesn’t look right — it needs a hyphen between your last name and the 4- or 5-digit number (e.g. CHUI-08879 or CHUI-8879). Please enter it again, or leave it blank if you don’t have one.");
         return;
       }
-      const res = store.applyForMembership({
+      const payload = {
         fullName: fd.get("fullName") || "",
         preferredName: fd.get("preferredName") || "",
         email: fd.get("email") || "",
         phone: fd.get("phone") || "",
         emergencyName: fd.get("emergencyName") || "",
+        emergencyRelationship: fd.get("emergencyRelationship") || "",
         emergencyPhone: fd.get("emergencyPhone") || "",
         heard: fd.get("heard") || "",
         ageConfirmed: fd.get("ageConfirmed") === "on",
         mediaConsent: fd.get("mediaConsent") === "on",
         donorId: fd.get("donorId") || "",
         indemnity: fd.get("indemnity") === "on",
-      });
-      if (!res.ok) {
-        errEl.innerHTML = `<div class="form-error">An application already exists for that email — try signing in instead.</div>`;
+        indemnitySignature: fd.get("indemnitySignature") || "",
+        indemnitySignedAt: fd.get("indemnitySignedAt") || "",
+      };
+      try {
+        const res = store.applyForMembership(payload);
+        if (!res.ok) {
+          showInlineFormError(errEl, "An application already exists for that email — try signing in instead.");
+          return;
+        }
+      } catch (err) {
+        showInlineFormError(errEl, err.message || "Unable to submit application");
         return;
       }
       toast("Application submitted — a leader will review it");
@@ -933,11 +983,24 @@ document.addEventListener("submit", async (e) => {
     case "form-indemnity": {
       e.preventDefault();
       if (!form.reportValidity()) return;
-      const user = store.currentUser();
-      if (!user) return;
-      store.acceptIndemnity(user.id);
-      toast("Indemnity accepted & confirmed");
-      render();
+      const fd = new FormData(form);
+      const errorEl = form.querySelector("#indemnity-error");
+      const acceptButton = form.querySelector("[data-doc-submit]");
+      if (!acceptButton || acceptButton.disabled) {
+        showInlineFormError(errorEl, "Read the full Indemnity before confirming");
+        return;
+      }
+      try {
+        await store.acceptMyIndemnity({
+          signature: fd.get("signature") || "",
+          signedAt: fd.get("signedAt") || "",
+          emergencyRelationship: fd.get("emergencyRelationship") || "",
+        });
+        toast("Indemnity accepted & confirmed");
+        await renderWithFeedback();
+      } catch (err) {
+        showInlineFormError(errorEl, err.message || "Unable to accept the Indemnity");
+      }
       break;
     }
 

@@ -987,6 +987,7 @@ async function hydrateLiveUser(user) {
       ...user,
       phone: app.mobile ?? user.phone ?? "",
       emergencyName: app.emergency_name ?? user.emergencyName ?? "",
+      emergencyRelationship: app.emergency_relationship ?? user.emergencyRelationship ?? "",
       emergencyPhone: app.emergency_phone ?? user.emergencyPhone ?? "",
       preferredName: (Object.prototype.hasOwnProperty.call(app, "preferred_name")) ? (app.preferred_name || "") : user.preferredName,
       heard: app.heard_source ?? user.heard ?? "",
@@ -998,6 +999,9 @@ async function hydrateLiveUser(user) {
       emailReceipts: app.email_receipts !== undefined ? !!app.email_receipts : user.emailReceipts,
       communityNews: app.community_news !== undefined ? !!app.community_news : user.communityNews,
       indemnityAcceptedAt: app.waiver_accepted_at ?? user.indemnityAcceptedAt,
+      indemnitySignature: app.waiver_signature_text ?? user.indemnitySignature ?? "",
+      indemnitySignedAt: app.waiver_signed_at ?? user.indemnitySignedAt ?? "",
+      indemnityFormVersion: app.waiver_form_version ?? user.indemnityFormVersion ?? "",
       privacyAcceptedAt: app.privacy_accepted_at ?? user.privacyAcceptedAt,
       appliedAt: app.submitted_at ?? user.appliedAt,
     };
@@ -1034,7 +1038,6 @@ function accountVisitor() {
         <div id="signin-error"></div>
         <button class="btn mt16" type="submit">Sign in</button>
       </form>
-<<<<<<< HEAD
       <p class="muted small mt16">This local prototype has no password. Sign in with the email used for an application on this device.</p>
     </div></div>
     <div class="card mt16"><div class="card-body">
@@ -1044,8 +1047,44 @@ function accountVisitor() {
     </div></div>`;
 }
 
+function emergencyContactSummary(name, relationship, phone) {
+  return esc(
+    [name, relationship, phone]
+      .map((value) => String(value || "").trim())
+      .filter(Boolean)
+      .join(" · ") || "—"
+  );
+}
+
+function indemnityState(user) {
+  const acceptedAt = user?.indemnityAcceptedAt;
+  if (!acceptedAt) {
+    return {
+      kind: "missing",
+      row: "To be accepted",
+      kicker: "To be accepted",
+      body: "Please read the indemnity below, then accept and confirm — it’s required for joining ITC activities.",
+    };
+  }
+  if (store.isIndemnityCurrent(user)) {
+    return {
+      kind: "current",
+      row: `Indemnity confirmed on ${fmtDay(acceptedAt)}`,
+      kicker: `Indemnity confirmed on ${fmtDay(acceptedAt)}`,
+      body: "You’re confirmed to join ITC activities.",
+    };
+  }
+  return {
+    kind: "stale",
+    row: `Legacy acceptance recorded on ${fmtDay(acceptedAt)}`,
+    kicker: `Legacy acceptance recorded on ${fmtDay(acceptedAt)}`,
+    body: "Please review the current indemnity and confirm it again so your record includes the required signature, signing date, and emergency-contact relationship.",
+  };
+}
+
 async function accountPending(user) {
   const hydrated = await hydrateLiveUser(user);
+  const indemnity = indemnityState(hydrated);
   return `
     <div class="kicker">Profile · ${esc(user.email)}</div>
     <h1 class="display">Thanks, ${esc(hydrated.preferredName || user.fullName.split(" ")[0])}.</h1>
@@ -1055,10 +1094,10 @@ async function accountPending(user) {
       <div class="receipt-lines">
         <div class="line"><span>Name</span><strong>${esc(user.fullName)}</strong></div>
         <div class="line"><span>Phone</span><strong>${esc(hydrated.phone)}</strong></div>
-        <div class="line"><span>Emergency contact</span><strong>${esc(hydrated.emergencyName)} · ${esc(hydrated.emergencyPhone)}</strong></div>
+        <div class="line"><span>Emergency contact</span><strong>${emergencyContactSummary(hydrated.emergencyName, hydrated.emergencyRelationship, hydrated.emergencyPhone)}</strong></div>
         <div class="line"><span>Heard about ITC</span><strong>${esc(hydrated.heard)}</strong></div>
         ${user.donorId ? `<div class="line"><span>Donor ID</span><strong>${esc(user.donorId)}</strong></div>` : ""}
-        <div class="line"><span>Indemnity</span><strong>${hydrated.indemnityAcceptedAt ? "Accepted" : "—"}</strong></div>
+        <div class="line"><span>Indemnity</span><strong>${indemnity.kind === "current" ? "Accepted" : indemnity.kind === "stale" ? "Review & confirm" : "—"}</strong></div>
         <div class="line"><span>Photo consent</span><strong>${hydrated.mediaConsent ? "Yes" : "No"}</strong></div>
       </div>
     </div></div>
@@ -1084,6 +1123,7 @@ function accountDeclined(user) {
 
 async function accountMember(user) {
   const hydrated = await hydrateLiveUser(user);
+  const indemnity = indemnityState(hydrated);
   const normalized = normalizeRole(hydrated.role);
   if (user.role !== normalized) user.role = normalized;
   const isAdmin = isAdminRole(normalized);
@@ -1122,8 +1162,8 @@ async function accountMember(user) {
         "#/account/indemnity",
         ICONS.check,
         "Indemnity",
-        hydrated.indemnityAcceptedAt ? `Indemnity confirmed on ${fmtDay(hydrated.indemnityAcceptedAt)}` : "To be accepted",
-        { cls: hydrated.indemnityAcceptedAt ? "ok" : "todo" }
+        indemnity.row,
+        { cls: indemnity.kind === "current" ? "ok" : "todo" }
       )}
       ${profileRow("#/account/donor", ICONS.heart, "Donor Profile", "Donor ID and e-receipt details")}
       ${profileRow("#/account/payments", ICONS.dollar, "Payments & Receipts", "Bookings, donations and orders")}
@@ -1181,6 +1221,10 @@ async function accountDetailsEdit(user) {
         <input id="md-emergency_name" name="emergency_name" value="${esc(hydrated.emergencyName || "")}" required>
       </div>
       <div class="field">
+        <label for="md-emergency_relationship">Emergency contact relationship *</label>
+        <input id="md-emergency_relationship" name="emergency_relationship" value="${esc(hydrated.emergencyRelationship || "")}" required>
+      </div>
+      <div class="field">
         <label for="md-emergency_phone">Emergency contact phone *</label>
         <input id="md-emergency_phone" name="emergency_phone" type="tel" value="${esc(hydrated.emergencyPhone || "")}" required>
       </div>
@@ -1211,11 +1255,12 @@ async function accountDetails(user) {
         <div class="line"><span>Mobile / WhatsApp number</span><strong>${esc(hydrated.phone)}</strong></div>
         <div class="line"><span>Age status</span><strong>${ageStatus}</strong></div>
         <div class="line"><span>Emergency contact name</span><strong>${esc(hydrated.emergencyName)}</strong></div>
+        <div class="line"><span>Emergency contact relationship</span><strong>${esc(hydrated.emergencyRelationship)}</strong></div>
         <div class="line"><span>Emergency contact phone</span><strong>${esc(hydrated.emergencyPhone)}</strong></div>
         <div class="line"><span>How you heard about ITC</span><strong>${esc(hydrated.heard || "—")}</strong></div>
         <a class="btn ghost sm mt16" href="#/account/details/edit">Edit membership details</a>
       </div>
-      <p class="muted small mt16">Profile editing is stubbed in the prototype — fields come from the application form.</p>
+      <p class="muted small mt16">Keep these details current so ITC leaders can reach you in an emergency.</p>
     </div></div>`;
 }
 
@@ -1236,51 +1281,53 @@ function linkCard(href, title, status, { sub = "", cls = "" } = {}) {
     </a>`;
 }
 
-// Draft indemnity wording — final text to be confirmed with ITC leadership
-// before launch. The apply form captures acceptance at join time; this page
-// catches members who joined before that requirement existed.
 async function accountIndemnity(user) {
   const hydrated = await hydrateLiveUser(user);
-  const at = hydrated.indemnityAcceptedAt;
+  const current = store.isIndemnityCurrent(hydrated);
+  const hadAcceptance = !!hydrated.indemnityAcceptedAt;
+  const defaultDate = todayISO();
   return `
     <a class="back-link" href="#/account">← Profile</a>
     <div class="kicker mt16">Profile · Indemnity</div>
-    <h1 class="display sm">Health &amp; Liability Indemnity.</h1>
-    ${
-      at
-        ? `
+    <h1 class="display sm">Indemnity.</h1>
+    ${current ? `
       <div class="banner mt16">
-        <span class="kicker">Indemnity confirmed on ${fmtDay(at)}</span>
+        <span class="kicker">Indemnity confirmed on ${fmtDay(hydrated.indemnityAcceptedAt)}</span>
         <p>You’re confirmed to join ITC activities.</p>
-      </div>`
-        : `
+      </div>` : `
       <div class="banner warn mt16">
         <span class="kicker">To be accepted</span>
-        <p>Please read the indemnity below, then accept and confirm — it’s required for joining ITC activities.</p>
-      </div>`
-    }
-    <div class="card mt16"><div class="card-body prose">
-      <h3>Health declaration</h3>
-      <p>I confirm that I am physically fit and in good health, and I know of no medical reason I should not take part in Island Training Club (ITC) activities. If my health changes, I will seek professional medical advice before taking part again.</p>
-      <h3>Participation at my own risk</h3>
-      <p>I understand that ITC activities are recreational, may be volunteer-led, and involve inherent physical risk. I take part at my own risk, will work within my own limits, and will follow the instructions of ITC leaders at all times.</p>
-      <h3>Release &amp; indemnity</h3>
-      <p>To the fullest extent permitted by law, I release and indemnify ITC, its leaders, members and volunteers against any claim, loss, injury or damage arising from my participation in ITC activities.</p>
-      <h3>Emergency contact</h3>
-      <p>I confirm the emergency contact details in my membership application are accurate, and I will keep them up to date.</p>
-    </div></div>
-    ${
-      at
-        ? ""
-        : `
-      <form id="form-indemnity" class="mt16" novalidate>
-        <label class="check"><input type="checkbox" name="indemnityAccept" required>
-          <span>I have read and accept the health &amp; liability indemnity above. *</span></label>
-        <div id="indemnity-error"></div>
-        <button class="btn mt16" type="submit">Accept &amp; Confirm</button>
-      </form>`
-    }
-    <p class="muted small mt16">Draft wording — the final indemnity will be confirmed with ITC leadership before launch.</p>`;
+        <p>${hadAcceptance
+          ? "A new version of the Indemnity is available. Please read and re-sign."
+          : "Please read the Indemnity, then accept and confirm."}</p>
+      </div>`}
+    ${current ? `
+      <a class="btn ghost sm mt16" href="#" data-action="open-doc" data-doc="indemnity">View as full document</a>
+      <div class="card mt16"><div class="card-body receipt-lines">
+        <div class="line"><span>Signed by</span><strong>${esc(hydrated.indemnitySignature)}</strong></div>
+        <div class="line"><span>Date of signing</span><strong>${fmtDay(parseISO(hydrated.indemnitySignedAt))}</strong></div>
+        <div class="line"><span>Emergency contact name</span><strong>${esc(hydrated.emergencyName)}</strong></div>
+        <div class="line"><span>Emergency contact relationship</span><strong>${esc(hydrated.emergencyRelationship)}</strong></div>
+        <div class="line"><span>Emergency contact phone</span><strong>${esc(hydrated.emergencyPhone)}</strong></div>
+        <div class="line"><span>Document version</span><strong>${esc(hydrated.indemnityFormVersion)}</strong></div>
+      </div></div>` : `
+      <div data-doc-accept="indemnity">
+        <a class="btn ghost sm mt16" href="#" data-action="open-doc" data-doc="indemnity">View as full document</a>
+        <p class="muted small" data-doc-hint>Read the document to enable acceptance.</p>
+        <form id="form-indemnity" class="mt16" novalidate>
+          <div class="field"><label for="indemnity-signature">Participant's full name as signature *</label><input id="indemnity-signature" name="signature" required autocomplete="name"></div>
+          <div class="field"><label for="indemnity-signed-at">Date of signing *</label><input id="indemnity-signed-at" name="signedAt" type="date" value="${defaultDate}" max="${defaultDate}" required></div>
+          <div class="card"><div class="card-body receipt-lines">
+            <div class="line"><span>Emergency contact name</span><strong>${esc(hydrated.emergencyName || "Not provided")}</strong></div>
+            <div class="line"><span>Emergency contact phone</span><strong>${esc(hydrated.emergencyPhone || "Not provided")}</strong></div>
+          </div></div>
+          <div class="field"><label for="indemnity-relationship">Emergency contact relationship *</label><input id="indemnity-relationship" name="emergencyRelationship" value="${esc(hydrated.emergencyRelationship || "")}" required></div>
+          <a class="btn ghost sm" href="#/account/details/edit">Edit in Membership Details →</a>
+          <div id="indemnity-error"></div>
+          <button class="btn mt16" type="submit" data-doc-submit disabled>Accept &amp; Confirm</button>
+        </form>
+      </div>`}
+  `;
 }
 
 function accountDonor(user, application) {
@@ -1468,11 +1515,11 @@ function ageStatusField(isMinor) {
     </div>`;
 }
 
-function applyField(type, name, label, required, value = "") {
+function applyField(type, name, label, required, value = "", attrs = "") {
   return `
     <label class="field">
       <span class="field-label">${esc(label)}${required ? " *" : ""}</span>
-      <input type="${type}" name="${name}" value="${esc(value || "")}" ${required ? "required" : ""}>
+      <input type="${type}" name="${name}" value="${esc(value || "")}" ${required ? "required" : ""}${attrs ? ` ${attrs}` : ""}>
     </label>`;
 }
 
@@ -1517,14 +1564,29 @@ function applyFormHtml(cu, draft) {
           ${applyField("text", "guardian_phone", "Guardian phone", savedAge === true, fields.guardian_phone)}
         </div>
         ${applyField("text", "emergency_name", "Emergency contact name", true, fields.emergency_name)}
+        ${applyField("text", "emergency_relationship", "Relationship to participant", true, fields.emergency_relationship)}
         ${applyField("text", "emergency_phone", "Emergency contact phone", true, fields.emergency_phone)}
         ${applySelect("heard_source", "How did you hear about ITC?", ["friend", "family", "search", "social", "event", "other"], true, fields.heard_source)}
         ${applyField("text", "heard_detail", "Detail (optional)", false, fields.heard_detail)}
         ${applyField("text", "preferred_name", "Preferred name (optional)", false, fields.preferred_name)}
         <label class="check"><input type="checkbox" name="photo_consent" ${checked("photo_consent")}> I consent to photos/videos of me being used on ITC channels. (Optional)</label>
-        <label class="check"><input type="checkbox" name="waiver" ${checked("waiver")} required> I accept the participation waiver. (⏳ text pending ITC review)</label>
-        <label class="check"><input type="checkbox" name="privacy" ${checked("privacy")} required> I accept the privacy policy. (⏳ text pending ITC review)</label>
-        <label class="check"><input type="checkbox" name="guidelines" ${checked("guidelines")} required> I accept the community guidelines. (⏳ text pending ITC review)</label>
+        <div data-doc-accept="indemnity">
+          <label class="check"><input type="checkbox" name="waiver" ${checked("waiver")} required disabled data-doc-checkbox>
+            <span>I accept the <a href="#" class="modal-link" data-action="open-doc" data-doc="indemnity">Indemnity</a> form. *</span></label>
+          <p class="muted small" data-doc-hint>Read the document to enable acceptance.</p>
+        </div>
+        ${applyField("text", "waiver_signature_text", "Participant's full name as signature", true, fields.waiver_signature_text)}
+        ${applyField("date", "waiver_signed_at", "Date of signing", true, fields.waiver_signed_at || todayISO(), `max="${todayISO()}"`)}
+        <div data-doc-accept="privacy">
+          <label class="check"><input type="checkbox" name="privacy" ${checked("privacy")} required disabled data-doc-checkbox>
+            <span>I accept the <a href="#" class="modal-link" data-action="open-doc" data-doc="privacy">privacy policy</a>. *</span></label>
+          <p class="muted small" data-doc-hint>Read the document to enable acceptance.</p>
+        </div>
+        <div data-doc-accept="guidelines">
+          <label class="check"><input type="checkbox" name="guidelines" ${checked("guidelines")} required disabled data-doc-checkbox>
+            <span>I accept the <a href="#" class="modal-link" data-action="open-doc" data-doc="guidelines">community guidelines</a>. *</span></label>
+          <p class="muted small" data-doc-hint>Read the document to enable acceptance.</p>
+        </div>
         <button class="btn btn-primary" type="submit">Submit application</button>
         <div class="draft-controls mt16">
           <button class="btn ghost sm" type="button" data-action="save-draft">Save draft now</button>
@@ -1554,6 +1616,7 @@ function viewApplyLocal() {
       <div class="field"><label for="ap-phone">Mobile / WhatsApp *</label><input id="ap-phone" name="phone" type="tel" required autocomplete="tel" placeholder="+852 …"></div>
       <div class="field-row">
         <div class="field"><label for="ap-en">Emergency contact name *</label><input id="ap-en" name="emergencyName" required></div>
+        <div class="field"><label for="ap-er">Relationship to participant *</label><input id="ap-er" name="emergencyRelationship" required></div>
         <div class="field"><label for="ap-ep">Emergency contact phone *</label><input id="ap-ep" name="emergencyPhone" type="tel" required></div>
       </div>
       <div class="field">
@@ -1573,17 +1636,33 @@ function viewApplyLocal() {
       </div>
       <label class="check"><input type="checkbox" name="ageConfirmed" required>
         <span>I confirm I am 18 or over, or that a parent/guardian will accompany me to sessions. *</span></label>
-      <label class="check"><input type="checkbox" name="indemnity" required>
-        <span>I accept the health &amp; liability indemnity — I confirm I am fit to take part, I join ITC activities at my own risk, and I release ITC and its leaders from liability. *</span></label>
-      <label class="check"><input type="checkbox" name="guidelines" required>
-        <span>I accept the ITC community guidelines. *</span></label>
-      <label class="check"><input type="checkbox" name="privacy" required>
-        <span>I accept the privacy policy. *</span></label>
+      <div data-doc-accept="indemnity">
+        <label class="check"><input type="checkbox" name="indemnity" required disabled data-doc-checkbox>
+          <span>I accept the <a href="#" class="modal-link" data-action="open-doc" data-doc="indemnity">Indemnity</a> form. *</span></label>
+        <p class="muted small" data-doc-hint>Read the document to enable acceptance.</p>
+      </div>
+      <div class="field">
+        <label for="ap-signature">Participant's full name as signature *</label>
+        <input id="ap-signature" name="indemnitySignature" required autocomplete="name">
+      </div>
+      <div class="field">
+        <label for="ap-signed-at">Date of signing *</label>
+        <input id="ap-signed-at" name="indemnitySignedAt" type="date" value="${todayISO()}" max="${todayISO()}" required>
+      </div>
+      <div data-doc-accept="guidelines">
+        <label class="check"><input type="checkbox" name="guidelines" required disabled data-doc-checkbox>
+          <span>I accept the <a href="#" class="modal-link" data-action="open-doc" data-doc="guidelines">community guidelines</a>. *</span></label>
+        <p class="muted small" data-doc-hint>Read the document to enable acceptance.</p>
+      </div>
+      <div data-doc-accept="privacy">
+        <label class="check"><input type="checkbox" name="privacy" required disabled data-doc-checkbox>
+          <span>I accept the <a href="#" class="modal-link" data-action="open-doc" data-doc="privacy">privacy policy</a>. *</span></label>
+        <p class="muted small" data-doc-hint>Read the document to enable acceptance.</p>
+      </div>
       <label class="check"><input type="checkbox" name="mediaConsent">
         <span>(Optional) I consent to being included in ITC photos and videos.</span></label>
       <div id="apply-error"></div>
       <button class="btn mt24" type="submit">Submit application</button>
-      <p class="muted small mt8">Draft form — final fields and waiver wording to be confirmed with ITC leadership.</p>
     </form>`;
 }
 
@@ -1661,7 +1740,6 @@ export function viewPay(bookingId) {
     </div></div>
     <form id="form-mark-paid" class="mt16" data-booking="${b.id}">
       <div class="card"><div class="card-body">
-<<<<<<< HEAD
         <h3>Done? Tell the collector</h3>
         <div class="field-row">
           <label class="chip"><input type="radio" name="method" value="PayMe" checked> PayMe</label>
@@ -1989,6 +2067,11 @@ function adminApprovals(pending) {
   const decisionButton = (u, action, extraClass = "") => `
     <button class="btn ${extraClass}sm" type="button" data-action="${action}" data-user="${esc(u.id)}" data-applicant-name="${esc(u.fullName)}">${action === "approve" ? "Approve" : "Decline"}</button>`;
   const joinedDate = (u) => new Date(u.appliedAt).toLocaleDateString("en-HK", { day: "numeric", month: "short" });
+  const indemnityStatus = (u) => !u.indemnityAcceptedAt
+    ? "—"
+    : store.isIndemnityCurrent(u)
+      ? "Accepted"
+      : "Review required";
   const readyCard = (u) => `
     <div class="card booking-card applicant" id="approval-${esc(u.id)}" data-approval-card data-applicant-name="${esc(u.fullName)}"><div class="card-body">
       <header>
@@ -2001,10 +2084,10 @@ function adminApprovals(pending) {
       <dl>
         <dt>Email</dt><dd>${esc(u.email)}</dd>
         <dt>Phone</dt><dd>${esc(u.phone)}</dd>
-        <dt>Emergency</dt><dd>${esc(u.emergencyName)} · ${esc(u.emergencyPhone)}</dd>
+        <dt>Emergency</dt><dd>${emergencyContactSummary(u.emergencyName, u.emergencyRelationship, u.emergencyPhone)}</dd>
         <dt>Heard via</dt><dd>${esc(u.heard)}</dd>
         <dt>Age 18+ / guardian</dt><dd>${u.isMinor ? "Under 18 · guardian required" : "18 or over"}</dd>
-        <dt>Indemnity</dt><dd>${u.indemnityAcceptedAt ? "Accepted" : "—"}</dd>
+        <dt>Indemnity</dt><dd>${indemnityStatus(u)}</dd>
         <dt>Photo consent</dt><dd>${u.mediaConsent ? "Yes" : "No"}</dd>
       </dl>
       <div class="actions">

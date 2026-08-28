@@ -22,13 +22,14 @@ import {
   donorIdProblem,
 } from "./data.js";
 import { supabase, isLive } from "./config.js";
+import { INDEMNITY_VERSION } from "./documents.js";
 import * as liveOps from "./operations.js";
 
 const STORAGE_KEY = "itc.prototype.v1";
 const APPLY_DEVICE_KEY = "itc.device.id";
 const APPLY_DRAFT_KEY = "itc.apply.draft.v1";
 const APPLY_DRAFT_VERSION = 1;
-const STATE_VERSION = 13;
+const STATE_VERSION = 14;
 
 // Live-mode (Supabase) session cache. Avoids hammering the DB on every
 // page load. The TTL is short so role flips and welcome notifications
@@ -119,8 +120,8 @@ function migrate() {
   if (!state.duty || typeof state.duty !== "object" || Array.isArray(state.duty)) state.duty = {};
   if (!state.paymentPayouts || typeof state.paymentPayouts !== "object"
       || Array.isArray(state.paymentPayouts)) state.paymentPayouts = {};
-  // v13 is not released yet: move legacy payout fields into the additive
-  // UUID-keyed operations map for every accepted v9-v13 snapshot.
+  // v14 carries forward the additive UUID-keyed operations map for every
+  // accepted v9-v13 snapshot.
   for (const user of state.users) {
     if (!user?.id || state.paymentPayouts[user.id] || (!user.paymeLink && !user.fpsPhone)) continue;
     state.paymentPayouts[user.id] = {
@@ -338,6 +339,18 @@ function migrate() {
     for (const activity of activities) delete activity.baseBooked;
     state.activities = activities;
   }
+  if (v < 14) {
+    for (const user of state.users) {
+      for (const field of [
+        "indemnitySignature",
+        "indemnitySignedAt",
+        "indemnityFormVersion",
+        "emergencyRelationship",
+      ]) {
+        if (!Object.prototype.hasOwnProperty.call(user, field)) user[field] = null;
+      }
+    }
+  }
   state.version = STATE_VERSION;
 }
 
@@ -495,11 +508,80 @@ export function clearApplyDraft() {
 
 // --- Signup / approval ---------------------------------------------------------
 
+function normalizeEmergencyContact({
+  emergencyName,
+  emergencyRelationship,
+  emergencyPhone,
+} = {}) {
+  const name = String(emergencyName || "").trim();
+  const relationship = String(emergencyRelationship || "").trim();
+  const phone = String(emergencyPhone || "").trim();
+  if (!name || !relationship || !phone) {
+    throw new Error("Enter emergency contact name, relationship and phone");
+  }
+  return { name, relationship, phone };
+}
+
+function normalizeIndemnityAcceptance({
+  signature,
+  signedAt,
+  emergencyName,
+  emergencyRelationship,
+  emergencyPhone,
+  formVersion = INDEMNITY_VERSION,
+} = {}) {
+  const normalizedSignature = String(signature || "").trim();
+  const normalizedSignedAt = String(signedAt || "").trim();
+  const emergency = normalizeEmergencyContact({
+    emergencyName,
+    emergencyRelationship,
+    emergencyPhone,
+  });
+  if (normalizedSignature.length < 2) {
+    throw new Error("Type your full name as your signature");
+  }
+  const validDate = /^\d{4}-\d{2}-\d{2}$/.test(normalizedSignedAt)
+    && isoDate(parseISO(normalizedSignedAt)) === normalizedSignedAt;
+  if (!validDate) throw new Error("Enter a valid signing date");
+  if (normalizedSignedAt > isoDate(todayLocal())) {
+    throw new Error("Signing date cannot be in the future");
+  }
+  if (formVersion !== INDEMNITY_VERSION) {
+    throw new Error("The Indemnity has changed. Reload and review the current document");
+  }
+  return {
+    signature: normalizedSignature,
+    signedAt: normalizedSignedAt,
+    emergencyName: emergency.name,
+    emergencyRelationship: emergency.relationship,
+    emergencyPhone: emergency.phone,
+    formVersion: INDEMNITY_VERSION,
+  };
+}
+
+export function isIndemnityCurrent(user) {
+  if (!user?.indemnityAcceptedAt || user.indemnityFormVersion !== INDEMNITY_VERSION) return false;
+  if (String(user.indemnitySignature || "").trim().length < 2) return false;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(user.indemnitySignedAt || ""))) return false;
+  return !!String(user.emergencyName || "").trim()
+    && !!String(user.emergencyRelationship || "").trim()
+    && !!String(user.emergencyPhone || "").trim();
+}
+
 export function applyForMembership(form) {
   const email = String(form.email).trim().toLowerCase();
   if (state.users.some((u) => u.email.toLowerCase() === email)) {
     return { ok: false, reason: "duplicate" };
   }
+  if (!form.indemnity) throw new Error("Read and accept the Indemnity");
+  const acceptance = normalizeIndemnityAcceptance({
+    signature: form.indemnitySignature,
+    signedAt: form.indemnitySignedAt,
+    emergencyName: form.emergencyName,
+    emergencyRelationship: form.emergencyRelationship,
+    emergencyPhone: form.emergencyPhone,
+  });
+  const acceptedAt = Date.now();
   const user = {
     id: uid("u"),
     role: "pending",
@@ -509,14 +591,16 @@ export function applyForMembership(form) {
     email,
     phone: form.phone.trim(),
     ageConfirmed: !!form.ageConfirmed,
-    emergencyName: form.emergencyName.trim(),
-    emergencyPhone: form.emergencyPhone.trim(),
+    emergencyName: acceptance.emergencyName,
+    emergencyRelationship: acceptance.emergencyRelationship,
+    emergencyPhone: acceptance.emergencyPhone,
     heard: form.heard.trim(),
     mediaConsent: !!form.mediaConsent,
     donorId: normalizeDonorId(form.donorId),
-    // Joining requires accepting the health & liability indemnity; the
-    // timestamp is the member's acceptance record (Profile > Indemnity).
-    indemnityAcceptedAt: form.indemnity ? Date.now() : null,
+    indemnityAcceptedAt: acceptedAt,
+    indemnitySignature: acceptance.signature,
+    indemnitySignedAt: acceptance.signedAt,
+    indemnityFormVersion: acceptance.formVersion,
     appliedAt: Date.now(),
   };
   state.users.push(user);
@@ -586,15 +670,20 @@ export async function updateMyDonorId(raw) {
   return data.donor_id;
 }
 
-// Records the member's acceptance of the health & liability indemnity.
-// Idempotent — the first acceptance timestamp is the record that matters.
-export function acceptIndemnity(userId) {
-  const user = state.users.find((u) => u.id === userId);
+export function acceptIndemnity(userId, payload) {
+  const user = state.users.find((candidate) => candidate.id === userId);
   if (!user) return null;
-  if (!user.indemnityAcceptedAt) {
-    user.indemnityAcceptedAt = Date.now();
-    save();
-  }
+  const acceptance = normalizeIndemnityAcceptance({
+    ...payload,
+    emergencyName: user.emergencyName,
+    emergencyPhone: user.emergencyPhone,
+  });
+  user.indemnityAcceptedAt = Date.now();
+  user.indemnitySignature = acceptance.signature;
+  user.indemnitySignedAt = acceptance.signedAt;
+  user.indemnityFormVersion = acceptance.formVersion;
+  user.emergencyRelationship = acceptance.emergencyRelationship;
+  save();
   return user.indemnityAcceptedAt;
 }
 
@@ -1854,12 +1943,16 @@ function localApplication(user) {
     guardian_name: user.guardianName || null,
     guardian_phone: user.guardianPhone || null,
     emergency_name: user.emergencyName || "",
+    emergency_relationship: user.emergencyRelationship || null,
     emergency_phone: user.emergencyPhone || "",
     heard_source: user.heard || "other",
     heard_detail: user.heardDetail || null,
     preferred_name: user.preferredName || null,
     photo_consent: !!user.mediaConsent,
     waiver_accepted_at: user.indemnityAcceptedAt || null,
+    waiver_signature_text: user.indemnitySignature || null,
+    waiver_signed_at: user.indemnitySignedAt || null,
+    waiver_form_version: user.indemnityFormVersion || null,
     privacy_accepted_at: user.privacyAcceptedAt || null,
     guidelines_accepted_at: user.guidelinesAcceptedAt || user.appliedAt || null,
     submitted_at: user.appliedAt || null,
@@ -1872,22 +1965,25 @@ function localApplication(user) {
 function membershipPatch(form) {
   const isMinor = parseAgeOver18(form.age_over_18);
   const guardian = guardianFields(isMinor, form.guardian_name, form.guardian_phone);
+  const emergency = normalizeEmergencyContact({
+    emergencyName: form.emergency_name,
+    emergencyRelationship: form.emergency_relationship,
+    emergencyPhone: form.emergency_phone,
+  });
   const patch = {
     mobile: String(form.mobile || "").trim(),
     is_minor: isMinor,
     date_of_birth: null,
     guardian_name: guardian.name,
     guardian_phone: guardian.phone,
-    emergency_name: String(form.emergency_name || "").trim(),
-    emergency_phone: String(form.emergency_phone || "").trim(),
+    emergency_name: emergency.name,
+    emergency_relationship: emergency.relationship,
+    emergency_phone: emergency.phone,
     heard_source: String(form.heard_source || "").trim(),
     heard_detail: String(form.heard_detail || "").trim() || null,
     preferred_name: String(form.preferred_name || "").trim() || null,
   };
   if (!patch.mobile) throw new Error("Enter mobile number");
-  if (!patch.emergency_name || !patch.emergency_phone) {
-    throw new Error("Enter emergency contact name and phone");
-  }
   if (!patch.heard_source) throw new Error("Choose how you heard about ITC");
   return patch;
 }
@@ -1936,6 +2032,15 @@ export async function saveMyApplication(form) {
   if (!cu) throw new Error("Not signed in");
   const isMinor = parseAgeOver18(form.age_over_18);
   const guardian = guardianFields(isMinor, form.guardian_name, form.guardian_phone);
+  if (!form.waiver) throw new Error("Read and accept the Indemnity");
+  const acceptance = normalizeIndemnityAcceptance({
+    signature: form.waiver_signature_text,
+    signedAt: form.waiver_signed_at,
+    emergencyName: form.emergency_name,
+    emergencyRelationship: form.emergency_relationship,
+    emergencyPhone: form.emergency_phone,
+  });
+  const acceptedAt = new Date().toISOString();
   const row = {
     profile_id: cu.id,
     mobile: form.mobile,
@@ -1943,15 +2048,19 @@ export async function saveMyApplication(form) {
     is_minor: isMinor,
     guardian_name: guardian.name,
     guardian_phone: guardian.phone,
-    emergency_name: form.emergency_name,
-    emergency_phone: form.emergency_phone,
+    emergency_name: acceptance.emergencyName,
+    emergency_relationship: acceptance.emergencyRelationship,
+    emergency_phone: acceptance.emergencyPhone,
     heard_source: form.heard_source,
     heard_detail: form.heard_detail || null,
     preferred_name: form.preferred_name || null,
     photo_consent: !!form.photo_consent,
-    waiver_accepted_at: new Date().toISOString(),
-    privacy_accepted_at: new Date().toISOString(),
-    guidelines_accepted_at: new Date().toISOString(),
+    waiver_accepted_at: acceptedAt,
+    waiver_signature_text: acceptance.signature,
+    waiver_signed_at: acceptance.signedAt,
+    waiver_form_version: acceptance.formVersion,
+    privacy_accepted_at: acceptedAt,
+    guidelines_accepted_at: acceptedAt,
   };
   const { error } = await supabase.from("applications").upsert(row);
   if (error) throw error;
@@ -1968,6 +2077,7 @@ export async function updateMyMembershipDetails(form) {
     user.guardianName = patch.guardian_name;
     user.guardianPhone = patch.guardian_phone;
     user.emergencyName = patch.emergency_name;
+    user.emergencyRelationship = patch.emergency_relationship;
     user.emergencyPhone = patch.emergency_phone;
     user.heard = patch.heard_source;
     user.heardDetail = patch.heard_detail;
@@ -2011,25 +2121,42 @@ export async function updateMyPrivacyPreferences(form) {
   return data;
 }
 
-export async function acceptMyIndemnity() {
+export async function acceptMyIndemnity(payload) {
   if (!isLive() || !supabase) {
     const user = currentUser();
     if (!user) throw new Error("Not signed in");
-    if (!user.indemnityAcceptedAt) {
-      user.indemnityAcceptedAt = Date.now();
-      save();
-    }
-    return user.indemnityAcceptedAt;
+    return acceptIndemnity(user.id, payload);
   }
   const cu = await getCurrentUser();
   if (!cu) throw new Error("Not signed in");
   const app = await getMyApplication();
   if (!app) throw new Error("Application not found");
-  if (app.waiver_accepted_at) return app.waiver_accepted_at;
+  const mapped = {
+    indemnityAcceptedAt: app.waiver_accepted_at,
+    indemnitySignature: app.waiver_signature_text,
+    indemnitySignedAt: app.waiver_signed_at,
+    indemnityFormVersion: app.waiver_form_version,
+    emergencyName: app.emergency_name,
+    emergencyRelationship: app.emergency_relationship,
+    emergencyPhone: app.emergency_phone,
+  };
+  if (isIndemnityCurrent(mapped)) return app.waiver_accepted_at;
+  const acceptance = normalizeIndemnityAcceptance({
+    ...payload,
+    emergencyName: app.emergency_name,
+    emergencyPhone: app.emergency_phone,
+  });
   const waiver_accepted_at = new Date().toISOString();
+  const patch = {
+    waiver_accepted_at,
+    waiver_signature_text: acceptance.signature,
+    waiver_signed_at: acceptance.signedAt,
+    waiver_form_version: acceptance.formVersion,
+    emergency_relationship: acceptance.emergencyRelationship,
+  };
   const { data, error } = await supabase
     .from("applications")
-    .update({ waiver_accepted_at })
+    .update(patch)
     .eq("profile_id", cu.id)
     .select()
     .single();
@@ -2070,11 +2197,15 @@ export async function listPendingApplications() {
       email: a.profiles.email,
       phone: a.mobile,
       emergencyName: a.emergency_name,
+      emergencyRelationship: a.emergency_relationship,
       emergencyPhone: a.emergency_phone,
       heard: a.heard_source,
       appliedAt: a.submitted_at,
       isMinor: !!a.is_minor,
       indemnityAcceptedAt: a.waiver_accepted_at,
+      indemnitySignature: a.waiver_signature_text,
+      indemnitySignedAt: a.waiver_signed_at,
+      indemnityFormVersion: a.waiver_form_version,
       mediaConsent: a.photo_consent,
     }));
 }

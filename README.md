@@ -39,7 +39,7 @@ The design review remains available at `http://127.0.0.1:4173/references/itc-mob
   - **Supabase:** identity, roles, applications, notifications, Giving campaigns, and donor profiles.
   - **`localStorage`:** Payment operations and Community prototype interactions. Payment reservations, bookings, queues, collector duty, payout details, confirmations, receipts, and prototype donation records are keyed by the authenticated Supabase profile UUID. No real money is moved.
 - Navigation combines the Notification bell with a signed-in-only Giving tab. Admin navigation contains Approvals, Members, Activities, Giving, and Payments / Ops.
-- Persisted prototype state is **v13** and accepts/migrates existing **v9–v12** snapshots without discarding genuine domain records.
+- Persisted prototype state is **v14** and accepts/migrates existing **v9–v13** snapshots without discarding genuine domain records.
 - With Supabase configured, a new Google profile remains `pending` until its application is submitted and an Admin approves it. Pending and declined profiles cannot use Payment or Giving controls.
 - Without Supabase configuration, local state starts empty. Apply through the membership flow to create a local pending profile, which can then sign in again by email (no password).
 - `app/js/store.js` remains the backend seam across both ownership domains until a production backend is selected.
@@ -52,7 +52,7 @@ The design review remains available at `http://127.0.0.1:4173/references/itc-mob
 
 - Merchandise shop (deferred in the phase-one brief).
 - Real payments, delivered email receipts, outbound messages, and a service worker (manifest is included; a cache layer would fight the refinement loop). Live in-app notifications are Supabase-backed when configured.
-- Final waiver/privacy/guidelines copy — all such text is draft placeholder.
+- Final privacy/guidelines copy and any post-workshop legal/policy revisions. The supplied Hyrox indemnity source is implemented; privacy and guidelines remain provisional.
 
 ## Selected Direction
 

@@ -43,12 +43,16 @@ const applicationRows = new Map([
       guardian_name: null,
       guardian_phone: null,
       emergency_name: "Taylor Coach",
+      emergency_relationship: "Coach",
       emergency_phone: "+852 6777 8888",
       heard_source: "instagram",
       heard_detail: "Coach post",
       preferred_name: "Riley",
       photo_consent: true,
       waiver_accepted_at: "2026-08-05T01:00:00.000Z",
+      waiver_signature_text: "Riley Runner",
+      waiver_signed_at: "2026-08-05",
+      waiver_form_version: "v1",
       privacy_accepted_at: "2026-08-05T01:05:00.000Z",
       guidelines_accepted_at: "2026-08-05T01:10:00.000Z",
       submitted_at: "2026-08-05T01:15:00.000Z",
@@ -685,13 +689,24 @@ operationalRpcHandler = (name, args) => {
 
 const store = await import("./js/store.js");
 const views = await import("./js/views.js");
+const data = await import("./js/data.js");
 const operations = await import("./js/operations.js");
+const todayISO = data.isoDate(data.todayLocal());
 store.load();
 await store.hydrateLiveOperations();
 
 const appSource = readFileSync(resolve(__dirnameSmoke, "js/app.js"), "utf8");
 assert.match(appSource, /form\.dataset\.form === "apply"/);
+assert.match(appSource, /payload\.waiver = !!fd\.get\("waiver"\)/);
 assert.match(appSource, /await store\.saveMyApplication\(payload\)/);
+assert.match(appSource, /form\.dataset\.form === "membership-details"/);
+assert.match(appSource, /await store\.updateMyMembershipDetails\(/);
+assert.match(appSource, /await store\.acceptMyIndemnity\(\{/);
+assert.match(appSource, /const acceptButton = form\.querySelector\("\[data-doc-submit\]"\)/);
+assert.match(appSource, /acceptButton\.disabled/);
+assert.match(appSource, /signature:\s*fd\.get\("signature"\)/);
+assert.match(appSource, /signedAt:\s*fd\.get\("signedAt"\)/);
+assert.match(appSource, /emergencyRelationship:\s*fd\.get\("emergencyRelationship"\)/);
 assert.match(appSource, /t\.name !== "age_over_18"/);
 assert.match(appSource, /const APPLY_DRAFT_DEBOUNCE_MS = 500/);
 assert.match(appSource, /case "save-draft"/);
@@ -719,18 +734,28 @@ const liveApplyHtml = await views.viewApply();
 assert.match(liveApplyHtml, /data-form="apply"/);
 assert.match(liveApplyHtml, /name="mobile"/);
 assert.match(liveApplyHtml, /name="age_over_18"/);
+for (const name of ["emergency_relationship", "waiver_signature_text", "waiver_signed_at"]) {
+  assert.match(liveApplyHtml, new RegExp(`name="${name}"`));
+}
 assert.match(liveApplyHtml, /name="waiver"/);
+assert.match(liveApplyHtml, /data-doc-accept="indemnity"/);
+assert.match(liveApplyHtml, /name="waiver"[^>]*disabled[^>]*data-doc-checkbox/);
+assert.match(liveApplyHtml, new RegExp(`name="waiver_signed_at"[^>]*value="${todayISO}"`));
+assert.match(liveApplyHtml, new RegExp(`name="waiver_signed_at"[^>]*max="${todayISO}"`));
 assert.doesNotMatch(liveApplyHtml, /name="email"/);
 
 store.saveApplyDraft({ fields: {
   mobile: "+852 6123 4567",
   age_over_18: "yes",
   emergency_name: "Taylor Coach",
+  emergency_relationship: "Coach",
   emergency_phone: "+852 6777 8888",
   heard_source: "friend",
   preferred_name: "Riley",
   photo_consent: true,
   waiver: true,
+  waiver_signature_text: "Riley Runner",
+  waiver_signed_at: "2026-08-05",
   privacy: true,
   guidelines: true,
 } });
@@ -738,21 +763,39 @@ const draftApplyHtml = await views.viewApply();
 assert.match(draftApplyHtml, /data-draft-resume/);
 assert.match(draftApplyHtml, /value="\+852 6123 4567"/);
 assert.match(draftApplyHtml, /name="age_over_18" value="yes" checked/);
+assert.match(draftApplyHtml, /name="emergency_relationship" value="Coach"/);
+assert.match(draftApplyHtml, /name="waiver_signature_text" value="Riley Runner"/);
+assert.match(draftApplyHtml, /name="waiver_signed_at" value="2026-08-05"/);
 assert.match(draftApplyHtml, /data-action="save-draft"/);
 assert.match(draftApplyHtml, /data-action="discard-draft"/);
 
-await store.saveMyApplication({
+const liveApplyPayload = {
   mobile: "+852 6123 4567",
   age_over_18: "yes",
   guardian_name: "",
   guardian_phone: "",
   emergency_name: "Taylor Coach",
+  emergency_relationship: "Coach",
   emergency_phone: "+852 6777 8888",
   heard_source: "friend",
   heard_detail: "",
   preferred_name: "Riley",
   photo_consent: false,
-});
+  waiver: true,
+  waiver_signature_text: "Riley Runner",
+  waiver_signed_at: "2026-08-05",
+};
+for (const [label, overrides] of [
+  ["missing emergency name", { emergency_name: "" }],
+  ["missing emergency phone", { emergency_phone: "" }],
+]) {
+  await assert.rejects(
+    () => store.saveMyApplication({ ...liveApplyPayload, ...overrides }),
+    /Enter emergency contact name, relationship and phone/,
+    `${label} should be rejected during live application submit`
+  );
+}
+await store.saveMyApplication(liveApplyPayload);
 assert.equal(store.getApplyDraft(), null, "successful live submit must clear its draft");
 
 Object.assign(profile, originalProfileForApply);
@@ -775,6 +818,15 @@ assert.ok(approvalsHtml.indexOf("Submitted Runner") < approvalsHtml.indexOf("Inc
 if (!approvalsHtml.includes("Application not submitted")) {
   throw new Error("Approvals must explain incomplete pending profiles");
 }
+assert.match(approvalsHtml, /<dt>Indemnity<\/dt><dd>Accepted<\/dd>/);
+const submittedApplication = structuredClone(applicationRows.get("pending-submitted"));
+applicationRows.set("pending-submitted", {
+  ...submittedApplication,
+  emergency_phone: "",
+});
+const reviewRequiredHtml = await views.viewAdmin("approvals");
+assert.match(reviewRequiredHtml, /<dt>Indemnity<\/dt><dd>Review required<\/dd>/);
+applicationRows.set("pending-submitted", submittedApplication);
 const submittedProfile = pendingProfiles.find((item) => item.id === "pending-submitted");
 const incompleteProfile = pendingProfiles.find((item) => item.id === "pending-incomplete");
 submittedProfile.role = "member";
@@ -1048,14 +1100,27 @@ const indemnity = await views.viewAccount("indemnity");
 if (!indemnity.includes(`Indemnity confirmed on ${confirmedDay}`) || indemnity.includes("To be accepted")) {
   throw new Error("Indemnity page should reflect the live application waiver acceptance date");
 }
+for (const marker of [
+  "Signed by",
+  "Riley Runner",
+  "Date of signing",
+  "Emergency contact relationship",
+  "Coach",
+  "Document version",
+  "v1",
+]) {
+  if (!indemnity.includes(marker)) {
+    throw new Error(`Current live indemnity page missing ${marker}`);
+  }
+}
 store.currentUser().role = "pending";
 store.currentUser().status = "pending";
 const pendingAccount = await views.viewAccount();
 if (!pendingAccount.includes("+852 6123 4567")) {
   throw new Error("Pending Profile should render the fetched application phone");
 }
-if (!pendingAccount.includes("Taylor Coach · +852 6777 8888")) {
-  throw new Error("Pending Profile should render the fetched application emergency contact");
+if (!pendingAccount.includes("Taylor Coach · Coach · +852 6777 8888")) {
+  throw new Error("Pending Profile should render the fetched application emergency contact and relationship");
 }
 if (!pendingAccount.includes("Accepted")) {
   throw new Error("Pending Profile should render the fetched application waiver state");
@@ -1194,6 +1259,7 @@ for (const label of [
   "Mobile / WhatsApp number",
   "Age status",
   "Emergency contact name",
+  "Emergency contact relationship",
   "Emergency contact phone",
   "How you heard about ITC",
 ]) {
@@ -1227,8 +1293,11 @@ if (!/name="age_over_18" value="yes"[^>]*checked/.test(detailsEdit)) {
 if (!detailsEdit.includes("data-minor-only") || !detailsEdit.includes("hidden")) {
   throw new Error("Live details edit route should keep the guardian block conditional");
 }
-if (!detailsEdit.includes('value="Taylor Coach"') || !detailsEdit.includes('value="+852 6777 8888"')) {
+if (!detailsEdit.includes('value="Taylor Coach"') || !detailsEdit.includes('value="Coach"') || !detailsEdit.includes('value="+852 6777 8888"')) {
   throw new Error("Live details edit route should prefill emergency contact fields");
+}
+if (!detailsEdit.includes('name="emergency_relationship"')) {
+  throw new Error("Live details edit route should include emergency_relationship");
 }
 if (detailsEdit.includes('name="photo_consent"')) {
   throw new Error("Live details edit route should exclude photo consent controls");
@@ -1324,6 +1393,7 @@ await store.updateMyMembershipDetails({
   mobile: "+852 9000 0000",
   age_over_18: "yes",
   emergency_name: "Alex Runner",
+  emergency_relationship: "Coach",
   emergency_phone: "+852 9111 1111",
   heard_source: "friend",
   heard_detail: "Run club",
@@ -1338,6 +1408,7 @@ if (
     "date_of_birth",
     "emergency_name",
     "emergency_phone",
+    "emergency_relationship",
     "guardian_name",
     "guardian_phone",
     "heard_detail",
@@ -1383,6 +1454,7 @@ for (const banned of [
   "guardian_phone",
   "emergency_name",
   "emergency_phone",
+  "emergency_relationship",
   "heard_source",
   "heard_detail",
   "preferred_name",
@@ -1394,29 +1466,68 @@ for (const banned of [
   if (banned in privacyPatch) throw new Error(`privacy patch should exclude ${banned}`);
 }
 applicationUpdates.length = 0;
-const preservedWaiver = await store.acceptMyIndemnity();
-if (preservedWaiver !== "2026-08-05T01:00:00.000Z") {
-  throw new Error("acceptMyIndemnity should preserve an existing timestamp");
-}
-if (applicationUpdates.length !== 0) {
-  throw new Error("acceptMyIndemnity should not write when already accepted");
-}
+const preservedWaiver = await store.acceptMyIndemnity({
+  signature: "Riley Runner",
+  signedAt: "2026-08-05",
+  emergencyRelationship: "Coach",
+});
+assert.equal(preservedWaiver, "2026-08-05T01:00:00.000Z");
+assert.equal(applicationUpdates.length, 0, "current v1 acceptance should remain idempotent");
 applicationRows.set(authUser.id, {
   ...applicationRows.get(authUser.id),
-  waiver_accepted_at: null,
+  emergency_phone: "",
 });
-const waiverMissing = await views.viewAccount("indemnity");
-if (!waiverMissing.includes("To be accepted")) {
-  throw new Error("Indemnity page should prompt when the live waiver is missing");
+await assert.rejects(
+  () => store.acceptMyIndemnity({
+    signature: "Riley Runner",
+    signedAt: "2026-08-05",
+    emergencyRelationship: "Coach",
+  }),
+  /Enter emergency contact name, relationship and phone/
+);
+assert.equal(applicationUpdates.length, 0, "missing canonical emergency contact must not write a live waiver update");
+applicationRows.set(authUser.id, {
+  ...applicationRows.get(authUser.id),
+  emergency_phone: "+852 6777 8888",
+});
+applicationRows.set(authUser.id, {
+  ...applicationRows.get(authUser.id),
+  waiver_signature_text: null,
+  waiver_signed_at: null,
+  waiver_form_version: null,
+  emergency_relationship: null,
+});
+const legacyAccount = await views.viewAccount();
+if (!legacyAccount.includes(`Legacy acceptance recorded on ${confirmedDay}`) || legacyAccount.includes("Indemnity confirmed on")) {
+  throw new Error("Legacy live rows must stay stale/re-signable on the Profile summary");
 }
-const createdWaiver = await store.acceptMyIndemnity();
-if (createdWaiver !== fixedIso) {
-  throw new Error(`acceptMyIndemnity should write ${fixedIso}, got ${createdWaiver}`);
+const legacyWaiver = await views.viewAccount("indemnity");
+for (const marker of [
+  "A new version of the Indemnity is available",
+  'data-doc-accept="indemnity"',
+  'name="signature"',
+  'name="signedAt"',
+  'name="emergencyRelationship"',
+  "Accept &amp; Confirm",
+  "Edit in Membership Details",
+]) {
+  if (!legacyWaiver.includes(marker)) {
+    throw new Error(`Legacy live re-sign flow missing ${marker}`);
+  }
 }
-const indemnityPatch = applicationUpdates.at(-1);
-if (!indemnityPatch || Object.keys(indemnityPatch).join(",") !== "waiver_accepted_at") {
-  throw new Error("acceptMyIndemnity should only write waiver_accepted_at");
-}
+const createdWaiver = await store.acceptMyIndemnity({
+  signature: "Riley Runner",
+  signedAt: "2026-08-05",
+  emergencyRelationship: "Coach",
+});
+assert.equal(createdWaiver, fixedIso);
+assert.deepEqual(applicationUpdates.at(-1), {
+  waiver_accepted_at: fixedIso,
+  waiver_signature_text: "Riley Runner",
+  waiver_signed_at: "2026-08-05",
+  waiver_form_version: "v1",
+  emergency_relationship: "Coach",
+});
 
 const home = views.viewHome();
 if (!home.includes("Good to see you, Riley.")) {
@@ -1433,6 +1544,18 @@ if (!refreshedAccount.includes(`Indemnity confirmed on ${confirmedDay}`) || refr
 const refreshedIndemnity = await views.viewAccount("indemnity");
 if (!refreshedIndemnity.includes(`Indemnity confirmed on ${confirmedDay}`) || refreshedIndemnity.includes("To be accepted")) {
   throw new Error("Indemnity page should rerender from the accepted live waiver timestamp");
+}
+applicationRows.set(authUser.id, {
+  ...applicationRows.get(authUser.id),
+  waiver_accepted_at: null,
+  waiver_signature_text: null,
+  waiver_signed_at: null,
+  waiver_form_version: null,
+  emergency_relationship: null,
+});
+const waiverMissing = await views.viewAccount("indemnity");
+if (!waiverMissing.includes("To be accepted")) {
+  throw new Error("Indemnity page should prompt when the live waiver is missing");
 }
 applicationRows.delete(authUser.id);
 const missingAccount = await views.viewAccount();
