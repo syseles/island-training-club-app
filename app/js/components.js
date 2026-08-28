@@ -11,15 +11,16 @@
 // Documents come from the DOCUMENTS registry in documents.js. The modal is
 // document-agnostic: pass any registry key and it renders that document.
 //
-// Checkbox pairing convention (used by the apply forms):
+// Pairing convention (used by the apply forms and Profile > Indemnity):
 //   <div data-doc-accept="privacy">
-//     <label class="check"><input … disabled data-doc-checkbox> … <a
-//       data-action="open-doc" data-doc="privacy">privacy policy</a> …</label>
+//     … <a data-action="open-doc" data-doc="privacy">privacy policy</a> …
+//     <input … disabled data-doc-checkbox>
+//     <button … disabled data-doc-submit>Accept &amp; Confirm</button>
 //     <p class="muted small" data-doc-hint>Read the document to enable acceptance.</p>
 //   </div>
 // applyDocumentAcceptance(trigger) finds the trigger's nearest
-// [data-doc-accept] container and unlocks the checkbox inside it — so several
-// gated documents can share one form without cross-talk.
+// [data-doc-accept] container and unlocks its checkbox and/or submit button —
+// so several gated documents can share one form without cross-talk.
 
 import { DOCUMENTS } from "./documents.js";
 
@@ -31,12 +32,15 @@ export function isAtScrollEnd(scrollTop, clientHeight, scrollHeight) {
 
 export function applyDocumentAcceptance(trigger) {
   const container = trigger && trigger.closest ? trigger.closest("[data-doc-accept]") : null;
-  const checkbox = container && container.querySelector
-    ? container.querySelector("[data-doc-checkbox]")
-    : null;
-  if (!checkbox) return false;
-  checkbox.disabled = false;
-  checkbox.checked = true;
+  if (!container || !container.querySelector) return false;
+  const checkbox = container.querySelector("[data-doc-checkbox]");
+  const submit = container.querySelector("[data-doc-submit]");
+  if (!checkbox && !submit) return false;
+  if (checkbox) {
+    checkbox.disabled = false;
+    checkbox.checked = true;
+  }
+  if (submit) submit.disabled = false;
   const hint = container.querySelector("[data-doc-hint]");
   if (hint) hint.hidden = true;
   return true;

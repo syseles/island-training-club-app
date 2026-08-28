@@ -972,6 +972,10 @@ for (const marker of [
   }
 }
 console.log("ok  stale indemnity page renders the re-sign flow");
+if (staleIndemnityHtml.includes('name="indemnityAccept"') || !/data-doc-submit[^>]*disabled/.test(staleIndemnityHtml)) {
+  failures++;
+  console.error("FAIL stale Indemnity should use one modal acknowledgement to unlock Accept & Confirm");
+} else console.log("ok  stale Indemnity uses one modal acknowledgement to unlock Accept & Confirm");
 for (const marker of [
   'await store.acceptMyIndemnity({',
   'signature: fd.get("signature") || ""',
@@ -995,7 +999,7 @@ if (!(await views.viewAccount("indemnity")).includes("Accept &amp; Confirm")) {
   console.error("FAIL indemnity page missing Accept & Confirm");
 } else console.log("ok  indemnity page offers Accept & Confirm");
 
-// --- Profile > Indemnity: View-as-document button + DRY card body (Task 5) ---
+// --- Profile > Indemnity: one modal acknowledgement + full document button ---
 const indemnityPageHtml = await views.viewAccount("indemnity");
 if (!indemnityPageHtml.includes("View as full document")) {
   failures++;
@@ -1149,13 +1153,16 @@ if (typeof components.openReadAndAcceptModal !== "function") {
 // --- applyDocumentAcceptance: scoped per document container ---
 const mkContainer = () => {
   const checkbox = { disabled: true, checked: false };
+  const submit = { disabled: true };
   const hint = { hidden: false };
   return {
     checkbox,
+    submit,
     hint,
     el: {
       querySelector: (sel) =>
         sel === "[data-doc-checkbox]" ? checkbox
+        : sel === "[data-doc-submit]" ? submit
         : sel === "[data-doc-hint]" ? hint
         : null,
     },
@@ -1169,13 +1176,26 @@ if (components.applyDocumentAcceptance(privacyTrigger) !== true) {
   failures++;
   console.error("FAIL applyDocumentAcceptance should return true when a container is paired");
 }
-if (privacyC.checkbox.disabled !== false || privacyC.checkbox.checked !== true || privacyC.hint.hidden !== true) {
+if (privacyC.checkbox.disabled !== false || privacyC.checkbox.checked !== true || privacyC.submit.disabled !== false || privacyC.hint.hidden !== true) {
   failures++;
-  console.error("FAIL applyDocumentAcceptance did not enable/check the privacy checkbox and hide its hint");
+  console.error("FAIL applyDocumentAcceptance did not unlock the privacy checkbox, submit button, and hint");
 }
-if (indemnityC.checkbox.checked || guidelinesC.checkbox.checked || indemnityC.hint.hidden || guidelinesC.hint.hidden) {
+if (indemnityC.checkbox.checked || guidelinesC.checkbox.checked || indemnityC.submit.disabled !== true || guidelinesC.submit.disabled !== true || indemnityC.hint.hidden || guidelinesC.hint.hidden) {
   failures++;
   console.error("FAIL applyDocumentAcceptance mutated a container other than the trigger's");
+}
+const submitOnly = {
+  submit: { disabled: true },
+  hint: { hidden: false },
+  querySelector: (sel) =>
+    sel === "[data-doc-submit]" ? submitOnly.submit
+    : sel === "[data-doc-hint]" ? submitOnly.hint
+    : null,
+};
+const submitOnlyTrigger = { closest: (sel) => (sel === "[data-doc-accept]" ? submitOnly : null) };
+if (components.applyDocumentAcceptance(submitOnlyTrigger) !== true || submitOnly.submit.disabled || !submitOnly.hint.hidden) {
+  failures++;
+  console.error("FAIL applyDocumentAcceptance should unlock a submit-only document container");
 }
 console.log("ok  applyDocumentAcceptance mutates only the trigger's document container");
 

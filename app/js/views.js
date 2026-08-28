@@ -1304,8 +1304,8 @@ async function accountIndemnity(user) {
           ? "A new version of the Indemnity is available. Please read and re-sign."
           : "Please read the Indemnity, then accept and confirm."}</p>
       </div>`}
-    <a class="btn ghost sm mt16" href="#" data-action="open-doc" data-doc="indemnity">View as full document</a>
     ${current ? `
+      <a class="btn ghost sm mt16" href="#" data-action="open-doc" data-doc="indemnity">View as full document</a>
       <div class="card mt16"><div class="card-body receipt-lines">
         <div class="line"><span>Signed by</span><strong>${esc(hydrated.indemnitySignature)}</strong></div>
         <div class="line"><span>Date of signing</span><strong>${fmtDay(parseISO(hydrated.indemnitySignedAt))}</strong></div>
@@ -1314,24 +1314,22 @@ async function accountIndemnity(user) {
         <div class="line"><span>Emergency contact phone</span><strong>${esc(hydrated.emergencyPhone)}</strong></div>
         <div class="line"><span>Document version</span><strong>${esc(hydrated.indemnityFormVersion)}</strong></div>
       </div></div>` : `
-      <form id="form-indemnity" class="mt16" novalidate>
-        <div data-doc-accept="indemnity">
-          <label class="check"><input type="checkbox" name="indemnityAccept" required disabled data-doc-checkbox>
-            <span>I accept the <a href="#" class="modal-link" data-action="open-doc" data-doc="indemnity">Indemnity</a> form. *</span>
-          </label>
-          <p class="muted small" data-doc-hint>Read the document to enable acceptance.</p>
-        </div>
-        <div class="field"><label for="indemnity-signature">Participant's full name as signature *</label><input id="indemnity-signature" name="signature" required autocomplete="name"></div>
-        <div class="field"><label for="indemnity-signed-at">Date of signing *</label><input id="indemnity-signed-at" name="signedAt" type="date" value="${defaultDate}" max="${defaultDate}" required></div>
-        <div class="card"><div class="card-body receipt-lines">
-          <div class="line"><span>Emergency contact name</span><strong>${esc(hydrated.emergencyName || "Not provided")}</strong></div>
-          <div class="line"><span>Emergency contact phone</span><strong>${esc(hydrated.emergencyPhone || "Not provided")}</strong></div>
-        </div></div>
-        <div class="field"><label for="indemnity-relationship">Emergency contact relationship *</label><input id="indemnity-relationship" name="emergencyRelationship" value="${esc(hydrated.emergencyRelationship || "")}" required></div>
-        <a class="btn ghost sm" href="#/account/details/edit">Edit in Membership Details →</a>
-        <div id="indemnity-error"></div>
-        <button class="btn mt16" type="submit">Accept &amp; Confirm</button>
-      </form>`}
+      <div data-doc-accept="indemnity">
+        <a class="btn ghost sm mt16" href="#" data-action="open-doc" data-doc="indemnity">View as full document</a>
+        <p class="muted small" data-doc-hint>Read the document to enable acceptance.</p>
+        <form id="form-indemnity" class="mt16" novalidate>
+          <div class="field"><label for="indemnity-signature">Participant's full name as signature *</label><input id="indemnity-signature" name="signature" required autocomplete="name"></div>
+          <div class="field"><label for="indemnity-signed-at">Date of signing *</label><input id="indemnity-signed-at" name="signedAt" type="date" value="${defaultDate}" max="${defaultDate}" required></div>
+          <div class="card"><div class="card-body receipt-lines">
+            <div class="line"><span>Emergency contact name</span><strong>${esc(hydrated.emergencyName || "Not provided")}</strong></div>
+            <div class="line"><span>Emergency contact phone</span><strong>${esc(hydrated.emergencyPhone || "Not provided")}</strong></div>
+          </div></div>
+          <div class="field"><label for="indemnity-relationship">Emergency contact relationship *</label><input id="indemnity-relationship" name="emergencyRelationship" value="${esc(hydrated.emergencyRelationship || "")}" required></div>
+          <a class="btn ghost sm" href="#/account/details/edit">Edit in Membership Details →</a>
+          <div id="indemnity-error"></div>
+          <button class="btn mt16" type="submit" data-doc-submit disabled>Accept &amp; Confirm</button>
+        </form>
+      </div>`}
   `;
 }
 

@@ -985,8 +985,9 @@ document.addEventListener("submit", async (e) => {
       if (!form.reportValidity()) return;
       const fd = new FormData(form);
       const errorEl = form.querySelector("#indemnity-error");
-      if (fd.get("indemnityAccept") !== "on") {
-        showInlineFormError(errorEl, "Read and accept the Indemnity before confirming");
+      const acceptButton = form.querySelector("[data-doc-submit]");
+      if (!acceptButton || acceptButton.disabled) {
+        showInlineFormError(errorEl, "Read the full Indemnity before confirming");
         return;
       }
       try {
