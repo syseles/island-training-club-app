@@ -937,6 +937,20 @@ document.addEventListener("click", async (e) => {
       render();
       break;
 
+    case "delete-event": {
+      if (!confirm("Delete this event? Only possible before anyone books — afterwards cancel it instead.")) return;
+      withBusyControl(el, "Deleting…", async () => {
+        try {
+          await store.deleteOneOffEvent(el.dataset.session);
+          toast("Event deleted");
+          await renderWithFeedback();
+        } catch (err) {
+          toast(err.message || "Unable to delete event", true);
+        }
+      }, { busyKey: el });
+      break;
+    }
+
     case "reset-week-venue": {
       const control = el;
       withBusyControl(control, "Resetting\u2026", async () => {
@@ -1195,6 +1209,34 @@ document.addEventListener("submit", async (e) => {
       store.cancelSessionWeek(form.dataset.session, reason);
       toast("Session cancelled — members notified");
       render();
+      break;
+    }
+
+    case "form-one-off-event": {
+      e.preventDefault();
+      if (!form.reportValidity()) return;
+      const control = form.querySelector('[type="submit"]');
+      const fd = new FormData(form);
+      const kind = String(fd.get("kind") || "free");
+      await withBusyControl(control, "Adding…", async () => {
+        try {
+          await store.createOneOffEvent({
+            name: fd.get("name"),
+            dateISO: fd.get("date"),
+            time: fd.get("time"),
+            durationMin: fd.get("durationMin"),
+            location: fd.get("location"),
+            mapsQuery: fd.get("mapsQuery"),
+            category: fd.get("category"),
+            price: kind === "paid" ? Number(fd.get("price")) : 0,
+            capacity: fd.get("capacity"),
+          });
+          toast("Event added");
+          await renderWithFeedback();
+        } catch (err) {
+          toast(err.message || "Unable to add event", true);
+        }
+      }, { busyKey: form });
       break;
     }
 

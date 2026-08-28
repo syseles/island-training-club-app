@@ -2360,6 +2360,74 @@ export async function viewAdminCampaign(id) {
     </form>`;
 }
 
+// One-off events: single-date admin-created events (race days, socials,
+// pop-ups). Paid events flow through the normal reserve/pay pipeline; free
+// events are show-up. Deletion is only possible before anyone books.
+function adminOneOffEvents() {
+  const upcoming = store.upcomingSessions(60).filter((s) => s.oneOff && !sessionStarted(s));
+  const cards = upcoming.map((s) => {
+    const override = store.getSession(s.id);
+    const cancelled = override?.cancelled;
+    return `
+      <div class="card mt16 ${cancelled ? "is-cancelled" : ""}"><div class="card-body">
+        <div class="kicker dim" style="margin-top:0">${esc(fmtDate(s.dateISO))} · ${fmtTime(s.time)}</div>
+        <h3 class="mt8">${esc(s.name)}</h3>
+        <p class="muted small mt8">${esc(s.location)} · ${s.kind === "paid" ? `${fmtMoney(s.price)} · cap ${s.capacity}` : "Free · no booking"}</p>
+        ${cancelled
+          ? `<p class="badge danger">${esc(sessionCancellationCopy(override))}</p>`
+          : `
+          <form id="form-cancel-week" data-session="${esc(s.id)}" class="mt8">
+            <div class="field"><label>Cancel this event — reason (required)</label><input name="reason" placeholder="e.g. Venue unavailable" required></div>
+            <div class="btn-row">
+              <button class="btn danger sm" type="submit">Cancel event</button>
+              <button class="btn ghost sm" type="button" data-action="delete-event" data-session="${esc(s.id)}">Delete</button>
+            </div>
+          </form>`}
+      </div></div>`;
+  }).join("");
+  return `
+    <details class="admin-section mt24">
+      <summary><h2>One-off Events</h2></summary>
+      <p class="muted small mt8">Single-date events — race days, socials, pop-ups. Free events need no booking; paid events use the normal reserve-and-pay flow. Delete works only before anyone books; afterwards cancel instead.</p>
+      ${cards || `<div class="empty mt8">No upcoming one-off events.</div>`}
+      <form id="form-one-off-event" class="card mt16"><div class="card-body">
+        <h3>Add one-off event</h3>
+        <div class="field"><label for="oe-name">Name *</label><input id="oe-name" name="name" required placeholder="e.g. Dragon boat taster"></div>
+        <div class="field-row">
+          <div class="field"><label for="oe-date">Date *</label><input id="oe-date" name="date" type="date" required></div>
+          <div class="field"><label for="oe-time">Start time *</label><input id="oe-time" name="time" type="time" required></div>
+          <div class="field"><label for="oe-dur">Duration (min)</label><input id="oe-dur" name="durationMin" type="number" min="15" step="15" value="60"></div>
+        </div>
+        <div class="field-row">
+          <div class="field"><label for="oe-loc">Venue *</label><input id="oe-loc" name="location" required placeholder="e.g. Central Harbourfront"></div>
+          <div class="field"><label for="oe-maps">Google Maps search</label><input id="oe-maps" name="mapsQuery" placeholder="Defaults to venue"></div>
+        </div>
+        <div class="field-row">
+          <div class="field">
+            <label for="oe-cat">Category</label>
+            <select id="oe-cat" name="category">
+              ${["Other", "Strength", "Run", "HYROX", "Water"].map((c) => `<option>${c}</option>`).join("")}
+            </select>
+          </div>
+          <div class="field">
+            <label for="oe-kind">Type</label>
+            <select id="oe-kind" name="kind" data-change="kind-toggle">
+              <option value="free" selected>Free — open attendance</option>
+              <option value="paid">Paid — book & pay in app</option>
+            </select>
+          </div>
+        </div>
+        <div class="paid-only hidden">
+          <div class="field-row">
+            <div class="field"><label for="oe-price">Price (HKD)</label><input id="oe-price" name="price" type="number" min="0" value="180"></div>
+            <div class="field"><label for="oe-cap">Capacity</label><input id="oe-cap" name="capacity" type="number" min="1" value="20"></div>
+          </div>
+        </div>
+        <button class="btn sm mt8" type="submit">Add event</button>
+      </div></form>
+    </details>`;
+}
+
 function adminActivities() {
   const acts = store.activities();
   const activityRows = acts
@@ -2388,7 +2456,8 @@ function adminActivities() {
     ${isLive() ? "" : `<a class="btn ghost mt16" href="#/admin/activity/new">+ New activity</a>`}
     </details>
     ${adminFreeEventVenues()}
-    ${adminWeeklySessions()}`;
+    ${adminWeeklySessions()}
+    ${adminOneOffEvents()}`;
 }
 
 function adminMembers(viewer, users) {
