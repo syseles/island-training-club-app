@@ -2152,6 +2152,77 @@ store.signIn("member@example.test");
   console.log("ok  collector confirms payment from ops");
 }
 
+// --- Generic Socials preview: rolling seven-day selector ---
+store.resetLocalData();
+installLocalFixtures();
+store.signIn("admin@example.test");
+{
+  const today = data.todayLocal();
+  const datePlus = (days) => data.isoDate(data.addDays(today, days));
+  await store.createOneOffEvent({
+    name: "Already Started Social",
+    dateISO: datePlus(0),
+    time: "00:00",
+    durationMin: 90,
+    location: "Central",
+    mapsQuery: "Central, Hong Kong",
+    category: "Socials",
+    price: 0,
+    capacity: 20,
+  });
+  const earliestSocial = await store.createOneOffEvent({
+    name: "Community Breakfast",
+    dateISO: datePlus(1),
+    time: "08:00",
+    durationMin: 90,
+    location: "Central",
+    mapsQuery: "Central, Hong Kong",
+    category: "Socials",
+    price: 0,
+    capacity: 20,
+  });
+  await store.createOneOffEvent({
+    name: "Community Dinner",
+    dateISO: datePlus(2),
+    time: "19:00",
+    durationMin: 90,
+    location: "Wan Chai",
+    mapsQuery: "Wan Chai, Hong Kong",
+    category: "Socials",
+    price: 0,
+    capacity: 20,
+  });
+  await store.createOneOffEvent({
+    name: "Strength Workshop",
+    dateISO: datePlus(1),
+    time: "07:00",
+    durationMin: 60,
+    location: "Central",
+    mapsQuery: "Central, Hong Kong",
+    category: "Strength",
+    price: 0,
+    capacity: 20,
+  });
+  await store.createOneOffEvent({
+    name: "Next Week Social",
+    dateISO: datePlus(7),
+    time: "08:00",
+    durationMin: 90,
+    location: "Central",
+    mapsQuery: "Central, Hong Kong",
+    category: "Socials",
+    price: 0,
+    capacity: 20,
+  });
+  const nextSocial = store.nextSocialSession();
+  if (!nextSocial || nextSocial.id !== earliestSocial.id) {
+    throw new Error("nextSocialSession should skip started socials and select the earliest rolling-window social");
+  }
+  console.log("ok  Socials selector skips started events and ignores later/non-Socials events");
+}
+store.resetLocalData();
+installLocalFixtures();
+
 // --- One-off events (local mode) ---
 store.resetLocalData();
 installLocalFixtures();

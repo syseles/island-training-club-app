@@ -12,6 +12,7 @@ import {
   parseISO,
   findSession,
   todayLocal,
+  addDays,
   isoDate,
   saturdayOnOrAfter,
   fmtDate,
@@ -1348,13 +1349,14 @@ export function weekVenueOverride(sessionId) {
 
 export function upcomingSessions(days = 14) {
   if (isLive()) {
-    const today = todayLocal().getTime();
+    const today = todayLocal();
+    const todayISO = isoDate(today);
+    const endISO = isoDate(addDays(today, days));
     const livePaid = liveOps.listLiveSessions()
-      .filter((s) => parseISO(s.dateISO).getTime() >= today)
+      .filter((s) => s.dateISO >= todayISO && s.dateISO < endISO)
       .sort((a, b) =>
         a.dateISO.localeCompare(b.dateISO) || String(a.time).localeCompare(String(b.time))
       )
-      .slice(0, days * 2)
       .map((s) => ({
         ...s,
         spots: spotsLeft(s),
@@ -1402,6 +1404,19 @@ export function upcomingSessions(days = 14) {
 
 export function nextSession() {
   return upcomingSessions(14)[0] ?? null;
+}
+
+export function nextSocialSession() {
+  const now = Date.now();
+  const latest = now + 7 * 24 * 60 * 60 * 1000;
+  return upcomingSessions(8).find((session) => {
+    if (session.category !== "Socials") return false;
+    const start = parseISO(session.dateISO);
+    const [hours, minutes] = String(session.time || "").split(":").map(Number);
+    start.setHours(hours, minutes, 0, 0);
+    const startMs = start.getTime();
+    return startMs >= now && startMs <= latest;
+  }) ?? null;
 }
 
 // --- Community: prayer requests ------------------------------------------------
