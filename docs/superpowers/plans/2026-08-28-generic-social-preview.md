@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Make the Community feature card link directly to the earliest Socials event in the current 7-day “This week” window, using generic event copy.
+**Goal:** Make the Community feature card link directly to the earliest Socials event whose start time falls within the next seven days, using generic event copy.
 
-**Architecture:** Add `store.nextSocialSession()` as the single selection seam. First make `upcomingSessions(days)` honor its requested date window for all live sessions without truncating valid results; then reuse its chronologically sorted `upcomingSessions(7)` result and filter to `category === "Socials"`. `communityHome()` will render the selected event and direct activity link, with a Schedule fallback when no result exists.
+**Architecture:** Add `store.nextSocialSession()` as the single selection seam. First make `upcomingSessions(days)` honor its requested source window for all live sessions without truncating valid results; then read an eight-day source window, filter sessions to the rolling `[now, now + 7 days]` start-time interval and `category === "Socials"`. `communityHome()` will render the selected event and direct activity link, with a Schedule fallback when no result exists.
 
 **Tech Stack:** Vanilla ES modules, hand-rendered HTML templates, localStorage-backed store, existing Node smoke tests.
 
@@ -12,7 +12,8 @@
 
 - Keep the implementation on `feature/rsvp-events`.
 - Include all sessions categorized `Socials`, including recurring RSVP sessions and one-off socials.
-- Follow the 7-day calendar window used by Schedule’s `This week` behavior: today through six days after today.
+- Follow a rolling seven-day event-start window: from the current local Hong Kong time through seven days from now.
+- Include a not-yet-started event today and skip an event whose start time has passed, even if it is today.
 - Use existing local Hong Kong date helpers and existing date/time ordering.
 - Preserve `aria-labelledby="next-connection-title"` and escape dynamic event content with existing view helpers.
 - Do not add dependencies, a build step, a migration, or a second event data source.
@@ -20,7 +21,7 @@
 
 ---
 
-### Task 1: Add the 7-day Socials selector
+### Task 1: Add the rolling 7-day Socials selector
 
 **Files:**
 - Modify: `app/js/store.js` in the live `upcomingSessions(days)` branch and near `nextSession()`
@@ -28,7 +29,7 @@
 
 **Interfaces:**
 - Produces: `export function nextSocialSession()` returning the earliest matching session object or `null`.
-- Consumes: `upcomingSessions(7)`, which merges local/live sessions and sorts by `dateISO` and `time`; Task 1 also makes its live result honor the seven-day upper boundary without truncation.
+- Consumes: `upcomingSessions(8)`, which merges local/live sessions and sorts by `dateISO` and `time`; Task 1 also makes its live source window accurate without truncation.
 
 - [ ] **Step 1: Write the failing selector test**
 
@@ -37,6 +38,17 @@ After resetting local state and installing fixtures, sign in as the local admin 
 ```js
 const today = data.todayLocal();
 const datePlus = (days) => data.isoDate(data.addDays(today, days));
+await store.createOneOffEvent({
+  name: "Already Started Social",
+  dateISO: datePlus(0),
+  time: "00:00",
+  durationMin: 90,
+  location: "Central",
+  mapsQuery: "Central, Hong Kong",
+  category: "Socials",
+  price: 0,
+  capacity: 20,
+});
 const earliestSocial = await store.createOneOffEvent({
   name: "Community Breakfast",
   dateISO: datePlus(1),
@@ -83,7 +95,7 @@ await store.createOneOffEvent({
 });
 const nextSocial = store.nextSocialSession();
 if (!nextSocial || nextSocial.id !== earliestSocial.id) {
-  throw new Error("nextSocialSession should select the earliest Socials event within This week");
+  throw new Error("nextSocialSession should select the earliest not-started Socials event within the rolling seven-day window");
 }
 ```
 
@@ -93,19 +105,28 @@ Run: `node app/smoke.mjs`
 
 Expected: FAIL because `store.nextSocialSession` is not defined.
 
-- [ ] **Step 3: Make the shared live window accurate and implement the selector**
+- [ ] **Step 3: Make the shared live source window accurate and implement the selector**
 
-In the live branch of `upcomingSessions(days)`, derive the end date from `addDays(todayLocal(), days)`, keep live sessions with `dateISO >= todayISO && dateISO < endISO`, and remove the `.slice(0, days * 2)` truncation so a valid Socials event cannot be omitted behind other sessions. Preserve the existing date/time sort and free-session merge.
+In the live branch of `upcomingSessions(days)`, derive the source end date from `addDays(todayLocal(), days)`, keep live sessions with `dateISO >= todayISO && dateISO < endISO`, and remove the `.slice(0, days * 2)` truncation so a valid Socials event cannot be omitted behind other sessions. Preserve the existing date/time sort and free-session merge.
 
-Then add this export immediately after `nextSession()` in `app/js/store.js`:
+Then add this export immediately after `nextSession()` in `app/js/store.js`, using the existing `parseISO` helper to compare local event start timestamps:
 
 ```js
 export function nextSocialSession() {
-  return upcomingSessions(7).find((session) => session.category === "Socials") ?? null;
+  const now = Date.now();
+  const latest = now + 7 * 24 * 60 * 60 * 1000;
+  return upcomingSessions(8).find((session) => {
+    if (session.category !== "Socials") return false;
+    const start = parseISO(session.dateISO);
+    const [hours, minutes] = String(session.time || "").split(":").map(Number);
+    start.setHours(hours, minutes, 0, 0);
+    const startMs = start.getTime();
+    return startMs >= now && startMs <= latest;
+  }) ?? null;
 }
 ```
 
-This reuses one accurate 7-day window and the existing chronological ordering for both local and live session sources.
+The eight-day source includes the next calendar Saturday when today’s event has already started; the timestamp filter then implements the rolling seven-day boundary. Existing chronological ordering ensures the first match is earliest.
 
 - [ ] **Step 4: Run the smoke test and verify it passes**
 
@@ -184,7 +205,7 @@ store.load();
 const fallbackCommunity = views.viewCommunity();
 if (store.nextSocialSession() !== null || !fallbackCommunity.includes('href="#/schedule"')) {
   failures++;
-  console.error("FAIL Community Pulse should fall back to Schedule when no Socials event is in This week");
+  console.error("FAIL Community Pulse should fall back to Schedule when no Socials event starts within seven days");
 }
 store.resetLocalData();
 installLocalFixtures();
