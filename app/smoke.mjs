@@ -357,9 +357,10 @@ if (!commHtml.includes("Find your place in the crew.")) {
   console.error("FAIL visitor Community heading is not personalized");
 } else console.log("ok  visitor Community heading is personalized");
 for (const required of [
-  "Next connection",
-  "Post-training lunch",
-  "See the next lunch",
+  "Socials",
+  "Connect beyond training",
+  "Meet up, share a meal, and find your people.",
+  "View next social",
   "Latest from ITC",
   "Island Training Club turns 2",
   "Ways to connect",
@@ -370,9 +371,18 @@ for (const required of [
     console.error(`FAIL Community Pulse missing ${required}`);
   }
 }
-if (!commHtml.includes('href="#/schedule"')) {
+const selectedCommunitySocial = store.nextSocialSession();
+if (!selectedCommunitySocial
+    || !commHtml.includes(`Next up: ${selectedCommunitySocial.name}`)
+    || !commHtml.includes(data.fmtDate(selectedCommunitySocial.dateISO))
+    || !commHtml.includes(`href="#/activity/${selectedCommunitySocial.id}"`)) {
   failures++;
-  console.error("FAIL Community Pulse meal CTA should link to the Schedule tab");
+  console.error("FAIL Community Pulse should show and link to the next Socials event");
+}
+if (commHtml.includes("Post-training lunch") || commHtml.includes("Every Saturday after HYROX")
+    || commHtml.includes("See the next lunch")) {
+  failures++;
+  console.error("FAIL Community Pulse should not use lunch-specific preview copy");
 }
 const coexistenceSurface = `${integratedViewSource}\n${localVisitorHome}\n${commHtml}`;
 for (const marker of ["Home", "notificationBellHTML", '#/giving', "community-pulse", "HYROX"]) {
@@ -2219,6 +2229,20 @@ store.signIn("admin@example.test");
     throw new Error("nextSocialSession should skip started socials and select the earliest rolling-window social");
   }
   console.log("ok  Socials selector skips started events and ignores later/non-Socials events");
+}
+store.resetLocalData();
+installLocalFixtures();
+{
+  const fallbackState = JSON.parse(mem.get("itc.prototype.v1"));
+  fallbackState.activities = fallbackState.activities.filter((activity) => activity.category !== "Socials");
+  fallbackState.oneOffEvents = [];
+  mem.set("itc.prototype.v1", JSON.stringify(fallbackState));
+  store.load();
+  const fallbackCommunity = views.viewCommunity();
+  if (store.nextSocialSession() !== null || !fallbackCommunity.includes('href="#/schedule"')) {
+    throw new Error("Community Pulse should fall back to Schedule when no Socials event starts within seven days");
+  }
+  console.log("ok  Community Socials preview falls back to Schedule when no event is available");
 }
 store.resetLocalData();
 installLocalFixtures();

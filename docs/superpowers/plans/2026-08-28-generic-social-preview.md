@@ -159,7 +159,7 @@ Update the existing required Community markers so they expect the approved copy 
 
 ```js
 for (const required of [
-  "Next connection",
+  "Socials",
   "Connect beyond training",
   "Meet up, share a meal, and find your people.",
   "View next social",

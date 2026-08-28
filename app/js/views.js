@@ -854,6 +854,11 @@ function communityHeading(user) {
 function communityHome() {
   const user = store.currentUser();
   const announcement = ANNOUNCEMENTS[0];
+  const nextSocial = store.nextSocialSession();
+  const socialHref = nextSocial ? `#/activity/${nextSocial.id}` : "#/schedule";
+  const socialDetail = nextSocial
+    ? `<p class="muted small mt8">Next up: ${esc(nextSocial.name)} · ${esc(fmtDate(nextSocial.dateISO))}</p>`
+    : "";
   return `
     <div class="community-pulse">
       <div class="kicker">Community</div>
@@ -861,11 +866,12 @@ function communityHome() {
       <p class="subcopy mt8">Island Training Club is a Hong Kong training community with a Christian foundation — open to everyone. Training is the doorway; find your next way to connect.</p>
 
       <section class="community-feature" aria-labelledby="next-connection-title">
-        <span class="kicker">Next connection</span>
-        <h2 id="next-connection-title">Post-training lunch</h2>
-        <p>Every Saturday after HYROX. Everyone pays their own bill — RSVP so the organizer can book a table.</p>
+        <span class="kicker">Socials</span>
+        <h2 id="next-connection-title">Connect beyond training</h2>
+        <p>Meet up, share a meal, and find your people.</p>
+        ${socialDetail}
         <div class="community-feature-actions">
-          <a class="btn sm" href="#/schedule">See the next lunch</a>
+          <a class="btn sm" href="${socialHref}">View next social</a>
         </div>
       </section>
 
