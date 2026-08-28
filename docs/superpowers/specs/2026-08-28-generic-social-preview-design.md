@@ -20,9 +20,9 @@ The event name and date are rendered from the selected upcoming social, so a fut
 
 Add a small store-level selector for the next social event. It will:
 
-1. Read the app's existing upcoming-session data across a 366-day horizon, rather than relying on the default two-week preview.
+1. Read the app's existing upcoming-session data across the same 7-day calendar window as Schedule's `This week` view: today through six days after today.
 2. Keep sessions whose category is exactly `Socials`.
-3. Keep sessions dated today or later, using the app's local Hong Kong date semantics.
+3. Keep sessions dated within that window, using the app's local Hong Kong date semantics. Events after the 7-day window must not be selected.
 4. Sort by ISO date and then start time, matching Schedule ordering.
 5. Return the earliest session or `null` when none exists.
 
