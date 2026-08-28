@@ -800,11 +800,11 @@ export function activeBookingsForSession(sessionId) {
 
 export function spotsLeft(session) {
   if (!session) return null;
+  if (session.kind === "free") return null;
+  if (session.capacity == null) return null; // uncapped (e.g. the RSVP lunch)
   if (isLive()) {
-    if (session.kind === "free") return null;
     return Math.max(0, session.capacity - liveOps.liveHeldBookingsForSession(session.id).length);
   }
-  if (session.kind === "free") return null;
   return Math.max(0, session.capacity - heldBookingsForSession(session.id).length);
 }
 
@@ -1627,7 +1627,8 @@ export async function rsvpSession(userId, sessionOrId, now = Date.now()) {
   if (session.kind !== "rsvp") throw new Error("Session is not an RSVP event");
   if (session.cancelled) throw new Error("Session is cancelled");
   if (sessionStarted(session)) throw new Error("Session has already started");
-  if (spotsLeft(session) <= 0) throw new Error("Session is full");
+  const spots = spotsLeft(session);
+  if (spots !== null && spots <= 0) throw new Error("Session is full");
   if (userBookingFor(userId, session.id)) throw new Error("Already booked");
   const booking = {
     id: uid("b"),

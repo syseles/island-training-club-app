@@ -2218,6 +2218,8 @@ installLocalFixtures();
   const lunch = store.upcomingSessions(21).find((s) => s.kind === "rsvp");
   if (!lunch || lunch.category !== "Socials" || lunch.name !== "Post-Training Lunch")
     throw new Error("local seeds must include the recurring RSVP lunch");
+  if (lunch.capacity !== null || store.spotsLeft(lunch) !== null)
+    throw new Error("the lunch is uncapped — capacity and spots must be null");
   store.signIn("member@example.test");
   const lunchHtml = views.viewActivity(lunch.id);
   if (!lunchHtml.includes("Count me in") || lunchHtml.includes("Book & pay"))
@@ -2260,6 +2262,8 @@ installLocalFixtures();
   const venueSection = adminActsHtml.split("Weekly Venue Overrides")[1]?.split("Weekly Session Overrides")[0] || "";
   if (!venueSection.includes("Post-Training Lunch") || !venueSection.includes("Cancel this week's event"))
     throw new Error("the lunch venue card must offer the per-week cancel control");
+  if (venueSection.includes("cap"))
+    throw new Error("the uncapped lunch must not show a capacity");
   store.signIn("member@example.test");
   store.signOut();
   console.log("ok  RSVP lunch: join, going state, withdraw, Socials filter, no checkout");

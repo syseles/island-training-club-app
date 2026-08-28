@@ -112,7 +112,7 @@ export const SEED_ACTIVITIES = [
       "The other half of Saturday: refuel together after training. Everyone pays their own bill — tap Count me in so the organizer can book a table.",
     memberNote: "Venue is posted in the session note once the table is booked.",
     price: 0,
-    capacity: 12,
+    capacity: null, // unlimited — the organizer books a table from the RSVP list
     published: true,
   },
 ];

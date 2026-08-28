@@ -174,7 +174,7 @@ const operationalTableRows = {
   operational_activity_templates: [
     { activity_id: "hyrox", name: "ITC HYROX", venue: "BFT Causeway Bay", weekday: 6, start_time: "11:15:00", duration_minutes: 60, capacity: 20, price_hkd: 180, default_open: true, active: true, category: "HYROX", maps_query: null, requires_rsvp: false },
     { activity_id: "hyrox-midtown", name: "ITC HYROX", venue: "Midtown 28", weekday: 6, start_time: "11:00:00", duration_minutes: 60, capacity: 12, price_hkd: 180, default_open: false, active: true, category: "HYROX", maps_query: null, requires_rsvp: false },
-    { activity_id: "lunch", name: "Post-Training Lunch", venue: "TBC", weekday: 6, start_time: "12:45:00", duration_minutes: 75, capacity: 12, price_hkd: 0, default_open: true, active: true, category: "Socials", maps_query: null, requires_rsvp: true },
+    { activity_id: "lunch", name: "Post-Training Lunch", venue: "TBC", weekday: 6, start_time: "12:45:00", duration_minutes: 75, capacity: null, price_hkd: 0, default_open: true, active: true, category: "Socials", maps_query: null, requires_rsvp: true },
   ],
   operational_bookings: [],
   operational_queue_entries: [],
@@ -547,7 +547,7 @@ for (let i = 0; i < 4; i++) {
     start_time: "12:45:00",
     duration_minutes: 75,
     venue: "TBC",
-    capacity: 12,
+    capacity: null,
     price_hkd: 0,
     is_open: true,
     venue_tbc: false,
@@ -1512,6 +1512,9 @@ console.log("ok  live one-off events create, hydrate, delete, and guard booked d
 const lunchSession = store.upcomingSessions(21).find((s) => s.kind === "rsvp");
 if (!lunchSession || lunchSession.category !== "Socials" || lunchSession.name !== "Post-Training Lunch") {
   throw new Error("live RSVP lunch session must hydrate with rsvp kind and Socials category");
+}
+if (lunchSession.capacity !== null || store.spotsLeft(lunchSession) !== null) {
+  throw new Error("the lunch is uncapped — capacity and spots must be null");
 }
 const lunchHtml = views.viewActivity(lunchSession.id);
 if (!lunchHtml.includes('data-action="rsvp-join"') || lunchHtml.includes("Book & pay")) {

@@ -2243,7 +2243,7 @@ function adminFreeEventVenues() {
             </div>
           </form>
           ${s.kind === "rsvp" ? `
-          <p class="muted small mt8">${store.attendeesFor(s).length} going · cap ${s.capacity}</p>
+          <p class="muted small mt8">${store.attendeesFor(s).length} going${s.capacity != null ? ` · cap ${s.capacity}` : ""}</p>
           <form id="form-cancel-week" data-session="${safeId}" class="mt8">
             <div class="field"><label>Cancel this week — reason (required)</label><input name="reason" placeholder="e.g. Organizer away" required></div>
             <button class="btn danger sm" type="submit">Cancel this week's event</button>
