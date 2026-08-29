@@ -4,7 +4,7 @@
 
 **Goal:** Make a dated live RSVP lunch venue save, render, and reset exactly like the existing weekday free-event venue overrides.
 
-**Architecture:** Keep `store.setWeekVenue()` as the only UI-to-backend seam, but resolve the authoritative session before deciding which activity may be overridden. Reuse the existing `set_session_venue` RPC and operational-cache refresh; the deployed Supabase project must have the existing lunch migrations applied in order.
+**Architecture:** Keep `store.setWeekVenue()` as the only UI-to-backend seam and keep the client’s six named RPC arguments so WNT meeting coordinates continue to work. Add a forward-only migration that makes the six-argument `set_session_venue` implementation authoritative for `wnt`, `run`, `water`, and `lunch`, then restore the four-argument overload as a compatibility wrapper.
 
 **Tech Stack:** Vanilla ES modules, localStorage prototype state, Supabase RPC/migrations, Node smoke tests.
 
@@ -14,7 +14,9 @@
 - Preserve the override allow-list: `wnt`, `run`, `water`, and `lunch`.
 - Do not change lunch RSVP, capacity, payment, cancellation, or recurring-default behavior.
 - Do not change the localStorage schema.
-- Reuse migration `20260829000003_lunch_venue_overrides.sql`; do not create a duplicate schema migration unless migration inspection proves the existing file is insufficient.
+- Do not edit previously shipped migration `20260829000003_lunch_venue_overrides.sql`; add only `20260829000006_lunch_venue_meeting_point_rpc.sql` for the proven overload defect.
+- Preserve WNT Tamar Park meeting-coordinate validation and persistence; lunch must always store null meeting coordinates.
+- Keep the four-argument RPC as a wrapper around the authoritative six-argument RPC.
 - Run `node app/smoke.mjs`, `node app/live-auth-smoke.mjs`, and `git diff --check` before completion.
 
 ---
@@ -193,3 +195,156 @@ git status --short --branch
 ```
 
 Expected: both suites pass, the whitespace check is clean, and only intended committed work is present.
+
+---
+
+### Task 4: Repair the six-argument lunch venue RPC
+
+**Files:**
+- Create: `supabase/migrations/20260829000006_lunch_venue_meeting_point_rpc.sql`
+- Modify: `supabase/tests/operational_backend_integration.sql` in the venue-override transaction
+- Modify: `app/smoke.mjs` near migration/source contract checks
+- Verify: `app/js/operations.js` in `liveSetWeekVenue()`
+
+**Interfaces:**
+- Consumes: the six named arguments emitted by `liveSetWeekVenue()`: `p_session_id`, `p_location`, `p_maps_query`, `p_was_tbc`, `p_meeting_lat`, and `p_meeting_lng`.
+- Produces: authoritative `public.set_session_venue(text, text, text, boolean, double precision, double precision)` supporting `wnt`, `run`, `water`, and `lunch`.
+- Preserves: four-argument compatibility overload, Admin authorization, notification fan-out/deduplication, advisory locking, WNT coordinate behavior, grants, and cache result shape.
+
+- [ ] **Step 1: Add a failing migration contract test**
+
+In `app/smoke.mjs`, load the new migration:
+
+```js
+const lunchMeetingRpcMigrationSource = readFileSync(
+  resolve(__dirnameSmoke, "../supabase/migrations/20260829000006_lunch_venue_meeting_point_rpc.sql"),
+  "utf8"
+);
+```
+
+Extract the six-argument implementation and assert that it contains the six-argument signature, the complete allow-list, WNT-only coordinate logic, and lunch notification label. Also assert that the four-argument overload forwards null coordinates:
+
+```js
+assert.match(lunchMeetingRpcMigrationSource,
+  /set_session_venue\([\s\S]*?p_meeting_lat double precision,[\s\S]*?p_meeting_lng double precision/);
+assert.match(lunchMeetingRpcMigrationSource,
+  /v_activity_id not in \('wnt', 'run', 'water', 'lunch'\)/);
+assert.match(lunchMeetingRpcMigrationSource,
+  /v_is_wnt_tamar := v_activity_id = 'wnt'/);
+assert.match(lunchMeetingRpcMigrationSource,
+  /when 'lunch' then 'Post-Training Lunch'/);
+assert.match(lunchMeetingRpcMigrationSource,
+  /select public\.set_session_venue\([\s\S]*?p_was_tbc, null, null[\s\S]*?\);/);
+```
+
+- [ ] **Step 2: Run the local smoke suite and verify RED**
+
+Run: `node app/smoke.mjs`
+
+Expected: FAIL with `ENOENT` because migration `00006` does not exist.
+
+- [ ] **Step 3: Add SQL integration coverage before the migration implementation**
+
+In the existing venue-override transaction in `supabase/tests/operational_backend_integration.sql`, authenticate as the Admin fixture and call the six-argument function for `lunch-2026-08-22`:
+
+```sql
+perform public.set_session_venue(
+  'lunch-2026-08-22', 'Cafe Deco, Central', 'Cafe Deco, Central', true,
+  null, null
+);
+perform pg_temp.op_assert(
+  exists (
+    select 1 from public.operational_session_venue_overrides
+     where session_id = 'lunch-2026-08-22'
+       and activity_id = 'lunch'
+       and location = 'Cafe Deco, Central'
+       and maps_query = 'Cafe Deco, Central'
+       and meeting_lat is null
+       and meeting_lng is null
+  ),
+  'six-argument lunch venue save persists without meeting coordinates'
+);
+```
+
+Then call the four-argument overload with null location/map values and assert the row is reset without an authorization or fixed-venue error. Keep the existing WNT coordinate assertions unchanged so the same integration suite protects both behaviors.
+
+- [ ] **Step 4: Create the forward-only migration**
+
+Start from the complete six-argument implementation in `20260825000001_wnt_meeting_points.sql`, preserving its validation, locking, persistence, notification, and coordinate logic. In the new migration, make these exact semantic changes:
+
+```sql
+if v_activity_id not in ('wnt', 'run', 'water', 'lunch') then
+  raise exception 'Activity venue is fixed.' using errcode = '42501';
+end if;
+```
+
+Keep meeting coordinates WNT-only:
+
+```sql
+v_is_wnt_tamar := v_activity_id = 'wnt'
+  and v_normalized_location in ('tamar park', 'tamar park, admiralty');
+```
+
+Add the lunch label:
+
+```sql
+when 'lunch' then 'Post-Training Lunch'
+```
+
+After the authoritative six-argument function, replace the four-argument overload with this compatibility wrapper:
+
+```sql
+create or replace function public.set_session_venue(
+  p_session_id text,
+  p_location text,
+  p_maps_query text,
+  p_was_tbc boolean
+)
+returns public.operational_session_venue_overrides
+language sql
+security definer
+set search_path = public
+as $$
+  select public.set_session_venue(
+    p_session_id, p_location, p_maps_query, p_was_tbc, null, null
+  );
+$$;
+```
+
+Revoke execution from `public` and `anon` and grant it to `authenticated` for both overload signatures. End with:
+
+```sql
+notify pgrst, 'reload schema';
+```
+
+Do not change `app/js/operations.js`; retaining all six named arguments is required.
+
+- [ ] **Step 5: Run local and live-auth suites**
+
+Run:
+
+```bash
+node app/smoke.mjs
+node app/live-auth-smoke.mjs
+bash supabase/tests/verify_operational_backend_safety.sh
+git diff --check
+```
+
+Expected: both Node suites pass, the safety harness passes, and whitespace is clean.
+
+If `ITC_OPERATIONS_TEST_DATABASE_URL` and `ITC_ALLOW_DATABASE_RESET=1` are available, also run:
+
+```bash
+bash supabase/tests/verify_operational_backend.sh
+```
+
+Otherwise report that PostgreSQL integration was not run; do not claim the migration is deployed or the live issue fixed.
+
+- [ ] **Step 6: Commit the RPC overload repair**
+
+```bash
+git add docs/superpowers/plans/2026-08-29-live-lunch-venue-override.md \
+  supabase/migrations/20260829000006_lunch_venue_meeting_point_rpc.sql \
+  supabase/tests/operational_backend_integration.sql app/smoke.mjs
+git commit -m "fix(events): admit lunch in venue RPC"
+```
