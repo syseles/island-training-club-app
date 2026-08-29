@@ -348,3 +348,82 @@ git add docs/superpowers/plans/2026-08-29-live-lunch-venue-override.md \
   supabase/tests/operational_backend_integration.sql app/smoke.mjs
 git commit -m "fix(events): admit lunch in venue RPC"
 ```
+
+---
+
+### Task 5: Count live RSVP bookings independently of identities
+
+**Files:**
+- Modify: `app/js/store.js` near `attendeesFor()`
+- Modify: `app/js/views.js` RSVP count surfaces
+- Test: `app/smoke.mjs` near RSVP rendering coverage
+- Test: `app/live-auth-smoke.mjs` near live lunch join/withdraw coverage
+
+**Interfaces:**
+- Produces: `export function attendeeCountFor(session)` returning the number of confirmed bookings for `session.id`.
+- Consumes: existing `activeBookingsForSession(sessionId)`, whose live path reads the operational booking cache and whose local path reads prototype bookings.
+- Preserves: `attendeesFor(session)` as identity/name formatting only; no synthetic users or local identity persistence.
+
+- [ ] **Step 1: Write failing count-contract tests**
+
+In `app/smoke.mjs`, assert `store.attendeeCountFor` exists and that every RSVP count surface in `views.js` calls it rather than `attendeesFor(s).length`. Keep attendee-name assertions separate.
+
+In `app/live-auth-smoke.mjs`, record the lunch count before joining, then assert exact deltas:
+
+```js
+const countBeforeRsvp = store.attendeeCountFor(lunchSession);
+const rsvpBooking = await store.rsvpSession(authUser.id, lunchSession.id);
+assert.equal(store.attendeeCountFor(lunchSession), countBeforeRsvp + 1,
+  "Count me in must increase the RSVP count by exactly one");
+const goingHtml = views.viewActivity(lunchSession.id);
+assert.ok(goingHtml.includes(`${countBeforeRsvp + 1} going`));
+await store.withdrawRsvp(rsvpBooking.id);
+assert.equal(store.attendeeCountFor(lunchSession), countBeforeRsvp,
+  "withdrawal must decrease the RSVP count by exactly one");
+```
+
+Also assert the live prototype state still contains no copied identity rows.
+
+- [ ] **Step 2: Run RED**
+
+Run:
+
+```bash
+node app/smoke.mjs
+node app/live-auth-smoke.mjs
+```
+
+Expected: FAIL because `attendeeCountFor` does not exist and live `attendeesFor()` filters out bookings whose owners are absent from local `state.users`.
+
+- [ ] **Step 3: Implement the count seam**
+
+Add near `attendeesFor()`:
+
+```js
+export function attendeeCountFor(session) {
+  if (!session?.id) return 0;
+  return activeBookingsForSession(session.id).length;
+}
+```
+
+Replace only count expressions in Schedule rows, RSVP Activity Details, and Admin Free & RSVP controls with `store.attendeeCountFor(s)`. Do not change `attendeesFor()` or create placeholder identities.
+
+- [ ] **Step 4: Verify exact transitions and regressions**
+
+Run:
+
+```bash
+node app/smoke.mjs
+node app/live-auth-smoke.mjs
+git diff --check
+```
+
+Expected: both suites pass; join is exactly `+1`, withdrawal exactly `-1`, and every count surface uses confirmed bookings.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add docs/superpowers/plans/2026-08-29-live-lunch-venue-override.md \
+  app/js/store.js app/js/views.js app/smoke.mjs app/live-auth-smoke.mjs
+git commit -m "fix(events): count live lunch RSVPs"
+```
