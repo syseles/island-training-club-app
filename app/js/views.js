@@ -2129,7 +2129,7 @@ function adminOps(viewer, memberUsers, profilePhone = "") {
 // controls — setup and scheduling in one place.
 function adminPaidSessionControls() {
   const upcoming = store.upcomingSessions(21).filter(
-    (s) => s.category === "HYROX" && s.kind === "paid" && !sessionStarted(s)
+    (s) => !s.oneOff && s.category === "HYROX" && s.kind === "paid" && !sessionStarted(s)
   );
   const sessionCards = upcoming.map((s) => {
     const confirmed = store.heldBookingsForSession(s.id).filter((b) => b.status === "confirmed");
@@ -2212,7 +2212,7 @@ function adminFinalizeGym() {
 
 function adminFreeEventControls() {
   const upcoming = store.upcomingSessions(21)
-    .filter((s) => s.kind !== "paid" && !sessionStarted(s));
+    .filter((s) => !s.oneOff && s.kind !== "paid" && !sessionStarted(s));
   return `
     <h3 id="free-rsvp-events-title">Free &amp; RSVP Events</h3>
     <p class="muted small mt8">Set a venue for one dated free or RSVP event. Later weeks keep the recurring default.</p>

@@ -2299,6 +2299,18 @@ store.signIn("admin@example.test");
       || !adminActivitiesHtml.includes("form-one-off-event")
       || !adminActivitiesHtml.includes("HYROX Race Day Send-off"))
     throw new Error("Activities tab should list one-off events and the add form");
+  const weeklyStart = adminActivitiesHtml.indexOf(">Weekly Event Controls<");
+  const oneOffStart = adminActivitiesHtml.indexOf(">One-off Events<");
+  const weeklyRegion = weeklyStart === -1 || oneOffStart === -1
+    ? ""
+    : adminActivitiesHtml.slice(weeklyStart, oneOffStart);
+  const oneOffRegion = oneOffStart === -1 ? "" : adminActivitiesHtml.slice(oneOffStart);
+  for (const event of [paidEvent, freeEvent]) {
+    if (weeklyRegion.includes(event.name) || weeklyRegion.includes(event.id))
+      throw new Error(`${event.name} must not receive recurring controls`);
+    if (!oneOffRegion.includes(event.name) || !oneOffRegion.includes(event.id))
+      throw new Error(`${event.name} must appear only in One-off Events`);
+  }
   // Deletion is refused once a booking exists; cancellation still works and
   // voids the booking (no same-activity follow-up session to defer to).
   store.signIn("member@example.test");
@@ -3400,6 +3412,16 @@ if ((activitiesHtml.match(/>Weekly Event Controls</g) || []).length !== 1
     || !activitiesHtml.includes("Free &amp; RSVP Events")
     || !activitiesHtml.includes("Paid Sessions")) {
   throw new Error("Activities should group weekly controls by free/RSVP and paid sessions");
+}
+const paidControlsSource = integratedViewSource
+  .split("function adminPaidSessionControls()")[1]?.split("function adminFinalizeGym()")[0] || "";
+const freeControlsSource = integratedViewSource
+  .split("function adminFreeEventControls()")[1]?.split("function adminWeeklyEventControls()")[0] || "";
+if (!paidControlsSource.includes('<div class="empty mt8">No upcoming paid sessions.</div>')) {
+  throw new Error("Paid Sessions must retain its concise empty-group state");
+}
+if (!freeControlsSource.includes('<div class="empty mt8">No upcoming free or RSVP events.</div>')) {
+  throw new Error("Free & RSVP Events must retain its concise empty-group state");
 }
 if (activitiesHtml.includes(">Weekly Venue Overrides<")
     || activitiesHtml.includes(">Weekly Session Overrides<")) {
