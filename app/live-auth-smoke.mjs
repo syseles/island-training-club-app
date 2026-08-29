@@ -1287,6 +1287,44 @@ for (const badge of ["Application", "Decision", "Role change", "Club update", "M
   assert.match(categoryNotificationsHtml, new RegExp(`class="notification-kind-badge">${badge}<`));
 }
 assert.match(categoryNotificationsHtml, /Giving campaign published[\s\S]*?data-destination="#\/giving"|data-destination="#\/giving"[\s\S]*?Giving campaign published/);
+const semanticFallbackRows = [
+  {
+    id: "notification-booking-reserved",
+    kind: "operational_booking_reserved",
+    title: "Booking reserved",
+    body: "Complete payment for your reservation.",
+    created_at: "2026-08-05T06:38:00.000Z",
+    read_at: null,
+  },
+  {
+    id: "notification-payment-marked",
+    kind: "operational_payment_marked",
+    title: "Payment marked",
+    body: "Review the member payment.",
+    created_at: "2026-08-05T06:37:00.000Z",
+    read_at: null,
+  },
+  {
+    id: "notification-session-cancelled",
+    kind: "operational_session_cancelled_no_defer",
+    title: "Session cancelled without deferral",
+    body: "Review the schedule.",
+    created_at: "2026-08-05T06:36:00.000Z",
+    read_at: null,
+  },
+];
+const semanticFallbackHtml = await views.viewNotifications(notificationNow, semanticFallbackRows);
+const semanticFallbackButtons = semanticFallbackHtml.match(/<button class="notification-row[\s\S]*?<\/button>/g) || [];
+for (const [title, destination] of [
+  ["Booking reserved", "#/account/payments"],
+  ["Payment marked", "#/admin/payments"],
+  ["Session cancelled without deferral", "#/schedule"],
+]) {
+  const button = semanticFallbackButtons.find((row) => row.includes(`<strong>${title}</strong>`));
+  assert.ok(button, `${title} must render as a notification row`);
+  assert.match(button, new RegExp(`data-destination="${destination}"`),
+    `${title} must render its semantic section fallback without an explicit destination`);
+}
 const categoryFilterCases = [
   ["application", "Application &lt;submitted&gt;"],
   ["decision", "Application approved"],

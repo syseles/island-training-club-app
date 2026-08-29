@@ -204,6 +204,55 @@ for (const marker of [
 }
 console.log("ok  latest Notification domain markers coexist");
 {
+  const notificationFallbacks = new Map([
+    ["operational_booking_reserved", "#/account/payments"],
+    ["operational_rsvp_confirmed", "#/account/payments"],
+    ["operational_payment_approved", "#/account/payments"],
+    ["operational_session_deferred", "#/account/payments"],
+    ["operational_session_cancelled_no_defer", "#/schedule"],
+    ["operational_payment_marked", "#/admin/payments"],
+    ["operational_gym_finalized", "#/admin/payments"],
+    ["operational_session_cancelled", "#/schedule"],
+    ["operational_session_venue_updated", "#/schedule"],
+    ["admin_application_submitted", "#/admin/approvals"],
+    ["admin_application_approved", "#/admin/members"],
+    ["admin_application_declined", "#/admin/members"],
+    ["admin_role_promoted", "#/admin/members"],
+    ["admin_role_demoted", "#/admin/members"],
+    ["admin_membership_revoked", "#/admin/members"],
+    ["admin_role_changed", "#/admin/members"],
+    ["giving_campaign_published", "#/giving"],
+    ["welcome", "#/account"],
+  ]);
+  const malformedDestinations = [
+    "https://example.com/foreign",
+    "/account/payments",
+    "#account/payments",
+    "javascript:alert(1)",
+  ];
+  for (const [kind, expected] of notificationFallbacks) {
+    if (data.notificationDestination(kind) !== expected) {
+      failures++;
+      console.error(`FAIL ${kind} notification fallback should be ${expected}`);
+    }
+    if (data.notificationDestination(kind, "#/pay/booking-123") !== "#/pay/booking-123") {
+      failures++;
+      console.error(`FAIL explicit internal notification destination should win for ${kind}`);
+    }
+    for (const destination of malformedDestinations) {
+      if (data.notificationDestination(kind, destination) !== expected) {
+        failures++;
+        console.error(`FAIL malformed notification destination should not win for ${kind}: ${destination}`);
+      }
+    }
+  }
+  if (data.notificationDestination("unknown_kind") !== "#/account") {
+    failures++;
+    console.error("FAIL unknown notification kinds should fall back to #/account");
+  }
+  console.log("ok  notification destinations use explicit internal routes or stable semantic fallbacks");
+}
+{
   // Live deployments: recurring activity defaults are seed/SQL-administered,
   // so the Admin activity editor must render read-only with an honest note
   // instead of silently writing device-local state behind a success toast.
