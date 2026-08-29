@@ -26,6 +26,19 @@ For a dated lunch session, an Admin can:
 
 The lunch remains an RSVP event. Venue editing does not change capacity, RSVP status, payment behavior, or recurring defaults.
 
+## Live RSVP headcount
+
+Every “X going” label must count confirmed bookings directly, not depend on whether the booking owner exists in the local prototype identity array. Live mode deliberately keeps `state.users` empty, so attendee-name resolution cannot be used as the count source.
+
+Expose a dedicated count helper at the store seam and use it on Schedule, Activity Details, and Admin RSVP controls. The count must update from the refreshed operational booking cache:
+
+- Before joining: `0 going`.
+- After one successful “Count me in”: `1 going` — exactly `+1`.
+- After withdrawing that RSVP: `0 going` — exactly `-1`.
+- Other confirmed members each contribute one; cancelled, deferred, and reserved/unconfirmed rows do not contribute.
+
+Keep attendee-name formatting separate. No placeholder identity rows should be created or persisted merely to obtain a count.
+
 ## Application changes
 
 In `store.setWeekVenue()`:
@@ -63,6 +76,9 @@ Update live-auth smoke coverage so the lunch session exercises the authoritative
 
 Verify:
 
+- A live RSVP changes the displayed count by exactly `+1` after “Count me in” and exactly `-1` after withdrawal.
+- Schedule, Activity Details, and Admin RSVP controls derive the same count from confirmed bookings.
+- The count works while live `state.users` remains empty and does not create local identity records.
 - The client’s six named RPC arguments resolve to an implementation that admits lunch.
 - Saving a complete lunch venue does not throw `Activity venue is fixed.`
 - Lunch saves and resets persist `null` meeting coordinates.
