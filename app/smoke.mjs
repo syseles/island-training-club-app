@@ -2104,6 +2104,9 @@ installLocalFixtures();
     (s) => s.activityId === "hyrox" && !data.sessionStarted(s)
   );
   store.setSessionNotice(sess.id, "Weather watch — check WhatsApp");
+  views.scheduleState.weekOffset = Math.round(
+    (data.mondayOf(data.parseISO(sess.dateISO)) - data.mondayOf(data.todayLocal())) / (7 * 86400000)
+  );
   views.scheduleState.selected = sess.dateISO;
   const row = views.viewSchedule();
   if (!row.includes("Weather watch"))
@@ -2118,10 +2121,14 @@ installLocalFixtures();
   if (!detail.includes("HYROX race weekend"))
     throw new Error("detail page should show the reason");
   console.log("ok  cancelled week shows in Schedule (badge + reason) and detail");
+  views.scheduleState.weekOffset = 0;
 }
 {
   const mid = store.upcomingSessions(14).find(
     (s) => s.activityId === "hyrox-midtown" && !data.sessionStarted(s)
+  );
+  views.scheduleState.weekOffset = Math.round(
+    (data.mondayOf(data.parseISO(mid.dateISO)) - data.mondayOf(data.todayLocal())) / (7 * 86400000)
   );
   views.scheduleState.selected = mid.dateISO;
   if (!views.viewSchedule().includes("Not yet open"))
@@ -2131,6 +2138,7 @@ installLocalFixtures();
   if (!detail.includes('data-action="join-interest"'))
     throw new Error("closed Midtown should offer wait-for-Midtown");
   console.log("ok  closed Midtown: badge + interest action");
+  views.scheduleState.weekOffset = 0;
 }
 
 // --- HYROX payment system: member payment UI (Task 9) ---
@@ -2266,7 +2274,9 @@ store.signIn("admin@example.test");
 store.resetLocalData();
 installLocalFixtures();
 {
-  const lunch = store.upcomingSessions(21).find((s) => s.kind === "rsvp");
+  const lunch = store.upcomingSessions(21).find(
+    (s) => s.kind === "rsvp" && !data.sessionStarted(s)
+  );
   if (!lunch || lunch.category !== "Socials" || lunch.name !== "Post-Training Lunch")
     throw new Error("local seeds must include the recurring RSVP lunch");
   if (lunch.capacity !== null || store.spotsLeft(lunch) !== null)
