@@ -1540,6 +1540,14 @@ if (!lunchSession || lunchSession.category !== "Socials" || lunchSession.name !=
 if (lunchSession.capacity !== null || store.spotsLeft(lunchSession) !== null) {
   throw new Error("the lunch is uncapped — capacity and spots must be null");
 }
+const otherLunchSession = store.upcomingSessions(28).find(
+  (session) => session.activityId === "lunch"
+    && session.id !== lunchSession.id
+    && session.dateISO !== lunchSession.dateISO
+);
+if (!otherLunchSession || otherLunchSession.location !== "TBC") {
+  throw new Error("live smoke needs another dated lunch at TBC to verify venue isolation");
+}
 const lunchHtml = views.viewActivity(lunchSession.id);
 if (!lunchHtml.includes('data-action="rsvp-join"') || lunchHtml.includes("Book & pay")) {
   throw new Error("live RSVP activity should offer Count me in, not checkout");
@@ -1575,6 +1583,9 @@ const overriddenLunch = store.getSession(lunchSession.id);
 if (overriddenLunch.location !== "Cafe Deco, Central" || overriddenLunch.mapsQuery !== "Cafe Deco, Central") {
   throw new Error("weekly venue override must apply to live RSVP sessions");
 }
+if (store.getSession(otherLunchSession.id)?.location !== "TBC") {
+  throw new Error("saving a live lunch venue must not change another dated lunch");
+}
 const priorScheduleWeekOffset = views.scheduleState.weekOffset;
 const priorScheduleSelected = views.scheduleState.selected;
 views.scheduleState.weekOffset = Math.round(
@@ -1599,7 +1610,10 @@ const resetLunch = store.getSession(lunchSession.id);
 if (resetLunch.location !== "TBC") {
   throw new Error("resetting a live lunch venue should restore its TBC recurring default");
 }
-console.log("ok  live sessions order by start time and lunch accepts weekly venue overrides");
+if (store.getSession(otherLunchSession.id)?.location !== "TBC") {
+  throw new Error("resetting a live lunch venue must not change another dated lunch");
+}
+console.log("ok  live sessions order by start time and lunch accepts isolated weekly venue overrides");
 
 // A live Admin must compose the Supabase UUID directory with device-local
 // Payment operations without copying editable identity records into storage.

@@ -59,9 +59,9 @@ const storeSource = readFileSync(resolve(__dirnameSmoke, "js/store.js"), "utf8")
 const weekVenueSource = storeSource.match(
   /export function setWeekVenue[\s\S]*?\/\/ --- Giving/
 )?.[0] || "";
-if (!/const before = getSession\(sessionId\)/.test(weekVenueSource)
-    || !/before\?\.activityId/.test(weekVenueSource)) {
-  throw new Error("setWeekVenue should authorize from the resolved session activityId");
+const orderedWeekVenueAuthorization = /const before = getSession\(sessionId\);\s*const fallbackActivityId = String\(sessionId\)\.replace\([^\n]+\);\s*const overrideActivityId = before\?\.activityId \|\| fallbackActivityId;\s*if \(!new Set\(\["wnt", "run", "water", "lunch"\]\)\.has\(overrideActivityId\)\) \{/;
+if (!orderedWeekVenueAuthorization.test(weekVenueSource)) {
+  throw new Error("setWeekVenue should resolve the session before fallback authorization and the allow-list");
 }
 
 for (const relativePath of [
