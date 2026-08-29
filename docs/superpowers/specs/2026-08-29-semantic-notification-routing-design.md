@@ -12,7 +12,7 @@ The booking reservation RPC has the new booking ID at notification creation time
 
 ## Architecture
 
-Notification producers own semantic routing because they have authoritative related entity IDs at creation time. A new migration updates current Supabase producers to write explicit destinations. Existing local prototype producers continue passing their existing links through the store seam; any missing local destinations are corrected at their source.
+Semantic routing is assigned at the database notification-insert boundary, where the related booking/session mutation from the same transaction is visible. A new migration adds one `BEFORE INSERT` routing trigger for Supabase notifications. Existing local prototype producers continue passing their existing links through the store seam; any missing local destinations are corrected at their source.
 
 The Inbox remains a renderer and router, not an entity-matching engine. It will continue to:
 
@@ -54,22 +54,23 @@ No generic entity-type or entity-ID columns are added.
 
 Create `supabase/migrations/20260829000005_notification_destinations.sql`, after the latest RSVP migration.
 
-The migration will update the latest active versions of notification-producing functions so destinations are written in the same transaction as their related event:
+The migration will add a focused security-definer resolver and a `BEFORE INSERT` trigger on `public.notifications`. The trigger:
 
-- Reservation/RSVP creation uses the returned booking ID.
-- Payment approval uses the approved booking ID.
-- Payment marked and gym finalized use the Admin Payments route.
-- Deferral uses the newly created booking ID.
-- Booking/session cancellation uses the related session ID.
-- Admin application/role triggers and Giving publication use their stable section routes.
+- Leaves any valid explicit destination unchanged.
+- Assigns stable routes directly from notification kind.
+- Resolves reservation/RSVP creation from a same-profile booking whose `reserved_at` matches the notification transaction time.
+- Resolves payment approval from a same-profile booking whose `paid_at` matches the transaction time.
+- Resolves deferral from the newly created same-profile booking in that transaction.
+- Resolves session cancellation from the session whose `cancelled_at` matches the transaction time.
+- Returns null rather than guessing when the related row is absent or ambiguous.
 
-Function signatures, security-definer settings, search paths, authorization, booking/payment behavior, notification copy, grants, and transaction boundaries remain unchanged. Only destination insertion is added.
+Existing notification-producing function signatures, bodies, security-definer settings, search paths, authorization, booking/payment behavior, notification copy, grants, and transaction boundaries remain unchanged.
 
 ## Existing notification backfill
 
-Backfill existing rows whose `destination` is null; never overwrite an explicit destination.
+Backfill existing rows whose `destination` is null by calling the same resolver used by the insert trigger; never overwrite an explicit destination.
 
-For booking-specific rows, match the notification to an operational booking belonging to the same profile whose relevant booking timestamp falls within five seconds of `notifications.created_at`. Update only notifications with exactly one candidate in that window; zero or multiple candidates remain unchanged.
+For booking-specific rows, the resolver matches an operational booking belonging to the same profile whose relevant booking timestamp falls within five seconds of `notifications.created_at`. It returns a route only when exactly one candidate exists in that window; zero or multiple candidates remain unchanged.
 
 Backfill:
 
@@ -100,7 +101,7 @@ This ensures unmatched historical records still land in a relevant section rathe
 - Destinations contain booking/session IDs already protected by existing route ownership and role checks.
 - A member opening another member’s booking route still receives Booking not found.
 - Backfill joins always require matching `profile_id` for member-owned bookings.
-- The migration does not expose additional notification data or alter RLS.
+- The resolver is security-definer with a fixed `search_path`, is not executable by `public` or `anon`, and the migration does not alter notification RLS.
 
 ## Testing
 
@@ -119,7 +120,7 @@ Verify:
 
 Add SQL assertions covering:
 
-- New reservation notification destination equals the returned booking payment route.
+- The insert trigger preserves explicit destinations and assigns a new reservation notification the exact booking payment route.
 - RSVP confirmation points to Booking Details.
 - Payment approval points to Booking Details.
 - Payment marked and gym finalized point to Admin Payments.
