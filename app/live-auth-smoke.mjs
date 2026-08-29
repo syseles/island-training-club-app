@@ -514,11 +514,22 @@ globalThis.window = {
 // Seed operational fake tables with at least one upcoming paid session so
 // scheduled live-mode views can render.
 const today = new Date();
+const aug15Iso = "2026-08-15";
 const seededCancelled = new Set(["hyrox-2026-08-15", "hyrox-midtown-2026-08-15"]);
-const daysUntilNextSaturday = ((6 - today.getDay() + 7) % 7) || 7;
-for (let i = 0; i < 4; i++) {
-  const d = new Date(today.getTime() + (daysUntilNextSaturday + i * 7) * 24 * 60 * 60 * 1000);
-  const iso = d.toISOString().slice(0, 10);
+const normalWeeklyFixtureDates = [];
+const firstNormalSaturday = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+const daysUntilNextSaturday = ((6 - firstNormalSaturday.getDay() + 7) % 7) || 7;
+firstNormalSaturday.setDate(firstNormalSaturday.getDate() + daysUntilNextSaturday);
+for (let week = 0; normalWeeklyFixtureDates.length < 4; week += 1) {
+  const d = new Date(firstNormalSaturday);
+  d.setDate(firstNormalSaturday.getDate() + week * 7);
+  const iso = [
+    d.getFullYear(),
+    String(d.getMonth() + 1).padStart(2, "0"),
+    String(d.getDate()).padStart(2, "0"),
+  ].join("-");
+  if (iso === aug15Iso) continue;
+  normalWeeklyFixtureDates.push(iso);
   operationalTableRows.operational_sessions.push({
     id: `hyrox-${iso}`,
     activity_id: "hyrox",
@@ -588,7 +599,6 @@ for (let i = 0; i < 4; i++) {
 }
 
 // Seed the 15 August 2026 cancelled sessions with system provenance.
-const aug15Iso = "2026-08-15";
 operationalTableRows.operational_sessions.push({
   id: "hyrox-2026-08-15",
   activity_id: "hyrox",
@@ -633,6 +643,19 @@ operationalTableRows.operational_sessions.push({
   created_at: today.toISOString(),
   updated_at: today.toISOString(),
 });
+
+assert.equal(normalWeeklyFixtureDates.length, 4, "live smoke needs four normal weekly fixtures");
+assert.ok(!normalWeeklyFixtureDates.includes(aug15Iso), "normal weekly fixtures must skip the cancelled race weekend");
+assert.ok(
+  normalWeeklyFixtureDates.every((iso) => new RealDate(`${iso}T00:00:00Z`).getUTCDay() === 6),
+  "normal weekly fixture dates must all be Saturdays",
+);
+const operationalSessionIds = operationalTableRows.operational_sessions.map((row) => row.id);
+assert.equal(
+  new Set(operationalSessionIds).size,
+  operationalSessionIds.length,
+  "live operational fixture IDs must be unique",
+);
 
 operationalRpcHandler = (name, args) => {
   operationalRpcCalls.push({ name, args: structuredClone(args) });
