@@ -2183,11 +2183,17 @@ store.signIn("member@example.test");
   if (!pay.includes("Admin"))
     throw new Error("pay screen should name the on-duty collector");
   const expectedNote = `${sess.name} · ${data.fmtDate(sess.dateISO)} · ${sess.location} · Test Member`;
+  const expectedNoteControl = `data-action="copy-payment-note" data-note="${expectedNote}"`;
   if (!pay.includes('href="https://payme.hsbc.com.hk/1/test-admin"')
       || !pay.includes('target="_blank"')
-      || !pay.includes(expectedNote)
-      || !pay.includes('data-action="copy-payment-note"')) {
-    throw new Error("pay screen should open the collector PayMe link and show the suggested note");
+      || !pay.includes(`<strong>${expectedNote}</strong>`)
+      || !pay.includes(expectedNoteControl)) {
+    throw new Error("pay screen should open the collector PayMe link and render the exact suggested-note payload");
+  }
+  if (!pay.includes('name="method" value="PayMe" checked')
+      || pay.includes('name="method" value="PayMe" disabled')
+      || pay.includes('name="method" value="FPS" checked')) {
+    throw new Error("pay screen with PayMe available should default to an enabled PayMe method");
   }
   if (pay.includes("amount ready")) {
     throw new Error("PayMe instructions must not claim the amount is prefilled");
@@ -2196,8 +2202,12 @@ store.signIn("member@example.test");
   store.updateCollectorPayouts("fixture-admin", { paymeLink: "" });
   store.signIn("member@example.test");
   const fpsOnlyPay = views.viewPay(b.id);
-  if (/<a[^>]*>PayMe to/.test(fpsOnlyPay) || !fpsOnlyPay.includes("use FPS")) {
-    throw new Error("pay screen without a PayMe link should disable PayMe and direct the member to FPS");
+  if (/<a[^>]*>PayMe to/.test(fpsOnlyPay) || !fpsOnlyPay.includes("use FPS")
+      || !/<button[^>]*\sdisabled>PayMe unavailable<\/button>/.test(fpsOnlyPay)
+      || !fpsOnlyPay.includes('name="method" value="PayMe" disabled')
+      || fpsOnlyPay.includes('name="method" value="PayMe" checked')
+      || !fpsOnlyPay.includes('name="method" value="FPS" checked')) {
+    throw new Error("pay screen without a PayMe link should natively disable PayMe and default the form to FPS");
   }
   console.log("ok  pay screen safely hands off PayMe with amount guidance, note, and FPS fallback");
   store.markBookingPaid(b.id, "PayMe", "");

@@ -1848,8 +1848,8 @@ export function viewPay(bookingId) {
       <div class="card"><div class="card-body">
         <h3>Done? Tell the collector</h3>
         <div class="field-row">
-          <label class="chip"><input type="radio" name="method" value="PayMe" checked> PayMe</label>
-          <label class="chip"><input type="radio" name="method" value="FPS"> FPS</label>
+          <label class="chip"><input type="radio" name="method" value="PayMe"${payme ? " checked" : " disabled"}> PayMe</label>
+          <label class="chip"><input type="radio" name="method" value="FPS"${payme ? "" : " checked"}> FPS</label>
         </div>
         </div>
         <div class="field"><label for="pay-ref">Reference (optional)</label><input id="pay-ref" name="ref" placeholder="e.g. last 4 digits"></div>

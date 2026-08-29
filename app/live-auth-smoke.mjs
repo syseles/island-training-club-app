@@ -1622,6 +1622,10 @@ for (const marker of ["On-duty collector", "https://payme.hsbc.com.hk/1/live-adm
     throw new Error(`Member payout route after auth transition missing ${marker}`);
   }
 }
+const renderedPaymentNote = `${memberPayBooking.snapshot.name} · ${data.fmtDate(memberPayBooking.snapshot.dateISO)} · ${memberPayBooking.snapshot.location} · Micah Member`;
+const renderedPaymentNoteMatch = memberPayHtml.match(/data-action="copy-payment-note" data-note="([^"]+)"/);
+assert.equal(renderedPaymentNoteMatch?.[1], renderedPaymentNote,
+  "member payment view must render the exact delegated clipboard payload");
 if (JSON.parse(mem.get("itc.prototype.v1")).users.length !== 0) {
   throw new Error("Member payout resolution must not persist a duplicate identity directory");
 }
@@ -2541,12 +2545,22 @@ fpsControl.dataset = { action: "copy-fps", phone: "+852 6123 4567" };
 fpsControl.closest = () => fpsControl;
 await click({ target: fpsControl, preventDefault() {} });
 assert.equal(copiedPaymentText, "+852 6123 4567");
-const paymentNote = "HYROX Saturday · Sat, 5 Sep · BFT Central · Micah Member";
 const paymentNoteControl = makeElement();
-paymentNoteControl.dataset = { action: "copy-payment-note", note: paymentNote };
+paymentNoteControl.dataset = { action: "copy-payment-note", note: renderedPaymentNoteMatch[1] };
 paymentNoteControl.closest = () => paymentNoteControl;
 await click({ target: paymentNoteControl, preventDefault() {} });
-assert.equal(copiedPaymentText, paymentNote);
+assert.equal(copiedPaymentText, renderedPaymentNote,
+  "delegated copy must receive the exact payload rendered by viewPay");
+toastStack.children.length = 0;
+Object.defineProperty(globalThis.navigator, "clipboard", {
+  configurable: true,
+  value: { writeText: async () => { throw new Error("Clipboard permission denied"); } },
+});
+await assert.doesNotReject(() => click({ target: paymentNoteControl, preventDefault() {} }),
+  "clipboard rejection must be handled by delegated payment-note copying");
+assert.deepEqual(toastStack.children.map((item) => [item.textContent, item.getAttribute("role")]), [
+  ["Unable to copy payment note", "alert"],
+]);
 console.log("ok  delegated release, deferral, FPS copy, and payment-note copy controls execute prototype behavior");
 
 // Gym finalization must travel through the delegated submit seam, persist the

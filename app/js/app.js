@@ -1005,8 +1005,12 @@ document.addEventListener("click", async (e) => {
 
     case "copy-payment-note":
       if (el.dataset.note && navigator.clipboard?.writeText) {
-        await navigator.clipboard.writeText(el.dataset.note);
-        toast("Payment note copied");
+        try {
+          await navigator.clipboard.writeText(el.dataset.note);
+          toast("Payment note copied");
+        } catch {
+          toast("Unable to copy payment note", true);
+        }
       } else {
         toast("Copy unsupported on this device");
       }
