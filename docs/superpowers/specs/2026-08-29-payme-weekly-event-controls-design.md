@@ -30,7 +30,9 @@ If no valid collector PayMe link exists, the PayMe action is non-clickable and e
 
 An approved member must be able to read payout details only for collectors who appear in `collector_assignments`. Keep the payout table’s existing self/Admin RLS unchanged; expose assigned collector payout rows through a narrow authenticated `SECURITY DEFINER` RPC that rejects visitors and pending/declined profiles. Live hydration merges those assigned rows with rows already visible under normal RLS, allowing Admin payout management and cold member payment handoff without exposing arbitrary unassigned payout profiles.
 
-Live payout edits are authoritative only after the Supabase update succeeds. A rejected RPC must leave the device-local payout cache unchanged, keep the submitted form rendered, and surface error feedback. Disable the payout form controls while the request is pending to prevent duplicate submissions.
+Live payout edits are authoritative only after the Supabase update succeeds. A rejected RPC must leave the device-local payout cache unchanged, keep the submitted form rendered, and surface error feedback. Capture `FormData` before disabling controls because native `FormData` omits disabled inputs; then disable the payout form controls while the request is pending to prevent duplicate submissions.
+
+Assigned-payout hydration is optional enrichment, not a prerequisite for Schedule or Admin Activities. Failure of `get_assigned_collector_payout_profiles()`—including an undeployed migration, anonymous execution denial, or pending/declined role denial—must not discard successfully fetched sessions, bookings, templates, assignments, or venue overrides. Continue with directly RLS-visible payout rows, expose the payout problem as degraded payment data, and keep HYROX and lunch sessions visible. Once migration `20260829000005_assigned_collector_payout_rpc.sql` is applied, approved cold-member hydration gains the assigned collector’s payout row.
 
 ## Suggested payment note
 
@@ -92,6 +94,9 @@ The combined section changes hierarchy and copy only. It does not merge the dist
 
 PayMe smoke coverage will verify:
 
+- Native-form semantics preserve the entered PayMe link by capturing payload before controls are disabled.
+- An unavailable/unauthorized assigned-payout RPC degrades only payout enrichment; Schedule still shows paid HYROX and RSVP lunch sessions, and Admin Paid Sessions remains populated.
+- Anonymous, pending, and declined hydration can still load public operational sessions.
 - A cold approved-member hydration receives the assigned collector’s payout row through the narrow RPC even when direct table RLS returns no collector payout rows.
 - Pending/declined/anonymous callers cannot use the assigned-payout RPC, and unassigned payout profiles are not returned.
 - Rejected live payout updates leave the prior device-local value unchanged while preserving the form and feedback.
