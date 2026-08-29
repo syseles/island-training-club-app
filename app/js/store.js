@@ -1429,7 +1429,9 @@ export function recordPrayer({ userId, name, request }) {
 export function collectorFor(sessionId) {
   // Resolve identity from Supabase's in-memory directory in live mode and
   // compose only UUID-keyed payout operations from local persistence.
-  const withPayouts = (user) => user ? { ...user, ...(state.paymentPayouts[user.id] || {}) } : null;
+  const withPayouts = (user) => user
+    ? { ...user, ...payoutDetailsForRead(state.paymentPayouts[user.id]) }
+    : null;
   if (isLive()) {
     const dateISO = sessionDateOf(sessionId);
     if (dateISO) {
@@ -1438,7 +1440,7 @@ export function collectorFor(sessionId) {
         const payouts = liveOps.livePayoutFor(slot.userId);
         const directory = livePaymentDirectory.get(slot.userId);
         const assigned = directory || (payouts ? { id: slot.userId, fullName: "On-duty collector", preferredName: null } : null);
-        if (assigned) return payouts ? { ...assigned, ...payouts } : assigned;
+        if (assigned) return payouts ? { ...assigned, ...payoutDetailsForRead(payouts) } : assigned;
       }
     }
     const candidates = [...livePaymentDirectory.values()];
@@ -1456,7 +1458,12 @@ export function collectorFor(sessionId) {
       }
       const payouts = state.paymentPayouts[slot.userId];
       if (payouts) {
-        return { id: slot.userId, fullName: "On-duty collector", preferredName: null, ...payouts };
+        return {
+          id: slot.userId,
+          fullName: "On-duty collector",
+          preferredName: null,
+          ...payoutDetailsForRead(payouts),
+        };
       }
     }
   }
@@ -1487,15 +1494,48 @@ export function setDuty(userId, saturdayISO) {
   return state.duty[saturdayISO];
 }
 
+export function normalizePayMeLink(raw) {
+  let value = String(raw ?? "").trim();
+  if (!value) return "";
+  if (!/^[a-z][a-z\d+.-]*:\/\//i.test(value)) value = `https://${value}`;
+  let url;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new Error("Enter your personal PayMe link.");
+  }
+  const personalPath = url.pathname.split("/").filter(Boolean);
+  if (url.protocol !== "https:"
+      || url.hostname.toLowerCase() !== "payme.hsbc.com.hk"
+      || personalPath.length === 0) {
+    throw new Error("Enter your personal PayMe link from PayMe.");
+  }
+  return url.toString().replace(/\/$/, "");
+}
+
+function payoutDetailsForRead(payouts) {
+  const details = payouts || {};
+  let paymeLink = "";
+  try {
+    paymeLink = normalizePayMeLink(details.paymeLink);
+  } catch {
+    // Persisted or live legacy values must not break payout views.
+  }
+  return { ...details, paymeLink };
+}
+
 export function collectorPayoutsFor(userId) {
   const profile = paymentUserById(userId);
   const profilePhone = String(profile?.phone || "").trim();
   if (isLive()) {
     const live = liveOps.livePayoutFor(userId);
-    if (live) return { paymeLink: live.paymeLink || "", fpsPhone: live.fpsPhone || profilePhone };
+    if (live) {
+      const normalized = payoutDetailsForRead(live);
+      return { paymeLink: normalized.paymeLink, fpsPhone: live.fpsPhone || profilePhone };
+    }
     return { paymeLink: "", fpsPhone: profilePhone };
   }
-  const saved = state.paymentPayouts[userId] || {};
+  const saved = payoutDetailsForRead(state.paymentPayouts[userId]);
   return {
     paymeLink: "",
     fpsPhone: profilePhone || saved.fpsPhone || "",
@@ -1511,9 +1551,10 @@ export function updateCollectorPayouts(userId, { paymeLink, fpsPhone }) {
   const profilePhone = String(profile?.phone || "").trim();
   const resolvedFpsPhone = profilePhone || String(fpsPhone ?? "").trim();
   if (isLive()) {
-    const live = liveOps.liveUpdatePayout(userId, paymeLink, resolvedFpsPhone);
+    const normalizedPayMeLink = normalizePayMeLink(paymeLink);
+    const live = liveOps.liveUpdatePayout(userId, normalizedPayMeLink, resolvedFpsPhone);
     state.paymentPayouts[userId] = {
-      paymeLink: String(paymeLink ?? "").trim(),
+      paymeLink: normalizedPayMeLink,
       fpsPhone: resolvedFpsPhone,
     };
     save();
@@ -1523,7 +1564,7 @@ export function updateCollectorPayouts(userId, { paymeLink, fpsPhone }) {
   const target = paymentUserById(userId);
   if (!target || target.status !== "approved" || !PAYMENT_ADMIN_ROLES.has(target.role)) return null;
   state.paymentPayouts[target.id] = {
-    paymeLink: String(paymeLink ?? "").trim(),
+    paymeLink: normalizePayMeLink(paymeLink),
     fpsPhone: profilePhone || String(fpsPhone ?? "").trim(),
   };
   save();

@@ -1564,23 +1564,24 @@ if (!await store.markBookingPaid(memberUuidBooking.id, "FPS", "LIVE-MEMBER-REF",
 }
 await store.setDuty(authUser.id, gatedPaidSession.dateISO);
 await store.updateCollectorPayouts(authUser.id, {
-  paymeLink: "https://payme.example/live-admin",
+  paymeLink: "payme.hsbc.com.hk/1/live-admin",
   fpsPhone: "+852 6123 4567",
 });
 let liveOpsHtml = await views.viewAdmin("payments");
-for (const marker of ["Micah Member", "LIVE-MEMBER-REF", "Riley", "https://payme.example/live-admin", "+852 6123 4567"]) {
+for (const marker of ["Micah Member", "LIVE-MEMBER-REF", "Riley", "https://payme.hsbc.com.hk/1/live-admin", "+852 6123 4567"]) {
   if (!liveOpsHtml.includes(marker)) {
     throw new Error(`Live Payment Ops composition missing ${marker}`);
   }
 }
 const persistedLiveOps = JSON.parse(mem.get("itc.prototype.v1"));
 if (persistedLiveOps.users.length !== 0
+    || persistedLiveOps.paymentPayouts?.[authUser.id]?.paymeLink !== "https://payme.hsbc.com.hk/1/live-admin"
     || persistedLiveOps.paymentPayouts?.[authUser.id]?.fpsPhone !== "+852 6123 4567") {
   throw new Error("Live Payment Ops must persist UUID-keyed details without a local identity directory");
 }
 store.load();
 liveOpsHtml = await views.viewAdmin("payments");
-if (!liveOpsHtml.includes("https://payme.example/live-admin")
+if (!liveOpsHtml.includes("https://payme.hsbc.com.hk/1/live-admin")
     || !liveOpsHtml.includes("LIVE-MEMBER-REF")
     || liveOpsHtml.includes('name="fpsPhone"')
     || !liveOpsHtml.includes("+852 6123 4567")) {
@@ -1616,7 +1617,7 @@ await signOutForMember;
 await store.getCurrentUser();
 store.load();
 const memberPayHtml = views.viewPay(memberPayBooking.id);
-for (const marker of ["On-duty collector", "https://payme.example/live-admin", "+852 6123 4567", 'data-action="copy-fps"']) {
+for (const marker of ["On-duty collector", "https://payme.hsbc.com.hk/1/live-admin", "+852 6123 4567", 'data-action="copy-fps"']) {
   if (typeof memberPayHtml !== "string" || !memberPayHtml.includes(marker)) {
     throw new Error(`Member payout route after auth transition missing ${marker}`);
   }
@@ -2683,6 +2684,28 @@ assert.ok(toastStack.children.some((item) =>
   item.textContent === "Venue override setup unavailable"
 ));
 console.log("ok  failed weekly venue submit preserves form state without rerendering");
+
+const invalidPayoutForm = new HTMLFormElement();
+invalidPayoutForm.id = "";
+invalidPayoutForm.dataset = { action: "form-payouts" };
+invalidPayoutForm.fields = { paymeLink: "not a url" };
+const htmlBeforePayoutFailure = viewEl.innerHTML;
+const payoutBeforeFailure = JSON.parse(mem.get("itc.prototype.v1"))
+  .paymentPayouts?.[authUser.id]?.paymeLink;
+toastStack.children.length = 0;
+await domListeners.get("submit")({ target: invalidPayoutForm, preventDefault() {} });
+await new Promise(setImmediate);
+assert.equal(viewEl.innerHTML, htmlBeforePayoutFailure);
+assert.equal(invalidPayoutForm.fields.paymeLink, "not a url");
+assert.equal(
+  JSON.parse(mem.get("itc.prototype.v1")).paymentPayouts?.[authUser.id]?.paymeLink,
+  payoutBeforeFailure
+);
+assert.deepEqual(toastStack.children.map((item) => item.textContent), [
+  "Enter your personal PayMe link.",
+]);
+assert.equal(toastStack.children[0].getAttribute("role"), "alert");
+console.log("ok  invalid payout submit preserves form state and shows validation feedback");
 
 // Legacy member-management URLs canonicalize instead of rendering the removed
 // row/avatar implementation.

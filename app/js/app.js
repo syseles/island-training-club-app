@@ -1289,12 +1289,16 @@ document.addEventListener("submit", async (e) => {
       const member = store.currentUser();
       const application = await store.getMyApplication();
       const profilePhone = String(application?.mobile || application?.phone || member?.phone || "").trim();
-      store.updateCollectorPayouts(member.id, {
-        paymeLink: fd.get("paymeLink"),
-        fpsPhone: profilePhone,
-      });
-      toast("Payout details saved");
-      render();
+      try {
+        await store.updateCollectorPayouts(member.id, {
+          paymeLink: fd.get("paymeLink"),
+          fpsPhone: profilePhone,
+        });
+        toast("Payout details saved");
+        render();
+      } catch (err) {
+        toast(err.message || "Unable to save payout details", true);
+      }
       break;
     }
 

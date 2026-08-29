@@ -1,6 +1,8 @@
 // Headless smoke test: render every view for every user state.
 // Run: node --input-type=module < smoke.mjs  (from the app/ directory)
 
+import assert from "node:assert/strict";
+
 // --- localStorage shim ---
 const mem = new Map();
 globalThis.localStorage = {
@@ -1998,6 +2000,23 @@ installLocalFixtures(); store.signIn("member@example.test");
 }
 
 // --- HYROX payment system: duty roster (Task 7) ---
+assert.equal(
+  store.normalizePayMeLink("payme.hsbc.com.hk/1/collector-code"),
+  "https://payme.hsbc.com.hk/1/collector-code"
+);
+assert.equal(store.normalizePayMeLink(""), "");
+for (const invalid of [
+  "https://payme.hsbc.com.hk/",
+  "http://payme.hsbc.com.hk/1/collector-code",
+  "https://example.com/collector",
+  "not a url",
+]) {
+  assert.throws(
+    () => store.normalizePayMeLink(invalid),
+    /personal PayMe link/
+  );
+}
+
 store.resetLocalData();
 installLocalFixtures();
 // Add a second admin so we can exercise a handover.
@@ -2033,18 +2052,57 @@ installLocalFixtures();
     throw new Error("dutyFor should record the handover");
   if (store.collectorFor(sess.id)?.id !== "fixture-super")
     throw new Error("collectorFor should follow the handover");
+
+  const legacy = JSON.parse(mem.get("itc.prototype.v1"));
+  legacy.paymentPayouts["fixture-super"] = {
+    paymeLink: "payme.hsbc.com.hk/1/legacy-super",
+    fpsPhone: "+852 0000 0000",
+  };
+  mem.set("itc.prototype.v1", JSON.stringify(legacy));
+  store.load();
+  assert.equal(
+    store.collectorPayoutsFor("fixture-super").paymeLink,
+    "https://payme.hsbc.com.hk/1/legacy-super"
+  );
+  assert.equal(
+    store.collectorFor(sess.id).paymeLink,
+    "https://payme.hsbc.com.hk/1/legacy-super"
+  );
+
+  const invalidLegacy = JSON.parse(mem.get("itc.prototype.v1"));
+  invalidLegacy.paymentPayouts["fixture-super"].paymeLink = "https://example.com/not-payme";
+  mem.set("itc.prototype.v1", JSON.stringify(invalidLegacy));
+  store.load();
+  assert.equal(store.collectorPayoutsFor("fixture-super").paymeLink, "");
+  assert.equal(store.collectorFor(sess.id).paymeLink, "");
+
   store.updateCollectorPayouts("fixture-super", {
-    paymeLink: "https://payme.hsbc.com.hk/test-super",
+    paymeLink: "payme.hsbc.com.hk/1/test-super",
   });
+  assert.equal(
+    JSON.parse(mem.get("itc.prototype.v1")).paymentPayouts["fixture-super"].paymeLink,
+    "https://payme.hsbc.com.hk/1/test-super"
+  );
+  assert.throws(
+    () => store.updateCollectorPayouts("fixture-super", { paymeLink: "not a url" }),
+    /personal PayMe link/
+  );
+  assert.equal(
+    JSON.parse(mem.get("itc.prototype.v1")).paymentPayouts["fixture-super"].paymeLink,
+    "https://payme.hsbc.com.hk/1/test-super"
+  );
+
   store.signIn("super@example.test");
   const payoutHtml = await views.viewAdmin("payments");
-  if (payoutHtml.includes('name="fpsPhone"') || !payoutHtml.includes("+852 5000 0003"))
-    throw new Error("payout form should show the Membership Details phone without an FPS input");
+  if (payoutHtml.includes('name="fpsPhone"')
+      || !payoutHtml.includes("https://payme.hsbc.com.hk/1/test-super")
+      || !payoutHtml.includes("+852 5000 0003"))
+    throw new Error("payout form should show normalized PayMe and the Membership Details phone without an FPS input");
   const c = store.collectorFor(sess.id);
-  if (c.paymeLink !== "https://payme.hsbc.com.hk/test-super"
+  if (c.paymeLink !== "https://payme.hsbc.com.hk/1/test-super"
       || c.fpsPhone !== "+852 5000 0003")
-    throw new Error("collector payout details should use the profile phone");
-  console.log("ok  duty switch changes whose PayMe link and profile FPS phone are shown");
+    throw new Error("collector payout details should normalize PayMe and use the profile phone");
+  console.log("ok  duty switch normalizes PayMe and uses the profile FPS phone");
 }
 
 // --- HYROX payment system: schedule & activity surfacing (Task 8) ---
