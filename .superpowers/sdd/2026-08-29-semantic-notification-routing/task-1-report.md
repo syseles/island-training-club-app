@@ -80,3 +80,39 @@ The same failure reproduces from an untouched `git archive HEAD` baseline. On Sa
 - Booking/session IDs inferred: none.
 - Delegated mark-read semantics changed: no.
 - Migration/Task 2 work: none.
+
+## Fix Round 1 evidence
+
+Imported the reviewer-established prerequisite commit `04bfb9c` unchanged via cherry-pick as:
+
+```text
+f1b3176 test(smoke): stabilize same-day session checks
+```
+
+The imported commit is test-only (`app/smoke.mjs`: 11 insertions, 1 deletion). Its stable patch ID matches `04bfb9c` exactly:
+
+```text
+04bfb9c patch-id: d577e0bffa08402144b78c0e7dbd148c3188d14f
+f1b3176 patch-id: d577e0bffa08402144b78c0e7dbd148c3188d14f
+```
+
+Fresh verification after the import:
+
+```sh
+node app/smoke.mjs
+# exit 0 — All smoke tests passed.
+
+node app/live-auth-smoke.mjs
+# exit 0
+
+git diff --check
+# exit 0
+
+git diff --check f0ae611..HEAD
+# exit 0
+
+git diff --exit-code b60954b..HEAD -- app/js/data.js app/live-auth-smoke.mjs
+# exit 0 — prerequisite did not alter notification production or live-auth behavior
+```
+
+The earlier date-sensitive baseline concern is resolved by the isolated prerequisite commit. Notification fallback behavior remains unchanged from `b60954b`.
