@@ -172,6 +172,267 @@ update public.operational_sessions
        cancel_reason = 'HYROX race weekend'
  where id in ('hyrox-2026-08-15', 'hyrox-midtown-2026-08-15');
 
+-- RSVP integrity: exact public counts, requires_rsvp enforcement, Hong Kong
+-- start boundaries, and preservation of paid/uncapped reservation behavior.
+do $$
+declare
+  v_member_a        constant uuid := 'bb000000-0000-0000-0000-00000000b001';
+  v_member_b        constant uuid := 'dd000000-0000-0000-0000-00000000d001';
+  v_member_c        constant uuid := 'ee000000-0000-0000-0000-00000000e001';
+  v_admin           constant uuid := 'aa000000-0000-0000-0000-00000000a001';
+  v_super           constant uuid := 'ff000000-0000-0000-0000-00000000f001';
+  v_hk_now          timestamp := now() at time zone 'Asia/Hong_Kong';
+  v_count_date      date := (now() at time zone 'Asia/Hong_Kong')::date + 400;
+  v_paid_date       date := (now() at time zone 'Asia/Hong_Kong')::date + 401;
+  v_free_date       date := (now() at time zone 'Asia/Hong_Kong')::date + 402;
+  v_boundary_date   date := (now() at time zone 'Asia/Hong_Kong')::date;
+  v_count_session   text;
+  v_paid_session    text;
+  v_free_session    text;
+  v_boundary_session text;
+  v_free_booking    uuid;
+  v_boundary_booking uuid;
+  v_paid_booking    uuid;
+  v_lunch_booking   uuid;
+  v_going_count     bigint;
+  v_visible_count   integer;
+begin
+  v_count_session := 'lunch-' || v_count_date::text;
+  v_paid_session := 'hyrox-' || v_paid_date::text;
+  v_free_session := 'event-free-integrity-' || v_free_date::text;
+  v_boundary_session := 'lunch-' || v_boundary_date::text;
+
+  insert into public.operational_activity_templates
+    (activity_id, name, venue, weekday, start_time, duration_minutes,
+     capacity, price_hkd, default_open, active, category, maps_query, requires_rsvp)
+  values
+    ('event-free-integrity', 'Integrity Free Event', 'Tamar Park',
+     extract(dow from v_free_date)::integer, time '19:00', 60,
+     20, 0, true, false, 'Socials', 'Tamar Park', false)
+  on conflict (activity_id) do update
+    set price_hkd = excluded.price_hkd,
+        requires_rsvp = excluded.requires_rsvp,
+        active = excluded.active;
+
+  insert into public.operational_sessions
+    (id, activity_id, session_date, start_time, duration_minutes,
+     venue, capacity, price_hkd, is_open)
+  values
+    (v_count_session, 'lunch', v_count_date, time '12:45', 75,
+     'TBC', null, 0, true),
+    (v_paid_session, 'hyrox', v_paid_date, time '11:15', 60,
+     'BFT Causeway Bay', 20, 180, true),
+    (v_free_session, 'event-free-integrity', v_free_date, time '19:00', 60,
+     'Tamar Park', 20, 0, true)
+  on conflict (id) do update
+    set start_time = excluded.start_time,
+        capacity = excluded.capacity,
+        price_hkd = excluded.price_hkd,
+        is_open = excluded.is_open;
+
+  -- Two confirmed lunch bookings plus statuses that must not count.
+  insert into public.operational_bookings
+    (profile_id, session_id, status, pay_deadline_at, paid_at, snapshot)
+  values
+    (v_member_a, v_count_session, 'confirmed', now(), now(),
+     jsonb_build_object('name', 'Post-Training Lunch', 'session_date', v_count_date,
+       'start_time', '12:45', 'venue', 'TBC', 'price_hkd', 0)),
+    (v_member_b, v_count_session, 'confirmed', now(), now(),
+     jsonb_build_object('name', 'Post-Training Lunch', 'session_date', v_count_date,
+       'start_time', '12:45', 'venue', 'TBC', 'price_hkd', 0)),
+    (v_member_c, v_count_session, 'reserved', now(), null,
+     jsonb_build_object('name', 'Post-Training Lunch', 'session_date', v_count_date,
+       'start_time', '12:45', 'venue', 'TBC', 'price_hkd', 0)),
+    (v_admin, v_count_session, 'cancelled', now(), null,
+     jsonb_build_object('name', 'Post-Training Lunch', 'session_date', v_count_date,
+       'start_time', '12:45', 'venue', 'TBC', 'price_hkd', 0)),
+    (v_super, v_count_session, 'deferred', now(), now(),
+     jsonb_build_object('name', 'Post-Training Lunch', 'session_date', v_count_date,
+       'start_time', '12:45', 'venue', 'TBC', 'price_hkd', 0));
+
+  select going_count into v_going_count
+    from public.get_operational_rsvp_counts()
+   where session_id = v_count_session;
+  perform pg_temp.op_assert(v_going_count = 2,
+    'RSVP aggregate counts only two confirmed lunch bookings');
+  perform pg_temp.op_assert(
+    (select p.proallargnames = array['session_id', 'going_count']::text[]
+       from pg_proc p
+      where p.oid = 'public.get_operational_rsvp_counts()'::regprocedure),
+    'RSVP aggregate exposes no identity output columns'
+  );
+  perform pg_temp.op_assert(
+    has_function_privilege('anon', 'public.get_operational_rsvp_counts()', 'execute')
+    and has_function_privilege('authenticated', 'public.get_operational_rsvp_counts()', 'execute'),
+    'anon and authenticated can execute only the identity-free count aggregate'
+  );
+  perform pg_temp.op_assert(
+    (select relrowsecurity from pg_class
+      where oid = 'public.operational_bookings'::regclass)
+    and exists (
+      select 1 from pg_policies
+       where schemaname = 'public'
+         and tablename = 'operational_bookings'
+         and policyname = 'member read own operational bookings'
+    ),
+    'direct operational booking RLS remains enabled and unchanged'
+  );
+
+  set local role anon;
+  select going_count into v_going_count
+    from public.get_operational_rsvp_counts()
+   where session_id = v_count_session;
+  select count(*) into v_visible_count
+    from public.operational_bookings
+   where session_id = v_count_session;
+  reset role;
+  perform pg_temp.op_assert(v_going_count = 2,
+    'anon receives the exact RSVP total through the aggregate');
+  perform pg_temp.op_assert(v_visible_count = 0,
+    'anon receives no direct booking rows');
+
+  perform set_config('request.jwt.claim.sub', v_member_a::text, true);
+  set local role authenticated;
+  select going_count into v_going_count
+    from public.get_operational_rsvp_counts()
+   where session_id = v_count_session;
+  select count(*) into v_visible_count
+    from public.operational_bookings
+   where session_id = v_count_session;
+  reset role;
+  perform pg_temp.op_assert(v_going_count = 2,
+    'ordinary member receives the exact all-member RSVP total');
+  perform pg_temp.op_assert(v_visible_count = 1,
+    'ordinary member direct booking query sees only their own row');
+
+  -- Zero-price ordinary free events cannot enter the RSVP reserve path.
+  perform set_config('request.jwt.claim.sub', v_member_a::text, true);
+  set local role authenticated;
+  begin
+    perform public.reserve_operational_session(v_free_session);
+    raise exception 'ordinary free event reserve should fail';
+  exception when others then
+    if sqlerrm not like '%Session does not require RSVP.%' then raise; end if;
+  end;
+  reset role;
+  perform pg_temp.op_assert(
+    not exists (select 1 from public.operational_bookings
+      where profile_id = v_member_a and session_id = v_free_session),
+    'rejected ordinary free reserve creates no booking row'
+  );
+
+  -- Even a forged confirmed free-event row cannot be withdrawn through RSVP.
+  insert into public.operational_bookings
+    (profile_id, session_id, status, pay_deadline_at, paid_at, snapshot)
+  values
+    (v_member_b, v_free_session, 'confirmed', now(), now(),
+     jsonb_build_object('name', 'Integrity Free Event', 'session_date', v_free_date,
+       'start_time', '19:00', 'venue', 'Tamar Park', 'price_hkd', 0))
+  returning id into v_free_booking;
+  perform set_config('request.jwt.claim.sub', v_member_b::text, true);
+  set local role authenticated;
+  begin
+    perform public.withdraw_operational_rsvp(v_free_booking);
+    raise exception 'ordinary free event withdraw should fail';
+  exception when others then
+    if sqlerrm not like '%Only your own confirmed RSVP can be withdrawn.%' then raise; end if;
+  end;
+  reset role;
+  perform pg_temp.op_assert(
+    (select status = 'confirmed' from public.operational_bookings where id = v_free_booking),
+    'rejected ordinary free withdraw does not mutate its booking row'
+  );
+
+  -- now() is transaction-stable. Split that same instant into Hong Kong date
+  -- and wall time so equality proves the at-start rejection exactly.
+  delete from public.operational_bookings where session_id = v_boundary_session;
+  insert into public.operational_sessions
+    (id, activity_id, session_date, start_time, duration_minutes,
+     venue, capacity, price_hkd, is_open)
+  values
+    (v_boundary_session, 'lunch', v_boundary_date,
+     (v_hk_now + interval '1 hour')::time, 75, 'TBC', null, 0, true)
+  on conflict (id) do update
+    set start_time = excluded.start_time,
+        cancelled_at = null,
+        cancelled_by = null,
+        cancelled_source = null,
+        cancel_reason = null,
+        capacity = null,
+        price_hkd = 0,
+        is_open = true;
+
+  perform set_config('request.jwt.claim.sub', v_member_a::text, true);
+  set local role authenticated;
+  select id into v_boundary_booking
+    from public.reserve_operational_session(v_boundary_session);
+  reset role;
+  perform pg_temp.op_assert(v_boundary_booking is not null,
+    'lunch RSVP succeeds before its Hong Kong start time');
+
+  update public.operational_sessions
+     set start_time = v_hk_now::time
+   where id = v_boundary_session;
+
+  perform set_config('request.jwt.claim.sub', v_member_b::text, true);
+  set local role authenticated;
+  begin
+    perform public.reserve_operational_session(v_boundary_session);
+    raise exception 'RSVP at Hong Kong start should fail';
+  exception when others then
+    if sqlerrm not like '%Session has already started.%' then raise; end if;
+  end;
+  reset role;
+  perform pg_temp.op_assert(
+    not exists (select 1 from public.operational_bookings
+      where profile_id = v_member_b and session_id = v_boundary_session),
+    'at-start Hong Kong reserve creates no booking row'
+  );
+
+  perform set_config('request.jwt.claim.sub', v_member_a::text, true);
+  set local role authenticated;
+  begin
+    perform public.withdraw_operational_rsvp(v_boundary_booking);
+    raise exception 'RSVP withdraw at Hong Kong start should fail';
+  exception when others then
+    if sqlerrm not like '%Session has already started.%' then raise; end if;
+  end;
+  reset role;
+  perform pg_temp.op_assert(
+    (select status = 'confirmed' from public.operational_bookings
+      where id = v_boundary_booking),
+    'at-start Hong Kong withdraw leaves RSVP confirmed'
+  );
+
+  -- Paid HYROX remains reserved with capacity/payment semantics.
+  perform set_config('request.jwt.claim.sub', v_member_c::text, true);
+  set local role authenticated;
+  select id into v_paid_booking
+    from public.reserve_operational_session(v_paid_session);
+  reset role;
+  perform pg_temp.op_assert(
+    (select status = 'reserved' and payment_marked_at is null
+       from public.operational_bookings where id = v_paid_booking),
+    'paid HYROX reservation behavior is preserved'
+  );
+
+  -- The pre-seeded noise does not cap lunch; another member confirms instantly.
+  perform set_config('request.jwt.claim.sub', v_admin::text, true);
+  set local role authenticated;
+  select id into v_lunch_booking
+    from public.reserve_operational_session(v_count_session);
+  reset role;
+  perform pg_temp.op_assert(
+    (select status = 'confirmed' from public.operational_bookings
+      where id = v_lunch_booking)
+    and (select capacity is null from public.operational_sessions
+      where id = v_count_session),
+    'uncapped lunch RSVP still confirms instantly'
+  );
+
+  perform set_config('request.jwt.claim.sub', '', true);
+end $$;
+
 -- run tests as a SQL function that can switch auth.uid() per case.
 do $$
 declare

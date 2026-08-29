@@ -810,6 +810,10 @@ export function spotsLeft(session) {
 
 export function attendeeCountFor(session) {
   if (!session?.id) return 0;
+  if (isLive()) {
+    const exactCount = liveOps.liveRsvpCountFor(session.id);
+    if (exactCount !== null) return exactCount;
+  }
   return activeBookingsForSession(session.id).length;
 }
 
@@ -1353,9 +1357,13 @@ export function weekVenueOverride(sessionId) {
 
 export function upcomingSessions(days = 14) {
   if (isLive()) {
-    const todayISO = isoDate(todayLocal());
+    const today = todayLocal();
+    const todayISO = isoDate(today);
+    const end = new Date(today);
+    end.setDate(end.getDate() + days - 1);
+    const endISO = isoDate(end);
     const livePaid = liveOps.listLiveSessions()
-      .filter((s) => s.dateISO >= todayISO)
+      .filter((s) => s.dateISO >= todayISO && s.dateISO <= endISO)
       .sort((a, b) =>
         a.dateISO.localeCompare(b.dateISO) || String(a.time).localeCompare(String(b.time))
       )
@@ -1366,7 +1374,7 @@ export function upcomingSessions(days = 14) {
       }));
     const freeSessions = sessionsInRange(
       state.activities.filter((a) => a.kind === "free"),
-      todayLocal(),
+      today,
       days
     ).map((s) => {
       const decorated = decorateFreeSession(s);

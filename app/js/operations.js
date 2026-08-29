@@ -42,6 +42,8 @@ const liveCache = {
   assignments: new Map(),
   payout: new Map(),
   venueOverrides: new Map(),
+  rsvpCounts: new Map(),
+  rsvpCountError: null,
   loaded: false,
   loading: null,
   error: null,
@@ -243,6 +245,19 @@ function replaceState(payload) {
   liveCache.venueOverrides = new Map(
     (payload.venueOverrides || []).map((row) => [row.sessionId, row])
   );
+  liveCache.rsvpCounts = new Map();
+  liveCache.rsvpCountError = payload.rsvpCountError || null;
+  if (!liveCache.rsvpCountError) {
+    for (const session of payload.sessions) {
+      if (session.kind === "rsvp") liveCache.rsvpCounts.set(session.id, 0);
+    }
+    for (const row of payload.rsvpCounts || []) {
+      const count = Number(row.going_count);
+      if (row.session_id && Number.isInteger(count) && count >= 0) {
+        liveCache.rsvpCounts.set(row.session_id, count);
+      }
+    }
+  }
   liveCache.loaded = true;
   liveCache.error = null;
   liveCache.updatedAt = Date.now();
@@ -288,10 +303,20 @@ function operationalProblem(error) {
 
 let hydrationPromise = null;
 
+async function fetchRsvpCounts() {
+  try {
+    const { data, error } = await supabase.rpc("get_operational_rsvp_counts");
+    if (error) throw operationalProblem(error);
+    return { rows: data || [], error: null };
+  } catch (err) {
+    return { rows: [], error: operationalProblem(err) };
+  }
+}
+
 async function fetchOperationalState() {
   if (!isLive() || !supabase) return null;
   const since = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
-  const [sessions, bookings, queues, receipts, assignments, payouts, templates, venueOverrides] = await Promise.all([
+  const [sessions, bookings, queues, receipts, assignments, payouts, templates, venueOverrides, rsvpCounts] = await Promise.all([
     supabase.from("operational_sessions").select("*").gte("session_date", since).order("session_date"),
     supabase.from("operational_bookings").select("*"),
     supabase.from("operational_queue_entries").select("*")
@@ -302,6 +327,7 @@ async function fetchOperationalState() {
     supabase.from("collector_payout_profiles").select("*"),
     supabase.from("operational_activity_templates").select("*").order("activity_id"),
     supabase.from("operational_session_venue_overrides").select("*"),
+    fetchRsvpCounts(),
   ]);
   for (const result of [sessions, bookings, queues, receipts, assignments, payouts, templates, venueOverrides]) {
     if (result.error) throw operationalProblem(result.error);
@@ -319,6 +345,8 @@ async function fetchOperationalState() {
     assignments: (assignments.data || []).map(buildAssignmentRow),
     payouts: (payouts.data || []).map(buildPayoutRow),
     venueOverrides: (venueOverrides.data || []).map(buildVenueOverrideRow),
+    rsvpCounts: rsvpCounts.rows,
+    rsvpCountError: rsvpCounts.error,
   };
 }
 
@@ -379,6 +407,9 @@ export function operationalStateStatus() {
     loading: !!liveCache.loading,
     loaded: liveCache.loaded,
     error: liveCache.error ? String(liveCache.error.message || liveCache.error) : null,
+    rsvpCountError: liveCache.rsvpCountError
+      ? String(liveCache.rsvpCountError.message || liveCache.rsvpCountError)
+      : null,
     updatedAt: liveCache.updatedAt,
   };
 }
@@ -501,6 +532,12 @@ export function liveConfirmedBookingsForSession(sessionId) {
   return liveCache.bookings.filter(
     (b) => b.sessionId === sessionId && b.status === "confirmed"
   );
+}
+
+export function liveRsvpCountFor(sessionId) {
+  return liveCache.rsvpCounts.has(sessionId)
+    ? liveCache.rsvpCounts.get(sessionId)
+    : null;
 }
 
 export function liveQueueForSession(sessionId) {

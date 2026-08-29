@@ -91,6 +91,39 @@ const lunchMeetingRpcMigrationSource = readFileSync(
   resolve(__dirnameSmoke, "../supabase/migrations/20260829000006_lunch_venue_meeting_point_rpc.sql"),
   "utf8"
 );
+const rsvpIntegrityMigrationSource = readFileSync(
+  resolve(__dirnameSmoke, "../supabase/migrations/20260829000008_rsvp_integrity.sql"),
+  "utf8"
+);
+for (const marker of [
+  "get_operational_rsvp_counts",
+  "requires_rsvp",
+  "status = 'confirmed'",
+  "at time zone 'Asia/Hong_Kong'",
+  "reserve_operational_session",
+  "withdraw_operational_rsvp",
+  "grant execute on function public.get_operational_rsvp_counts() to anon, authenticated",
+]) assert.ok(rsvpIntegrityMigrationSource.includes(marker));
+const rsvpCountFunctionSource = rsvpIntegrityMigrationSource.match(
+  /create or replace function public\.get_operational_rsvp_counts\(\)[\s\S]*?\n\$\$;/
+)?.[0] || "";
+const rsvpCountReturnColumns = rsvpCountFunctionSource.match(
+  /returns table\s*\(([\s\S]*?)\)/i
+)?.[1].replace(/\s+/g, " ").trim();
+assert.equal(rsvpCountReturnColumns, "session_id text, going_count bigint",
+  "public RSVP counts must expose only session ID and confirmed total");
+assert.doesNotMatch(rsvpIntegrityMigrationSource,
+  /grant\s+(?:all|select|insert|update|delete)[\s\S]*?on\s+(?:table\s+)?public\.operational_bookings/i,
+  "RSVP count migration must not grant direct booking-table access");
+const upcomingSessionsSource = storeSource.match(
+  /export function upcomingSessions\(days = 14\)[\s\S]*?\n}\n\nexport function nextSession/
+)?.[0] || "";
+assert.match(upcomingSessionsSource,
+  /end\.setDate\(end\.getDate\(\) \+ days - 1\)/,
+  "live upcomingSessions must compute an inclusive calendar-day end date");
+assert.match(upcomingSessionsSource,
+  /s\.dateISO >= todayISO && s\.dateISO <= endISO/,
+  "live upcomingSessions must apply its inclusive upper date bound");
 const lunchMeetingRpcSixArgumentSource = lunchMeetingRpcMigrationSource.match(
   /create or replace function public\.set_session_venue\([\s\S]*?p_meeting_lat double precision,[\s\S]*?p_meeting_lng double precision[\s\S]*?\n\$\$;/
 )?.[0] || "";
