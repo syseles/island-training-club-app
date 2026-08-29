@@ -30,7 +30,11 @@ The lunch remains an RSVP event. Venue editing does not change capacity, RSVP st
 
 Every “X going” label must count confirmed bookings directly, not depend on whether the booking owner exists in the local prototype identity array. Live mode deliberately keeps `state.users` empty, so attendee-name resolution cannot be used as the count source.
 
-Expose a dedicated count helper at the store seam and use it on Schedule, Activity Details, and Admin RSVP controls. The count must update from the refreshed operational booking cache:
+Expose a dedicated count helper at the store seam and use it on Schedule, Activity Details, and Admin RSVP controls. Local mode may count confirmed prototype bookings directly. Live mode must use a count-only aggregate RPC because booking RLS exposes only a member’s own rows and Admins’ broader access must not determine what count members see. The aggregate returns session IDs and confirmed counts only—never profile IDs or names—and is readable by visitors and authenticated users because RSVP headcounts are already public UI data.
+
+Hydration stores these totals in a dedicated operational count map and refreshes them after join/withdraw through the existing RPC refresh cycle. Failure or absence of the count RPC must not abort core Schedule hydration; it may temporarily fall back to the caller-visible confirmed count while reporting degraded count data.
+
+The count must update as follows:
 
 - Before joining: `0 going`.
 - After one successful “Count me in”: `1 going` — exactly `+1`.
@@ -38,6 +42,20 @@ Expose a dedicated count helper at the store seam and use it on Schedule, Activi
 - Other confirmed members each contribute one; cancelled, deferred, and reserved/unconfirmed rows do not contribute.
 
 Keep attendee-name formatting separate. No placeholder identity rows should be created or persisted merely to obtain a count.
+
+## RSVP integrity and time boundaries
+
+Only templates with `requires_rsvp = true` may use the zero-price reserve/withdraw flow. Ordinary free events remain show-up events even though their price is also zero; direct RPC calls must not create hidden confirmed bookings for them.
+
+Session-start enforcement uses the session’s Hong Kong wall time:
+
+```sql
+(session_date + start_time) at time zone 'Asia/Hong_Kong'
+```
+
+Joining or withdrawing at or after that instant is rejected. This avoids treating a Hong Kong lunch time as UTC.
+
+Live `upcomingSessions(days)` must honor the same date horizon as local mode: today through `days - 1` calendar days, inclusive. Social preview can still apply its rolling seven-day start-time filter, while Home and Admin callers do not receive months of generated sessions.
 
 ## Application changes
 
@@ -61,14 +79,24 @@ Add `20260829000006_lunch_venue_meeting_point_rpc.sql`. The migration must:
 4. Replace the four-argument overload with a compatibility wrapper that forwards `null` coordinates to the six-argument function.
 5. Preserve Admin authorization, advisory locking, notification deduplication, grants, and the PostgREST schema reload.
 
+Add `20260829000008_rsvp_integrity.sql`. It must:
+
+1. Add `get_operational_rsvp_counts()` returning only `session_id` and confirmed `going_count` for templates whose `requires_rsvp` is true.
+2. Grant that aggregate to `anon` and `authenticated` without exposing booking/profile rows.
+3. Replace reserve/withdraw RPC implementations so zero-price behavior also requires `requires_rsvp = true`.
+4. Reject ordinary free-event reserve/withdraw attempts.
+5. Compare session start using `AT TIME ZONE 'Asia/Hong_Kong'`.
+6. Preserve paid reservation/payment behavior, uncapped RSVP behavior, notifications, authorization, and grants.
+
 Apply the migrations in order to the live Supabase project:
 
 1. `20260829000002_rsvp_events.sql`
 2. `20260829000003_lunch_venue_overrides.sql`
 3. `20260829000004_uncapped_rsvp.sql`
 4. `20260829000006_lunch_venue_meeting_point_rpc.sql`
+5. `20260829000008_rsvp_integrity.sql`
 
-`00006` intentionally follows the Admin branch’s reserved `00005` migration number so the branches can later integrate without a filename collision. The implementation must not claim the live issue is fixed until `00006` is confirmed applied. If direct migration access is unavailable, report that deployment step explicitly.
+`00006` follows the Admin branch’s reserved `00005`; `00008` follows Notification’s reserved `00007`. This avoids integration filename collisions. The implementation must not claim the live issue is fixed until `00006` and `00008` are confirmed applied. If direct migration access is unavailable, report that deployment step explicitly.
 
 ## Testing
 
@@ -76,8 +104,13 @@ Update live-auth smoke coverage so the lunch session exercises the authoritative
 
 Verify:
 
-- A live RSVP changes the displayed count by exactly `+1` after “Count me in” and exactly `-1` after withdrawal.
-- Schedule, Activity Details, and Admin RSVP controls derive the same count from confirmed bookings.
+- A member sees other members’ confirmed RSVP total through the count-only aggregate despite booking-row RLS.
+- A live RSVP changes the displayed aggregate by exactly `+1` after “Count me in” and exactly `-1` after withdrawal.
+- Reserved, cancelled, deferred, and ordinary free-event rows do not contribute.
+- Schedule, Activity Details, and Admin RSVP controls derive the same aggregate count.
+- Ordinary free events reject reserve and withdraw RPC calls.
+- RSVP start boundaries use Hong Kong time.
+- Live session queries honor the requested calendar-day horizon.
 - The count works while live `state.users` remains empty and does not create local identity records.
 - The client’s six named RPC arguments resolve to an implementation that admits lunch.
 - Saving a complete lunch venue does not throw `Activity venue is fixed.`

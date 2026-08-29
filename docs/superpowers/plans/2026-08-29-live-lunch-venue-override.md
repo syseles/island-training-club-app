@@ -427,3 +427,142 @@ git add docs/superpowers/plans/2026-08-29-live-lunch-venue-override.md \
   app/js/store.js app/js/views.js app/smoke.mjs app/live-auth-smoke.mjs
 git commit -m "fix(events): count live lunch RSVPs"
 ```
+
+---
+
+### Task 6: Publish exact RSVP totals and enforce RSVP integrity
+
+**Files:**
+- Create: `supabase/migrations/20260829000008_rsvp_integrity.sql`
+- Modify: `supabase/tests/operational_backend_integration.sql`
+- Modify: `app/js/operations.js` operational cache/hydration readers
+- Modify: `app/js/store.js` live count and date horizon
+- Test: `app/smoke.mjs`
+- Test: `app/live-auth-smoke.mjs`
+
+**Interfaces:**
+- Produces: `public.get_operational_rsvp_counts()` returning `table(session_id text, going_count bigint)` with no identity columns.
+- Produces: `liveOps.liveRsvpCountFor(sessionId)` returning an exact hydrated integer or null when count enrichment is degraded.
+- Preserves: `store.attendeeCountFor(session)` public API, paid reservation behavior, uncapped lunch, and optional non-fatal enrichment semantics.
+
+- [ ] **Step 1: Write failing migration and source contracts**
+
+In `app/smoke.mjs`, load `20260829000008_rsvp_integrity.sql` and assert:
+
+```js
+for (const marker of [
+  "get_operational_rsvp_counts",
+  "requires_rsvp",
+  "status = 'confirmed'",
+  "at time zone 'Asia/Hong_Kong'",
+  "reserve_operational_session",
+  "withdraw_operational_rsvp",
+  "grant execute on function public.get_operational_rsvp_counts() to anon, authenticated",
+]) assert.ok(rsvpIntegrityMigrationSource.includes(marker));
+```
+
+Assert the aggregate return declaration contains only `session_id` and `going_count`, and the migration does not grant direct booking-table access.
+
+Add a source assertion that live `upcomingSessions(days)` computes and applies an inclusive upper date bound rather than returning every hydrated future session.
+
+- [ ] **Step 2: Run RED**
+
+Run: `node app/smoke.mjs`
+
+Expected: FAIL with `ENOENT` because migration `00008` does not exist.
+
+- [ ] **Step 3: Add SQL integration scenarios before implementation**
+
+Extend `supabase/tests/operational_backend_integration.sql` with rollback-safe assertions:
+
+1. Create two confirmed lunch bookings for different approved members plus reserved/cancelled/deferred noise; assert the aggregate returns exactly `2` for that lunch and no identity columns are exposed.
+2. Call `reserve_operational_session()` directly for a zero-price one-off/free template with `requires_rsvp = false`; assert rejection and no booking row.
+3. Call `withdraw_operational_rsvp()` for an ordinary free-event row; assert rejection/no mutation.
+4. Set a lunch date/time around a Hong Kong boundary and use transaction-local clock controls or direct resolver conditions to prove the RPC rejects at/after Hong Kong start while preserving pre-start behavior.
+5. Assert paid HYROX reservation and uncapped lunch RSVP still work.
+6. Assert `anon` and `authenticated` can execute only the count aggregate while direct booking RLS remains unchanged.
+
+- [ ] **Step 4: Create migration `00008`**
+
+Add a `STABLE`, `SECURITY DEFINER`, fixed-search-path count function:
+
+```sql
+create or replace function public.get_operational_rsvp_counts()
+returns table(session_id text, going_count bigint)
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select b.session_id, count(*)::bigint
+    from public.operational_bookings b
+    join public.operational_sessions s on s.id = b.session_id
+    join public.operational_activity_templates t on t.activity_id = s.activity_id
+   where t.requires_rsvp
+     and b.status = 'confirmed'
+   group by b.session_id;
+$$;
+```
+
+Revoke from `public`, then grant execution to `anon, authenticated`. Do not expose profile IDs.
+
+Replace the final reserve and withdraw functions from migrations `00004`/`00002`. Resolve `requires_rsvp` from the session’s activity template. Define RSVP as `price_hkd = 0 AND requires_rsvp`; reject zero-price non-RSVP reserve/withdraw attempts. Use this exact start comparison in both functions:
+
+```sql
+if (v_session.session_date + v_session.start_time)
+     at time zone 'Asia/Hong_Kong' <= now() then
+  raise exception 'Session has already started.' using errcode = '23514';
+end if;
+```
+
+Preserve existing paid capacity/payment deadline behavior, nullable RSVP capacity behavior, notification kinds/copy, authorization, return rows, and grants. End with `notify pgrst, 'reload schema';`.
+
+- [ ] **Step 5: Add count enrichment to operational hydration**
+
+Add `rsvpCounts: new Map()` and optional `rsvpCountError` to `liveCache`. Fetch `get_operational_rsvp_counts` through an always-settling helper so a missing/unauthorized aggregate never aborts core hydration. Replace the count map on every hydration and expose:
+
+```js
+export function liveRsvpCountFor(sessionId) {
+  return liveCache.rsvpCounts.has(sessionId)
+    ? liveCache.rsvpCounts.get(sessionId)
+    : null;
+}
+```
+
+Expose degraded status through `operationalStateStatus()`. Realtime booking refresh already reloads the aggregate; do not add another subscription.
+
+In `store.attendeeCountFor(session)`, use the exact live aggregate when non-null, otherwise fall back to caller-visible confirmed bookings. Local behavior remains unchanged.
+
+- [ ] **Step 6: Restore the live date horizon**
+
+In live `upcomingSessions(days)`, compute today and an inclusive end date `days - 1` calendar days later using local date arithmetic. Filter `s.dateISO >= todayISO && s.dateISO <= endISO` before sorting/decorating. Add date-stable tests proving 14-day callers exclude day 15 while the rolling Social preview still uses event start time.
+
+- [ ] **Step 7: Add behavioral live-auth coverage**
+
+Make the fake direct booking table enforce member RLS, while `get_operational_rsvp_counts` aggregates all confirmed RSVP bookings. Seed another member’s confirmed lunch booking and excluded-status rows. Assert an ordinary member sees that baseline total, then exact `+1` after join and exact `-1` after withdrawal without receiving the other member’s booking/profile row.
+
+Assert Schedule, Activity Details, and Admin render the same total. Add a rejected count-RPC hydration showing core sessions remain visible and count status degrades safely.
+
+- [ ] **Step 8: Run verification**
+
+Run:
+
+```bash
+node app/smoke.mjs
+node app/live-auth-smoke.mjs
+bash supabase/tests/verify_operational_backend_safety.sh
+git diff --check
+```
+
+If disposable database credentials exist, also run `bash supabase/tests/verify_operational_backend.sh`. Otherwise report PostgreSQL runtime and deployment unverified.
+
+- [ ] **Step 9: Commit**
+
+```bash
+git add docs/superpowers/specs/2026-08-29-live-lunch-venue-override-design.md \
+  docs/superpowers/plans/2026-08-29-live-lunch-venue-override.md \
+  supabase/migrations/20260829000008_rsvp_integrity.sql \
+  supabase/tests/operational_backend_integration.sql \
+  app/js/operations.js app/js/store.js app/smoke.mjs app/live-auth-smoke.mjs
+git commit -m "fix(events): publish exact RSVP totals"
+```
