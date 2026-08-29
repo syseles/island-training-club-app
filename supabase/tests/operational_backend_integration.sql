@@ -60,6 +60,26 @@ begin
   if to_regclass('public.collector_payout_profiles') is null then
     raise notice 'FAIL: collector_payout_profiles missing'; failures := failures + 1;
   end if;
+  if to_regprocedure('public.get_assigned_collector_payout_profiles()') is null then
+    raise notice 'FAIL: get_assigned_collector_payout_profiles missing'; failures := failures + 1;
+  else
+    if not has_function_privilege(
+      'authenticated',
+      'public.get_assigned_collector_payout_profiles()',
+      'execute'
+    ) then
+      raise notice 'FAIL: authenticated cannot execute assigned collector payout RPC';
+      failures := failures + 1;
+    end if;
+    if has_function_privilege(
+      'anon',
+      'public.get_assigned_collector_payout_profiles()',
+      'execute'
+    ) then
+      raise notice 'FAIL: anon should not execute assigned collector payout RPC';
+      failures := failures + 1;
+    end if;
+  end if;
   if to_regclass('public.operational_session_venue_overrides') is null then
     raise notice 'FAIL: operational_session_venue_overrides missing'; failures := failures + 1;
   end if;
@@ -162,6 +182,80 @@ update public.profiles set full_name = 'Extra Member', role = 'member'
   where id = 'ee000000-0000-0000-0000-00000000e001';
 update public.profiles set full_name = 'Super Test', role = 'super_admin'
   where id = 'ff000000-0000-0000-0000-00000000f001';
+
+-- Assigned payout reads add only the collector rows needed by approved members.
+insert into public.collector_assignments
+  (week_start, collector_profile_id, assigned_by)
+values
+  (date '2026-08-03',
+   'aa000000-0000-0000-0000-00000000a001',
+   'ff000000-0000-0000-0000-00000000f001');
+
+insert into public.collector_payout_profiles
+  (profile_id, payme_link, fps_phone)
+values
+  ('aa000000-0000-0000-0000-00000000a001',
+   'https://payme.hsbc.com.hk/1/assigned-admin',
+   '+852 6111 1001'),
+  ('ff000000-0000-0000-0000-00000000f001',
+   'https://payme.hsbc.com.hk/1/unassigned-super',
+   '+852 6222 2002');
+
+do $$
+declare
+  v_direct_count integer;
+  v_assigned_count integer;
+  v_unassigned_count integer;
+begin
+  perform set_config('request.jwt.claim.sub', 'bb000000-0000-0000-0000-00000000b001', true);
+  set local role authenticated;
+
+  select count(*) into v_direct_count
+    from public.collector_payout_profiles
+   where profile_id in (
+     'aa000000-0000-0000-0000-00000000a001',
+     'ff000000-0000-0000-0000-00000000f001'
+   );
+  perform pg_temp.op_assert(
+    v_direct_count = 0,
+    'member direct payout-table RLS remains self-only'
+  );
+
+  select count(*) into v_assigned_count
+    from public.get_assigned_collector_payout_profiles()
+   where profile_id = 'aa000000-0000-0000-0000-00000000a001'
+     and payme_link = 'https://payme.hsbc.com.hk/1/assigned-admin'
+     and fps_phone = '+852 6111 1001';
+  perform pg_temp.op_assert(
+    v_assigned_count = 1,
+    'approved member reads the assigned collector payout row'
+  );
+
+  select count(*) into v_unassigned_count
+    from public.get_assigned_collector_payout_profiles()
+   where profile_id = 'ff000000-0000-0000-0000-00000000f001';
+  perform pg_temp.op_assert(
+    v_unassigned_count = 0,
+    'approved member cannot read an unassigned payout row through the RPC'
+  );
+
+  perform set_config('request.jwt.claim.sub', 'cc000000-0000-0000-0000-00000000c001', true);
+  begin
+    perform public.get_assigned_collector_payout_profiles();
+    raise exception 'pending profile should not read assigned collector payouts';
+  exception when others then
+    if sqlerrm not like '%Approved membership required.%' then raise; end if;
+  end;
+
+  reset role;
+  perform set_config('request.jwt.claim.sub', '', true);
+  begin
+    perform public.get_assigned_collector_payout_profiles();
+    raise exception 'anonymous session should not read assigned collector payouts';
+  exception when others then
+    if sqlerrm not like '%Authentication required.%' then raise; end if;
+  end;
+end $$;
 
 -- generate sessions and pre-cancel 15 August.
 select ensure_operational_sessions(date '2026-08-01', 5);

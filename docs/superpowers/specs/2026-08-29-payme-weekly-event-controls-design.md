@@ -26,6 +26,12 @@ The UI must not claim that the amount is embedded or prefilled. It will tell the
 
 If no valid collector PayMe link exists, the PayMe action is non-clickable and explains that FPS should be used instead. It must never render an empty or relative `href` that routes back into the ITC app.
 
+## Live payout visibility and consistency
+
+An approved member must be able to read payout details only for collectors who appear in `collector_assignments`. Keep the payout table’s existing self/Admin RLS unchanged; expose assigned collector payout rows through a narrow authenticated `SECURITY DEFINER` RPC that rejects visitors and pending/declined profiles. Live hydration merges those assigned rows with rows already visible under normal RLS, allowing Admin payout management and cold member payment handoff without exposing arbitrary unassigned payout profiles.
+
+Live payout edits are authoritative only after the Supabase update succeeds. A rejected RPC must leave the device-local payout cache unchanged, keep the submitted form rendered, and surface error feedback. Disable the payout form controls while the request is pending to prevent duplicate submissions.
+
 ## Suggested payment note
 
 Generate the note from the booking snapshot and current member:
@@ -86,6 +92,9 @@ The combined section changes hierarchy and copy only. It does not merge the dist
 
 PayMe smoke coverage will verify:
 
+- A cold approved-member hydration receives the assigned collector’s payout row through the narrow RPC even when direct table RLS returns no collector payout rows.
+- Pending/declined/anonymous callers cannot use the assigned-payout RPC, and unassigned payout profiles are not returned.
+- Rejected live payout updates leave the prior device-local value unchanged while preserving the form and feedback.
 - A scheme-less official personal link becomes an absolute HTTPS link.
 - A generic homepage, foreign host, malformed link, or non-HTTPS protocol is rejected.
 - The payment anchor targets the normalized collector link and cannot become an in-app relative route.

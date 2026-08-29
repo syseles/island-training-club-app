@@ -1568,13 +1568,15 @@ export function updateCollectorPayouts(userId, { paymeLink, fpsPhone }) {
   const resolvedFpsPhone = profilePhone || String(fpsPhone ?? "").trim();
   if (isLive()) {
     const normalizedPayMeLink = normalizePayMeLink(paymeLink);
-    const live = liveOps.liveUpdatePayout(userId, normalizedPayMeLink, resolvedFpsPhone);
-    state.paymentPayouts[userId] = {
-      paymeLink: normalizedPayMeLink,
-      fpsPhone: resolvedFpsPhone,
-    };
-    save();
-    return live;
+    return liveOps.liveUpdatePayout(userId, normalizedPayMeLink, resolvedFpsPhone)
+      .then((result) => {
+        state.paymentPayouts[userId] = {
+          paymeLink: normalizedPayMeLink,
+          fpsPhone: resolvedFpsPhone,
+        };
+        save();
+        return result;
+      });
   }
   requirePaymentAdminActor();
   const target = paymentUserById(userId);

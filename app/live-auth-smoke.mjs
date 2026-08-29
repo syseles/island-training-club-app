@@ -137,6 +137,11 @@ const declinedProfiles = [
     created_at: "2026-08-05T05:00:00.000Z",
   },
 ];
+function operationalRoleFor(profileId) {
+  if (profileId === profile.id) return profile.role;
+  return [...approvedProfiles, ...pendingProfiles, ...declinedProfiles]
+    .find((item) => item.id === profileId)?.role || null;
+}
 applicationRows.set("pending-submitted", {
   ...structuredClone(applicationRows.get(authUser.id)),
   profile_id: "pending-submitted",
@@ -168,6 +173,7 @@ let operationalRpcHandler = null;
 let operationalAuthSubOverride = null;
 let operationalVenueOverrideReadError = null;
 const operationalRpcCalls = [];
+const operationalPayoutDirectReads = [];
 const operationalSubscriptions = [];
 const operationalTableRows = {
   operational_sessions: [],
@@ -465,7 +471,18 @@ const fakeSupabase = {
         if (table === "operational_session_venue_overrides") {
           operationalVenueOverrideReadError = null;
         }
-        return { data: error ? null : rows.slice(), error };
+        let visibleRows = rows;
+        if (table === "collector_payout_profiles") {
+          const role = operationalRoleFor(authUser.id);
+          visibleRows = ["admin", "super_admin"].includes(role)
+            ? rows
+            : rows.filter((row) => row.profile_id === authUser.id);
+          operationalPayoutDirectReads.push({
+            profileId: authUser.id,
+            profileIds: visibleRows.map((row) => row.profile_id),
+          });
+        }
+        return { data: error ? null : visibleRows.slice(), error };
       };
       const thenable = () => Promise.resolve(result());
       const chain = {
@@ -639,6 +656,20 @@ operationalRpcHandler = (name, args) => {
   operationalAuthSubOverride = null;
   const now = new Date().toISOString();
   const actingProfile = override || authUser.id;
+  if (name === "get_assigned_collector_payout_profiles") {
+    const role = operationalRoleFor(actingProfile);
+    if (!["member", "admin", "super_admin"].includes(role)) {
+      return Promise.resolve({ data: null, error: { message: "Approved membership required." } });
+    }
+    const assignedIds = new Set(
+      operationalTableRows.collector_assignments.map((row) => row.collector_profile_id)
+    );
+    const seen = new Set();
+    const assignedPayouts = operationalTableRows.collector_payout_profiles
+      .filter((row) => assignedIds.has(row.profile_id) && !seen.has(row.profile_id) && seen.add(row.profile_id))
+      .map((row) => structuredClone(row));
+    return Promise.resolve({ data: assignedPayouts, error: null });
+  }
   if (name === "create_operational_event") {
     const activityId = `event-${operationalTableRows.operational_activity_templates.length + 1}`;
     operationalTableRows.operational_activity_templates.push({
@@ -1623,6 +1654,14 @@ if (!liveOpsHtml.includes("https://payme.hsbc.com.hk/1/live-admin")
     || !liveOpsHtml.includes("+852 6123 4567")) {
   throw new Error("Live Payment Ops details must survive a local state reload");
 }
+operationalTableRows.collector_payout_profiles.push({
+  profile_id: "unassigned-super",
+  payme_link: "https://payme.hsbc.com.hk/1/unassigned-super",
+  fps_phone: "+852 6999 9999",
+});
+await operations.refreshOperationalState();
+assert.ok(operations.livePayoutFor("unassigned-super"),
+  "Admin hydration must first populate the unassigned payout cache fixture");
 
 // Exercise the member-facing route after the real auth transition clears the
 // in-memory Admin directory. UUID-keyed duty and payout operations must remain
@@ -1652,16 +1691,47 @@ releaseSignOut({ error: null });
 await signOutForMember;
 await store.getCurrentUser();
 store.load();
+const assignedPayoutCallsBeforeMemberHydration = operationalRpcCalls
+  .filter((call) => call.name === "get_assigned_collector_payout_profiles").length;
+await operations.refreshOperationalState();
+const memberDirectPayoutRead = operationalPayoutDirectReads.at(-1);
+assert.equal(memberDirectPayoutRead?.profileId, "approved-member");
+assert.doesNotMatch(memberDirectPayoutRead?.profileIds.join(",") || "", /live-user-1|unassigned-super/,
+  "member direct payout-table hydration must not bypass self/Admin RLS");
+assert.equal(
+  operationalRpcCalls.filter((call) => call.name === "get_assigned_collector_payout_profiles").length,
+  assignedPayoutCallsBeforeMemberHydration + 1,
+  "forced member hydration must request assigned collector payouts"
+);
+assert.equal(operations.livePayoutFor("unassigned-super"), null,
+  "forced member hydration must clear an Admin-derived unassigned payout row");
+store.currentUser().fullName = 'Micah & "Member" <Runner>';
+store.getBooking(memberPayBooking.id).snapshot.location = 'BFT & "Bay" <Deck>';
 const memberPayHtml = views.viewPay(memberPayBooking.id);
 for (const marker of ["On-duty collector", "https://payme.hsbc.com.hk/1/live-admin", "+852 6123 4567", 'data-action="copy-fps"']) {
   if (typeof memberPayHtml !== "string" || !memberPayHtml.includes(marker)) {
     throw new Error(`Member payout route after auth transition missing ${marker}`);
   }
 }
-const renderedPaymentNote = `${memberPayBooking.snapshot.name} · ${data.fmtDate(memberPayBooking.snapshot.dateISO)} · ${memberPayBooking.snapshot.location} · Micah Member`;
-const renderedPaymentNoteMatch = memberPayHtml.match(/data-action="copy-payment-note" data-note="([^"]+)"/);
-assert.equal(renderedPaymentNoteMatch?.[1], renderedPaymentNote,
-  "member payment view must render the exact delegated clipboard payload");
+const renderedPaymentNote = `${memberPayBooking.snapshot.name} · ${data.fmtDate(memberPayBooking.snapshot.dateISO)} · BFT & "Bay" <Deck> · Micah & "Member" <Runner>`;
+const escapedRenderedPaymentNote = `${memberPayBooking.snapshot.name} · ${data.fmtDate(memberPayBooking.snapshot.dateISO)} · BFT &amp; &quot;Bay&quot; &lt;Deck&gt; · Micah &amp; &quot;Member&quot; &lt;Runner&gt;`;
+const renderedPaymentNoteControl = [...memberPayHtml.matchAll(/<button\b[^>]*>/g)]
+  .map((match) => match[0])
+  .find((tag) => /\bdata-action="copy-payment-note"/.test(tag));
+const renderedPaymentNoteAttribute = renderedPaymentNoteControl
+  ?.match(/\bdata-note="([^"]*)"/)?.[1];
+const renderedPaymentNotePayload = String(renderedPaymentNoteAttribute || "")
+  .replace(/&quot;/g, '"')
+  .replace(/&#39;/g, "'")
+  .replace(/&lt;/g, "<")
+  .replace(/&gt;/g, ">")
+  .replace(/&amp;/g, "&");
+assert.ok(memberPayHtml.includes(`<strong>${escapedRenderedPaymentNote}</strong>`),
+  "member payment view must escape visible HTML-sensitive note text");
+assert.equal(renderedPaymentNoteAttribute, escapedRenderedPaymentNote,
+  "member payment view must escape its data-note attribute");
+assert.equal(renderedPaymentNotePayload, renderedPaymentNote,
+  "the rendered data-note must decode to the exact delegated clipboard payload");
 if (JSON.parse(mem.get("itc.prototype.v1")).users.length !== 0) {
   throw new Error("Member payout resolution must not persist a duplicate identity directory");
 }
@@ -2582,7 +2652,7 @@ fpsControl.closest = () => fpsControl;
 await click({ target: fpsControl, preventDefault() {} });
 assert.equal(copiedPaymentText, "+852 6123 4567");
 const paymentNoteControl = makeElement();
-paymentNoteControl.dataset = { action: "copy-payment-note", note: renderedPaymentNoteMatch[1] };
+paymentNoteControl.dataset = { action: "copy-payment-note", note: renderedPaymentNotePayload };
 paymentNoteControl.closest = () => paymentNoteControl;
 await click({ target: paymentNoteControl, preventDefault() {} });
 assert.equal(copiedPaymentText, renderedPaymentNote,
@@ -2741,10 +2811,39 @@ assert.ok(toastStack.children.some((item) =>
 ));
 console.log("ok  failed weekly venue submit preserves form state without rerendering");
 
+operationalRpcHandler = baseOperationalRpcHandler;
+await store.updateCollectorPayouts(authUser.id, {
+  paymeLink: "payme.hsbc.com.hk/1/prior-live",
+  fpsPhone: "+852 6000 0000",
+});
+const priorPayout = structuredClone(
+  JSON.parse(mem.get("itc.prototype.v1")).paymentPayouts?.[authUser.id]
+);
+assert.deepEqual(priorPayout, {
+  paymeLink: "https://payme.hsbc.com.hk/1/prior-live",
+  fpsPhone: "+852 6000 0000",
+});
+
+function equipPayoutForm(form) {
+  const input = makeElement();
+  input.tagName = "INPUT";
+  input.name = "paymeLink";
+  input.disabled = false;
+  const submit = makeElement();
+  submit.tagName = "BUTTON";
+  submit.type = "submit";
+  submit.textContent = "Save payout details";
+  submit.disabled = false;
+  form.querySelector = (selector) => selector === '[type="submit"]' ? submit : null;
+  form.querySelectorAll = (selector) => selector === "input, button" ? [input, submit] : [];
+  return { input, submit };
+}
+
 const rejectedPayoutForm = new HTMLFormElement();
 rejectedPayoutForm.id = "";
 rejectedPayoutForm.dataset = { action: "form-payouts" };
 rejectedPayoutForm.fields = { paymeLink: "payme.hsbc.com.hk/1/rejected-live" };
+const rejectedPayoutControls = equipPayoutForm(rejectedPayoutForm);
 const htmlBeforePayoutFailure = viewEl.innerHTML;
 const payoutRpcGate = deferred();
 let payoutRpcArgs = null;
@@ -2767,35 +2866,95 @@ assert.deepEqual(payoutRpcArgs, {
   p_payme_link: "https://payme.hsbc.com.hk/1/rejected-live",
   p_fps_phone: "",
 });
-assert.equal(
-  JSON.parse(mem.get("itc.prototype.v1")).paymentPayouts?.[authUser.id]?.paymeLink,
-  "https://payme.hsbc.com.hk/1/rejected-live",
-  "live payout cache must update before RPC settlement"
+assert.deepEqual(
+  JSON.parse(mem.get("itc.prototype.v1")).paymentPayouts?.[authUser.id],
+  priorPayout,
+  "live payout cache must keep its prior value while the RPC is pending"
 );
 assert.equal(payoutSubmitSettled, false, "payout submit must remain pending with the live RPC");
+for (const control of Object.values(rejectedPayoutControls)) {
+  assert.equal(control.disabled, true, "every payout form control must be disabled while saving");
+}
+assert.equal(rejectedPayoutControls.submit.getAttribute("aria-busy"), "true");
+assert.equal(rejectedPayoutControls.submit.textContent, "Saving…");
 assert.equal(viewEl.innerHTML, htmlBeforePayoutFailure);
 assert.equal(rejectedPayoutForm.fields.paymeLink, "payme.hsbc.com.hk/1/rejected-live");
 payoutRpcGate.resolve({ data: null, error: { message: "Payout profile unavailable" } });
 await payoutSubmit;
-assert.equal(
-  JSON.parse(mem.get("itc.prototype.v1")).paymentPayouts?.[authUser.id]?.paymeLink,
-  "https://payme.hsbc.com.hk/1/rejected-live",
-  "live payout cache must remain available after RPC rejection"
+assert.deepEqual(
+  JSON.parse(mem.get("itc.prototype.v1")).paymentPayouts?.[authUser.id],
+  priorPayout,
+  "rejected live payout RPC must leave the prior device value unchanged"
 );
 assert.equal(viewEl.innerHTML, htmlBeforePayoutFailure);
 assert.equal(rejectedPayoutForm.fields.paymeLink, "payme.hsbc.com.hk/1/rejected-live");
+for (const control of Object.values(rejectedPayoutControls)) {
+  assert.equal(control.disabled, false, "payout controls must be restored after rejection");
+}
+assert.equal(rejectedPayoutControls.submit.hasAttribute("aria-busy"), false);
+assert.equal(rejectedPayoutControls.submit.textContent, "Save payout details");
 assert.deepEqual(toastStack.children.map((item) => item.textContent), [
   "Payout profile unavailable",
 ]);
 assert.equal(toastStack.children[0].getAttribute("role"), "alert");
-console.log("ok  rejected live payout preserves cache and form state with error feedback");
+console.log("ok  rejected live payout preserves prior cache and restores its busy form");
+
+const successfulPayoutForm = new HTMLFormElement();
+successfulPayoutForm.id = "";
+successfulPayoutForm.dataset = { action: "form-payouts" };
+successfulPayoutForm.fields = { paymeLink: "payme.hsbc.com.hk/1/successful-live" };
+const successfulPayoutControls = equipPayoutForm(successfulPayoutForm);
+const successfulPayoutRpcGate = deferred();
+operationalRpcHandler = (name, args) => {
+  if (name === "update_collector_payout_profile") {
+    payoutRpcArgs = structuredClone(args);
+    return successfulPayoutRpcGate.promise;
+  }
+  return baseOperationalRpcHandler(name, args);
+};
+toastStack.children.length = 0;
+let successfulPayoutSettled = false;
+const successfulPayoutSubmit = domListeners.get("submit")({
+  target: successfulPayoutForm,
+  preventDefault() {},
+}).then(() => { successfulPayoutSettled = true; });
+await new Promise(setImmediate);
+assert.deepEqual(
+  JSON.parse(mem.get("itc.prototype.v1")).paymentPayouts?.[authUser.id],
+  priorPayout,
+  "successful live payout must not persist before RPC settlement"
+);
+assert.equal(successfulPayoutSettled, false);
+assert.equal(successfulPayoutControls.input.disabled, true);
+assert.equal(successfulPayoutControls.submit.disabled, true);
+const successfulServerPayout = operationalTableRows.collector_payout_profiles
+  .find((row) => row.profile_id === authUser.id);
+Object.assign(successfulServerPayout, {
+  payme_link: "https://payme.hsbc.com.hk/1/successful-live",
+  fps_phone: "",
+});
+successfulPayoutRpcGate.resolve({ data: structuredClone(successfulServerPayout), error: null });
+await successfulPayoutSubmit;
+await new Promise(setImmediate);
+assert.deepEqual(
+  JSON.parse(mem.get("itc.prototype.v1")).paymentPayouts?.[authUser.id],
+  { paymeLink: "https://payme.hsbc.com.hk/1/successful-live", fpsPhone: "" },
+  "successful live payout must persist its normalized value after RPC settlement"
+);
+assert.equal(successfulPayoutControls.input.disabled, false);
+assert.equal(successfulPayoutControls.submit.disabled, false);
+assert.equal(successfulPayoutControls.submit.hasAttribute("aria-busy"), false);
+assert.ok(toastStack.children.some((item) => item.textContent === "Payout details saved"));
+console.log("ok  successful live payout persists only after RPC settlement");
 
 operationalRpcHandler = baseOperationalRpcHandler;
 const applicationFailurePayoutForm = new HTMLFormElement();
 applicationFailurePayoutForm.id = "";
 applicationFailurePayoutForm.dataset = { action: "form-payouts" };
 applicationFailurePayoutForm.fields = { paymeLink: "payme.hsbc.com.hk/1/application-failure" };
+const applicationFailurePayoutControls = equipPayoutForm(applicationFailurePayoutForm);
 const rpcCallsBeforeApplicationFailure = operationalRpcCalls.length;
+const htmlBeforeApplicationPayoutFailure = viewEl.innerHTML;
 applicationReadError = new Error("Membership details unavailable");
 toastStack.children.length = 0;
 let applicationFailureSubmitError = null;
@@ -2808,8 +2967,11 @@ try {
 }
 assert.equal(applicationFailureSubmitError, null, "payout form must catch application lookup failures");
 assert.equal(operationalRpcCalls.length, rpcCallsBeforeApplicationFailure);
-assert.equal(viewEl.innerHTML, htmlBeforePayoutFailure);
+assert.equal(viewEl.innerHTML, htmlBeforeApplicationPayoutFailure);
 assert.equal(applicationFailurePayoutForm.fields.paymeLink, "payme.hsbc.com.hk/1/application-failure");
+assert.equal(applicationFailurePayoutControls.input.disabled, false);
+assert.equal(applicationFailurePayoutControls.submit.disabled, false);
+assert.equal(applicationFailurePayoutControls.submit.hasAttribute("aria-busy"), false);
 assert.deepEqual(toastStack.children.map((item) => item.textContent), [
   "Membership details unavailable",
 ]);

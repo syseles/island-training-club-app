@@ -79,6 +79,25 @@ const indemnityMigrationSource = readFileSync(
   resolve(__dirnameSmoke, "../supabase/migrations/20260827000001_hyrox_indemnity_fields.sql"),
   "utf8"
 );
+const assignedPayoutMigrationSource = readFileSync(
+  resolve(__dirnameSmoke, "../supabase/migrations/20260829000005_assigned_collector_payout_rpc.sql"),
+  "utf8"
+);
+for (const marker of [
+  "security definer",
+  "set search_path = public",
+  "current_user_role()",
+  "collector_assignments",
+  "collector_payout_profiles",
+  "revoke all on function public.get_assigned_collector_payout_profiles() from public",
+  "grant execute on function public.get_assigned_collector_payout_profiles() to authenticated",
+]) {
+  assert.ok(
+    assignedPayoutMigrationSource.toLowerCase().includes(marker),
+    `assigned collector payout migration missing ${marker}`
+  );
+}
+console.log("ok  assigned collector payout RPC migration keeps least-privilege controls");
 for (const column of [
   "waiver_signature_text",
   "waiver_signed_at",
@@ -2177,22 +2196,73 @@ store.signIn("member@example.test");
     throw new Error("checkout should be a reserve screen (no card form)");
   console.log("ok  checkout is now a reserve screen");
   const b = store.reserveSession("fixture-member", sess);
+  b.snapshot.location = 'BFT & "Bay" <Deck>';
+  store.currentUser().fullName = 'Test & "Member" <Runner>';
   const pay = views.viewPay(b.id);
   if (!pay.includes("PayMe to") || !pay.includes("FPS to") || !pay.includes("HK$"))
     throw new Error("pay screen should show PayMe/FPS to the collector + amount");
   if (!pay.includes("Admin"))
     throw new Error("pay screen should name the on-duty collector");
-  const expectedNote = `${sess.name} · ${data.fmtDate(sess.dateISO)} · ${sess.location} · Test Member`;
-  const expectedNoteControl = `data-action="copy-payment-note" data-note="${expectedNote}"`;
+  const expectedNote = `${sess.name} · ${data.fmtDate(sess.dateISO)} · BFT & "Bay" <Deck> · Test & "Member" <Runner>`;
+  const escapedExpectedNote = `${sess.name} · ${data.fmtDate(sess.dateISO)} · BFT &amp; &quot;Bay&quot; &lt;Deck&gt; · Test &amp; &quot;Member&quot; &lt;Runner&gt;`;
+  const noteControlTag = [...pay.matchAll(/<button\b[^>]*>/g)]
+    .map((match) => match[0])
+    .find((tag) => /\bdata-action="copy-payment-note"/.test(tag));
+  const encodedNote = noteControlTag?.match(/\bdata-note="([^"]*)"/)?.[1];
+  const decodedNote = String(encodedNote || "")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&amp;/g, "&");
   if (!pay.includes('href="https://payme.hsbc.com.hk/1/test-admin"')
       || !pay.includes('target="_blank"')
-      || !pay.includes(`<strong>${expectedNote}</strong>`)
-      || !pay.includes(expectedNoteControl)) {
-    throw new Error("pay screen should open the collector PayMe link and render the exact suggested-note payload");
+      || !pay.includes(`<strong>${escapedExpectedNote}</strong>`)
+      || encodedNote !== escapedExpectedNote
+      || decodedNote !== expectedNote) {
+    throw new Error("pay screen should escape visible/attribute notes and decode to the exact clipboard payload");
   }
-  if (!pay.includes('name="method" value="PayMe" checked')
-      || pay.includes('name="method" value="PayMe" disabled')
-      || pay.includes('name="method" value="FPS" checked')) {
+
+  const paymentFormStart = pay.indexOf('<form id="form-mark-paid"');
+  const paymentSubmitStart = pay.indexOf('<button class="btn mt16" type="submit"', paymentFormStart);
+  const paymentFormBeforeSubmit = pay.slice(paymentFormStart, paymentSubmitStart);
+  const openDivClasses = [];
+  let unmatchedPaymentDiv = false;
+  let referenceInsideCardBody = false;
+  let confirmationInsideCardBody = false;
+  for (const tokenMatch of paymentFormBeforeSubmit.matchAll(
+    /<div\b[^>]*>|<\/div>|<input\b[^>]*id="pay-ref"[^>]*>|confirms in-app/g
+  )) {
+    const token = tokenMatch[0];
+    if (token.startsWith("<div")) {
+      openDivClasses.push(token.match(/\bclass="([^"]*)"/)?.[1] || "");
+    } else if (token === "</div>") {
+      if (openDivClasses.length) openDivClasses.pop();
+      else unmatchedPaymentDiv = true;
+    } else if (token.startsWith("<input")) {
+      referenceInsideCardBody = openDivClasses.includes("card-body");
+    } else {
+      confirmationInsideCardBody = openDivClasses.includes("card-body");
+    }
+  }
+  assert.equal((paymentFormBeforeSubmit.match(/<div class="card">/g) || []).length, 1);
+  assert.equal((paymentFormBeforeSubmit.match(/<div class="card-body">/g) || []).length, 1);
+  assert.equal(unmatchedPaymentDiv, false, "payment confirmation card must not contain an unmatched closing div");
+  assert.equal(openDivClasses.length, 0, "payment confirmation card wrappers must close before submit");
+  assert.equal(referenceInsideCardBody, true, "payment reference field must remain inside card-body");
+  assert.equal(confirmationInsideCardBody, true, "payment confirmation copy must remain inside card-body");
+
+  const methodInput = (html, method) => [...html.matchAll(/<input\b[^>]*>/g)]
+    .map((match) => match[0])
+    .find((tag) => tag.includes(`name="method"`) && tag.includes(`value="${method}"`)) || "";
+  const hasBooleanAttribute = (tag, attribute) =>
+    new RegExp(`\\s${attribute}(?:\\s|>)`).test(tag);
+  const paymeMethod = methodInput(pay, "PayMe");
+  const fpsMethod = methodInput(pay, "FPS");
+  if (!hasBooleanAttribute(paymeMethod, "checked")
+      || hasBooleanAttribute(paymeMethod, "disabled")
+      || hasBooleanAttribute(fpsMethod, "checked")
+      || hasBooleanAttribute(fpsMethod, "disabled")) {
     throw new Error("pay screen with PayMe available should default to an enabled PayMe method");
   }
   if (pay.includes("amount ready")) {
@@ -2202,11 +2272,14 @@ store.signIn("member@example.test");
   store.updateCollectorPayouts("fixture-admin", { paymeLink: "" });
   store.signIn("member@example.test");
   const fpsOnlyPay = views.viewPay(b.id);
+  const fpsOnlyPayMeMethod = methodInput(fpsOnlyPay, "PayMe");
+  const fpsOnlyFpsMethod = methodInput(fpsOnlyPay, "FPS");
   if (/<a[^>]*>PayMe to/.test(fpsOnlyPay) || !fpsOnlyPay.includes("use FPS")
       || !/<button[^>]*\sdisabled>PayMe unavailable<\/button>/.test(fpsOnlyPay)
-      || !fpsOnlyPay.includes('name="method" value="PayMe" disabled')
-      || fpsOnlyPay.includes('name="method" value="PayMe" checked')
-      || !fpsOnlyPay.includes('name="method" value="FPS" checked')) {
+      || !hasBooleanAttribute(fpsOnlyPayMeMethod, "disabled")
+      || hasBooleanAttribute(fpsOnlyPayMeMethod, "checked")
+      || !hasBooleanAttribute(fpsOnlyFpsMethod, "checked")
+      || hasBooleanAttribute(fpsOnlyFpsMethod, "disabled")) {
     throw new Error("pay screen without a PayMe link should natively disable PayMe and default the form to FPS");
   }
   console.log("ok  pay screen safely hands off PayMe with amount guidance, note, and FPS fallback");

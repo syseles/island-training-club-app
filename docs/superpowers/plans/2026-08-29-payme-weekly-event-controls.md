@@ -17,7 +17,7 @@
 - Label the paid Admin group exactly `Paid Sessions`.
 - Preserve one-off event controls as a separate top-level section.
 - Preserve all existing weekly form IDs, `data-action` values, and mutation functions.
-- Do not add dependencies, a build step, a localStorage migration, or a Supabase migration.
+- Do not add dependencies, a build step, or a localStorage migration. The only permitted Supabase schema change is `20260829000005_assigned_collector_payout_rpc.sql`, the least-privilege read RPC approved after final review.
 - Run `node app/smoke.mjs`, `node app/live-auth-smoke.mjs`, and `git diff --check` before completion.
 
 ---
@@ -377,3 +377,150 @@ git log -6 --oneline
 ```
 
 Confirm application changes are limited to PayMe normalization/handoff, payment-note copying, weekly Admin hierarchy, and matching tests/docs. Keep the worktree for review and do not merge into `testing` without explicit approval.
+
+---
+
+### Task 5: Final-review remediation — secure live payout reads and transactional saves
+
+**Files:**
+- Create: `supabase/migrations/20260829000005_assigned_collector_payout_rpc.sql`
+- Modify: `supabase/tests/operational_backend_integration.sql`
+- Modify: `app/js/operations.js` in `fetchOperationalState()`
+- Modify: `app/js/store.js` in `updateCollectorPayouts()`
+- Modify: `app/js/app.js` in `form-payouts`
+- Modify: `app/js/views.js` in `viewPay()`
+- Test: `app/smoke.mjs`
+- Test: `app/live-auth-smoke.mjs`
+
+**Interfaces:**
+- Produces: `public.get_assigned_collector_payout_profiles()` returning `table(profile_id uuid, payme_link text, fps_phone text)` to authenticated approved profiles only.
+- Consumes: existing `collector_assignments`, `collector_payout_profiles`, `current_user_role()`, direct payout-table hydration, and `liveOps.liveUpdatePayout()`.
+- Invariant: normal RLS continues to expose self/Admin payout rows; the RPC adds only payout rows for profiles that appear in `collector_assignments`.
+- Invariant: rejected live updates do not mutate `state.paymentPayouts`; successful updates persist the normalized value only after RPC settlement.
+
+- [ ] **Step 1: Write failing SQL and smoke coverage for the secure read contract**
+
+In `supabase/tests/operational_backend_integration.sql`, assert that the function exists, `authenticated` can execute it, and `anon` cannot. In a transaction, create payout rows for an assigned Admin and an unassigned Super Admin. As an approved member, assert the RPC returns the assigned row but not the unassigned row; as a pending profile, assert the RPC raises `Approved membership required.`
+
+In `app/smoke.mjs`, read the new migration and assert it contains all of these load-bearing controls:
+
+```js
+for (const marker of [
+  "security definer",
+  "set search_path = public",
+  "current_user_role()",
+  "collector_assignments",
+  "collector_payout_profiles",
+  "revoke all on function public.get_assigned_collector_payout_profiles() from public",
+  "grant execute on function public.get_assigned_collector_payout_profiles() to authenticated",
+]) assert.ok(assignedPayoutMigrationSource.toLowerCase().includes(marker));
+```
+
+- [ ] **Step 2: Run the local suite and verify RED**
+
+Run: `node app/smoke.mjs`
+
+Expected: FAIL because `20260829000005_assigned_collector_payout_rpc.sql` does not exist.
+
+- [ ] **Step 3: Add the least-privilege RPC migration**
+
+Create `public.get_assigned_collector_payout_profiles()` as a `stable`, `SECURITY DEFINER`, SQL/PLpgSQL function with `set search_path = public`. It must:
+
+1. Raise `Authentication required.` when `auth.uid()` is null.
+2. Raise `Approved membership required.` unless `public.current_user_role()` is one of `member`, `admin`, or `super_admin`.
+3. Return distinct `profile_id`, `payme_link`, and `fps_phone` rows by joining `collector_assignments` to `collector_payout_profiles` on the assigned collector UUID.
+4. Return no arbitrary unassigned payout profiles.
+5. Revoke execution from `public` and `anon`, then grant execution only to `authenticated`.
+
+Do not relax the payout table’s existing RLS policies.
+
+- [ ] **Step 4: Add failing cold-member hydration coverage**
+
+In `app/live-auth-smoke.mjs`, make the fake direct `collector_payout_profiles` read respect the active profile: Admins can read all rows; members can read only their own row. Add fake RPC handling for `get_assigned_collector_payout_profiles` that returns only rows joined to assignments for approved callers.
+
+Simulate a fresh/forced approved-member hydration after clearing any Admin-derived payout cache. Assert the direct table result has no collector row, the assigned-payout RPC is called, and `views.viewPay()` still renders the assigned collector’s normalized PayMe URL and FPS phone. Also assert an unassigned payout row is absent.
+
+Run: `node app/live-auth-smoke.mjs`
+
+Expected: FAIL because hydration does not call or merge the assigned-payout RPC.
+
+- [ ] **Step 5: Merge assigned payout rows during live hydration**
+
+In `fetchOperationalState()`, request `supabase.rpc("get_assigned_collector_payout_profiles")` alongside the existing direct payout-table select. Treat either error through `operationalProblem()`. Merge direct and assigned payout rows by `profile_id` before `buildPayoutRow()` so:
+
+- Admin hydration retains all directly visible payout profiles.
+- A cold member hydration gains only assigned collector payout profiles.
+- Duplicate self/Admin/assigned rows collapse to one cache entry.
+
+If the test needs a cache lifecycle seam, add a production `resetOperationalState()` or forced hydration path that clears/replaces all authorization-sensitive maps; use it on auth transitions rather than exposing a test-only API.
+
+- [ ] **Step 6: Write failing transactional-save and busy-state coverage**
+
+Change the deferred rejected-RPC test in `app/live-auth-smoke.mjs` to seed a prior payout value and assert:
+
+- The prior persisted value remains while the RPC is pending.
+- All payout form controls are disabled and the submit control is busy while pending.
+- RPC rejection leaves the prior value unchanged.
+- The submitted field value and rendered form remain unchanged.
+- Controls are restored and alert feedback appears after rejection.
+
+Add a successful deferred-RPC case asserting the normalized value is persisted only after RPC resolution.
+
+Run: `node app/live-auth-smoke.mjs`
+
+Expected: FAIL because current code writes before settlement and does not busy-guard the form.
+
+- [ ] **Step 7: Persist only after success and busy-guard the form**
+
+Keep `updateCollectorPayouts()` synchronous for local mode. In live mode, return the existing Promise chain and write `state.paymentPayouts[userId]` only in its success continuation:
+
+```js
+return liveOps.liveUpdatePayout(userId, normalizedPayMeLink, resolvedFpsPhone)
+  .then((result) => {
+    state.paymentPayouts[userId] = {
+      paymeLink: normalizedPayMeLink,
+      fpsPhone: resolvedFpsPhone,
+    };
+    save();
+    return result;
+  });
+```
+
+Wrap `form-payouts` with the existing `withBusyControl()` helper, using the submit button as the announced control, the form as `busyKey`, and all payout inputs/buttons as `controls`. Keep application lookup, normalization, RPC update, success render, and failure toast inside the busy work callback.
+
+- [ ] **Step 8: Correct payment markup and harden semantic tests**
+
+Move the premature `</div>` in `viewPay()` so the reference field and confirmation copy remain inside `.card-body`, producing exactly one `.card` and one `.card-body` close before the submit button.
+
+Add a payment-note fixture containing `&`, `"`, and `<` in member/location values. Assert visible text and `data-note` are escaped and decode to the exact clipboard payload. Replace radio assertions that depend on serialized attribute order with checks scoped to each input tag, independently asserting `checked` and absence/presence of `disabled`.
+
+- [ ] **Step 9: Run all available verification**
+
+Run:
+
+```bash
+node app/smoke.mjs
+node app/live-auth-smoke.mjs
+bash supabase/tests/verify_operational_backend_safety.sh
+git diff --check
+```
+
+If `ITC_OPERATIONS_TEST_DATABASE_URL` and `ITC_ALLOW_DATABASE_RESET=1` are available, also run:
+
+```bash
+bash supabase/tests/verify_operational_backend.sh
+```
+
+Otherwise report the disposable-database integration check as not run; do not claim the migration deployed or remotely verified.
+
+- [ ] **Step 10: Commit the remediation**
+
+```bash
+git add docs/superpowers/specs/2026-08-29-payme-weekly-event-controls-design.md \
+  docs/superpowers/plans/2026-08-29-payme-weekly-event-controls.md \
+  supabase/migrations/20260829000005_assigned_collector_payout_rpc.sql \
+  supabase/tests/operational_backend_integration.sql \
+  app/js/operations.js app/js/store.js app/js/app.js app/js/views.js \
+  app/smoke.mjs app/live-auth-smoke.mjs
+git commit -m "fix(payments): secure live collector payouts"
+```
