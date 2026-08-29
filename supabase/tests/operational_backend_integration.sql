@@ -799,6 +799,38 @@ begin
     'four-argument reset clears point and retains member dedupe'
   );
 
+  -- The browser's six named arguments admit lunch without retaining stale
+  -- meeting coordinates, and the compatibility overload can reset it.
+  perform public.set_session_venue(
+    'lunch-2026-08-22', 'Cafe Deco, Central', 'Cafe Deco, Central', true,
+    null, null
+  );
+  perform pg_temp.op_assert(
+    exists (
+      select 1 from public.operational_session_venue_overrides
+       where session_id = 'lunch-2026-08-22'
+         and activity_id = 'lunch'
+         and location = 'Cafe Deco, Central'
+         and maps_query = 'Cafe Deco, Central'
+         and meeting_lat is null
+         and meeting_lng is null
+    ),
+    'six-argument lunch venue save persists without meeting coordinates'
+  );
+  perform public.set_session_venue('lunch-2026-08-22', null, null, false);
+  perform pg_temp.op_assert(
+    exists (
+      select 1 from public.operational_session_venue_overrides
+       where session_id = 'lunch-2026-08-22'
+         and activity_id = 'lunch'
+         and location is null
+         and maps_query is null
+         and meeting_lat is null
+         and meeting_lng is null
+    ),
+    'four-argument lunch venue reset clears the retained override'
+  );
+
   reset role;
 end $$;
 

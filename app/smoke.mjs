@@ -12,6 +12,7 @@ globalThis.localStorage = {
 const store = await import("./js/store.js");
 const views = await import("./js/views.js");
 const data = await import("./js/data.js");
+const assert = await import("node:assert/strict");
 
 let failures = 0;
 async function check(label, fn) {
@@ -86,6 +87,23 @@ const indemnityMigrationSource = readFileSync(
   resolve(__dirnameSmoke, "../supabase/migrations/20260827000001_hyrox_indemnity_fields.sql"),
   "utf8"
 );
+const lunchMeetingRpcMigrationSource = readFileSync(
+  resolve(__dirnameSmoke, "../supabase/migrations/20260829000006_lunch_venue_meeting_point_rpc.sql"),
+  "utf8"
+);
+const lunchMeetingRpcSixArgumentSource = lunchMeetingRpcMigrationSource.match(
+  /create or replace function public\.set_session_venue\([\s\S]*?p_meeting_lat double precision,[\s\S]*?p_meeting_lng double precision[\s\S]*?\n\$\$;/
+)?.[0] || "";
+assert.match(lunchMeetingRpcSixArgumentSource,
+  /set_session_venue\([\s\S]*?p_meeting_lat double precision,[\s\S]*?p_meeting_lng double precision/);
+assert.match(lunchMeetingRpcSixArgumentSource,
+  /v_activity_id not in \('wnt', 'run', 'water', 'lunch'\)/);
+assert.match(lunchMeetingRpcSixArgumentSource,
+  /v_is_wnt_tamar := v_activity_id = 'wnt'/);
+assert.match(lunchMeetingRpcSixArgumentSource,
+  /when 'lunch' then 'Post-Training Lunch'/);
+assert.match(lunchMeetingRpcMigrationSource,
+  /select public\.set_session_venue\([\s\S]*?p_was_tbc, null, null[\s\S]*?\);/);
 for (const column of [
   "waiver_signature_text",
   "waiver_signed_at",
