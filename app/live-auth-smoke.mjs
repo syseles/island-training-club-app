@@ -2347,6 +2347,79 @@ await domListeners.get("click")({
   },
 });
 
+// The live reservation notification must preserve its exact booking-owned pay
+// route from rendered HTML through the real click delegate. Reopening the same
+// now-read row must keep that route without issuing a second read update.
+const exactPaymentDestination = `#/pay/${uuidBooking.id}`;
+const bookingReservedNotification = {
+  id: "notification-booking-reserved-exact",
+  kind: "operational_booking_reserved",
+  title: "Booking reserved",
+  body: "Complete payment for your reservation.",
+  destination: exactPaymentDestination,
+  created_at: "2026-08-05T06:39:45.000Z",
+  read_at: null,
+};
+notificationRows.push(bookingReservedNotification);
+const renderedNotificationControl = async () => {
+  const html = await views.viewNotifications(notificationNow, [bookingReservedNotification]);
+  const button = (html.match(/<button class="notification-row[\s\S]*?<\/button>/g) || [])
+    .find((row) => row.includes("<strong>Booking reserved</strong>"));
+  assert.ok(button, "Booking reserved must render as a notification row");
+  const attribute = (name) => button.match(new RegExp(`${name}="([^"]*)"`))?.[1];
+  const destination = attribute("data-destination");
+  assert.equal(destination, exactPaymentDestination,
+    "Booking reserved must render the exact reserved-booking payment route");
+  assert.notEqual(destination, "#/account");
+  assert.notEqual(destination, "#/account/payments");
+
+  const control = makeElement();
+  control.tagName = "BUTTON";
+  control.textContent = "Booking reserved Complete payment for your reservation.";
+  control.dataset = {
+    action: attribute("data-action"),
+    notificationId: attribute("data-notification-id"),
+    notificationRead: attribute("data-notification-read"),
+    destination,
+  };
+  control.closest = () => control;
+  return control;
+};
+
+const unreadBookingReservedControl = await renderedNotificationControl();
+assert.equal(unreadBookingReservedControl.dataset.notificationRead, "false");
+const updatesBeforeBookingReservedOpen = notificationUpdates.length;
+await domListeners.get("click")({ target: unreadBookingReservedControl });
+assert.equal(notificationUpdates.length, updatesBeforeBookingReservedOpen + 1,
+  "opening the unread reservation notification must complete one read update");
+assert.equal(notificationUpdates.at(-1)?.id, bookingReservedNotification.id);
+assert.ok(bookingReservedNotification.read_at,
+  "opening the unread reservation notification must persist its read state");
+assert.equal(location.hash, exactPaymentDestination,
+  "the unread reservation notification must navigate to its exact payment route");
+await windowListeners.get("hashchange")();
+assert.ok(viewEl.innerHTML.includes(`data-booking="${uuidBooking.id}"`),
+  "the payment view must accept the current member's reserved booking");
+assert.doesNotMatch(viewEl.innerHTML, /Booking not found\./);
+
+location.hash = "#/notifications";
+await windowListeners.get("hashchange")();
+const readBookingReservedControl = await renderedNotificationControl();
+assert.equal(readBookingReservedControl.dataset.notificationRead, "true");
+const updatesBeforeBookingReservedReopen = notificationUpdates.length;
+await domListeners.get("click")({ target: readBookingReservedControl });
+assert.equal(notificationUpdates.length, updatesBeforeBookingReservedReopen,
+  "reopening the read reservation notification must not update it again");
+assert.equal(location.hash, exactPaymentDestination,
+  "the read reservation notification must retain its exact payment route");
+await windowListeners.get("hashchange")();
+assert.ok(viewEl.innerHTML.includes(`data-booking="${uuidBooking.id}"`),
+  "the read reservation notification must reopen the owned payment view");
+notificationRows.splice(notificationRows.indexOf(bookingReservedNotification), 1);
+location.hash = "#/notifications";
+await windowListeners.get("hashchange")();
+console.log("ok  exact Booking reserved notification routes unread and read rows to the owned payment view");
+
 // Unread row activation is checked, duplicate-safe, and row-safe. It does not
 // navigate until one unread row is confirmed updated, then advances the render
 // generation so an older same-route count cannot overwrite the new badge.
