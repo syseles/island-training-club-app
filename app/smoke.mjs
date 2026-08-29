@@ -81,6 +81,10 @@ const notificationRoutingMigrationSource = readFileSync(
   resolve(__dirnameSmoke, "../supabase/migrations/20260829000007_notification_destinations.sql"),
   "utf8"
 );
+const operationalBackendIntegrationSource = readFileSync(
+  resolve(__dirnameSmoke, "../supabase/tests/operational_backend_integration.sql"),
+  "utf8"
+);
 const normalizedNotificationRoutingMigrationSource = notificationRoutingMigrationSource.toLowerCase();
 for (const marker of [
   "security definer",
@@ -113,6 +117,66 @@ if (JSON.stringify(notificationRoutingFunctionDeclarations) !== JSON.stringify([
   throw new Error("notification routing migration must declare only the centralized resolver and trigger function");
 }
 console.log("ok  notification migration centralizes exact routes without weakening notification access");
+for (const marker of [
+  "v_payment_marked_before",
+  "v_payment_marked_after",
+  "v_gym_finalized_before",
+  "v_gym_finalized_after",
+  "v_unique_cancel_session",
+  "v_cancelled_admin_before",
+  "v_cancelled_admin_after",
+  "notification_routing_backfill_snapshot",
+  "notification routing migration second reapplication is idempotent",
+]) {
+  if (!operationalBackendIntegrationSource.includes(marker)) {
+    throw new Error(`notification integration evidence missing ${marker}`);
+  }
+}
+for (const [pattern, label] of [
+  [/v_payment_marked_after\s*-\s*v_payment_marked_before\s*=\s*2\b/i, "payment-marked producer count"],
+  [/v_gym_finalized_after\s*-\s*v_gym_finalized_before\s*=\s*2\b/i, "gym-finalized producer count"],
+  [/v_cancelled_member_after\s*-\s*v_cancelled_member_before\s*=\s*1\b/i, "member cancellation producer count"],
+  [/v_cancelled_admin_after\s*-\s*v_cancelled_admin_before\s*=\s*2\b/i, "Admin cancellation producer count"],
+]) {
+  if (!pattern.test(operationalBackendIntegrationSource)) {
+    throw new Error(`notification integration missing scoped ${label}`);
+  }
+}
+if (!/perform\s+(?:public\.)?cancel_operational_session\s*\(\s*v_unique_cancel_session\b/i.test(operationalBackendIntegrationSource)) {
+  throw new Error("notification integration must exercise the real unique cancellation producer");
+}
+const notificationRoutingMigrationReapplications = [
+  ...operationalBackendIntegrationSource.matchAll(
+    /^\\ir\s+\.\.\/migrations\/20260829000007_notification_destinations\.sql\s*$/gm
+  ),
+];
+if (notificationRoutingMigrationReapplications.length !== 2) {
+  throw new Error("notification integration must reapply migration 00007 exactly twice");
+}
+for (const fixtureClass of [
+  "unique-null",
+  "unique-malformed",
+  "ambiguous-same-profile",
+  "foreign-only",
+  "valid-explicit",
+  "read-state",
+]) {
+  if (!operationalBackendIntegrationSource.includes(`'${fixtureClass}'`)) {
+    throw new Error(`notification integration missing historical fixture class ${fixtureClass}`);
+  }
+}
+if (/update\s+public\.notifications\s+\w+\s+set\s+destination\s*=\s*public\.resolve_notification_destination/is.test(operationalBackendIntegrationSource)) {
+  throw new Error("notification integration must execute migration backfill instead of copying its update");
+}
+const invalidSessionGenerationCall = [
+  ...operationalBackendIntegrationSource.matchAll(
+    /ensure_operational_sessions\s*\(\s*date\s+'[^']+'\s*,\s*(\d+)\s*\)/gi
+  ),
+].find((match) => Number(match[1]) > 16);
+if (invalidSessionGenerationCall) {
+  throw new Error(`notification integration exceeds the 16-week session generation bound: ${invalidSessionGenerationCall[1]}`);
+}
+console.log("ok  notification SQL evidence exercises scoped producers and migration reapplication");
 for (const column of [
   "waiver_signature_text",
   "waiver_signed_at",

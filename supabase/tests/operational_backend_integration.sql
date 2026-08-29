@@ -548,8 +548,19 @@ declare
   v_rsvp_booking uuid;
   v_deferred_booking uuid;
   v_explicit_notification uuid;
+  v_unique_cancel_booking uuid;
+  v_unique_cancel_session constant text := 'hyrox-2026-12-05';
+  v_payment_marked_before integer;
+  v_payment_marked_after integer;
+  v_gym_finalized_before integer;
+  v_gym_finalized_after integer;
+  v_cancelled_member_before integer;
+  v_cancelled_member_after integer;
+  v_cancelled_admin_before integer;
+  v_cancelled_admin_after integer;
 begin
   perform ensure_operational_sessions(date '2026-08-01', 16);
+  perform ensure_operational_sessions(date '2026-12-05', 1);
 
   -- A newly reserved paid booking points to its exact payment page.
   perform set_config('request.jwt.claim.sub', 'ee000000-0000-0000-0000-00000000e001', true);
@@ -587,16 +598,30 @@ begin
   );
 
   -- Payment-marked Admin rows use the stable payments section; approval
-  -- points back to the member's exact booking.
+  -- points back to the member's exact booking. Before/after counts and the
+  -- exact action body keep the route assertion scoped to this producer call.
+  select count(*) into v_payment_marked_before
+    from public.notifications
+   where kind = 'operational_payment_marked'
+     and body = 'A member marked payment on 2026-10-17.';
   perform set_config('request.jwt.claim.sub', 'ee000000-0000-0000-0000-00000000e001', true);
   set local role authenticated;
   perform mark_operational_payment(v_paid_booking, 'payme', 'ROUTE-REF');
   reset role;
+  select count(*) into v_payment_marked_after
+    from public.notifications
+   where kind = 'operational_payment_marked'
+     and body = 'A member marked payment on 2026-10-17.';
+  perform pg_temp.op_assert(
+    v_payment_marked_after - v_payment_marked_before = 2,
+    'payment marking produces exactly two Admin notifications for this action'
+  );
   perform pg_temp.op_assert(
     not exists (
       select 1
         from public.notifications
        where kind = 'operational_payment_marked'
+         and body = 'A member marked payment on 2026-10-17.'
          and destination is distinct from '#/admin/payments'
     ),
     'payment-marked Admin notifications use the payments destination'
@@ -637,19 +662,105 @@ begin
     'deferral notification has exact resulting Booking Details destination'
   );
 
-  -- Gym-finalized Admin rows use the same stable payments section.
+  -- Gym-finalized Admin rows use the same stable payments section. Scope
+  -- both production and route checks to this session's exact action body.
+  select count(*) into v_gym_finalized_before
+    from public.notifications
+   where kind = 'operational_gym_finalized'
+     and body = 'Gym confirmation recorded for hyrox-midtown-2026-10-17.';
   perform set_config('request.jwt.claim.sub', 'aa000000-0000-0000-0000-00000000a001', true);
   set local role authenticated;
   perform finalize_operational_gym('hyrox-midtown-2026-10-17', 'Routing test');
   reset role;
+  select count(*) into v_gym_finalized_after
+    from public.notifications
+   where kind = 'operational_gym_finalized'
+     and body = 'Gym confirmation recorded for hyrox-midtown-2026-10-17.';
+  perform pg_temp.op_assert(
+    v_gym_finalized_after - v_gym_finalized_before = 2,
+    'gym finalization produces exactly two Admin notifications for this action'
+  );
   perform pg_temp.op_assert(
     not exists (
       select 1
         from public.notifications
        where kind = 'operational_gym_finalized'
+         and body = 'Gym confirmation recorded for hyrox-midtown-2026-10-17.'
          and destination is distinct from '#/admin/payments'
     ),
     'gym-finalized Admin notifications use the payments destination'
+  );
+
+  -- Exercise cancellation through the real producer with exactly one session
+  -- in the resolver window. The final generated HYROX date has no deferral
+  -- target, so the same call produces one member and two Admin cancellation
+  -- rows. Older cancellation fixtures are retained outside the five-second
+  -- matching window rather than serving as synthetic route evidence.
+  perform set_config('request.jwt.claim.sub', 'ee000000-0000-0000-0000-00000000e001', true);
+  set local role authenticated;
+  select id into v_unique_cancel_booking
+    from reserve_operational_session(v_unique_cancel_session);
+  perform mark_operational_payment(v_unique_cancel_booking, 'payme', 'ROUTE-CANCEL');
+  perform set_config('request.jwt.claim.sub', 'aa000000-0000-0000-0000-00000000a001', true);
+  perform approve_operational_payment(v_unique_cancel_booking);
+  reset role;
+
+  update public.operational_sessions
+     set cancelled_at = cancelled_at - interval '1 minute'
+   where cancelled_at is not null;
+
+  select count(*) into v_cancelled_member_before
+    from public.notifications
+   where profile_id = 'ee000000-0000-0000-0000-00000000e001'
+     and kind = 'operational_session_cancelled_no_defer'
+     and body = 'Your booking for hyrox-2026-12-05 was cancelled with no deferral target available.';
+  select count(*) into v_cancelled_admin_before
+    from public.notifications
+   where kind = 'operational_session_cancelled'
+     and body = 'Session hyrox-2026-12-05 was cancelled by ITC.';
+
+  perform set_config('request.jwt.claim.sub', 'aa000000-0000-0000-0000-00000000a001', true);
+  set local role authenticated;
+  perform cancel_operational_session(v_unique_cancel_session, 'Unique routing test');
+  reset role;
+
+  select count(*) into v_cancelled_member_after
+    from public.notifications
+   where profile_id = 'ee000000-0000-0000-0000-00000000e001'
+     and kind = 'operational_session_cancelled_no_defer'
+     and body = 'Your booking for hyrox-2026-12-05 was cancelled with no deferral target available.';
+  select count(*) into v_cancelled_admin_after
+    from public.notifications
+   where kind = 'operational_session_cancelled'
+     and body = 'Session hyrox-2026-12-05 was cancelled by ITC.';
+  perform pg_temp.op_assert(
+    v_cancelled_member_after - v_cancelled_member_before = 1,
+    'real cancellation produces exactly one no-defer member notification'
+  );
+  perform pg_temp.op_assert(
+    v_cancelled_admin_after - v_cancelled_admin_before = 2,
+    'real cancellation produces exactly two Admin notifications'
+  );
+  perform pg_temp.op_assert(
+    not exists (
+      select 1
+        from public.notifications
+       where profile_id = 'ee000000-0000-0000-0000-00000000e001'
+         and kind = 'operational_session_cancelled_no_defer'
+         and body = 'Your booking for hyrox-2026-12-05 was cancelled with no deferral target available.'
+         and destination is distinct from '#/activity/hyrox-2026-12-05'
+    ),
+    'real no-defer cancellation routes to its unique Activity Details page'
+  );
+  perform pg_temp.op_assert(
+    not exists (
+      select 1
+        from public.notifications
+       where kind = 'operational_session_cancelled'
+         and body = 'Session hyrox-2026-12-05 was cancelled by ITC.'
+         and destination is distinct from '#/activity/hyrox-2026-12-05'
+    ),
+    'real Admin cancellation routes to its unique Activity Details page'
   );
 
   -- Explicit valid destinations are authoritative even for entity kinds.
@@ -668,28 +779,45 @@ begin
   );
 end $$;
 
--- Historical backfill matches only one same-profile entity, preserves read
--- state, and leaves ambiguous or cross-profile candidates unresolved.
+-- Historical backfill fixtures cover six independent classes. Notifications
+-- are inserted before their candidate bookings so only actual reapplication
+-- of migration 00007 can perform the historical correction.
+create temp table notification_routing_backfill_fixtures (
+  fixture_class text primary key,
+  notification_id uuid not null unique
+) on commit drop;
+
 do $$
 declare
   v_unique_at constant timestamptz := '2001-01-01 00:00:00+00';
-  v_ambiguous_at constant timestamptz := '2001-01-01 00:10:00+00';
-  v_foreign_at constant timestamptz := '2001-01-01 00:20:00+00';
+  v_malformed_at constant timestamptz := '2001-01-01 00:01:00+00';
+  v_ambiguous_at constant timestamptz := '2001-01-01 00:02:00+00';
+  v_foreign_at constant timestamptz := '2001-01-01 00:03:00+00';
+  v_explicit_at constant timestamptz := '2001-01-01 00:04:00+00';
+  v_read_state_at constant timestamptz := '2001-01-01 00:05:00+00';
   v_read_at constant timestamptz := '2001-01-02 00:00:00+00';
   v_unique_notification uuid;
+  v_malformed_notification uuid;
   v_ambiguous_notification uuid;
   v_foreign_notification uuid;
-  v_unique_booking constant uuid := '11000000-0000-0000-0000-000000000001';
+  v_explicit_notification uuid;
+  v_read_state_notification uuid;
 begin
-  -- Insert notifications before their candidate bookings so the INSERT
-  -- trigger correctly leaves these historical fixtures unresolved.
   insert into public.notifications
-    (profile_id, kind, title, body, read_at, created_at)
+    (profile_id, kind, title, body, created_at)
   values
     ('bb000000-0000-0000-0000-00000000b001',
-     'operational_booking_reserved', 'Historical unique', 'No body parsing.',
-     v_read_at, v_unique_at)
+     'operational_booking_reserved', 'Historical unique null', 'No body parsing.',
+     v_unique_at)
   returning id into v_unique_notification;
+
+  insert into public.notifications
+    (profile_id, kind, title, body, destination, created_at)
+  values
+    ('bb000000-0000-0000-0000-00000000b001',
+     'operational_booking_reserved', 'Historical malformed', 'No body parsing.',
+     'https://example.invalid/foreign', v_malformed_at)
+  returning id into v_malformed_notification;
 
   insert into public.notifications
     (profile_id, kind, title, body, created_at)
@@ -703,15 +831,37 @@ begin
     (profile_id, kind, title, body, created_at)
   values
     ('bb000000-0000-0000-0000-00000000b001',
-     'operational_booking_reserved', 'Historical foreign', 'No body parsing.',
+     'operational_booking_reserved', 'Historical foreign only', 'No body parsing.',
      v_foreign_at)
   returning id into v_foreign_notification;
+
+  insert into public.notifications
+    (profile_id, kind, title, body, destination, created_at)
+  values
+    ('bb000000-0000-0000-0000-00000000b001',
+     'operational_booking_reserved', 'Historical explicit', 'No body parsing.',
+     '#/giving', v_explicit_at)
+  returning id into v_explicit_notification;
+
+  insert into public.notifications
+    (profile_id, kind, title, body, read_at, created_at)
+  values
+    ('bb000000-0000-0000-0000-00000000b001',
+     'operational_booking_reserved', 'Historical read state', 'No body parsing.',
+     v_read_at, v_read_state_at)
+  returning id into v_read_state_notification;
 
   insert into public.operational_bookings
     (id, profile_id, session_id, status, reserved_at, pay_deadline_at, snapshot)
   values
-    (v_unique_booking, 'bb000000-0000-0000-0000-00000000b001',
-     'hyrox-2026-08-22', 'expired', v_unique_at, v_unique_at + interval '1 day', '{}'::jsonb),
+    ('11000000-0000-0000-0000-000000000001',
+     'bb000000-0000-0000-0000-00000000b001',
+     'hyrox-2026-08-22', 'expired', v_unique_at,
+     v_unique_at + interval '1 day', '{}'::jsonb),
+    ('11000000-0000-0000-0000-000000000002',
+     'bb000000-0000-0000-0000-00000000b001',
+     'hyrox-midtown-2026-08-22', 'expired', v_malformed_at,
+     v_malformed_at + interval '1 day', '{}'::jsonb),
     ('22000000-0000-0000-0000-000000000001',
      'bb000000-0000-0000-0000-00000000b001',
      'hyrox-2026-08-22', 'expired', v_ambiguous_at,
@@ -723,87 +873,136 @@ begin
     ('33000000-0000-0000-0000-000000000001',
      'dd000000-0000-0000-0000-00000000d001',
      'hyrox-2026-08-22', 'expired', v_foreign_at,
-     v_foreign_at + interval '1 day', '{}'::jsonb);
-
-  update public.notifications n
-     set destination = public.resolve_notification_destination(
-       n.profile_id, n.kind, n.created_at
-     )
-   where (n.destination is null or left(n.destination, 2) <> '#/')
-     and public.resolve_notification_destination(
-       n.profile_id, n.kind, n.created_at
-     ) is not null;
-
-  perform pg_temp.op_assert(
-    (select destination from public.notifications where id = v_unique_notification)
-      = '#/pay/' || v_unique_booking::text,
-    'unique same-profile historical reservation backfills exactly'
-  );
-  perform pg_temp.op_assert(
-    (select read_at from public.notifications where id = v_unique_notification) = v_read_at,
-    'historical backfill preserves existing read_at'
-  );
-  perform pg_temp.op_assert(
-    (select destination from public.notifications where id = v_ambiguous_notification) is null,
-    'same-time ambiguous historical reservations remain unresolved'
-  );
-  perform pg_temp.op_assert(
-    (select destination from public.notifications where id = v_foreign_notification) is null,
-    'another profile booking is never selected'
-  );
-end $$;
-
--- Session-specific kinds resolve only one timestamp-matched session. The
--- member cancellation fixture has a profile-owned booking relation; the
--- Admin cancellation fixture deliberately does not.
-do $$
-declare
-  v_cancelled_at constant timestamptz := '2002-01-01 00:00:00+00';
-  v_member_notification uuid;
-  v_admin_notification uuid;
-begin
-  update public.operational_sessions
-     set cancelled_at = v_cancelled_at,
-         cancelled_by = null,
-         cancelled_source = 'system',
-         cancel_reason = 'Notification routing fixture'
-   where id = 'hyrox-midtown-2026-10-24';
-
-  insert into public.operational_bookings
-    (id, profile_id, session_id, status, reserved_at, pay_deadline_at, snapshot)
-  values
-    ('44000000-0000-0000-0000-000000000001',
+     v_foreign_at + interval '1 day', '{}'::jsonb),
+    ('55000000-0000-0000-0000-000000000001',
      'bb000000-0000-0000-0000-00000000b001',
-     'hyrox-midtown-2026-10-24', 'cancelled', v_cancelled_at,
-     v_cancelled_at + interval '1 day', '{}'::jsonb);
+     'hyrox-2026-08-22', 'expired', v_explicit_at,
+     v_explicit_at + interval '1 day', '{}'::jsonb),
+    ('66000000-0000-0000-0000-000000000001',
+     'bb000000-0000-0000-0000-00000000b001',
+     'hyrox-2026-08-22', 'expired', v_read_state_at,
+     v_read_state_at + interval '1 day', '{}'::jsonb);
 
-  insert into public.notifications
-    (profile_id, kind, title, body, created_at)
-  values
-    ('bb000000-0000-0000-0000-00000000b001',
-     'operational_session_cancelled_no_defer', 'Booking cancelled',
-     'No body parsing.', v_cancelled_at)
-  returning id into v_member_notification;
+  -- The insert trigger correctly discarded the malformed route while no
+  -- candidate existed; restore it to model a genuinely historical bad value.
+  update public.notifications
+     set destination = 'https://example.invalid/foreign'
+   where id = v_malformed_notification;
 
-  insert into public.notifications
-    (profile_id, kind, title, body, created_at)
+  insert into pg_temp.notification_routing_backfill_fixtures
+    (fixture_class, notification_id)
   values
-    ('aa000000-0000-0000-0000-00000000a001',
-     'operational_session_cancelled', 'Session cancelled',
-     'No body parsing.', v_cancelled_at)
-  returning id into v_admin_notification;
+    ('unique-null', v_unique_notification),
+    ('unique-malformed', v_malformed_notification),
+    ('ambiguous-same-profile', v_ambiguous_notification),
+    ('foreign-only', v_foreign_notification),
+    ('valid-explicit', v_explicit_notification),
+    ('read-state', v_read_state_notification);
 
   perform pg_temp.op_assert(
-    (select destination from public.notifications where id = v_member_notification)
-      = '#/activity/hyrox-midtown-2026-10-24',
-    'member cancellation resolves its unique profile-related session'
+    (select count(*) from pg_temp.notification_routing_backfill_fixtures) = 6,
+    'six historical notification fixture classes are present'
   );
   perform pg_temp.op_assert(
-    (select destination from public.notifications where id = v_admin_notification)
-      = '#/activity/hyrox-midtown-2026-10-24',
-    'Admin cancellation resolves its unique timestamp-matched session'
+    (select destination from public.notifications where id = v_unique_notification) is null,
+    'unique-null fixture starts unresolved'
+  );
+  perform pg_temp.op_assert(
+    (select destination from public.notifications where id = v_malformed_notification)
+      = 'https://example.invalid/foreign',
+    'unique-malformed fixture starts malformed'
   );
 end $$;
+
+\ir ../migrations/20260829000007_notification_destinations.sql
+
+do $$
+begin
+  perform pg_temp.op_assert(
+    (select n.destination
+       from public.notifications n
+       join pg_temp.notification_routing_backfill_fixtures f
+         on f.notification_id = n.id
+      where f.fixture_class = 'unique-null')
+      = '#/pay/11000000-0000-0000-0000-000000000001',
+    'actual migration backfills a null unique same-profile reservation'
+  );
+  perform pg_temp.op_assert(
+    (select n.destination
+       from public.notifications n
+       join pg_temp.notification_routing_backfill_fixtures f
+         on f.notification_id = n.id
+      where f.fixture_class = 'unique-malformed')
+      = '#/pay/11000000-0000-0000-0000-000000000002',
+    'actual migration repairs a malformed unique same-profile reservation'
+  );
+  perform pg_temp.op_assert(
+    (select n.destination
+       from public.notifications n
+       join pg_temp.notification_routing_backfill_fixtures f
+         on f.notification_id = n.id
+      where f.fixture_class = 'ambiguous-same-profile') is null,
+    'actual migration leaves same-profile ambiguity unresolved'
+  );
+  perform pg_temp.op_assert(
+    (select n.destination
+       from public.notifications n
+       join pg_temp.notification_routing_backfill_fixtures f
+         on f.notification_id = n.id
+      where f.fixture_class = 'foreign-only') is null,
+    'actual migration never selects another profile booking'
+  );
+  perform pg_temp.op_assert(
+    (select n.destination
+       from public.notifications n
+       join pg_temp.notification_routing_backfill_fixtures f
+         on f.notification_id = n.id
+      where f.fixture_class = 'valid-explicit') = '#/giving',
+    'actual migration preserves a valid explicit destination'
+  );
+  perform pg_temp.op_assert(
+    (select n.destination
+       from public.notifications n
+       join pg_temp.notification_routing_backfill_fixtures f
+         on f.notification_id = n.id
+      where f.fixture_class = 'read-state')
+      = '#/pay/66000000-0000-0000-0000-000000000001',
+    'actual migration backfills a read notification destination'
+  );
+  perform pg_temp.op_assert(
+    (select n.read_at
+       from public.notifications n
+       join pg_temp.notification_routing_backfill_fixtures f
+         on f.notification_id = n.id
+      where f.fixture_class = 'read-state')
+      = '2001-01-02 00:00:00+00'::timestamptz,
+    'actual migration preserves existing read_at'
+  );
+end $$;
+
+create temp table notification_routing_backfill_snapshot on commit drop as
+select id, profile_id, kind, title, body, destination, read_at, created_at
+  from public.notifications;
+
+\ir ../migrations/20260829000007_notification_destinations.sql
+
+select pg_temp.op_assert(
+  not exists (
+    select 1
+      from pg_temp.notification_routing_backfill_snapshot s
+      full join public.notifications n on n.id = s.id
+     where s.id is null
+        or n.id is null
+        or s.profile_id is distinct from n.profile_id
+        or s.kind is distinct from n.kind
+        or s.title is distinct from n.title
+        or s.body is distinct from n.body
+        or s.destination is distinct from n.destination
+        or s.read_at is distinct from n.read_at
+        or s.created_at is distinct from n.created_at
+  ),
+  'notification routing migration second reapplication is idempotent'
+);
 
 -- =====================================================================
 -- Free-event venue overrides (Task 1)

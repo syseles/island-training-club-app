@@ -112,3 +112,74 @@ Safety verifier passed: gate rejects unsafe conditions.
 - `bash supabase/tests/verify_operational_backend.sh`: not run; disposable Supabase-compatible credentials and `psql` are unavailable.
 - SQL syntax/runtime and deployment remain unverified against PostgreSQL/Supabase.
 - Migration `00007` has not been applied to any remote database.
+
+## Fix Round 1 evidence
+
+The bounded review fixes change only the source contract and executable SQL
+integration scenarios. Production migration
+`20260829000007_notification_destinations.sql` remains unchanged: both the
+committed and worktree blobs are
+`fd579b07c0d5eda33c3f203dc1465784a837321a`.
+
+### Source RED → GREEN
+
+Before changing the SQL integration source, `node app/smoke.mjs` exited 1 at
+the new Fix Round 1 contract with:
+
+```text
+Error: notification integration evidence missing v_payment_marked_before
+```
+
+After implementing the required executable evidence, the contract reports:
+
+```text
+ok  notification SQL evidence exercises scoped producers and migration reapplication
+```
+
+Static review then exposed an invalid 19-week fixture call against the
+existing 16-week RPC bound. A focused source contract was added first and
+`node app/smoke.mjs` exited 1 with:
+
+```text
+Error: notification integration exceeds the 16-week session generation bound: 19
+```
+
+The fixture now uses the established 16-week call plus a separate one-week
+December generation call; the complete smoke suite returns to exit 0.
+
+### Producer and migration evidence
+
+- Payment-marked and gym-finalized checks record action-specific before/after
+  counts, require exactly two produced Admin rows each, and scope bad-route
+  checks to the exact producer body.
+- Cancellation confirms the final generated HYROX booking, moves older
+  cancellation timestamps outside the resolver window, and calls the real
+  `cancel_operational_session(v_unique_cancel_session, ...)` producer. It
+  requires exactly one member no-defer row and two Admin rows, all routed to
+  the exact Activity Details destination.
+- Historical coverage has six literal classes: `unique-null`,
+  `unique-malformed`, `ambiguous-same-profile`, `foreign-only`,
+  `valid-explicit`, and `read-state`.
+- The integration script executes
+  `\ir ../migrations/20260829000007_notification_destinations.sql` exactly
+  twice. First-pass assertions cover all six classes and `read_at`; a snapshot
+  of every notification column then proves the second reapplication is data
+  idempotent.
+- The copied manual resolver update was removed. Static inventory reports zero
+  copied backfill statements in the integration script, so the actual
+  migration reapplication is the evidence.
+
+### Available verification
+
+```text
+node app/smoke.mjs                                      exit 0
+node app/live-auth-smoke.mjs                            exit 0
+bash supabase/tests/verify_operational_backend_safety.sh exit 0
+git diff --check                                        exit 0
+node --check app/smoke.mjs                              exit 0
+```
+
+Disposable PostgreSQL execution is still unavailable: no test database URL or
+reset acknowledgement is configured, `psql` and Supabase CLI are absent, and
+the Docker daemon is unavailable. SQL runtime, remote application, and live
+routing therefore remain explicitly unverified.
