@@ -52,7 +52,7 @@ No generic entity-type or entity-ID columns are added.
 
 ## Supabase migration
 
-Create `supabase/migrations/20260829000005_notification_destinations.sql`, after the latest RSVP migration.
+Create `supabase/migrations/20260829000007_notification_destinations.sql`. Migration numbers `00005` and `00006` are reserved by the Admin assigned-collector payout RPC and the RSVP six-argument lunch venue RPC respectively; `00007` avoids integration filename collisions while remaining forward-only.
 
 The migration will add a focused security-definer resolver and a `BEFORE INSERT` trigger on `public.notifications`. The trigger:
 
@@ -129,4 +129,4 @@ Add SQL assertions covering:
 - Existing reservation rows are backfilled only to same-profile uniquely matched bookings.
 - Explicit destinations and `read_at` values are not overwritten.
 
-Run `node app/smoke.mjs`, `node app/live-auth-smoke.mjs`, relevant Supabase SQL tests available in the repository, and `git diff --check` before completion.
+Run `node app/smoke.mjs`, `node app/live-auth-smoke.mjs`, relevant Supabase SQL tests available in the repository, and `git diff --check` before completion. The branch must contain executable application/migration changes—not documentation only—before notification routing is described as implemented. Do not claim live routing is fixed until migration `00007` is applied to Supabase.
