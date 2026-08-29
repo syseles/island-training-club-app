@@ -1823,12 +1823,14 @@ export function confirmGymBooking(sessionId, note, now = Date.now()) {
 export function setWeekVenue(sessionId, {
   location, mapsQuery, meetingLat = null, meetingLng = null,
 } = {}) {
-  const cleanLocation = String(location || "").trim();
-  const cleanMapsQuery = String(mapsQuery || "").trim();
-  const overrideActivityId = String(sessionId).replace(/-\d{4}-\d{2}-\d{2}$/, "");
+  const before = getSession(sessionId);
+  const fallbackActivityId = String(sessionId).replace(/-\d{4}-\d{2}-\d{2}$/, "");
+  const overrideActivityId = before?.activityId || fallbackActivityId;
   if (!new Set(["wnt", "run", "water", "lunch"]).has(overrideActivityId)) {
     throw new Error("Activity venue is fixed.");
   }
+  const cleanLocation = String(location || "").trim();
+  const cleanMapsQuery = String(mapsQuery || "").trim();
   const rawPointProvided = ![meetingLat, meetingLng].every(
     (value) => value === null || value === undefined || value === ""
   );
@@ -1839,7 +1841,6 @@ export function setWeekVenue(sessionId, {
     throw new Error("Choose a valid meeting point.");
   }
   const meetingPoint = acceptsPoint ? normalizedPoint : null;
-  const before = getSession(sessionId);
   if (isLive()) {
     const wasTBC = before?.location === "TBC"
       || !hasConfirmedVenue(before?.location, before?.mapsQuery);

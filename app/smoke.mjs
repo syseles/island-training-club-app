@@ -55,6 +55,15 @@ const { existsSync, readFileSync } = await import("node:fs");
 const { resolve, dirname } = await import("node:path");
 const { fileURLToPath } = await import("node:url");
 const __dirnameSmoke = dirname(fileURLToPath(import.meta.url));
+const storeSource = readFileSync(resolve(__dirnameSmoke, "js/store.js"), "utf8");
+const weekVenueSource = storeSource.match(
+  /export function setWeekVenue[\s\S]*?\/\/ --- Giving/
+)?.[0] || "";
+if (!/const before = getSession\(sessionId\)/.test(weekVenueSource)
+    || !/before\?\.activityId/.test(weekVenueSource)) {
+  throw new Error("setWeekVenue should authorize from the resolved session activityId");
+}
+
 for (const relativePath of [
   "js/config.js",
   "live-auth-smoke.mjs",
