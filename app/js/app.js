@@ -1003,6 +1003,15 @@ document.addEventListener("click", async (e) => {
       }
       break;
 
+    case "copy-payment-note":
+      if (el.dataset.note && navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(el.dataset.note);
+        toast("Payment note copied");
+      } else {
+        toast("Copy unsupported on this device");
+      }
+      break;
+
     case "copy-gym":
       if (navigator.clipboard?.writeText) {
         await navigator.clipboard.writeText(el.dataset.msg);

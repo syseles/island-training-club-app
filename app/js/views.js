@@ -1816,6 +1816,8 @@ export function viewPay(bookingId) {
   const cname = collector ? esc(collector.preferredName || collector.fullName) : "the on-duty collector";
   const payme = collector?.paymeLink || "";
   const fps = collector?.fpsPhone || "";
+  const memberName = user.fullName || user.preferredName || "ITC Member";
+  const paymentNote = `${s.name} · ${fmtDate(s.dateISO)} · ${s.location || "Venue TBC"} · ${memberName}`;
 
   return `
     <a class="back-link" href="#/activity/${b.sessionId}">← ${esc(s.name)}</a>
@@ -1824,8 +1826,17 @@ export function viewPay(bookingId) {
     <p class="subcopy mt8">Deadline: <strong>${fmtDeadline(b.payDeadlineAt)}</strong> — unpaid spots go to the waitlist.</p>
     <div class="card mt16"><div class="card-body">
       <h3>PayMe</h3>
-      <p class="muted small">Opens PayMe straight to ${cname} with the amount ready.</p>
-      <a class="btn mt8" href="${esc(payme)}" target="_blank" rel="noopener">PayMe to ${cname} · ${fmtMoney(s.price)}</a>
+      ${payme ? `
+        <p class="muted small">PayMe opens the collector’s profile. Enter the displayed amount of <strong>${fmtMoney(s.price)}</strong> after it opens.</p>
+        <a class="btn mt8" href="${esc(payme)}" target="_blank" rel="noopener">PayMe to ${cname} · ${fmtMoney(s.price)}</a>
+      ` : `
+        <p class="muted small">PayMe is unavailable for this collector. Please use FPS below to send <strong>${fmtMoney(s.price)}</strong>.</p>
+        <button class="btn mt8" type="button" disabled>PayMe unavailable</button>
+      `}
+      <p class="muted small mt8">Suggested payment note</p>
+      <p><strong>${esc(paymentNote)}</strong>
+        <button class="btn ghost sm" type="button" data-action="copy-payment-note" data-note="${esc(paymentNote)}">Copy note</button>
+      </p>
       <h3 class="mt24">FPS to ${cname}</h3>
       <p class="muted small">Scan with your banking app — the amount is embedded in the QR — or copy the number.</p>
       <div class="fps-qr" aria-hidden="true"><span>FPS QR<br>(mock)</span></div>

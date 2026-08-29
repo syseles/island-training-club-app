@@ -2163,6 +2163,10 @@ installLocalFixtures();
 // --- HYROX payment system: member payment UI (Task 9) ---
 store.resetLocalData();
 installLocalFixtures();
+store.signIn("admin@example.test");
+store.updateCollectorPayouts("fixture-admin", {
+  paymeLink: "payme.hsbc.com.hk/1/test-admin",
+});
 store.signIn("member@example.test");
 {
   const sess = store.upcomingSessions(14).find(
@@ -2178,7 +2182,24 @@ store.signIn("member@example.test");
     throw new Error("pay screen should show PayMe/FPS to the collector + amount");
   if (!pay.includes("Admin"))
     throw new Error("pay screen should name the on-duty collector");
-  console.log("ok  pay screen shows collector PayMe/FPS + amount");
+  const expectedNote = `${sess.name} · ${data.fmtDate(sess.dateISO)} · ${sess.location} · Test Member`;
+  if (!pay.includes('href="https://payme.hsbc.com.hk/1/test-admin"')
+      || !pay.includes('target="_blank"')
+      || !pay.includes(expectedNote)
+      || !pay.includes('data-action="copy-payment-note"')) {
+    throw new Error("pay screen should open the collector PayMe link and show the suggested note");
+  }
+  if (pay.includes("amount ready")) {
+    throw new Error("PayMe instructions must not claim the amount is prefilled");
+  }
+  store.signIn("admin@example.test");
+  store.updateCollectorPayouts("fixture-admin", { paymeLink: "" });
+  store.signIn("member@example.test");
+  const fpsOnlyPay = views.viewPay(b.id);
+  if (/<a[^>]*>PayMe to/.test(fpsOnlyPay) || !fpsOnlyPay.includes("use FPS")) {
+    throw new Error("pay screen without a PayMe link should disable PayMe and direct the member to FPS");
+  }
+  console.log("ok  pay screen safely hands off PayMe with amount guidance, note, and FPS fallback");
   store.markBookingPaid(b.id, "PayMe", "");
   const awaiting = views.viewBooking(b.id);
   if (!awaiting.includes("being confirmed"))

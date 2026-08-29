@@ -2531,17 +2531,23 @@ const routedMovedBooking = store.bookingsForUser(authUser.id).find((booking) =>
 );
 if (!routedMovedBooking) throw new Error("defer-to must create the moved booking");
 assert.equal(location.hash, `#/booking/${routedMovedBooking.id}`);
-let copiedFps = null;
+let copiedPaymentText = null;
 Object.defineProperty(globalThis.navigator, "clipboard", {
   configurable: true,
-  value: { writeText: async (value) => { copiedFps = value; } },
+  value: { writeText: async (value) => { copiedPaymentText = value; } },
 });
 const fpsControl = makeElement();
 fpsControl.dataset = { action: "copy-fps", phone: "+852 6123 4567" };
 fpsControl.closest = () => fpsControl;
 await click({ target: fpsControl, preventDefault() {} });
-assert.equal(copiedFps, "+852 6123 4567");
-console.log("ok  delegated release, deferral, and FPS copy controls execute prototype behavior");
+assert.equal(copiedPaymentText, "+852 6123 4567");
+const paymentNote = "HYROX Saturday · Sat, 5 Sep · BFT Central · Micah Member";
+const paymentNoteControl = makeElement();
+paymentNoteControl.dataset = { action: "copy-payment-note", note: paymentNote };
+paymentNoteControl.closest = () => paymentNoteControl;
+await click({ target: paymentNoteControl, preventDefault() {} });
+assert.equal(copiedPaymentText, paymentNote);
+console.log("ok  delegated release, deferral, FPS copy, and payment-note copy controls execute prototype behavior");
 
 // Gym finalization must travel through the delegated submit seam, persist the
 // authorized Admin mutation, and rerender the confirmed state.
