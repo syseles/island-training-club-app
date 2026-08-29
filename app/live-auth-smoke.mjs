@@ -1552,19 +1552,30 @@ const lunchHtml = views.viewActivity(lunchSession.id);
 if (!lunchHtml.includes('data-action="rsvp-join"') || lunchHtml.includes("Book & pay")) {
   throw new Error("live RSVP activity should offer Count me in, not checkout");
 }
+const countBeforeRsvp = store.attendeeCountFor(lunchSession);
 const rsvpBooking = await store.rsvpSession(authUser.id, lunchSession.id);
 if (rsvpBooking.status !== "confirmed") {
   throw new Error("live RSVP should confirm instantly without payment");
 }
+assert.equal(store.attendeeCountFor(lunchSession), countBeforeRsvp + 1,
+  "Count me in must increase the RSVP count by exactly one");
+assert.deepEqual(JSON.parse(mem.get("itc.prototype.v1")).users, [],
+  "live RSVP join must not copy identity rows into prototype state");
 const goingHtml = views.viewActivity(lunchSession.id);
+assert.ok(goingHtml.includes(`${countBeforeRsvp + 1} going`),
+  "RSVP Activity Details must render the confirmed booking count");
 if (!goingHtml.includes("rsvp-withdraw")) {
   throw new Error("RSVP'd member should see a withdraw action");
 }
 await store.withdrawRsvp(rsvpBooking.id);
+assert.equal(store.attendeeCountFor(lunchSession), countBeforeRsvp,
+  "withdrawal must decrease the RSVP count by exactly one");
+assert.deepEqual(JSON.parse(mem.get("itc.prototype.v1")).users, [],
+  "live RSVP withdrawal must leave prototype identity rows empty");
 if (store.getBooking(rsvpBooking.id).status !== "cancelled") {
   throw new Error("withdraw should cancel the RSVP");
 }
-console.log("ok  live RSVP events confirm instantly and withdraw cleanly");
+console.log("ok  live RSVP events change count by exactly one without copying identities");
 
 // Same-day live sessions order by start time, and weekly venue overrides
 // apply to live RSVP sessions (not just locally-seeded free events).

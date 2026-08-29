@@ -114,7 +114,7 @@ function sessionRow(s, { past, showDate = true, highlight } = {}) {
   } else if (reserved) {
     end = `<span class="badge warn">Pay by ${fmtDeadline(reserved.payDeadlineAt)}</span>`;
   } else if (s.kind === "rsvp") {
-    const going = store.attendeesFor(s).length;
+    const going = store.attendeeCountFor(s);
     end = `<span class="badge free">RSVP</span><span class="spots">${going} going</span>`;
   } else if (s.kind === "free") {
     end = `<span class="badge free">Free</span><span class="spots">Just show up</span>`;
@@ -483,7 +483,7 @@ export function viewActivity(sessionId) {
   } else if (s.kind === "rsvp") {
     // RSVP sessions (e.g. the post-training lunch): no payment moves in-app,
     // but the organizer needs a headcount — joining confirms instantly.
-    const goingCount = store.attendeesFor(s).length;
+    const goingCount = store.attendeeCountFor(s);
     if (booking) {
       actionBlock = `
         <div class="banner mt16">
@@ -2249,7 +2249,7 @@ function adminFreeEventVenues() {
             </div>
           </form>
           ${s.kind === "rsvp" ? `
-          <p class="muted small mt8">${store.attendeesFor(s).length} going${s.capacity != null ? ` · cap ${s.capacity}` : ""}</p>
+          <p class="muted small mt8">${store.attendeeCountFor(s)} going${s.capacity != null ? ` · cap ${s.capacity}` : ""}</p>
           <form id="form-cancel-week" data-session="${safeId}" class="mt8">
             <div class="field"><label>Cancel this week — reason (required)</label><input name="reason" placeholder="e.g. Organizer away" required></div>
             <button class="btn danger sm" type="submit">Cancel this week's event</button>

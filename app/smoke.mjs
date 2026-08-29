@@ -170,6 +170,12 @@ console.log("ok  integration source-tip provenance is explicit");
 
 const integratedViewSource = readFileSync(resolve(__dirnameSmoke, "js/views.js"), "utf8");
 const integratedAppSource = readFileSync(resolve(__dirnameSmoke, "js/app.js"), "utf8");
+assert.equal(typeof store.attendeeCountFor, "function",
+  "store must export attendeeCountFor for identity-independent RSVP counts");
+assert.equal((integratedViewSource.match(/store\.attendeeCountFor\(s\)/g) || []).length, 3,
+  "Schedule, RSVP Activity Details, and Admin controls must use attendeeCountFor");
+assert.doesNotMatch(integratedViewSource, /store\.attendeesFor\(s\)\.length/,
+  "RSVP count surfaces must not derive counts from attendee identities");
 const combinedRuntimeSource = `${integratedViewSource}\n${integratedAppSource}`;
 for (const marker of [
   "Continue with Google",
@@ -2359,6 +2365,10 @@ installLocalFixtures();
   const rsvp = await store.rsvpSession("fixture-member", lunch.id);
   if (rsvp.status !== "confirmed" || rsvp.snapshot.price !== 0)
     throw new Error("RSVP should confirm instantly with no payment");
+  assert.equal(store.attendeeCountFor(lunch), 1,
+    "local RSVP count must include the confirmed booking");
+  assert.deepEqual(store.attendeesFor(lunch), ["Tester M."],
+    "attendeesFor must preserve attendee name formatting independently of counts");
   const goingHtml = views.viewActivity(lunch.id);
   if (!goingHtml.includes("You're going") || !goingHtml.includes("rsvp-withdraw"))
     throw new Error("RSVP'd member should see the Going state and a withdraw action");

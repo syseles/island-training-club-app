@@ -808,6 +808,11 @@ export function spotsLeft(session) {
   return Math.max(0, session.capacity - heldBookingsForSession(session.id).length);
 }
 
+export function attendeeCountFor(session) {
+  if (!session?.id) return 0;
+  return activeBookingsForSession(session.id).length;
+}
+
 export function attendeesFor(session) {
   const names = [];
   for (const b of activeBookingsForSession(session.id)) {
