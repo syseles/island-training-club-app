@@ -515,8 +515,9 @@ globalThis.window = {
 // scheduled live-mode views can render.
 const today = new Date();
 const seededCancelled = new Set(["hyrox-2026-08-15", "hyrox-midtown-2026-08-15"]);
+const daysUntilNextSaturday = ((6 - today.getDay() + 7) % 7) || 7;
 for (let i = 0; i < 4; i++) {
-  const d = new Date(today.getTime() + (7 + i * 7) * 24 * 60 * 60 * 1000);
+  const d = new Date(today.getTime() + (daysUntilNextSaturday + i * 7) * 24 * 60 * 60 * 1000);
   const iso = d.toISOString().slice(0, 10);
   operationalTableRows.operational_sessions.push({
     id: `hyrox-${iso}`,
@@ -1550,6 +1551,30 @@ await store.setWeekVenue(lunchSession.id, { location: "Cafe Deco, Central", maps
 const overriddenLunch = store.getSession(lunchSession.id);
 if (overriddenLunch.location !== "Cafe Deco, Central" || overriddenLunch.mapsQuery !== "Cafe Deco, Central") {
   throw new Error("weekly venue override must apply to live RSVP sessions");
+}
+const priorScheduleWeekOffset = views.scheduleState.weekOffset;
+const priorScheduleSelected = views.scheduleState.selected;
+views.scheduleState.weekOffset = Math.round(
+  (data.mondayOf(data.parseISO(lunchSession.dateISO)) - data.mondayOf(data.todayLocal())) / (7 * 86400000)
+);
+views.scheduleState.selected = lunchSession.dateISO;
+const lunchScheduleHtml = views.viewSchedule();
+const lunchDetailHtml = views.viewActivity(lunchSession.id);
+if (!lunchScheduleHtml.includes("Cafe Deco, Central")
+    || !lunchDetailHtml.includes("Cafe Deco, Central")) {
+  throw new Error("live lunch venue override must appear on Schedule and Activity Details");
+}
+views.scheduleState.weekOffset = priorScheduleWeekOffset;
+views.scheduleState.selected = priorScheduleSelected;
+await store.setWeekVenue(lunchSession.id, {
+  location: null,
+  mapsQuery: null,
+  meetingLat: null,
+  meetingLng: null,
+});
+const resetLunch = store.getSession(lunchSession.id);
+if (resetLunch.location !== "TBC") {
+  throw new Error("resetting a live lunch venue should restore its TBC recurring default");
 }
 console.log("ok  live sessions order by start time and lunch accepts weekly venue overrides");
 
