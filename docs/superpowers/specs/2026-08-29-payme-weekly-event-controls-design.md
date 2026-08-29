@@ -1,0 +1,106 @@
+# PayMe Handoff and Weekly Event Controls Design
+
+## Goals
+
+1. Make the member PayMe button open the on-duty collector’s saved PayMe personal link instead of being interpreted as an in-app relative route.
+2. Give members an accurate, copyable payment note containing the session and payer information needed by the collector.
+3. Replace two ambiguous weekly Admin sections with one clear Weekly Event Controls hierarchy.
+
+## Branch baseline
+
+`feature/admin-ops` is fast-forwarded to the current `testing` baseline before implementation so it contains RSVP events, the current payout profile behavior, and the existing free/RSVP weekly controls.
+
+## PayMe personal-link behavior
+
+The collector continues to save their PayMe link under Admin > Payments. The app will normalize and validate that value before using it:
+
+- Trim surrounding whitespace.
+- Add `https://` when an otherwise valid PayMe host was entered without a scheme.
+- Accept HTTPS links on the official `payme.hsbc.com.hk` host.
+- Require a collector-specific path rather than the generic PayMe homepage.
+- Reject other protocols, hosts, malformed URLs, and generic homepage links with clear form feedback.
+
+The member payment screen will use the normalized absolute URL in an external anchor. On supported devices, the PayMe universal link can launch the PayMe app with the collector selected; browser fallback remains controlled by PayMe.
+
+The UI must not claim that the amount is embedded or prefilled. It will tell the member to enter the displayed amount manually and use the suggested note.
+
+If no valid collector PayMe link exists, the PayMe action is non-clickable and explains that FPS should be used instead. It must never render an empty or relative `href` that routes back into the ITC app.
+
+## Suggested payment note
+
+Generate the note from the booking snapshot and current member:
+
+`<session name> · <date> · <location> · <member name>`
+
+Example:
+
+`ITC HYROX · 5 Sep · BFT Causeway Bay · Riley Runner`
+
+Use the booking snapshot’s session name, date, and location so the note matches what the member reserved. Use the member’s full name, falling back to the available display name. Escape the rendered note and provide a dedicated Copy note control using the existing delegated clipboard pattern.
+
+The payment note is guidance, not an in-app payment field. The member manually pastes or types it into PayMe.
+
+## Weekly Event Controls hierarchy
+
+On Admin > Activities, replace the two top-level sections `Weekly Venue Overrides` and `Weekly Session Overrides` with one top-level collapsible section:
+
+### Weekly Event Controls
+
+Supporting copy:
+
+`Manage one dated event without changing its recurring defaults.`
+
+Inside it, render two clearly labelled groups.
+
+### Free & RSVP Events
+
+Contains the existing controls for dated non-paid recurring events:
+
+- Display venue and Google Maps search.
+- WNT meeting-point picker where supported.
+- Reset to recurring default.
+- RSVP count and dated cancellation for RSVP events.
+
+### Paid Sessions
+
+Contains the existing paid recurring-session controls:
+
+- Time.
+- Venue status.
+- Session note.
+- Midtown open/close where supported.
+- Dated cancellation.
+
+One-off Events remains a separate top-level section because its workflow creates and deletes single-date events rather than overriding a recurring instance. Finalize with gym remains under Payments because it is payment-side operational work.
+
+The combined section changes hierarchy and copy only. It does not merge the distinct free/RSVP and paid form contracts into one universal form.
+
+## Accessibility and rendering
+
+- Keep the top-level controls in semantic `<details>`/`<summary>` markup.
+- Use headings for `Free & RSVP Events` and `Paid Sessions` so Admins can scan the groups.
+- Preserve all existing form IDs, `data-action` values, labels, and delegated handlers.
+- Preserve current cards, badges, cancellation states, and responsive behavior.
+
+## Testing
+
+PayMe smoke coverage will verify:
+
+- A scheme-less official personal link becomes an absolute HTTPS link.
+- A generic homepage, foreign host, malformed link, or non-HTTPS protocol is rejected.
+- The payment anchor targets the normalized collector link and cannot become an in-app relative route.
+- The old “amount is ready” copy is absent.
+- The suggested note includes session name, formatted date, location, and member name.
+- Copy note delegates to the clipboard handler.
+- Missing/invalid links produce an FPS fallback rather than a clickable PayMe action.
+
+Admin smoke coverage will verify:
+
+- Exactly one top-level `Weekly Event Controls` section appears.
+- `Free & RSVP Events` and `Paid Sessions` both appear inside it.
+- The old top-level section titles are absent.
+- Free/RSVP forms retain venue, reset, RSVP count, and RSVP cancellation controls.
+- Paid forms retain time, notice, venue-status, Midtown, and cancellation controls.
+- One-off Events remains separate and Payments does not absorb weekly setup controls.
+
+Run `node app/smoke.mjs`, `node app/live-auth-smoke.mjs`, and `git diff --check` before completion.
