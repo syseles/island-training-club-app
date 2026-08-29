@@ -77,6 +77,42 @@ const indemnityMigrationSource = readFileSync(
   resolve(__dirnameSmoke, "../supabase/migrations/20260827000001_hyrox_indemnity_fields.sql"),
   "utf8"
 );
+const notificationRoutingMigrationSource = readFileSync(
+  resolve(__dirnameSmoke, "../supabase/migrations/20260829000007_notification_destinations.sql"),
+  "utf8"
+);
+const normalizedNotificationRoutingMigrationSource = notificationRoutingMigrationSource.toLowerCase();
+for (const marker of [
+  "security definer",
+  "set search_path = public",
+  "before insert on public.notifications",
+  "resolve_notification_destination",
+  "operational_booking_reserved",
+  "#/pay/",
+  "count(*)",
+  "profile_id",
+  "revoke all on function public.resolve_notification_destination",
+]) {
+  if (!normalizedNotificationRoutingMigrationSource.includes(marker)) {
+    throw new Error(`notification routing migration missing ${marker}`);
+  }
+}
+if (/alter\s+table\s+public\.notifications\b[^;]*(?:enable|disable|force|no\s+force)\s+row\s+level\s+security/i.test(notificationRoutingMigrationSource)) {
+  throw new Error("notification routing migration must not alter notification RLS");
+}
+if (/grant\s+[^;]*\b(?:all(?:\s+privileges)?|insert|update|delete|truncate|references|trigger)\b[^;]*\s+on\s+(?:table\s+)?public\.notifications\b/i.test(notificationRoutingMigrationSource)) {
+  throw new Error("notification routing migration must not grant notification-table writes");
+}
+const notificationRoutingFunctionDeclarations = [
+  ...notificationRoutingMigrationSource.matchAll(/create\s+or\s+replace\s+function\s+public\.([a-z0-9_]+)/gi),
+].map((match) => match[1]).sort();
+if (JSON.stringify(notificationRoutingFunctionDeclarations) !== JSON.stringify([
+  "resolve_notification_destination",
+  "route_notification_destination",
+])) {
+  throw new Error("notification routing migration must declare only the centralized resolver and trigger function");
+}
+console.log("ok  notification migration centralizes exact routes without weakening notification access");
 for (const column of [
   "waiver_signature_text",
   "waiver_signed_at",
