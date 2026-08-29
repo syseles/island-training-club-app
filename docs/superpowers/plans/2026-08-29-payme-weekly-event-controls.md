@@ -524,3 +524,95 @@ git add docs/superpowers/specs/2026-08-29-payme-weekly-event-controls-design.md 
   app/smoke.mjs app/live-auth-smoke.mjs
 git commit -m "fix(payments): secure live collector payouts"
 ```
+
+---
+
+### Task 6: Keep operational sessions visible when payout enrichment degrades
+
+**Files:**
+- Modify: `app/js/operations.js` in `fetchOperationalState()`, `replaceState()`, and `operationalStateStatus()`
+- Modify: `app/js/app.js` in `form-payouts`
+- Test: `app/live-auth-smoke.mjs`
+- Test: `app/smoke.mjs`
+
+**Interfaces:**
+- Produces: operational status field `payoutError`, null on successful assigned-payout enrichment and a user-safe message when enrichment fails.
+- Preserves: direct RLS-visible payout rows, all core session/template/booking/assignment/venue hydration, and approved-member assigned payout rows when RPC `00005` is deployed.
+- Invariant: native `FormData` is captured before `withBusyControl()` disables inputs.
+
+- [ ] **Step 1: Write failing degraded-hydration tests**
+
+In `app/live-auth-smoke.mjs`, make `get_assigned_collector_payout_profiles` return each of these errors in isolated forced hydrations: function unavailable, permission denied, and `Approved membership required.`. For every case assert:
+
+```js
+await store.hydrateLiveOperations({ force: true });
+assert.ok(store.upcomingSessions(21).some((s) => s.kind === "paid"));
+assert.ok(store.upcomingSessions(21).some((s) => s.kind === "rsvp"));
+const activitiesHtml = await views.viewAdmin("activities");
+assert.ok(!activitiesHtml.includes("No upcoming paid sessions."));
+```
+
+For anonymous/pending/declined roles, assert public Schedule sessions still hydrate. Assert `operationalStateStatus().payoutError` reports degradation while core `error` remains null. Restore successful RPC behavior and assert `payoutError` clears and assigned payout hydration still works.
+
+- [ ] **Step 2: Run live RED**
+
+Run: `node app/live-auth-smoke.mjs`
+
+Expected: FAIL because the assigned-payout RPC result participates in the fatal error loop and aborts all hydration.
+
+- [ ] **Step 3: Isolate optional payout enrichment**
+
+Add a helper in `app/js/operations.js` that always settles:
+
+```js
+async function fetchAssignedPayoutRows() {
+  try {
+    const { data, error } = await supabase.rpc("get_assigned_collector_payout_profiles");
+    if (error) return { rows: [], error: operationalProblem(error) };
+    return { rows: data || [], error: null };
+  } catch (error) {
+    return { rows: [], error: operationalProblem(error) };
+  }
+}
+```
+
+Use this helper in `Promise.all()`, remove it from the fatal result-error loop, merge `rows` with direct payout-table rows as before, and return `payoutError` in the payload. `replaceState()` must set `liveCache.payoutError`; `operationalStateStatus()` must expose its message. Do not suppress errors from core operational tables.
+
+- [ ] **Step 4: Write a browser-faithful payout form RED test**
+
+Update the live `FormData` fake or add a focused form fixture so disabled controls are omitted like native `FormData`. Submit a valid PayMe link and assert the RPC still receives the entered normalized link while all controls become disabled during the pending request.
+
+Run: `node app/live-auth-smoke.mjs`
+
+Expected: FAIL because current `form-payouts` creates `FormData` after `withBusyControl()` disables the input.
+
+- [ ] **Step 5: Capture form payload before disabling controls**
+
+In `form-payouts`, create:
+
+```js
+const fd = new FormData(form);
+```
+
+before calling `withBusyControl()`. Keep the application lookup, update, success render, and error toast inside the busy callback, but consume the already captured `fd`. Preserve the form as `busyKey` and all inputs/buttons as disabled controls.
+
+- [ ] **Step 6: Run full verification**
+
+Run:
+
+```bash
+node app/smoke.mjs
+node app/live-auth-smoke.mjs
+bash supabase/tests/verify_operational_backend_safety.sh
+git diff --check
+```
+
+Expected: all available checks pass. Do not claim migration `00005` deployed; graceful degradation restores sessions but cold-member payout enrichment still requires the migration.
+
+- [ ] **Step 7: Commit**
+
+```bash
+git add docs/superpowers/plans/2026-08-29-payme-weekly-event-controls.md \
+  app/js/operations.js app/js/app.js app/smoke.mjs app/live-auth-smoke.mjs
+git commit -m "fix(admin): preserve sessions without payout RPC"
+```
