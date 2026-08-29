@@ -1287,9 +1287,9 @@ document.addEventListener("submit", async (e) => {
       e.preventDefault();
       const fd = new FormData(form);
       const member = store.currentUser();
-      const application = await store.getMyApplication();
-      const profilePhone = String(application?.mobile || application?.phone || member?.phone || "").trim();
       try {
+        const application = await store.getMyApplication();
+        const profilePhone = String(application?.mobile || application?.phone || member?.phone || "").trim();
         await store.updateCollectorPayouts(member.id, {
           paymeLink: fd.get("paymeLink"),
           fpsPhone: profilePhone,

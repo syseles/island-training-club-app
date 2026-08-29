@@ -2685,27 +2685,80 @@ assert.ok(toastStack.children.some((item) =>
 ));
 console.log("ok  failed weekly venue submit preserves form state without rerendering");
 
-const invalidPayoutForm = new HTMLFormElement();
-invalidPayoutForm.id = "";
-invalidPayoutForm.dataset = { action: "form-payouts" };
-invalidPayoutForm.fields = { paymeLink: "not a url" };
+const rejectedPayoutForm = new HTMLFormElement();
+rejectedPayoutForm.id = "";
+rejectedPayoutForm.dataset = { action: "form-payouts" };
+rejectedPayoutForm.fields = { paymeLink: "payme.hsbc.com.hk/1/rejected-live" };
 const htmlBeforePayoutFailure = viewEl.innerHTML;
-const payoutBeforeFailure = JSON.parse(mem.get("itc.prototype.v1"))
-  .paymentPayouts?.[authUser.id]?.paymeLink;
+const payoutRpcGate = deferred();
+let payoutRpcArgs = null;
+operationalRpcHandler = (name, args) => {
+  if (name === "update_collector_payout_profile") {
+    payoutRpcArgs = structuredClone(args);
+    return payoutRpcGate.promise;
+  }
+  return baseOperationalRpcHandler(name, args);
+};
 toastStack.children.length = 0;
-await domListeners.get("submit")({ target: invalidPayoutForm, preventDefault() {} });
+let payoutSubmitSettled = false;
+const payoutSubmit = domListeners.get("submit")({
+  target: rejectedPayoutForm,
+  preventDefault() {},
+}).then(() => { payoutSubmitSettled = true; });
 await new Promise(setImmediate);
-assert.equal(viewEl.innerHTML, htmlBeforePayoutFailure);
-assert.equal(invalidPayoutForm.fields.paymeLink, "not a url");
+assert.deepEqual(payoutRpcArgs, {
+  p_profile_id: authUser.id,
+  p_payme_link: "https://payme.hsbc.com.hk/1/rejected-live",
+  p_fps_phone: "",
+});
 assert.equal(
   JSON.parse(mem.get("itc.prototype.v1")).paymentPayouts?.[authUser.id]?.paymeLink,
-  payoutBeforeFailure
+  "https://payme.hsbc.com.hk/1/rejected-live",
+  "live payout cache must update before RPC settlement"
 );
+assert.equal(payoutSubmitSettled, false, "payout submit must remain pending with the live RPC");
+assert.equal(viewEl.innerHTML, htmlBeforePayoutFailure);
+assert.equal(rejectedPayoutForm.fields.paymeLink, "payme.hsbc.com.hk/1/rejected-live");
+payoutRpcGate.resolve({ data: null, error: { message: "Payout profile unavailable" } });
+await payoutSubmit;
+assert.equal(
+  JSON.parse(mem.get("itc.prototype.v1")).paymentPayouts?.[authUser.id]?.paymeLink,
+  "https://payme.hsbc.com.hk/1/rejected-live",
+  "live payout cache must remain available after RPC rejection"
+);
+assert.equal(viewEl.innerHTML, htmlBeforePayoutFailure);
+assert.equal(rejectedPayoutForm.fields.paymeLink, "payme.hsbc.com.hk/1/rejected-live");
 assert.deepEqual(toastStack.children.map((item) => item.textContent), [
-  "Enter your personal PayMe link.",
+  "Payout profile unavailable",
 ]);
 assert.equal(toastStack.children[0].getAttribute("role"), "alert");
-console.log("ok  invalid payout submit preserves form state and shows validation feedback");
+console.log("ok  rejected live payout preserves cache and form state with error feedback");
+
+operationalRpcHandler = baseOperationalRpcHandler;
+const applicationFailurePayoutForm = new HTMLFormElement();
+applicationFailurePayoutForm.id = "";
+applicationFailurePayoutForm.dataset = { action: "form-payouts" };
+applicationFailurePayoutForm.fields = { paymeLink: "payme.hsbc.com.hk/1/application-failure" };
+const rpcCallsBeforeApplicationFailure = operationalRpcCalls.length;
+applicationReadError = new Error("Membership details unavailable");
+toastStack.children.length = 0;
+let applicationFailureSubmitError = null;
+try {
+  await domListeners.get("submit")({ target: applicationFailurePayoutForm, preventDefault() {} });
+} catch (err) {
+  applicationFailureSubmitError = err;
+} finally {
+  applicationReadError = null;
+}
+assert.equal(applicationFailureSubmitError, null, "payout form must catch application lookup failures");
+assert.equal(operationalRpcCalls.length, rpcCallsBeforeApplicationFailure);
+assert.equal(viewEl.innerHTML, htmlBeforePayoutFailure);
+assert.equal(applicationFailurePayoutForm.fields.paymeLink, "payme.hsbc.com.hk/1/application-failure");
+assert.deepEqual(toastStack.children.map((item) => item.textContent), [
+  "Membership details unavailable",
+]);
+assert.equal(toastStack.children[0].getAttribute("role"), "alert");
+console.log("ok  payout application lookup failure preserves form state with error feedback");
 
 // Legacy member-management URLs canonicalize instead of rendering the removed
 // row/avatar implementation.

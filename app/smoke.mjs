@@ -2005,10 +2005,20 @@ assert.equal(
   "https://payme.hsbc.com.hk/1/collector-code"
 );
 assert.equal(store.normalizePayMeLink(""), "");
+assert.equal(
+  store.normalizePayMeLink("https://payme.hsbc.com.hk/1/collector-code/?next=/#step/"),
+  "https://payme.hsbc.com.hk/1/collector-code?next=/#step/"
+);
 for (const invalid of [
   "https://payme.hsbc.com.hk/",
+  "https://payme.hsbc.com.hk/1",
+  "https://payme.hsbc.com.hk/not-a-collector",
   "http://payme.hsbc.com.hk/1/collector-code",
   "https://example.com/collector",
+  "https://user:pass@payme.hsbc.com.hk/1/collector-code",
+  "https://payme.hsbc.com.hk:444/1/collector-code",
+  "https://payme.hsbc.com.hk/1/%2F",
+  "https://payme.hsbc.com.hk/1/%5C",
   "not a url",
 ]) {
   assert.throws(

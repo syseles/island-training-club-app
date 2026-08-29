@@ -1504,13 +1504,29 @@ export function normalizePayMeLink(raw) {
   } catch {
     throw new Error("Enter your personal PayMe link.");
   }
-  const personalPath = url.pathname.split("/").filter(Boolean);
-  if (url.protocol !== "https:"
-      || url.hostname.toLowerCase() !== "payme.hsbc.com.hk"
-      || personalPath.length === 0) {
+  const pathname = url.pathname.replace(/\/+$/, "");
+  const personalPath = pathname.split("/");
+  let collectorToken = "";
+  try {
+    collectorToken = decodeURIComponent(personalPath[2] || "");
+  } catch {
     throw new Error("Enter your personal PayMe link from PayMe.");
   }
-  return url.toString().replace(/\/$/, "");
+  if (url.protocol !== "https:"
+      || url.hostname.toLowerCase() !== "payme.hsbc.com.hk"
+      || url.username
+      || url.password
+      || url.port
+      || personalPath.length !== 3
+      || personalPath[0] !== ""
+      || personalPath[1] !== "1"
+      || !collectorToken
+      || collectorToken.trim() !== collectorToken
+      || /[\\/]/.test(collectorToken)) {
+    throw new Error("Enter your personal PayMe link from PayMe.");
+  }
+  url.pathname = pathname;
+  return url.toString();
 }
 
 function payoutDetailsForRead(payouts) {
