@@ -80,7 +80,7 @@ export function load() {
   return state;
 }
 
-export async function hydrateLiveOperations({ ensureWindow = false } = {}) {
+export async function hydrateLiveOperations({ ensureWindow = false, force = false } = {}) {
   if (!isLive()) return null;
   if (ensureWindow) {
     try {
@@ -89,7 +89,7 @@ export async function hydrateLiveOperations({ ensureWindow = false } = {}) {
       console.warn("ensureLiveSessionWindow failed", err);
     }
   }
-  await liveOps.hydrateOperationalState();
+  await liveOps.hydrateOperationalState({ force });
   await liveOps.startOperationalRealtime();
   return liveOps.operationalStateStatus();
 }

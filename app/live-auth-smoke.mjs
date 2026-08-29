@@ -880,6 +880,122 @@ const todayISO = data.isoDate(data.todayLocal());
 store.load();
 await store.hydrateLiveOperations();
 
+// Assigned collector payout enrichment is optional. Missing, forbidden, or
+// membership-gated RPCs must never hide the public operational schedule or
+// the Admin's paid-session controls.
+const successfulAssignedPayoutHandler = operationalRpcHandler;
+const assignedPayoutFailures = [
+  {
+    label: "function unavailable",
+    message: "Could not find the function public.get_assigned_collector_payout_profiles without parameters in the schema cache",
+  },
+  {
+    label: "permission denied",
+    message: "permission denied for function get_assigned_collector_payout_profiles",
+  },
+  { label: "membership required", message: "Approved membership required." },
+];
+for (const failure of assignedPayoutFailures) {
+  operationalRpcHandler = (name, args) => {
+    if (name === "get_assigned_collector_payout_profiles") {
+      operationalRpcCalls.push({ name, args: structuredClone(args) });
+      return Promise.resolve({ data: null, error: { message: failure.message } });
+    }
+    return successfulAssignedPayoutHandler(name, args);
+  };
+  const assignedCallsBeforeHydration = operationalRpcCalls
+    .filter((call) => call.name === "get_assigned_collector_payout_profiles").length;
+  await store.hydrateLiveOperations({ force: true });
+  assert.equal(
+    operationalRpcCalls.filter((call) => call.name === "get_assigned_collector_payout_profiles").length,
+    assignedCallsBeforeHydration + 1,
+    `${failure.label} test must exercise a forced assigned-payout hydration`
+  );
+  assert.ok(store.upcomingSessions(21).some((session) => session.kind === "paid"),
+    `${failure.label} payout enrichment must preserve paid sessions`);
+  assert.ok(store.upcomingSessions(21).some((session) => session.kind === "rsvp"),
+    `${failure.label} payout enrichment must preserve RSVP sessions`);
+  const status = operations.operationalStateStatus();
+  assert.equal(status.error, null, `${failure.label} must not become a core operations error`);
+  assert.equal(status.payoutError, failure.message,
+    `${failure.label} must report only payout degradation`);
+}
+
+operationalRpcHandler = successfulAssignedPayoutHandler;
+const originalAuthIdentity = structuredClone(authUser);
+const originalProfileIdentity = structuredClone(profile);
+for (const operationalIdentity of [
+  { label: "anonymous", id: "anonymous-profile", role: null },
+  { label: "pending", id: "pending-submitted", role: "pending" },
+  { label: "declined", id: "declined-member", role: "declined" },
+]) {
+  Object.assign(authUser, {
+    id: operationalIdentity.id,
+    email: `${operationalIdentity.label}@example.com`,
+  });
+  Object.assign(profile, {
+    id: operationalIdentity.id,
+    email: `${operationalIdentity.label}@example.com`,
+    role: operationalIdentity.role,
+  });
+  await store.hydrateLiveOperations({ force: true });
+  const status = operations.operationalStateStatus();
+  assert.equal(status.error, null,
+    `${operationalIdentity.label} payout gating must not become a core operations error`);
+  assert.equal(status.payoutError, "Approved membership required.",
+    `${operationalIdentity.label} must report payout-only membership degradation`);
+  assert.ok(store.upcomingSessions(21).some((session) => session.kind === "paid"),
+    `${operationalIdentity.label} public Schedule source must retain paid sessions`);
+  assert.ok(store.upcomingSessions(21).some((session) => session.kind === "rsvp"),
+    `${operationalIdentity.label} public Schedule source must retain RSVP sessions`);
+}
+Object.assign(authUser, originalAuthIdentity);
+Object.assign(profile, originalProfileIdentity);
+
+const assignedPayoutFixture = {
+  profile_id: "assigned-enrichment-collector",
+  payme_link: "https://payme.hsbc.com.hk/1/assigned-enrichment",
+  fps_phone: "+852 6888 8888",
+};
+const directPayoutFixture = {
+  profile_id: "approved-member",
+  payme_link: "https://payme.hsbc.com.hk/1/direct-member",
+  fps_phone: "+852 6111 1111",
+};
+operationalTableRows.collector_assignments.push({
+  week_start: "2026-08-08",
+  collector_profile_id: assignedPayoutFixture.profile_id,
+  assigned_at: fixedIso,
+});
+operationalTableRows.collector_payout_profiles.push(assignedPayoutFixture, directPayoutFixture);
+Object.assign(authUser, { id: "approved-member", email: "micah.member@example.com" });
+Object.assign(profile, {
+  id: "approved-member",
+  email: "micah.member@example.com",
+  role: "member",
+});
+await store.hydrateLiveOperations({ force: true });
+assert.equal(operations.operationalStateStatus().payoutError, null,
+  "successful payout enrichment must clear prior degradation");
+assert.deepEqual(operations.livePayoutFor("assigned-enrichment-collector"), {
+  profileId: "assigned-enrichment-collector",
+  paymeLink: "https://payme.hsbc.com.hk/1/assigned-enrichment",
+  fpsPhone: "+852 6888 8888",
+}, "successful RPC enrichment must preserve an assigned collector outside direct member RLS");
+assert.deepEqual(operations.livePayoutFor("approved-member"), {
+  profileId: "approved-member",
+  paymeLink: "https://payme.hsbc.com.hk/1/direct-member",
+  fpsPhone: "+852 6111 1111",
+}, "successful enrichment must preserve direct RLS-visible payout rows");
+Object.assign(authUser, originalAuthIdentity);
+Object.assign(profile, originalProfileIdentity);
+operationalTableRows.collector_assignments = operationalTableRows.collector_assignments
+  .filter((row) => row.collector_profile_id !== assignedPayoutFixture.profile_id);
+operationalTableRows.collector_payout_profiles = operationalTableRows.collector_payout_profiles
+  .filter((row) => ![assignedPayoutFixture.profile_id, directPayoutFixture.profile_id].includes(row.profile_id));
+await store.hydrateLiveOperations({ force: true });
+console.log("ok  payout RPC degradation preserves sessions and successful enrichment recovers");
+
 const hydratedWntPoint = store.getSession("wnt-2026-08-26");
 assert.equal(hydratedWntPoint.meetingLat, 22.2825);
 assert.equal(hydratedWntPoint.meetingLng, 114.1659);
@@ -1042,6 +1158,26 @@ assert.match(signedOutAccount, /data-action="sign-in-google"/);
 store.clearApplyDraft();
 
 await store.getCurrentUser();
+for (const failure of assignedPayoutFailures) {
+  operationalRpcHandler = (name, args) => {
+    if (name === "get_assigned_collector_payout_profiles") {
+      operationalRpcCalls.push({ name, args: structuredClone(args) });
+      return Promise.resolve({ data: null, error: { message: failure.message } });
+    }
+    return successfulAssignedPayoutHandler(name, args);
+  };
+  await store.hydrateLiveOperations({ force: true });
+  const activitiesHtml = await views.viewAdmin("activities");
+  assert.equal(typeof activitiesHtml, "string",
+    `${failure.label} must keep the Admin Activities route available`);
+  assert.ok(!activitiesHtml.includes("No upcoming paid sessions."),
+    `${failure.label} payout enrichment must preserve Admin paid controls`);
+}
+operationalRpcHandler = successfulAssignedPayoutHandler;
+await store.hydrateLiveOperations({ force: true });
+assert.equal(operations.operationalStateStatus().payoutError, null,
+  "successful Admin hydration must clear payout degradation");
+
 const originalProfileForApply = structuredClone(profile);
 const originalApplicationForApply = structuredClone(applicationRows.get(authUser.id));
 Object.assign(profile, { role: "pending" });
@@ -2139,8 +2275,13 @@ globalThis.document = {
 globalThis.HTMLInputElement = class {};
 globalThis.HTMLFormElement = class {};
 globalThis.FormData = class {
-  constructor(form) { this.form = form; }
-  get(name) { return this.form.fields?.[name] ?? null; }
+  constructor(form) {
+    this.values = { ...(form.fields || {}) };
+    for (const control of form.nativeControls || []) {
+      if (control.disabled && control.name) delete this.values[control.name];
+    }
+  }
+  get(name) { return this.values[name] ?? null; }
 };
 globalThis.location = {
   hash: "#/account",
@@ -2834,6 +2975,7 @@ function equipPayoutForm(form) {
   submit.type = "submit";
   submit.textContent = "Save payout details";
   submit.disabled = false;
+  form.nativeControls = [input, submit];
   form.querySelector = (selector) => selector === '[type="submit"]' ? submit : null;
   form.querySelectorAll = (selector) => selector === "input, button" ? [input, submit] : [];
   return { input, submit };

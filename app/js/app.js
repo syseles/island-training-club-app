@@ -1300,9 +1300,9 @@ document.addEventListener("submit", async (e) => {
       e.preventDefault();
       const control = form.querySelector('[type="submit"]');
       const controls = [...form.querySelectorAll("input, button")];
+      const fd = new FormData(form);
       await withBusyControl(control, "Saving…", async () => {
         try {
-          const fd = new FormData(form);
           const member = store.currentUser();
           const application = await store.getMyApplication();
           const profilePhone = String(application?.mobile || application?.phone || member?.phone || "").trim();
