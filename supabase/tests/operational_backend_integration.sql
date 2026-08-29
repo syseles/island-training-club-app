@@ -72,7 +72,10 @@ begin
     raise notice 'FAIL: notifications.destination missing'; failures := failures + 1;
   end if;
   if to_regprocedure('public.resolve_notification_destination(uuid,text,timestamptz)') is null then
-    raise notice 'FAIL: notification destination resolver missing'; failures := failures + 1;
+    raise notice 'FAIL: exact notification destination resolver missing'; failures := failures + 1;
+  end if;
+  if to_regprocedure('public.resolve_historical_booking_notification_destination(uuid,text,timestamptz)') is null then
+    raise notice 'FAIL: historical booking notification destination resolver missing'; failures := failures + 1;
   end if;
   if to_regprocedure('public.route_notification_destination()') is null then
     raise notice 'FAIL: notification destination trigger function missing'; failures := failures + 1;
@@ -99,6 +102,18 @@ begin
     'execute'
   ) then
     raise notice 'FAIL: browser roles can execute notification destination resolver';
+    failures := failures + 1;
+  end if;
+  if has_function_privilege(
+    'anon',
+    'public.resolve_historical_booking_notification_destination(uuid,text,timestamptz)',
+    'execute'
+  ) or has_function_privilege(
+    'authenticated',
+    'public.resolve_historical_booking_notification_destination(uuid,text,timestamptz)',
+    'execute'
+  ) then
+    raise notice 'FAIL: browser roles can execute historical booking notification resolver';
     failures := failures + 1;
   end if;
   if has_function_privilege(
@@ -712,10 +727,10 @@ begin
   );
 
   -- Exercise cancellation through the real producer with exactly one session
-  -- in the resolver window. The final generated HYROX date has no deferral
+  -- at the resolver timestamp. The final generated HYROX date has no deferral
   -- target, so the same call produces one member and two Admin cancellation
-  -- rows. Older cancellation fixtures are retained outside the five-second
-  -- matching window rather than serving as synthetic route evidence.
+  -- rows. Older cancellation fixtures are shifted off the exact timestamp
+  -- rather than serving as synthetic route evidence.
   perform set_config('request.jwt.claim.sub', 'ee000000-0000-0000-0000-00000000e001', true);
   set local role authenticated;
   select id into v_unique_cancel_booking
@@ -799,9 +814,11 @@ begin
   );
 end $$;
 
--- Historical backfill fixtures cover six independent classes. Notifications
--- are inserted before their candidate bookings so only actual reapplication
--- of migration 00007 can perform the historical correction.
+-- Historical backfill fixtures cover seven independent classes. The nearby
+-- booking exists before its notification to prove INSERT routing is exact;
+-- migration reapplication may fuzzily repair that booking row only. The
+-- historical cancellation gains an exact timestamp match after notification
+-- insertion and must remain unresolved.
 create temp table notification_routing_backfill_fixtures (
   fixture_class text primary key,
   notification_id uuid not null unique
@@ -809,28 +826,22 @@ create temp table notification_routing_backfill_fixtures (
 
 do $$
 declare
-  v_unique_at constant timestamptz := '2001-01-01 00:00:00+00';
+  v_nearby_at constant timestamptz := '2001-01-01 00:00:00+00';
   v_malformed_at constant timestamptz := '2001-01-01 00:01:00+00';
   v_ambiguous_at constant timestamptz := '2001-01-01 00:02:00+00';
   v_foreign_at constant timestamptz := '2001-01-01 00:03:00+00';
   v_explicit_at constant timestamptz := '2001-01-01 00:04:00+00';
   v_read_state_at constant timestamptz := '2001-01-01 00:05:00+00';
+  v_historical_cancellation_at constant timestamptz := '2001-01-01 00:06:00+00';
   v_read_at constant timestamptz := '2001-01-02 00:00:00+00';
-  v_unique_notification uuid;
+  v_nearby_notification uuid;
   v_malformed_notification uuid;
   v_ambiguous_notification uuid;
   v_foreign_notification uuid;
   v_explicit_notification uuid;
   v_read_state_notification uuid;
+  v_historical_cancellation_notification uuid;
 begin
-  insert into public.notifications
-    (profile_id, kind, title, body, created_at)
-  values
-    ('bb000000-0000-0000-0000-00000000b001',
-     'operational_booking_reserved', 'Historical unique null', 'No body parsing.',
-     v_unique_at)
-  returning id into v_unique_notification;
-
   insert into public.notifications
     (profile_id, kind, title, body, destination, created_at)
   values
@@ -871,13 +882,21 @@ begin
      v_read_at, v_read_state_at)
   returning id into v_read_state_notification;
 
+  insert into public.notifications
+    (profile_id, kind, title, body, created_at)
+  values
+    ('aa000000-0000-0000-0000-00000000a001',
+     'operational_session_cancelled', 'Historical cancellation', 'No body parsing.',
+     v_historical_cancellation_at)
+  returning id into v_historical_cancellation_notification;
+
   insert into public.operational_bookings
     (id, profile_id, session_id, status, reserved_at, pay_deadline_at, snapshot)
   values
     ('11000000-0000-0000-0000-000000000001',
      'bb000000-0000-0000-0000-00000000b001',
-     'hyrox-2026-08-22', 'expired', v_unique_at,
-     v_unique_at + interval '1 day', '{}'::jsonb),
+     'hyrox-2026-08-22', 'expired', v_nearby_at + interval '4 seconds',
+     v_nearby_at + interval '1 day', '{}'::jsonb),
     ('11000000-0000-0000-0000-000000000002',
      'bb000000-0000-0000-0000-00000000b001',
      'hyrox-midtown-2026-08-22', 'expired', v_malformed_at,
@@ -903,6 +922,24 @@ begin
      'hyrox-2026-08-22', 'expired', v_read_state_at,
      v_read_state_at + interval '1 day', '{}'::jsonb);
 
+  -- A booking four seconds away is eligible only for historical repair. It
+  -- already exists when this row is inserted, so a fuzzy INSERT resolver
+  -- would incorrectly assign it immediately.
+  insert into public.notifications
+    (profile_id, kind, title, body, created_at)
+  values
+    ('bb000000-0000-0000-0000-00000000b001',
+     'operational_booking_reserved', 'Historical nearby booking', 'No body parsing.',
+     v_nearby_at)
+  returning id into v_nearby_notification;
+
+  update public.operational_sessions
+     set cancelled_at = v_historical_cancellation_at,
+         cancelled_by = 'aa000000-0000-0000-0000-00000000a001',
+         cancelled_source = 'admin',
+         cancel_reason = 'Historical routing evidence'
+   where id = 'hyrox-midtown-2026-12-05';
+
   -- The insert trigger correctly discarded the malformed route while no
   -- candidate existed; restore it to model a genuinely historical bad value.
   update public.notifications
@@ -912,25 +949,36 @@ begin
   insert into pg_temp.notification_routing_backfill_fixtures
     (fixture_class, notification_id)
   values
-    ('unique-null', v_unique_notification),
+    ('nearby-booking', v_nearby_notification),
     ('unique-malformed', v_malformed_notification),
     ('ambiguous-same-profile', v_ambiguous_notification),
     ('foreign-only', v_foreign_notification),
     ('valid-explicit', v_explicit_notification),
-    ('read-state', v_read_state_notification);
+    ('read-state', v_read_state_notification),
+    ('historical-cancellation', v_historical_cancellation_notification);
 
   perform pg_temp.op_assert(
-    (select count(*) from pg_temp.notification_routing_backfill_fixtures) = 6,
-    'six historical notification fixture classes are present'
+    (select count(*) from pg_temp.notification_routing_backfill_fixtures) = 7,
+    'seven historical notification fixture classes are present'
   );
   perform pg_temp.op_assert(
-    (select destination from public.notifications where id = v_unique_notification) is null,
-    'unique-null fixture starts unresolved'
+    (select destination from public.notifications where id = v_nearby_notification) is null,
+    'exact INSERT routing does not infer a booking four seconds away'
   );
   perform pg_temp.op_assert(
     (select destination from public.notifications where id = v_malformed_notification)
       = 'https://example.invalid/foreign',
     'unique-malformed fixture starts malformed'
+  );
+  perform pg_temp.op_assert(
+    (select cancelled_at
+       from public.operational_sessions
+      where id = 'hyrox-midtown-2026-12-05') = v_historical_cancellation_at,
+    'historical cancellation fixture has one exact session candidate'
+  );
+  perform pg_temp.op_assert(
+    (select destination from public.notifications where id = v_historical_cancellation_notification) is null,
+    'historical cancellation fixture starts unresolved before backfill'
   );
 end $$;
 
@@ -943,9 +991,9 @@ begin
        from public.notifications n
        join pg_temp.notification_routing_backfill_fixtures f
          on f.notification_id = n.id
-      where f.fixture_class = 'unique-null')
+      where f.fixture_class = 'nearby-booking')
       = '#/pay/11000000-0000-0000-0000-000000000001',
-    'actual migration backfills a null unique same-profile reservation'
+    'actual migration fuzzily backfills a unique nearby same-profile reservation'
   );
   perform pg_temp.op_assert(
     (select n.destination
@@ -973,6 +1021,15 @@ begin
       where f.fixture_class = 'foreign-only'
         and n.destination is null) = 1,
     'actual migration leaves exactly one foreign-only fixture unresolved'
+  );
+  perform pg_temp.op_assert(
+    (select count(*)
+       from public.notifications n
+       join pg_temp.notification_routing_backfill_fixtures f
+         on f.notification_id = n.id
+      where f.fixture_class = 'historical-cancellation'
+        and n.destination is null) = 1,
+    'actual migration never infers a historical cancellation destination'
   );
   perform pg_temp.op_assert(
     (select n.destination

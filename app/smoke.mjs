@@ -91,11 +91,13 @@ for (const marker of [
   "set search_path = public",
   "before insert on public.notifications",
   "resolve_notification_destination",
+  "resolve_historical_booking_notification_destination",
   "operational_booking_reserved",
   "#/pay/",
   "count(*)",
   "profile_id",
   "revoke all on function public.resolve_notification_destination",
+  "revoke all on function public.resolve_historical_booking_notification_destination",
 ]) {
   if (!normalizedNotificationRoutingMigrationSource.includes(marker)) {
     throw new Error(`notification routing migration missing ${marker}`);
@@ -111,12 +113,37 @@ const notificationRoutingFunctionDeclarations = [
   ...notificationRoutingMigrationSource.matchAll(/create\s+or\s+replace\s+function\s+public\.([a-z0-9_]+)/gi),
 ].map((match) => match[1]).sort();
 if (JSON.stringify(notificationRoutingFunctionDeclarations) !== JSON.stringify([
+  "resolve_historical_booking_notification_destination",
   "resolve_notification_destination",
   "route_notification_destination",
 ])) {
-  throw new Error("notification routing migration must declare only the centralized resolver and trigger function");
+  throw new Error("notification routing migration must declare only the exact, historical-booking, and trigger functions");
 }
-console.log("ok  notification migration centralizes exact routes without weakening notification access");
+const notificationResolverBody = (functionName) => {
+  const escapedName = functionName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const match = notificationRoutingMigrationSource.match(new RegExp(
+    `create\\s+or\\s+replace\\s+function\\s+public\\.${escapedName}\\s*\\([\\s\\S]*?\\)\\s*returns[\\s\\S]*?\\bas\\s+\\$\\$([\\s\\S]*?)\\$\\$;`,
+    "i"
+  ));
+  if (!match) throw new Error(`notification routing migration missing ${functionName} body`);
+  return match[1];
+};
+const exactNotificationResolverBody = notificationResolverBody("resolve_notification_destination");
+if (/interval\s+'5 seconds'/i.test(exactNotificationResolverBody)
+    || !/=\s*p_created_at\b/i.test(exactNotificationResolverBody)) {
+  throw new Error("notification insert resolver must use exact event timestamps, never a fuzzy window");
+}
+const historicalBookingResolverBody = notificationResolverBody(
+  "resolve_historical_booking_notification_destination"
+);
+if (!/interval\s+'5 seconds'/i.test(historicalBookingResolverBody)
+    || !/public\.operational_bookings\b/i.test(historicalBookingResolverBody)) {
+  throw new Error("historical booking resolver must retain bounded booking-only fuzzy matching");
+}
+if (/public\.operational_sessions\b|cancelled_at\b|operational_session_cancelled(?:_no_defer)?\b/i.test(historicalBookingResolverBody)) {
+  throw new Error("historical booking resolver must not infer cancellation destinations");
+}
+console.log("ok  notification migration separates exact inserts from booking-only historical matching");
 for (const marker of [
   "v_payment_marked_before",
   "v_payment_marked_after",
@@ -126,6 +153,8 @@ for (const marker of [
   "v_cancelled_admin_before",
   "v_cancelled_admin_after",
   "notification_routing_backfill_snapshot",
+  "nearby-booking",
+  "historical-cancellation",
   "notification routing migration second reapplication is idempotent",
 ]) {
   if (!operationalBackendIntegrationSource.includes(marker)) {
@@ -163,18 +192,19 @@ if (notificationRoutingMigrationReapplications.length !== 2) {
   throw new Error("notification integration must reapply migration 00007 exactly twice");
 }
 for (const fixtureClass of [
-  "unique-null",
+  "nearby-booking",
   "unique-malformed",
   "ambiguous-same-profile",
   "foreign-only",
   "valid-explicit",
   "read-state",
+  "historical-cancellation",
 ]) {
   if (!operationalBackendIntegrationSource.includes(`'${fixtureClass}'`)) {
     throw new Error(`notification integration missing historical fixture class ${fixtureClass}`);
   }
 }
-for (const fixtureClass of ["ambiguous-same-profile", "foreign-only"]) {
+for (const fixtureClass of ["ambiguous-same-profile", "foreign-only", "historical-cancellation"]) {
   const rowExistsOnceWithNull = new RegExp(
     `perform\\s+pg_temp\\.op_assert\\(\\s*\\(select\\s+count\\(\\*\\)[\\s\\S]*?where\\s+f\\.fixture_class\\s*=\\s*'${fixtureClass}'[\\s\\S]*?and\\s+n\\.destination\\s+is\\s+null\\s*\\)\\s*=\\s*1\\s*,`,
     "i"
