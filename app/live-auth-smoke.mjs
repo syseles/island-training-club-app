@@ -1138,6 +1138,42 @@ for (const action of ["approve", "decline"]) {
   assert.doesNotMatch(decisionButton("pending-submitted", action), /\sdisabled(?:\s|>)/,
     `Submitted ${action} must be enabled`);
 }
+const liveActivitiesHtml = await views.viewAdmin("activities");
+assert.equal((liveActivitiesHtml.match(/>Weekly Event Controls</g) || []).length, 1,
+  "Live Admin Activities must render exactly one Weekly Event Controls section");
+assert.match(liveActivitiesHtml, /Free &amp; RSVP Events/);
+assert.match(liveActivitiesHtml, /Paid Sessions/);
+assert.doesNotMatch(liveActivitiesHtml, />Weekly Venue Overrides<|>Weekly Session Overrides</);
+const liveWeeklyControlsStart = liveActivitiesHtml.indexOf(">Weekly Event Controls<");
+const liveOneOffEventsStart = liveActivitiesHtml.indexOf(">One-off Events<");
+const liveWeeklyControlsHtml = liveWeeklyControlsStart === -1 || liveOneOffEventsStart === -1
+  ? ""
+  : liveActivitiesHtml.slice(liveWeeklyControlsStart, liveOneOffEventsStart);
+for (const marker of [
+  'data-action="form-week-venue"',
+  'data-action="reset-week-venue"',
+  "Cancel this week's event",
+  'id="form-session-time"',
+  'id="form-session-notice"',
+  'data-action="venue-tbc-toggle"',
+  'data-action="midtown-toggle"',
+  'id="form-cancel-week"',
+]) {
+  assert.ok(liveWeeklyControlsHtml.includes(marker),
+    `Live Weekly Event Controls must preserve ${marker}`);
+}
+assert.match(liveWeeklyControlsHtml, /\d+ going/,
+  "Live Weekly Event Controls must preserve the RSVP count");
+assert.ok(liveWeeklyControlsStart < liveOneOffEventsStart,
+  "Live One-off Events must follow Weekly Event Controls");
+assert.match(liveActivitiesHtml,
+  /aria-labelledby="paid-sessions-title">[\s\S]*<\/section>\s*<\/details>\s*<details class="admin-section mt24">\s*<summary><h2>One-off Events<\/h2>/,
+  "Live One-off Events must remain outside Weekly Event Controls");
+assert.match(liveActivitiesHtml, /Weekly Event Controls &gt; Free &amp; RSVP Events/);
+const liveActivityEditorHtml = views.viewAdminActivity("wnt");
+assert.match(liveActivityEditorHtml, /Weekly Event Controls &gt; Free &amp; RSVP Events/);
+console.log("ok  live Admin Activities groups dated controls without changing form contracts");
+
 const membersHtml = await views.viewAdmin("members");
 assert.doesNotMatch(membersHtml, /member-summary|Member status counts|data-change="member-(?:status|role)-filter"/);
 for (const [key, options] of Object.entries({

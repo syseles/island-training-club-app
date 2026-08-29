@@ -2367,13 +2367,14 @@ installLocalFixtures();
   const adminActsHtml = await views.viewAdmin("activities");
   if (!adminActsHtml.includes("Post-Training Lunch") || !adminActsHtml.includes(">RSVP</span>"))
     throw new Error("Activities list should badge the lunch as RSVP");
-  const weeklySection = adminActsHtml.split("Weekly Session Overrides")[1]?.split("One-off Events")[0] || "";
-  if (weeklySection.includes("lunch-") || weeklySection.includes("Post-Training Lunch"))
-    throw new Error("Weekly Session Overrides must stay HYROX-only — the lunch lives in Weekly Venue Overrides");
-  const venueSection = adminActsHtml.split("Weekly Venue Overrides")[1]?.split("Weekly Session Overrides")[0] || "";
-  if (!venueSection.includes("Post-Training Lunch") || !venueSection.includes("Cancel this week's event"))
+  const weeklyControlsRegion = adminActsHtml.split(">Weekly Event Controls<")[1]?.split(">One-off Events<")[0] || "";
+  const freeRsvpRegion = weeklyControlsRegion.split("Free &amp; RSVP Events")[1]?.split("Paid Sessions")[0] || "";
+  const paidSessionsRegion = weeklyControlsRegion.split("Paid Sessions")[1] || "";
+  if (paidSessionsRegion.includes("lunch-") || paidSessionsRegion.includes("Post-Training Lunch"))
+    throw new Error("Paid Sessions must stay paid-only — the lunch lives in Free & RSVP Events");
+  if (!freeRsvpRegion.includes("Post-Training Lunch") || !freeRsvpRegion.includes("Cancel this week's event"))
     throw new Error("the lunch venue card must offer the per-week cancel control");
-  if (venueSection.includes("cap"))
+  if (freeRsvpRegion.includes("cap"))
     throw new Error("the uncapped lunch must not show a capacity");
   store.signIn("member@example.test");
   store.signOut();
@@ -3382,7 +3383,6 @@ store.setWeekVenue(wntSession.id, {
 const activitiesHtml = await views.viewAdmin("activities");
 const hyroxAdminHtml = await views.viewAdmin("payments");
 if (!activitiesHtml.includes("Recurring Activity Defaults")
-    || !activitiesHtml.includes("Weekly Venue Overrides")
     || !activitiesHtml.includes("Only this session")
     || !activitiesHtml.includes("Google Maps search")
     || !activitiesHtml.includes("Save Weekly Venue")
@@ -3396,17 +3396,41 @@ if (!activitiesHtml.includes("Current venue: <strong>Victoria Park Swimming Pool
     || !activitiesHtml.includes("Recurring default: <strong>TBC</strong>")) {
   throw new Error("Activities must show distinct current and recurring venues for overridden Swimming");
 }
-if (!activitiesHtml.includes("Weekly Session Overrides")
-    || !activitiesHtml.includes("form-cancel-week")
-    || !activitiesHtml.includes('data-action="midtown-toggle"')
-    || !activitiesHtml.includes('data-action="venue-tbc-toggle"')) {
-  throw new Error("Activities must carry the weekly paid-session controls");
+if ((activitiesHtml.match(/>Weekly Event Controls</g) || []).length !== 1
+    || !activitiesHtml.includes("Free &amp; RSVP Events")
+    || !activitiesHtml.includes("Paid Sessions")) {
+  throw new Error("Activities should group weekly controls by free/RSVP and paid sessions");
 }
-const sectionOrder = ["Recurring Activity Defaults", "Weekly Venue Overrides", "Weekly Session Overrides"];
-const sectionPositions = sectionOrder.map((label) => activitiesHtml.indexOf(label));
-if (sectionPositions.some((p) => p === -1)
-    || !(sectionPositions[0] < sectionPositions[1] && sectionPositions[1] < sectionPositions[2])) {
-  throw new Error("Activities sections must be ordered: defaults, venue overrides, session overrides");
+if (activitiesHtml.includes(">Weekly Venue Overrides<")
+    || activitiesHtml.includes(">Weekly Session Overrides<")) {
+  throw new Error("legacy weekly override headings should be removed");
+}
+const weeklyControlsStart = activitiesHtml.indexOf(">Weekly Event Controls<");
+const oneOffEventsStart = activitiesHtml.indexOf(">One-off Events<");
+const weeklyControlsHtml = weeklyControlsStart === -1 || oneOffEventsStart === -1
+  ? ""
+  : activitiesHtml.slice(weeklyControlsStart, oneOffEventsStart);
+for (const marker of [
+  'data-action="form-week-venue"',
+  'data-action="reset-week-venue"',
+  "Cancel this week's event",
+  'id="form-session-time"',
+  'id="form-session-notice"',
+  'data-action="venue-tbc-toggle"',
+  'data-action="midtown-toggle"',
+  'id="form-cancel-week"',
+]) {
+  if (!weeklyControlsHtml.includes(marker)) {
+    throw new Error(`Weekly Event Controls must preserve ${marker}`);
+  }
+}
+if (!/\d+ going/.test(weeklyControlsHtml)) {
+  throw new Error("Weekly Event Controls must preserve the RSVP count");
+}
+if (!(activitiesHtml.indexOf("Recurring Activity Defaults") < weeklyControlsStart
+    && weeklyControlsStart < oneOffEventsStart)
+    || !/aria-labelledby="paid-sessions-title">[\s\S]*<\/section>\s*<\/details>\s*<details class="admin-section mt24">\s*<summary><h2>One-off Events<\/h2>/.test(activitiesHtml)) {
+  throw new Error("One-off Events must remain a separate section after Weekly Event Controls");
 }
 if (!activitiesHtml.includes("Club Operations") || activitiesHtml.includes("Club ops.")) {
   throw new Error("Admin heading must read Club Operations");
@@ -3414,9 +3438,9 @@ if (!activitiesHtml.includes("Club Operations") || activitiesHtml.includes("Club
 if (!activitiesHtml.includes('<details class="admin-section') || !activitiesHtml.includes("<summary>")) {
   throw new Error("Activities sections must collapse behind their headers");
 }
-if (hyroxAdminHtml.includes("Weekly Venue Overrides")
+if (hyroxAdminHtml.includes("Weekly Event Controls")
     || hyroxAdminHtml.includes('data-action="form-week-venue"')) {
-  throw new Error("HYROX must not contain free-event weekly venue controls");
+  throw new Error("Payments must not contain weekly event controls");
 }
 if (!hyroxAdminHtml.includes(">Payments</a>")
     || hyroxAdminHtml.includes(">HYROX</a>")
