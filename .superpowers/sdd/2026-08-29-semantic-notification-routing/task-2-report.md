@@ -183,3 +183,60 @@ Disposable PostgreSQL execution is still unavailable: no test database URL or
 reset acknowledgement is configured, `psql` and Supabase CLI are absent, and
 the Docker daemon is unavailable. SQL runtime, remote application, and live
 routing therefore remain explicitly unverified.
+
+## Fix Round 2 evidence
+
+This bounded round changes only the smoke source contract and executable SQL
+integration assertions. Production migration
+`20260829000007_notification_destinations.sql` remains byte-identical:
+
+```text
+git blob  fd579b07c0d5eda33c3f203dc1465784a837321a
+SHA-256  572f1e2695eb4579be5e080ddcc96f5d42c838c5aadfe60ea148e40ca4cc341d
+```
+
+### Exact-recipient RED → GREEN
+
+A source contract requiring the literal Admin/Super Admin recipient fixture and
+two ordered exact-recipient comparisons was added first. Before changing the
+SQL integration evidence, `node app/smoke.mjs` exited 1 with:
+
+```text
+Error: notification integration missing exact Admin recipient fixture
+```
+
+The payment-marked and gym-finalized scenarios now compare the ordered
+`profile_id` array to exactly the Admin and Super Admin fixture UUIDs. This
+rejects missing, duplicate, or unexpected recipients in addition to retaining
+the action-scoped count and destination checks.
+
+### Row-exists-once-with-null RED → GREEN
+
+A source contract requiring exactly one joined null-destination row for each
+unresolved fixture was added before changing the SQL assertions.
+`node app/smoke.mjs` exited 1 with:
+
+```text
+Error: notification integration must prove ambiguous-same-profile exists once with null destination
+```
+
+The `ambiguous-same-profile` and `foreign-only` assertions now require
+`count(*) = 1` with `n.destination is null`. Deleting a fixture notification,
+returning multiple rows, or assigning any destination can no longer satisfy the
+assertion through scalar-subquery null semantics.
+
+### Available verification
+
+```text
+node app/smoke.mjs                                      exit 0
+node app/live-auth-smoke.mjs                            exit 0
+bash supabase/tests/verify_operational_backend_safety.sh exit 0
+git diff --check                                        exit 0
+node --check app/smoke.mjs                              exit 0
+git diff --exit-code HEAD -- migration 00007            exit 0
+```
+
+Disposable PostgreSQL execution remains unavailable: the database URL and reset
+acknowledgement are unset, `psql` and Supabase CLI are absent, and the installed
+Docker client cannot reach a daemon. SQL runtime, remote application, and live
+routing remain unverified.

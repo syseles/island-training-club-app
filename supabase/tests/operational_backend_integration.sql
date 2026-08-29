@@ -550,6 +550,10 @@ declare
   v_explicit_notification uuid;
   v_unique_cancel_booking uuid;
   v_unique_cancel_session constant text := 'hyrox-2026-12-05';
+  v_expected_admin_recipients constant uuid[] := array[
+    'aa000000-0000-0000-0000-00000000a001'::uuid,
+    'ff000000-0000-0000-0000-00000000f001'::uuid
+  ];
   v_payment_marked_before integer;
   v_payment_marked_after integer;
   v_gym_finalized_before integer;
@@ -617,6 +621,14 @@ begin
     'payment marking produces exactly two Admin notifications for this action'
   );
   perform pg_temp.op_assert(
+    (select array_agg(profile_id order by profile_id)
+       from public.notifications
+      where kind = 'operational_payment_marked'
+        and body = 'A member marked payment on 2026-10-17.')
+      = v_expected_admin_recipients,
+    'payment marking reaches exactly the Admin and Super Admin recipients'
+  );
+  perform pg_temp.op_assert(
     not exists (
       select 1
         from public.notifications
@@ -679,6 +691,14 @@ begin
   perform pg_temp.op_assert(
     v_gym_finalized_after - v_gym_finalized_before = 2,
     'gym finalization produces exactly two Admin notifications for this action'
+  );
+  perform pg_temp.op_assert(
+    (select array_agg(profile_id order by profile_id)
+       from public.notifications
+      where kind = 'operational_gym_finalized'
+        and body = 'Gym confirmation recorded for hyrox-midtown-2026-10-17.')
+      = v_expected_admin_recipients,
+    'gym finalization reaches exactly the Admin and Super Admin recipients'
   );
   perform pg_temp.op_assert(
     not exists (
@@ -937,20 +957,22 @@ begin
     'actual migration repairs a malformed unique same-profile reservation'
   );
   perform pg_temp.op_assert(
-    (select n.destination
+    (select count(*)
        from public.notifications n
        join pg_temp.notification_routing_backfill_fixtures f
          on f.notification_id = n.id
-      where f.fixture_class = 'ambiguous-same-profile') is null,
-    'actual migration leaves same-profile ambiguity unresolved'
+      where f.fixture_class = 'ambiguous-same-profile'
+        and n.destination is null) = 1,
+    'actual migration leaves exactly one same-profile ambiguity unresolved'
   );
   perform pg_temp.op_assert(
-    (select n.destination
+    (select count(*)
        from public.notifications n
        join pg_temp.notification_routing_backfill_fixtures f
          on f.notification_id = n.id
-      where f.fixture_class = 'foreign-only') is null,
-    'actual migration never selects another profile booking'
+      where f.fixture_class = 'foreign-only'
+        and n.destination is null) = 1,
+    'actual migration leaves exactly one foreign-only fixture unresolved'
   );
   perform pg_temp.op_assert(
     (select n.destination

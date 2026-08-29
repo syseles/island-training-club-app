@@ -142,6 +142,15 @@ for (const [pattern, label] of [
     throw new Error(`notification integration missing scoped ${label}`);
   }
 }
+if (!/v_expected_admin_recipients\s+constant\s+uuid\[\]\s*:=\s*array\[\s*'aa000000-0000-0000-0000-00000000a001'::uuid\s*,\s*'ff000000-0000-0000-0000-00000000f001'::uuid\s*\]/i.test(operationalBackendIntegrationSource)) {
+  throw new Error("notification integration missing exact Admin recipient fixture");
+}
+const exactAdminRecipientAssertions = operationalBackendIntegrationSource.match(
+  /array_agg\(profile_id\s+order\s+by\s+profile_id\)[\s\S]*?=\s*v_expected_admin_recipients/gi
+) || [];
+if (exactAdminRecipientAssertions.length !== 2) {
+  throw new Error("notification integration must assert exact recipients for both Admin producers");
+}
 if (!/perform\s+(?:public\.)?cancel_operational_session\s*\(\s*v_unique_cancel_session\b/i.test(operationalBackendIntegrationSource)) {
   throw new Error("notification integration must exercise the real unique cancellation producer");
 }
@@ -163,6 +172,15 @@ for (const fixtureClass of [
 ]) {
   if (!operationalBackendIntegrationSource.includes(`'${fixtureClass}'`)) {
     throw new Error(`notification integration missing historical fixture class ${fixtureClass}`);
+  }
+}
+for (const fixtureClass of ["ambiguous-same-profile", "foreign-only"]) {
+  const rowExistsOnceWithNull = new RegExp(
+    `perform\\s+pg_temp\\.op_assert\\(\\s*\\(select\\s+count\\(\\*\\)[\\s\\S]*?where\\s+f\\.fixture_class\\s*=\\s*'${fixtureClass}'[\\s\\S]*?and\\s+n\\.destination\\s+is\\s+null\\s*\\)\\s*=\\s*1\\s*,`,
+    "i"
+  );
+  if (!rowExistsOnceWithNull.test(operationalBackendIntegrationSource)) {
+    throw new Error(`notification integration must prove ${fixtureClass} exists once with null destination`);
   }
 }
 if (/update\s+public\.notifications\s+\w+\s+set\s+destination\s*=\s*public\.resolve_notification_destination/is.test(operationalBackendIntegrationSource)) {
