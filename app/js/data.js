@@ -195,6 +195,10 @@ export function mondayOf(date) {
   return addDays(d, -offset);
 }
 
+export function sundayOf(date) {
+  return addDays(new Date(date.getTime()), -date.getDay());
+}
+
 function saturdayOnOrBefore(date) {
   const d = new Date(date.getTime());
   const offset = (d.getDay() + 1) % 7; // days since Saturday

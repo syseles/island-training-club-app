@@ -289,6 +289,75 @@ console.log("ok  signed-out Home uses the correct live/local sign-in action");
 await check("home (visitor)", () => views.viewHome());
 await check("schedule", () => views.viewSchedule());
 
+// Member Schedule weeks run Sunday–Saturday. Boundary and selection values
+// are hand-checked literals so a Monday fallback or off-by-seven navigation
+// cannot satisfy the expectations by sharing the implementation's logic.
+{
+  if (typeof data.sundayOf !== "function") {
+    throw new Error("Schedule requires an exported sundayOf helper");
+  }
+  for (const [dateISO, expectedSunday] of [
+    ["2026-08-09", "2026-08-09"], // Sunday stays in its own week
+    ["2026-08-10", "2026-08-09"], // Monday crosses back one day
+    ["2026-08-15", "2026-08-09"], // Saturday closes the same week
+  ]) {
+    const actual = data.isoDate(data.sundayOf(data.parseISO(dateISO)));
+    if (actual !== expectedSunday) {
+      throw new Error(`sundayOf(${dateISO}) should be ${expectedSunday}, got ${actual}`);
+    }
+  }
+
+  if (typeof views.scheduleSelectionForWeek !== "function") {
+    throw new Error("Schedule requires a shared week-selection fallback");
+  }
+  const navigationCases = [
+    ["2026-08-12", 0, "2026-08-12"], // current week keeps today selected
+    ["2026-08-12", 1, "2026-08-16"], // next week opens Sunday
+    ["2026-08-12", 2, "2026-08-23"], // next again moves seven days
+    ["2026-08-12", -1, "2026-08-02"], // previous week opens Sunday
+    ["2026-08-09", 1, "2026-08-16"], // Sunday boundary moves exactly seven days
+  ];
+  for (const [today, offset, expectedSelection] of navigationCases) {
+    const actual = views.scheduleSelectionForWeek(data.parseISO(today), offset);
+    if (actual !== expectedSelection) {
+      throw new Error(`Schedule offset ${offset} from ${today} should select ${expectedSelection}, got ${actual}`);
+    }
+  }
+
+  views.resetScheduleState();
+  const currentSchedule = views.viewSchedule();
+  const currentSunday = data.sundayOf(data.todayLocal());
+  const stripLabels = [...currentSchedule.matchAll(/data-date="[^"]+">\s*([A-Z][a-z]{2})<strong/g)]
+    .map((match) => match[1]);
+  const expectedLabels = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+  if (JSON.stringify(stripLabels) !== JSON.stringify(expectedLabels)) {
+    throw new Error(`Schedule strip should be Sunday-first; got ${stripLabels.join(" ")}`);
+  }
+  if (!currentSchedule.includes(`Week of ${data.fmtDateLong(currentSunday)}`)) {
+    throw new Error("Schedule Week of date should be the current Sunday");
+  }
+  const currentSelectedPattern = new RegExp(
+    `class="day-cell [^"]*active[^"]*"\\s*data-action="sched-day" data-date="${data.isoDate(data.todayLocal())}"`
+  );
+  if (!currentSelectedPattern.test(currentSchedule)) {
+    throw new Error("Current Schedule week should keep the current date selected");
+  }
+
+  views.scheduleState.weekOffset = 1;
+  views.scheduleState.selected = null;
+  const nextSchedule = views.viewSchedule();
+  const expectedNextSunday = data.addDays(currentSunday, 7);
+  if (views.scheduleState.selected !== data.isoDate(expectedNextSunday)) {
+    throw new Error("A non-current Schedule week should default to Sunday");
+  }
+  if (!nextSchedule.includes(`Week of ${data.fmtDateLong(expectedNextSunday)}`)) {
+    throw new Error("Next Schedule week should move seven days to the next Sunday");
+  }
+  views.resetScheduleState();
+  console.log("ok  Schedule uses Sunday boundaries and Sunday-first day labels");
+  console.log("ok  Schedule navigation selects Sundays and returns to today");
+}
+
 // Schedule filters: Free/Paid kind filters restored; all chips render.
 {
   const schedHtml = views.viewSchedule();
@@ -862,7 +931,7 @@ if (homeBooked.includes("Midtown 28") || homeBooked.includes("Just show up")) {
 } else console.log('ok  home "My week" hides unbooked sessions');
 const WEEK_MS = 7 * 24 * 3600 * 1000;
 views.scheduleState.weekOffset = Math.round(
-  (data.mondayOf(data.parseISO(paid.dateISO)) - data.mondayOf(data.todayLocal())) / WEEK_MS
+  (data.sundayOf(data.parseISO(paid.dateISO)) - data.sundayOf(data.todayLocal())) / WEEK_MS
 );
 views.scheduleState.selected = paid.dateISO;
 if (!views.viewSchedule().includes("Booked")) {
