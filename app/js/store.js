@@ -2634,8 +2634,23 @@ export async function decideApplication(profileId, decision) {
 
 
 
+function normalizeLocalNotification(notification) {
+  const created = new Date(notification?.createdAt);
+  const createdAt = Number.isNaN(created.getTime()) ? null : created.toISOString();
+  return {
+    ...notification,
+    body: notification?.body ?? notification?.message ?? "",
+    read_at: notification?.read ? (createdAt || new Date(0).toISOString()) : null,
+    destination: notification?.link ?? notification?.destination ?? null,
+    created_at: createdAt,
+  };
+}
+
 export async function listMyNotifications() {
-  if (!isLive() || !supabase) return [];
+  if (!isLive() || !supabase) {
+    const user = currentUser();
+    return user ? notificationsFor(user.id).map(normalizeLocalNotification) : [];
+  }
   const { data, error } = await supabase
     .from("notifications")
     .select("*")
@@ -2645,7 +2660,17 @@ export async function listMyNotifications() {
 }
 
 export async function markNotificationRead(id) {
-  if (!isLive() || !supabase) return;
+  if (!isLive() || !supabase) {
+    const user = currentUser();
+    const notification = state.notifications.find(
+      (row) => row.id === id && row.userId === user?.id && !row.read
+    );
+    if (!notification) throw new Error("Notification update conflict.");
+    notification.read = true;
+    save();
+    const normalized = normalizeLocalNotification(notification);
+    return { id: normalized.id, read_at: normalized.read_at };
+  }
   const { data, error } = await supabase
     .from("notifications")
     .update({ read_at: new Date().toISOString() })

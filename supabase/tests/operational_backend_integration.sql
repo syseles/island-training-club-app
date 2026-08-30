@@ -220,7 +220,56 @@ update public.profiles set full_name = 'Extra Member', role = 'member'
 update public.profiles set full_name = 'Super Test', role = 'super_admin'
   where id = 'ff000000-0000-0000-0000-00000000f001';
 
--- generate sessions and pre-cancel 15 August.
+-- Future-guarded scenarios use Saturdays derived from the current Hong Kong
+-- date. Two weeks of lead time keeps both paid and RSVP fixtures safely ahead
+-- of their start guards even when the database session uses another timezone.
+create temp table operational_time_fixtures (
+  base_date date not null,
+  paid_session text not null,
+  midtown_session text not null,
+  admin_paid_session text not null,
+  defer_target_session text not null,
+  cancel_session text not null,
+  cancel_midtown_session text not null,
+  receipt_session text not null,
+  routing_date date not null,
+  routing_paid_session text not null,
+  routing_midtown_session text not null,
+  routing_rsvp_session text not null,
+  window_last_session text not null,
+  unique_cancel_date date not null,
+  unique_cancel_session text not null
+) on commit drop;
+
+with hkt_clock as (
+  select (current_timestamp at time zone 'Asia/Hong_Kong')::date as today
+), fixture_date as (
+  select today + ((6 - extract(dow from today)::integer + 7) % 7) + 14 as base_date
+    from hkt_clock
+)
+insert into operational_time_fixtures
+select base_date,
+       'hyrox-' || base_date::text,
+       'hyrox-midtown-' || base_date::text,
+       'hyrox-' || (base_date + 7)::text,
+       'hyrox-' || (base_date + 14)::text,
+       'hyrox-' || (base_date + 21)::text,
+       'hyrox-midtown-' || (base_date + 21)::text,
+       'hyrox-' || (base_date + 28)::text,
+       base_date + 42,
+       'hyrox-' || (base_date + 42)::text,
+       'hyrox-midtown-' || (base_date + 42)::text,
+       'lunch-' || (base_date + 42)::text,
+       'hyrox-' || (base_date + 105)::text,
+       base_date + 126,
+       'hyrox-' || (base_date + 126)::text
+  from fixture_date;
+
+select ensure_operational_sessions(base_date, 16)
+  from operational_time_fixtures;
+
+-- Keep the expired static cancellation fixture: cancellation must win before
+-- the paid-session future guard.
 select ensure_operational_sessions(date '2026-08-01', 5);
 update public.operational_sessions
    set cancelled_at = now(),
@@ -238,12 +287,19 @@ declare
   v_other_id uuid;
   v_other_id2 uuid;
   v_pending_book uuid;
+  v_paid_session text;
+  v_midtown_session text;
+  v_defer_target_session text;
 begin
+  select paid_session, midtown_session, defer_target_session
+    into v_paid_session, v_midtown_session, v_defer_target_session
+    from operational_time_fixtures;
+
   -- Pending cannot reserve.
   perform set_config('request.jwt.claim.sub', 'cc000000-0000-0000-0000-00000000c001', true);
   set local role authenticated;
   begin
-    perform reserve_operational_session('hyrox-2026-08-22');
+    perform reserve_operational_session(v_paid_session);
     raise exception 'pending should not reserve';
   exception when others then
     if sqlerrm not like '%Approved membership required%' then
@@ -254,13 +310,13 @@ begin
   -- Member can reserve an open session.
   perform set_config('request.jwt.claim.sub', 'bb000000-0000-0000-0000-00000000b001', true);
   select id into v_pending_book
-    from reserve_operational_session('hyrox-2026-08-22');
+    from reserve_operational_session(v_paid_session);
   select status into v_status from public.operational_bookings where id = v_pending_book;
   perform pg_temp.op_assert(v_status = 'reserved', 'reserved booking created');
 
   -- Duplicate reservation is rejected.
   begin
-    perform reserve_operational_session('hyrox-2026-08-22');
+    perform reserve_operational_session(v_paid_session);
     raise exception 'duplicate should not reserve';
   exception when others then
     if sqlerrm not like '%Already booked%' then raise; end if;
@@ -276,18 +332,18 @@ begin
 
   -- Closed session also refuses reservation.
   begin
-    perform reserve_operational_session('hyrox-midtown-2026-08-22');
+    perform reserve_operational_session(v_midtown_session);
     raise exception 'closed session should not reserve';
   exception when others then
     if sqlerrm not like '%Session is not open%' then raise; end if;
   end;
 
   -- Interest can join on closed midtown.
-  perform join_operational_queue('hyrox-midtown-2026-08-22', 'interest');
+  perform join_operational_queue(v_midtown_session, 'interest');
 
   -- Waitlist cannot join on closed session.
   begin
-    perform join_operational_queue('hyrox-midtown-2026-08-22', 'waitlist');
+    perform join_operational_queue(v_midtown_session, 'waitlist');
     raise exception 'waitlist should not join on closed session';
   exception when others then
     if sqlerrm not like '%Session is not open%' then raise; end if;
@@ -316,7 +372,7 @@ begin
 
   -- Member cannot defer because booking is still reserved (not confirmed).
   begin
-    perform defer_operational_booking(v_pending_book, 'hyrox-2026-08-29');
+    perform defer_operational_booking(v_pending_book, v_defer_target_session);
     raise exception 'reserved should not defer';
   exception when others then
     if sqlerrm not like '%Only confirmed bookings can be deferred%' then raise; end if;
@@ -333,14 +389,18 @@ declare
   v_new_booking uuid;
   v_role text;
   v_status text;
+  v_admin_paid_session text;
+  v_defer_target_session text;
 begin
-  -- Generate additional sessions to cover later dates.
-  perform ensure_operational_sessions(date '2026-08-01', 12);
+  select admin_paid_session, defer_target_session
+    into v_admin_paid_session, v_defer_target_session
+    from operational_time_fixtures;
+
   -- Member reserves and marks payment.
   perform set_config('request.jwt.claim.sub', 'bb000000-0000-0000-0000-00000000b001', true);
   set local role authenticated;
   select id into v_pending_book
-    from reserve_operational_session('hyrox-2026-08-29');
+    from reserve_operational_session(v_admin_paid_session);
   perform mark_operational_payment(v_pending_book, 'payme', 'REF-100');
 
   -- Admin approves payment.
@@ -353,7 +413,7 @@ begin
   perform set_config('request.jwt.claim.sub', 'bb000000-0000-0000-0000-00000000b001', true);
   begin
     select id into v_new_booking
-      from defer_operational_booking(v_pending_book, 'hyrox-2026-09-05');
+      from defer_operational_booking(v_pending_book, v_defer_target_session);
   exception when no_data_found then
     v_new_booking := null;
   end;
@@ -379,13 +439,15 @@ declare
   v_confirmed uuid;
   v_waitlist_id uuid;
   v_interest_id uuid;
-  v_session_id text := 'hyrox-2026-10-03';
+  v_session_id text;
+  v_midtown_session_id text;
   v_deferred_count integer;
   v_cancelled_count integer;
   v_dissolved_count integer;
 begin
-  -- Generate a fresh session.
-  perform ensure_operational_sessions(date '2026-08-01', 10);
+  select cancel_session, cancel_midtown_session
+    into v_session_id, v_midtown_session_id
+    from operational_time_fixtures;
 
   -- Tighten capacity so two reservations fill the session.
   update public.operational_sessions set capacity = 2 where id = v_session_id;
@@ -405,7 +467,7 @@ begin
   perform set_config('request.jwt.claim.sub', 'ee000000-0000-0000-0000-00000000e001', true);
   select id into v_waitlist_id from join_operational_queue(v_session_id, 'waitlist');
   perform set_config('request.jwt.claim.sub', 'bb000000-0000-0000-0000-00000000b001', true);
-  select id into v_interest_id from join_operational_queue('hyrox-midtown-2026-10-03', 'interest');
+  select id into v_interest_id from join_operational_queue(v_midtown_session_id, 'interest');
 
   -- Admin cancels the session — the unpaid reservation will be cancelled
   -- by the RPC itself, so no direct update is needed here.
@@ -443,17 +505,20 @@ do $$
 declare
   v_pending uuid;
   v_target_id text;
+  v_window_last_session text;
 begin
-  perform ensure_operational_sessions(date '2026-08-01', 16);
+  select window_last_session into v_window_last_session
+    from operational_time_fixtures;
+
   -- member reserves; admin cancels session; cancellation defers to no target.
   perform set_config('request.jwt.claim.sub', 'bb000000-0000-0000-0000-00000000b001', true);
   set local role authenticated;
-  select id into v_pending from reserve_operational_session('hyrox-2026-11-14');
+  select id into v_pending from reserve_operational_session(v_window_last_session);
   perform mark_operational_payment(v_pending, 'payme', 'REF-200');
   perform set_config('request.jwt.claim.sub', 'aa000000-0000-0000-0000-00000000a001', true);
   perform approve_operational_payment(v_pending);
   -- Cancel without future targets: confirmed booking becomes cancelled.
-  perform cancel_operational_session('hyrox-2026-11-14', 'Venue flooded');
+  perform cancel_operational_session(v_window_last_session, 'Venue flooded');
   select status into v_target_id from public.operational_bookings where id = v_pending;
   perform pg_temp.op_assert(v_target_id = 'cancelled', 'confirmed booking cancelled when no deferral target');
   reset role;
@@ -504,10 +569,13 @@ end $$;
 do $$
 declare
   v_booking uuid;
+  v_receipt_session text;
 begin
+  select receipt_session into v_receipt_session
+    from operational_time_fixtures;
   perform set_config('request.jwt.claim.sub', 'bb000000-0000-0000-0000-00000000b001', true);
   set local role authenticated;
-  select id into v_booking from reserve_operational_session('hyrox-2026-09-12');
+  select id into v_booking from reserve_operational_session(v_receipt_session);
   perform set_config('request.jwt.claim.sub', 'aa000000-0000-0000-0000-00000000a001', true);
   begin
     perform approve_operational_payment(v_booking);
@@ -561,11 +629,20 @@ do $$
 declare
   v_paid_booking uuid;
   v_rsvp_booking uuid;
-  v_rsvp_session constant text := 'lunch-2026-10-17';
+  v_paid_session text;
+  v_rsvp_session text;
+  v_routing_date date;
+  v_routing_midtown_session text;
   v_deferred_booking uuid;
   v_explicit_notification uuid;
   v_unique_cancel_booking uuid;
-  v_unique_cancel_session constant text := 'hyrox-2026-12-05';
+  v_unique_cancel_date date;
+  v_unique_cancel_session text;
+  v_rsvp_body text;
+  v_payment_marked_body text;
+  v_gym_finalized_body text;
+  v_cancelled_member_body text;
+  v_cancelled_admin_body text;
   v_expected_admin_recipients constant uuid[] := array[
     'aa000000-0000-0000-0000-00000000a001'::uuid,
     'ff000000-0000-0000-0000-00000000f001'::uuid
@@ -579,14 +656,26 @@ declare
   v_cancelled_admin_before integer;
   v_cancelled_admin_after integer;
 begin
-  perform ensure_operational_sessions(date '2026-08-01', 16);
-  perform ensure_operational_sessions(date '2026-12-05', 1);
+  select routing_date, routing_paid_session, routing_midtown_session,
+         routing_rsvp_session, unique_cancel_date, unique_cancel_session
+    into v_routing_date, v_paid_session, v_routing_midtown_session,
+         v_rsvp_session, v_unique_cancel_date, v_unique_cancel_session
+    from operational_time_fixtures;
+  perform ensure_operational_sessions(v_unique_cancel_date, 1);
+
+  v_rsvp_body := 'You''re on the list for Post-Training Lunch on ' || v_routing_date::text
+    || '. Everyone pays their own bill — see you there.';
+  v_payment_marked_body := 'A member marked payment on ' || v_routing_date::text || '.';
+  v_gym_finalized_body := 'Gym confirmation recorded for ' || v_routing_midtown_session || '.';
+  v_cancelled_member_body := 'Your booking for ' || v_unique_cancel_session
+    || ' was cancelled with no deferral target available.';
+  v_cancelled_admin_body := 'Session ' || v_unique_cancel_session || ' was cancelled by ITC.';
 
   -- A newly reserved paid booking points to its exact payment page.
   perform set_config('request.jwt.claim.sub', 'ee000000-0000-0000-0000-00000000e001', true);
   set local role authenticated;
   select id into v_paid_booking
-    from reserve_operational_session('hyrox-2026-10-17');
+    from reserve_operational_session(v_paid_session);
   reset role;
   perform pg_temp.op_assert(
     exists (
@@ -612,6 +701,8 @@ begin
         from public.notifications
        where profile_id = 'ff000000-0000-0000-0000-00000000f001'
          and kind = 'operational_rsvp_confirmed'
+         and title = 'You''re in'
+         and body = v_rsvp_body
          and destination = '#/activity/' || v_rsvp_session
     ),
     'RSVP notification has exact Activity Details destination'
@@ -623,7 +714,7 @@ begin
   select count(*) into v_payment_marked_before
     from public.notifications
    where kind = 'operational_payment_marked'
-     and body = 'A member marked payment on 2026-10-17.';
+     and body = v_payment_marked_body;
   perform set_config('request.jwt.claim.sub', 'ee000000-0000-0000-0000-00000000e001', true);
   set local role authenticated;
   perform mark_operational_payment(v_paid_booking, 'payme', 'ROUTE-REF');
@@ -631,7 +722,7 @@ begin
   select count(*) into v_payment_marked_after
     from public.notifications
    where kind = 'operational_payment_marked'
-     and body = 'A member marked payment on 2026-10-17.';
+     and body = v_payment_marked_body;
   perform pg_temp.op_assert(
     v_payment_marked_after - v_payment_marked_before = 2,
     'payment marking produces exactly two Admin notifications for this action'
@@ -640,7 +731,7 @@ begin
     (select array_agg(profile_id order by profile_id)
        from public.notifications
       where kind = 'operational_payment_marked'
-        and body = 'A member marked payment on 2026-10-17.')
+        and body = v_payment_marked_body)
       = v_expected_admin_recipients,
     'payment marking reaches exactly the Admin and Super Admin recipients'
   );
@@ -649,7 +740,7 @@ begin
       select 1
         from public.notifications
        where kind = 'operational_payment_marked'
-         and body = 'A member marked payment on 2026-10-17.'
+         and body = v_payment_marked_body
          and destination is distinct from '#/admin/payments'
     ),
     'payment-marked Admin notifications use the payments destination'
@@ -674,7 +765,7 @@ begin
   -- notification points to that resulting entity.
   perform set_config('request.jwt.claim.sub', 'aa000000-0000-0000-0000-00000000a001', true);
   set local role authenticated;
-  perform cancel_operational_session('hyrox-2026-10-17', 'Routing test');
+  perform cancel_operational_session(v_paid_session, 'Routing test');
   reset role;
   select deferred_to_booking_id into v_deferred_booking
     from public.operational_bookings
@@ -695,15 +786,15 @@ begin
   select count(*) into v_gym_finalized_before
     from public.notifications
    where kind = 'operational_gym_finalized'
-     and body = 'Gym confirmation recorded for hyrox-midtown-2026-10-17.';
+     and body = v_gym_finalized_body;
   perform set_config('request.jwt.claim.sub', 'aa000000-0000-0000-0000-00000000a001', true);
   set local role authenticated;
-  perform finalize_operational_gym('hyrox-midtown-2026-10-17', 'Routing test');
+  perform finalize_operational_gym(v_routing_midtown_session, 'Routing test');
   reset role;
   select count(*) into v_gym_finalized_after
     from public.notifications
    where kind = 'operational_gym_finalized'
-     and body = 'Gym confirmation recorded for hyrox-midtown-2026-10-17.';
+     and body = v_gym_finalized_body;
   perform pg_temp.op_assert(
     v_gym_finalized_after - v_gym_finalized_before = 2,
     'gym finalization produces exactly two Admin notifications for this action'
@@ -712,7 +803,7 @@ begin
     (select array_agg(profile_id order by profile_id)
        from public.notifications
       where kind = 'operational_gym_finalized'
-        and body = 'Gym confirmation recorded for hyrox-midtown-2026-10-17.')
+        and body = v_gym_finalized_body)
       = v_expected_admin_recipients,
     'gym finalization reaches exactly the Admin and Super Admin recipients'
   );
@@ -721,7 +812,7 @@ begin
       select 1
         from public.notifications
        where kind = 'operational_gym_finalized'
-         and body = 'Gym confirmation recorded for hyrox-midtown-2026-10-17.'
+         and body = v_gym_finalized_body
          and destination is distinct from '#/admin/payments'
     ),
     'gym-finalized Admin notifications use the payments destination'
@@ -749,11 +840,11 @@ begin
     from public.notifications
    where profile_id = 'ee000000-0000-0000-0000-00000000e001'
      and kind = 'operational_session_cancelled_no_defer'
-     and body = 'Your booking for hyrox-2026-12-05 was cancelled with no deferral target available.';
+     and body = v_cancelled_member_body;
   select count(*) into v_cancelled_admin_before
     from public.notifications
    where kind = 'operational_session_cancelled'
-     and body = 'Session hyrox-2026-12-05 was cancelled by ITC.';
+     and body = v_cancelled_admin_body;
 
   perform set_config('request.jwt.claim.sub', 'aa000000-0000-0000-0000-00000000a001', true);
   set local role authenticated;
@@ -764,11 +855,11 @@ begin
     from public.notifications
    where profile_id = 'ee000000-0000-0000-0000-00000000e001'
      and kind = 'operational_session_cancelled_no_defer'
-     and body = 'Your booking for hyrox-2026-12-05 was cancelled with no deferral target available.';
+     and body = v_cancelled_member_body;
   select count(*) into v_cancelled_admin_after
     from public.notifications
    where kind = 'operational_session_cancelled'
-     and body = 'Session hyrox-2026-12-05 was cancelled by ITC.';
+     and body = v_cancelled_admin_body;
   perform pg_temp.op_assert(
     v_cancelled_member_after - v_cancelled_member_before = 1,
     'real cancellation produces exactly one no-defer member notification'
@@ -783,8 +874,8 @@ begin
         from public.notifications
        where profile_id = 'ee000000-0000-0000-0000-00000000e001'
          and kind = 'operational_session_cancelled_no_defer'
-         and body = 'Your booking for hyrox-2026-12-05 was cancelled with no deferral target available.'
-         and destination is distinct from '#/activity/hyrox-2026-12-05'
+         and body = v_cancelled_member_body
+         and destination is distinct from '#/activity/' || v_unique_cancel_session
     ),
     'real no-defer cancellation routes to its unique Activity Details page'
   );
@@ -793,8 +884,8 @@ begin
       select 1
         from public.notifications
        where kind = 'operational_session_cancelled'
-         and body = 'Session hyrox-2026-12-05 was cancelled by ITC.'
-         and destination is distinct from '#/activity/hyrox-2026-12-05'
+         and body = v_cancelled_admin_body
+         and destination is distinct from '#/activity/' || v_unique_cancel_session
     ),
     'real Admin cancellation routes to its unique Activity Details page'
   );

@@ -208,6 +208,27 @@ for (const fixtureClass of [
     throw new Error(`notification integration missing historical fixture class ${fixtureClass}`);
   }
 }
+for (const marker of [
+  "operational_time_fixtures",
+  "Asia/Hong_Kong",
+  "v_paid_session",
+  "v_rsvp_session",
+  "v_unique_cancel_session",
+]) {
+  if (!operationalBackendIntegrationSource.includes(marker)) {
+    throw new Error(`notification integration missing time-stable fixture marker ${marker}`);
+  }
+}
+const staticFutureGuardedCalls = [
+  ...operationalBackendIntegrationSource.matchAll(
+    /\b(?:reserve_operational_session|join_operational_queue|defer_operational_booking)\s*\(\s*'([^']+-\d{4}-\d{2}-\d{2})'/g
+  ),
+].map((match) => match[0]).filter((call) =>
+  !call.includes("reserve_operational_session('hyrox-2026-08-15'")
+);
+if (staticFutureGuardedCalls.length) {
+  throw new Error(`notification integration retains static future-guarded calls: ${staticFutureGuardedCalls.join(", ")}`);
+}
 for (const fixtureClass of [
   "ambiguous-same-profile",
   "foreign-only",
@@ -1637,10 +1658,65 @@ console.log("ok  double booking rejected");
 store.markBookingPaid(r1.id, "PayMe", "REF123");
 if (!store.getBooking(r1.id).paymentMarkedAt) throw new Error("payment not marked");
 const tinaNotes = store.notificationsFor("fixture-admin");
-if (!tinaNotes.some((n) => n.kind === "payment-marked"))
+const localPaymentNotification = tinaNotes.find((n) => n.kind === "payment-marked");
+if (!localPaymentNotification)
   throw new Error("collector should be notified of a marked payment");
 console.log("ok  member marks paid -> collector notified");
+
+// Local notifications cross the same store seam as Supabase rows. Preserve
+// local copy/identity while adapting unread state, destination, and time for
+// the Inbox; marking the rendered row read must survive a localStorage reload.
+localPaymentNotification.title = "Payment marked";
+localPaymentNotification.message = localPaymentNotification.body;
 store.signIn("admin@example.test");
+const localNotificationRows = await store.listMyNotifications();
+const localInboxRow = localNotificationRows.find((row) => row.id === localPaymentNotification.id);
+if (!localInboxRow
+    || localInboxRow.kind !== localPaymentNotification.kind
+    || localInboxRow.title !== localPaymentNotification.title
+    || localInboxRow.message !== localPaymentNotification.message
+    || localInboxRow.body !== localPaymentNotification.body) {
+  throw new Error("local notification seam must preserve id, kind, title, message, and body");
+}
+if (localInboxRow.read_at !== null
+    || localInboxRow.destination !== localPaymentNotification.link
+    || localInboxRow.created_at !== new Date(localPaymentNotification.createdAt).toISOString()) {
+  throw new Error("local notification seam must normalize unread state, destination, and creation time");
+}
+const localUnreadBeforeClick = localNotificationRows.filter((row) => !row.read_at).length;
+if (localUnreadBeforeClick < 1) {
+  throw new Error("local notification count must include the unread row");
+}
+const localInboxHtml = await views.viewNotifications(new Date(), localNotificationRows);
+if (!localInboxHtml.includes(`data-notification-id="${localPaymentNotification.id}"`)
+    || !localInboxHtml.includes(`data-destination="${localPaymentNotification.link}"`)) {
+  throw new Error("local Inbox must render the unread row with its exact destination");
+}
+await store.markNotificationRead(localPaymentNotification.id);
+const persistedNotificationState = JSON.parse(localStorage.getItem("itc.prototype.v1"));
+const persistedNotificationRecord = persistedNotificationState.notifications.find(
+  (row) => row.id === localPaymentNotification.id
+);
+if (persistedNotificationRecord?.read !== true
+    || Object.hasOwn(persistedNotificationRecord || {}, "read_at")
+    || Object.hasOwn(persistedNotificationRecord || {}, "destination")
+    || Object.hasOwn(persistedNotificationRecord || {}, "created_at")) {
+  throw new Error("local mark-read must persist only the existing local notification shape");
+}
+store.load();
+const persistedLocalRows = await store.listMyNotifications();
+const persistedLocalRow = persistedLocalRows.find((row) => row.id === localPaymentNotification.id);
+if (!persistedLocalRow?.read_at) {
+  throw new Error("clicking a local notification must persist its existing read flag");
+}
+if (persistedLocalRows.filter((row) => !row.read_at).length !== localUnreadBeforeClick - 1) {
+  throw new Error("local notification count must drop by one after the clicked row persists read");
+}
+const localInboxAfterClick = await views.viewNotifications(new Date(), persistedLocalRows);
+if (localInboxAfterClick.includes(`data-notification-id="${localPaymentNotification.id}"`)) {
+  throw new Error("the clicked local notification must hide from the unread-only Inbox");
+}
+console.log("ok  local notification Inbox, count, destination, and click persistence");
 const conf = store.confirmBookingPayment(r1.id);
 store.signIn(signIn.user.email);
 if (conf.booking.status !== "confirmed") throw new Error("collector confirm should confirm");
