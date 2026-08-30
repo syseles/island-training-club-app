@@ -698,14 +698,17 @@ declare
   v_waitlist_id uuid;
   v_interest_id uuid;
   v_session_date date := (now() at time zone 'Asia/Hong_Kong')::date + 430;
+  v_midtown_date date := (now() at time zone 'Asia/Hong_Kong')::date + 431;
   v_target_date date := (now() at time zone 'Asia/Hong_Kong')::date + 437;
   v_session_id text;
+  v_midtown_session text;
   v_target_session text;
   v_deferred_count integer;
   v_cancelled_count integer;
   v_dissolved_count integer;
 begin
   v_session_id := 'hyrox-' || v_session_date::text;
+  v_midtown_session := 'hyrox-midtown-' || v_midtown_date::text;
   v_target_session := 'hyrox-' || v_target_date::text;
   insert into public.operational_sessions
     (id, activity_id, session_date, start_time, duration_minutes,
@@ -713,15 +716,33 @@ begin
   values
     (v_session_id, 'hyrox', v_session_date, time '11:15', 60,
      'BFT Causeway Bay', 2, 180, true),
+    (v_midtown_session, 'hyrox-midtown', v_midtown_date, time '11:00', 60,
+     'Midtown28 Fitness', 12, 180, false),
     (v_target_session, 'hyrox', v_target_date, time '11:15', 60,
      'BFT Causeway Bay', 20, 180, true)
   on conflict (id) do update
-    set session_date = excluded.session_date,
+    set activity_id = excluded.activity_id,
+        session_date = excluded.session_date,
         start_time = excluded.start_time,
+        venue = excluded.venue,
         cancelled_at = null,
         capacity = excluded.capacity,
         price_hkd = excluded.price_hkd,
-        is_open = true;
+        is_open = excluded.is_open;
+
+  perform pg_temp.op_assert(
+    exists (
+      select 1
+        from public.operational_sessions
+       where id = v_midtown_session
+         and activity_id = 'hyrox-midtown'
+         and session_date = v_midtown_date
+         and session_date > (now() at time zone 'Asia/Hong_Kong')::date
+         and not is_open
+         and cancelled_at is null
+    ),
+    'closed Midtown interest fixture exists with required properties'
+  );
 
   -- Tight capacity lets two reservations fill the session.
 
@@ -740,7 +761,7 @@ begin
   perform set_config('request.jwt.claim.sub', 'ee000000-0000-0000-0000-00000000e001', true);
   select id into v_waitlist_id from join_operational_queue(v_session_id, 'waitlist');
   perform set_config('request.jwt.claim.sub', 'bb000000-0000-0000-0000-00000000b001', true);
-  select id into v_interest_id from join_operational_queue('hyrox-midtown-2026-10-03', 'interest');
+  select id into v_interest_id from join_operational_queue(v_midtown_session, 'interest');
 
   -- Admin cancels the session — the unpaid reservation will be cancelled
   -- by the RPC itself, so no direct update is needed here.

@@ -167,6 +167,24 @@ assert.match(operationalIntegrationSource,
 assert.match(operationalIntegrationSource,
   /session_date = v_at_start_hk::date,[\s\S]*?start_time = v_at_start_hk::time/,
   "HKT boundary fixtures must derive date and time from the same timestamp");
+const cancellationQueueIntegrationSource = operationalIntegrationSource.match(
+  /-- Admin cancellation atomicity\.[\s\S]*?-- Cancellation rollback test:/
+)?.[0] || "";
+assert.match(cancellationQueueIntegrationSource,
+  /v_midtown_date date := \(now\(\) at time zone 'Asia\/Hong_Kong'\)::date \+ \d+;/,
+  "cancellation coverage must derive its closed Midtown fixture from a future Hong Kong date");
+assert.match(cancellationQueueIntegrationSource,
+  /v_midtown_session text;[\s\S]*?v_midtown_session := 'hyrox-midtown-' \|\| v_midtown_date::text;/,
+  "cancellation coverage must derive the Midtown session ID from its future date");
+assert.match(cancellationQueueIntegrationSource,
+  /perform pg_temp\.op_assert\(\s*exists \([\s\S]*?where id = v_midtown_session[\s\S]*?and activity_id = 'hyrox-midtown'[\s\S]*?and session_date = v_midtown_date[\s\S]*?and not is_open[\s\S]*?and cancelled_at is null[\s\S]*?\),[\s\S]*?'closed Midtown interest fixture exists with required properties'[\s\S]*?\);/,
+  "cancellation coverage must explicitly prove the Midtown fixture exists, is future-derived, closed, and active");
+assert.match(cancellationQueueIntegrationSource,
+  /join_operational_queue\(v_midtown_session, 'interest'\)/,
+  "cancellation coverage must join interest through the dynamic Midtown fixture variable");
+assert.doesNotMatch(cancellationQueueIntegrationSource,
+  /join_operational_queue\('hyrox-midtown-\d{4}-\d{2}-\d{2}', 'interest'\)/,
+  "cancellation coverage must not call the interest queue with a dated Midtown literal");
 const upcomingSessionsSource = storeSource.match(
   /export function upcomingSessions\(days = 14\)[\s\S]*?\n}\n\nexport function nextSession/
 )?.[0] || "";
