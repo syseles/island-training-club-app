@@ -23,6 +23,7 @@ import {
   sessionsInRange,
   parseISO,
   mondayOf,
+  sundayOf,
   addDays,
   todayHktISO,
   todayLocal,
@@ -329,6 +330,11 @@ export function resetScheduleState() {
   scheduleState.filter = "all";
 }
 
+export function scheduleSelectionForWeek(referenceDate = todayLocal(), weekOffset = 0) {
+  const weekStart = addDays(sundayOf(referenceDate), weekOffset * 7);
+  return isoDate(weekOffset === 0 ? referenceDate : weekStart);
+}
+
 const FILTERS = [
   ["all", "All"],
   ["Run", "Run"],
@@ -345,9 +351,9 @@ function matchesFilter(s, filter) {
 
 export function viewSchedule() {
   const t = todayLocal();
-  const monday = addDays(mondayOf(t), scheduleState.weekOffset * 7);
+  const weekStart = addDays(sundayOf(t), scheduleState.weekOffset * 7);
   if (!scheduleState.selected) {
-    scheduleState.selected = scheduleState.weekOffset === 0 ? isoDate(t) : isoDate(monday);
+    scheduleState.selected = scheduleSelectionForWeek(t, scheduleState.weekOffset);
   }
   let sourceActivities;
   if (isLive()) {
@@ -370,7 +376,7 @@ export function viewSchedule() {
   } else {
     sourceActivities = store.activities();
   }
-  const weekSessions = sessionsInRange(sourceActivities, monday, 7)
+  const weekSessions = sessionsInRange(sourceActivities, weekStart, 7)
     .map((s) => {
       if (isLive()) {
         if (s.kind === "free") return store.getSession(s.id);
@@ -379,10 +385,10 @@ export function viewSchedule() {
       return store.getSession(s.id);
     })
     .filter(Boolean);
-  const dayNames = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+  const dayNames = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
   const cells = Array.from({ length: 7 }, (_, i) => {
-    const d = addDays(monday, i);
+    const d = addDays(weekStart, i);
     const iso = isoDate(d);
     const has = weekSessions.some((s) => s.dateISO === iso);
     return `
@@ -401,7 +407,7 @@ export function viewSchedule() {
     : `<div class="empty">No ${scheduleState.filter === "all" ? "" : esc(scheduleState.filter) + " "}sessions on ${esc(fmtDate(scheduleState.selected))}.</div>`;
 
   return `
-    <div class="kicker">Week of ${esc(fmtDateLong(monday))}</div>
+    <div class="kicker">Week of ${esc(fmtDateLong(weekStart))}</div>
     <h1 class="display">Find your next session</h1>
     <div class="week-strip">${cells}</div>
     <div class="week-nav">

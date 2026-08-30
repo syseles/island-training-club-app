@@ -2,6 +2,7 @@
 // Run: node --input-type=module < smoke.mjs  (from the app/ directory)
 
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { assertFpsCopyBindings } from "./test-html.mjs";
 
 // --- localStorage shim ---
@@ -693,6 +694,57 @@ if (
   console.error("FAIL announcement postedAt should resolve to 2026-08-06 local date");
 } else console.log("ok  announcement postedAt resolves to 2026-08-06 local date");
 
+// Weekly encouragement rotates on Hong Kong Sundays, regardless of the host
+// calendar. Each expected reference is hand-derived from the fixed HKT epoch.
+{
+  const verseCases = [
+    ["one second before the epoch boundary", "2026-07-25T15:59:59.000Z", "2 Timothy 4:7"],
+    ["one millisecond before the epoch boundary", "2026-07-25T15:59:59.999Z", "2 Timothy 4:7"],
+    ["at the epoch boundary", "2026-07-25T16:00:00.000Z", "Hebrews 12:1"],
+    ["one millisecond before the next boundary", "2026-08-01T15:59:59.999Z", "Hebrews 12:1"],
+    ["at the next boundary", "2026-08-01T16:00:00.000Z", "Isaiah 40:31"],
+    ["one week before the epoch", "2026-07-18T16:00:00.000Z", "2 Timothy 4:7"],
+    ["eight weeks before the epoch", "2026-05-30T16:00:00.000Z", "Hebrews 12:1"],
+    ["nine weeks before the epoch", "2026-05-23T16:00:00.000Z", "2 Timothy 4:7"],
+  ];
+  for (const [label, instant, expectedRef] of verseCases) {
+    const actualRef = data.weeklyVerse(new Date(instant)).ref;
+    if (actualRef !== expectedRef) {
+      throw new Error(`Weekly verse ${label} should be ${expectedRef}, got ${actualRef}`);
+    }
+  }
+
+  const dataModuleURL = new URL("./js/data.js", import.meta.url).href;
+  const fixedInstant = "2026-07-25T16:00:00.000Z";
+  const childSource = `
+    const RealDate = Date;
+    const fixedInstant = ${JSON.stringify(fixedInstant)};
+    globalThis.Date = class FixedDate extends RealDate {
+      constructor(...args) { super(...(args.length ? args : [fixedInstant])); }
+      static now() { return new RealDate(fixedInstant).getTime(); }
+    };
+    const { weeklyVerse } = await import(${JSON.stringify(dataModuleURL)});
+    const supplied = weeklyVerse(new RealDate(fixedInstant)).ref;
+    const defaulted = weeklyVerse().ref;
+    process.stdout.write(JSON.stringify({ supplied, defaulted }));
+  `;
+  for (const timeZone of ["Asia/Hong_Kong", "America/Los_Angeles"]) {
+    const child = spawnSync(process.execPath, ["--input-type=module", "--eval", childSource], {
+      encoding: "utf8",
+      env: { ...process.env, TZ: timeZone },
+    });
+    if (child.status !== 0) {
+      throw new Error(`Weekly verse ${timeZone} child failed: ${child.stderr.trim()}`);
+    }
+    const result = JSON.parse(child.stdout);
+    if (result.supplied !== "Hebrews 12:1" || result.defaulted !== "Hebrews 12:1") {
+      throw new Error(`Weekly verse should use the same HKT instant under ${timeZone}; got ${child.stdout}`);
+    }
+  }
+  console.log("ok  weekly verse rotates at deterministic HKT Sunday boundaries");
+  console.log("ok  weekly verse matches across HKT and Los Angeles host timezones");
+}
+
 // --- Visitor state ---
 store.signOut();
 const allUpcoming = store.upcomingSessions(14);
@@ -784,6 +836,75 @@ if (localVisitorHome.includes('data-action="sign-in-google"')) {
 console.log("ok  signed-out Home uses the correct live/local sign-in action");
 await check("home (visitor)", () => views.viewHome());
 await check("schedule", () => views.viewSchedule());
+
+// Member Schedule weeks run Sunday–Saturday. Boundary and selection values
+// are hand-checked literals so a Monday fallback or off-by-seven navigation
+// cannot satisfy the expectations by sharing the implementation's logic.
+{
+  if (typeof data.sundayOf !== "function") {
+    throw new Error("Schedule requires an exported sundayOf helper");
+  }
+  for (const [dateISO, expectedSunday] of [
+    ["2026-08-09", "2026-08-09"], // Sunday stays in its own week
+    ["2026-08-10", "2026-08-09"], // Monday crosses back one day
+    ["2026-08-15", "2026-08-09"], // Saturday closes the same week
+  ]) {
+    const actual = data.isoDate(data.sundayOf(data.parseISO(dateISO)));
+    if (actual !== expectedSunday) {
+      throw new Error(`sundayOf(${dateISO}) should be ${expectedSunday}, got ${actual}`);
+    }
+  }
+
+  if (typeof views.scheduleSelectionForWeek !== "function") {
+    throw new Error("Schedule requires a shared week-selection fallback");
+  }
+  const navigationCases = [
+    ["2026-08-12", 0, "2026-08-12"], // current week keeps today selected
+    ["2026-08-12", 1, "2026-08-16"], // next week opens Sunday
+    ["2026-08-12", 2, "2026-08-23"], // next again moves seven days
+    ["2026-08-12", -1, "2026-08-02"], // previous week opens Sunday
+    ["2026-08-09", 1, "2026-08-16"], // Sunday boundary moves exactly seven days
+  ];
+  for (const [today, offset, expectedSelection] of navigationCases) {
+    const actual = views.scheduleSelectionForWeek(data.parseISO(today), offset);
+    if (actual !== expectedSelection) {
+      throw new Error(`Schedule offset ${offset} from ${today} should select ${expectedSelection}, got ${actual}`);
+    }
+  }
+
+  views.resetScheduleState();
+  const currentSchedule = views.viewSchedule();
+  const currentSunday = data.sundayOf(data.todayLocal());
+  const stripLabels = [...currentSchedule.matchAll(/data-date="[^"]+">\s*([A-Z][a-z]{2})<strong/g)]
+    .map((match) => match[1]);
+  const expectedLabels = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+  if (JSON.stringify(stripLabels) !== JSON.stringify(expectedLabels)) {
+    throw new Error(`Schedule strip should be Sunday-first; got ${stripLabels.join(" ")}`);
+  }
+  if (!currentSchedule.includes(`Week of ${data.fmtDateLong(currentSunday)}`)) {
+    throw new Error("Schedule Week of date should be the current Sunday");
+  }
+  const currentSelectedPattern = new RegExp(
+    `class="day-cell [^"]*active[^"]*"\\s*data-action="sched-day" data-date="${data.isoDate(data.todayLocal())}"`
+  );
+  if (!currentSelectedPattern.test(currentSchedule)) {
+    throw new Error("Current Schedule week should keep the current date selected");
+  }
+
+  views.scheduleState.weekOffset = 1;
+  views.scheduleState.selected = null;
+  const nextSchedule = views.viewSchedule();
+  const expectedNextSunday = data.addDays(currentSunday, 7);
+  if (views.scheduleState.selected !== data.isoDate(expectedNextSunday)) {
+    throw new Error("A non-current Schedule week should default to Sunday");
+  }
+  if (!nextSchedule.includes(`Week of ${data.fmtDateLong(expectedNextSunday)}`)) {
+    throw new Error("Next Schedule week should move seven days to the next Sunday");
+  }
+  views.resetScheduleState();
+  console.log("ok  Schedule uses Sunday boundaries and Sunday-first day labels");
+  console.log("ok  Schedule navigation selects Sundays and returns to today");
+}
 
 // Schedule filters: only chronological activity categories remain.
 {
@@ -2015,7 +2136,7 @@ if (homeBooked.includes("Midtown28 Fitness") || homeBooked.includes("Just show u
 } else console.log('ok  home "My week" hides unbooked sessions');
 const WEEK_MS = 7 * 24 * 3600 * 1000;
 views.scheduleState.weekOffset = Math.round(
-  (data.mondayOf(data.parseISO(paid.dateISO)) - data.mondayOf(data.todayLocal())) / WEEK_MS
+  (data.sundayOf(data.parseISO(paid.dateISO)) - data.sundayOf(data.todayLocal())) / WEEK_MS
 );
 views.scheduleState.selected = paid.dateISO;
 if (!views.viewSchedule().includes("Booked")) {
@@ -2502,7 +2623,7 @@ installLocalFixtures(); store.signIn("member@example.test");
     || decorated.mapsQuery !== "Central Harbourfront, Hong Kong")
     throw new Error("weekly venue override should decorate the session");
   views.scheduleState.weekOffset = Math.round(
-    (data.mondayOf(data.parseISO(sess.dateISO)) - data.mondayOf(data.todayLocal())) / (7 * 86400000)
+    (data.sundayOf(data.parseISO(sess.dateISO)) - data.sundayOf(data.todayLocal())) / (7 * 86400000)
   );
   views.scheduleState.selected = sess.dateISO;
   views.scheduleState.filter = "all";
@@ -2642,7 +2763,7 @@ installLocalFixtures();
   );
   store.setSessionNotice(sess.id, "Weather watch — check WhatsApp");
   views.scheduleState.weekOffset = Math.round(
-    (data.mondayOf(data.parseISO(sess.dateISO)) - data.mondayOf(data.todayLocal())) / (7 * 86400000)
+    (data.sundayOf(data.parseISO(sess.dateISO)) - data.sundayOf(data.todayLocal())) / (7 * 86400000)
   );
   views.scheduleState.selected = sess.dateISO;
   const row = views.viewSchedule();
@@ -2665,7 +2786,7 @@ installLocalFixtures();
     (s) => s.activityId === "hyrox-midtown" && !data.sessionStarted(s)
   );
   views.scheduleState.weekOffset = Math.round(
-    (data.mondayOf(data.parseISO(mid.dateISO)) - data.mondayOf(data.todayLocal())) / (7 * 86400000)
+    (data.sundayOf(data.parseISO(mid.dateISO)) - data.sundayOf(data.todayLocal())) / (7 * 86400000)
   );
   views.scheduleState.selected = mid.dateISO;
   if (!views.viewSchedule().includes("Not yet open"))

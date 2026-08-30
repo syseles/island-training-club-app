@@ -3,7 +3,7 @@
 // ==========================================================================
 
 import * as store from "./store.js";
-import { buildICS, findSession, todayLocal, mondayOf, addDays, isoDate, donorIdProblem } from "./data.js";
+import { buildICS, findSession, todayLocal, donorIdProblem } from "./data.js";
 import * as views from "./views.js";
 import { isLive, supabase } from "./config.js";
 import * as components from "./components.js";
@@ -761,10 +761,7 @@ document.addEventListener("click", async (e) => {
     case "sched-week": {
       const st = views.scheduleState;
       st.weekOffset += Number(el.dataset.dir);
-      st.selected =
-        st.weekOffset === 0
-          ? isoDate(todayLocal())
-          : isoDate(addDays(mondayOf(todayLocal()), st.weekOffset * 7));
+      st.selected = views.scheduleSelectionForWeek(todayLocal(), st.weekOffset);
       render();
       break;
     }

@@ -2108,7 +2108,7 @@ if (!goingHtml.includes("rsvp-withdraw")) {
 const priorCountWeekOffset = views.scheduleState.weekOffset;
 const priorCountSelected = views.scheduleState.selected;
 views.scheduleState.weekOffset = Math.round(
-  (data.mondayOf(data.parseISO(lunchSession.dateISO)) - data.mondayOf(data.todayLocal())) / (7 * 86400000)
+  (data.sundayOf(data.parseISO(lunchSession.dateISO)) - data.sundayOf(data.todayLocal())) / (7 * 86400000)
 );
 views.scheduleState.selected = lunchSession.dateISO;
 const countScheduleHtml = views.viewSchedule();
@@ -2169,7 +2169,7 @@ if (store.getSession(otherLunchSession.id)?.location !== "TBC") {
 const priorScheduleWeekOffset = views.scheduleState.weekOffset;
 const priorScheduleSelected = views.scheduleState.selected;
 views.scheduleState.weekOffset = Math.round(
-  (data.mondayOf(data.parseISO(lunchSession.dateISO)) - data.mondayOf(data.todayLocal())) / (7 * 86400000)
+  (data.sundayOf(data.parseISO(lunchSession.dateISO)) - data.sundayOf(data.todayLocal())) / (7 * 86400000)
 );
 views.scheduleState.selected = lunchSession.dateISO;
 const lunchScheduleHtml = views.viewSchedule();
