@@ -48,12 +48,12 @@ begin
        and b.reserved_at = p_created_at;
 
     if v_candidate_count = 1 then
-      select b.id
-        into v_booking_id
+      select b.session_id
+        into v_session_id
         from public.operational_bookings b
        where b.profile_id = p_profile_id
          and b.reserved_at = p_created_at;
-      return '#/booking/' || v_booking_id::text;
+      return '#/activity/' || v_session_id;
     end if;
     return null;
   end if;
@@ -167,6 +167,7 @@ as $$
 declare
   v_candidate_count bigint;
   v_booking_id uuid;
+  v_session_id text;
 begin
   if p_kind = 'operational_booking_reserved' then
     select count(*)
@@ -197,13 +198,13 @@ begin
                              and p_created_at + interval '5 seconds';
 
     if v_candidate_count = 1 then
-      select b.id
-        into v_booking_id
+      select b.session_id
+        into v_session_id
         from public.operational_bookings b
        where b.profile_id = p_profile_id
          and b.reserved_at between p_created_at - interval '5 seconds'
                                and p_created_at + interval '5 seconds';
-      return '#/booking/' || v_booking_id::text;
+      return '#/activity/' || v_session_id;
     end if;
     return null;
   end if;

@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Route every known notification to its relevant app destination, especially `Booking reserved` to the exact booking payment page.
+**Goal:** Route every known notification to its relevant app destination—especially `Booking reserved` to the exact existing payment page and `RSVP confirmed` to the exact dated Activity Details page—and keep the notification window unread-only.
 
-**Architecture:** Keep explicit valid destinations authoritative. Add deterministic client fallbacks for stable section-level destinations, then add a forward-only Supabase migration with one security-definer resolver and one `BEFORE INSERT` trigger that assigns entity-specific destinations while the related transaction rows are visible. Backfill only uniquely matched historical rows.
+**Architecture:** Keep explicit valid destinations authoritative. Add deterministic client fallbacks for stable section-level destinations, then amend undeployed migration `00007` with one security-definer resolver and one `BEFORE INSERT` trigger that assigns entity-specific destinations while the related transaction rows are visible. Backfill only uniquely matched historical rows. Render only unread rows; after a successful `read_at` update, remove the row and update the unread count before navigating without deleting the database record.
 
 **Tech Stack:** Vanilla ES modules, delegated hash routing, Supabase PostgreSQL functions/triggers, Node smoke tests, disposable-database SQL verifier.
 
@@ -12,13 +12,16 @@
 
 - Implement on `feature/notification-routing` only.
 - Use migration `20260829000007_notification_destinations.sql`; `00005` and `00006` are reserved by Admin and RSVP branches.
-- `operational_booking_reserved` must route to `#/pay/<booking-id>` when an exact booking is known.
+- `operational_booking_reserved` must route to `#/pay/<booking-id>` when an exact booking is known and must continue opening the existing Book & Pay view.
+- `operational_rsvp_confirmed` must route to `#/activity/<session-id>` for new exact inserts and uniquely resolvable historical rows; unresolved rows fall back to `#/schedule`.
 - Preserve any explicit destination that starts with `#/`.
 - Never route a member to another profile’s booking; entity matching must include `profile_id` and require exactly one candidate.
 - Unknown kinds and ambiguous historical entity matches retain safe fallback behavior.
-- Preserve notification producer function bodies/signatures, notification RLS, `read_at`, copy, and mark-read-before-navigation behavior.
+- Preserve notification producer function bodies/signatures, notification RLS, copy, cancellation fallbacks, and mark-read-before-navigation behavior.
+- Keep read rows and `read_at` in the database for audit; never delete notification rows.
+- Render only unread rows and update the current window, empty state, and count after successful read persistence but before navigation.
 - Do not add dependencies, a build step, or localStorage changes.
-- Run `node app/smoke.mjs`, `node app/live-auth-smoke.mjs`, `bash supabase/tests/verify_operational_backend_safety.sh`, and `git diff --check` before completion.
+- Run `node app/smoke.mjs`, `node app/live-auth-smoke.mjs`, `bash supabase/tests/verify_admin_notifications_safety.sh`, `bash supabase/tests/verify_operational_backend_safety.sh`, syntax checks, and `git diff --check` before completion.
 
 ---
 
@@ -41,7 +44,7 @@ Add a table-driven assertion for these exact stable fallbacks:
 ```js
 const notificationFallbacks = new Map([
   ["operational_booking_reserved", "#/account/payments"],
-  ["operational_rsvp_confirmed", "#/account/payments"],
+  ["operational_rsvp_confirmed", "#/schedule"],
   ["operational_payment_approved", "#/account/payments"],
   ["operational_session_deferred", "#/account/payments"],
   ["operational_session_cancelled_no_defer", "#/schedule"],
@@ -99,7 +102,7 @@ git commit -m "fix(notifications): add semantic route fallbacks"
 ### Task 2: Assign exact destinations at the notification insert boundary
 
 **Files:**
-- Create: `supabase/migrations/20260829000007_notification_destinations.sql`
+- Modify (known undeployed): `supabase/migrations/20260829000007_notification_destinations.sql`
 - Modify: `supabase/tests/operational_backend_integration.sql`
 - Test: `app/smoke.mjs` migration source contracts
 
@@ -132,7 +135,7 @@ Assert the migration does not disable RLS or grant notification-table writes.
 
 Run: `node app/smoke.mjs`
 
-Expected: FAIL with `ENOENT` because migration `00007` does not exist.
+Expected for the original implementation: FAIL with `ENOENT` because migration `00007` does not exist. For the approved refinement, the changed RSVP route/backfill assertions fail against the existing undeployed migration.
 
 - [ ] **Step 3: Implement the resolver**
 
@@ -146,10 +149,10 @@ public.resolve_notification_destination(
 ) returns text
 ```
 
-For stable kinds, return the exact section routes from the design. For booking-specific kinds, select candidates belonging to `p_profile_id` whose relevant timestamp is within five seconds of `p_created_at`; return an entity route only when `count(*) = 1`:
+For stable kinds, return the exact section routes from the design. For entity-specific insert routing, select candidates belonging to `p_profile_id` whose relevant timestamp exactly equals `p_created_at`; return an entity route only when `count(*) = 1`. Keep bounded ±5-second matching in the historical booking helper only:
 
 - `operational_booking_reserved`: `reserved_at` → `#/pay/<id>`
-- `operational_rsvp_confirmed`: `reserved_at` → `#/booking/<id>`
+- `operational_rsvp_confirmed`: `reserved_at` → the unique booking's `#/activity/<session_id>`
 - `operational_payment_approved`: `paid_at` → `#/booking/<id>`
 - `operational_session_deferred`: new booking `reserved_at` with non-null `deferred_from_booking_id` → `#/booking/<id>`
 
@@ -168,18 +171,7 @@ Drop/recreate one `BEFORE INSERT` trigger named `notifications_route_destination
 
 - [ ] **Step 5: Backfill existing rows safely**
 
-Update only rows with null or malformed destinations:
-
-```sql
-update public.notifications n
-   set destination = public.resolve_notification_destination(
-     n.profile_id, n.kind, n.created_at
-   )
- where (n.destination is null or left(n.destination, 2) <> '#/')
-   and public.resolve_notification_destination(
-     n.profile_id, n.kind, n.created_at
-   ) is not null;
-```
+Update only rows with null or malformed destinations. Route booking and RSVP history through `resolve_historical_booking_notification_destination()` so same-profile candidates may match only within ±5 seconds and only when exactly one booking resolves; route stable kinds through the exact resolver. Never infer historical cancellation routes.
 
 Do not change `read_at`, title, body, kind, or explicit valid destinations. End with `notify pgrst, 'reload schema';`.
 
@@ -188,12 +180,12 @@ Do not change `read_at`, title, body, kind, or explicit valid destinations. End 
 In `supabase/tests/operational_backend_integration.sql`, inside rollback-safe transactions, assert:
 
 - A newly reserved paid booking creates `Booking reserved` with exact `#/pay/<booking-id>`.
-- A new RSVP creates exact Booking Details destination.
+- A new RSVP creates the exact dated Activity Details destination.
 - Payment approval and deferral route to the exact resulting booking.
 - Payment-marked/gym-finalized Admin rows use `#/admin/payments`.
 - Explicit `#/giving` remains unchanged.
-- Same-profile unique historical reservation backfills correctly.
-- A same-time ambiguous pair remains null.
+- Same-profile unique historical reservation and RSVP rows backfill correctly.
+- A same-time ambiguous reservation or RSVP pair remains null.
 - Another profile’s booking is never selected.
 - Existing `read_at` remains unchanged.
 
@@ -204,7 +196,13 @@ Run:
 ```bash
 node app/smoke.mjs
 node app/live-auth-smoke.mjs
+bash supabase/tests/verify_admin_notifications_safety.sh
 bash supabase/tests/verify_operational_backend_safety.sh
+node --check app/js/app.js
+node --check app/js/data.js
+node --check app/js/views.js
+node --check app/smoke.mjs
+node --check app/live-auth-smoke.mjs
 git diff --check
 ```
 
@@ -224,12 +222,12 @@ git commit -m "feat(notifications): route operational destinations"
 
 **Files:**
 - Modify: `app/live-auth-smoke.mjs`
-- Verify: `app/js/views.js` notification row renderer
-- Verify: `app/js/app.js` `notification-open` delegation
+- Modify: `app/js/views.js` notification row renderer
+- Modify: `app/js/app.js` `notification-open` delegation
 
 **Interfaces:**
 - Consumes: live notification row with `destination = '#/pay/<booking-id>'`.
-- Produces: end-to-end regression evidence from rendered row through delegated hash navigation.
+- Produces: end-to-end regression evidence from unread rendered row through persisted read removal and delegated hash navigation.
 
 - [ ] **Step 1: Add exact rendered-route coverage**
 
@@ -239,11 +237,12 @@ Use the live reservation fixture’s real booking ID. Add a notification row who
 
 Dispatch the real `notification-open` handler with that notification ID/destination. Assert:
 
-1. `markNotificationRead()` completes.
-2. `location.hash` becomes exactly `#/pay/<booking-id>`.
-3. The payment view accepts the current member’s reserved booking.
-
-Repeat with an already-read row to prove read state does not change routing.
+1. `markNotificationRead()` completes and duplicate activation cannot bypass it.
+2. The row disappears from the unread-only window and the unread count changes before destination hash assignment.
+3. `location.hash` becomes exactly `#/pay/<booking-id>`.
+4. The same existing payment view accepts the current member’s reserved booking.
+5. Read rows supplied by the audit query do not render; all-read/filter-empty results show the correct empty state.
+6. Read update failures retain the row/count and prevent navigation.
 
 - [ ] **Step 3: Run final verification**
 
@@ -252,7 +251,13 @@ Run:
 ```bash
 node app/smoke.mjs
 node app/live-auth-smoke.mjs
+bash supabase/tests/verify_admin_notifications_safety.sh
 bash supabase/tests/verify_operational_backend_safety.sh
+node --check app/js/app.js
+node --check app/js/data.js
+node --check app/js/views.js
+node --check app/smoke.mjs
+node --check app/live-auth-smoke.mjs
 git diff --check
 git status --short --branch
 ```

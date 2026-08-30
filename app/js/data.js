@@ -467,7 +467,7 @@ export function notificationHktTime(value) {
 
 const NOTIFICATION_DESTINATIONS = new Map([
   ["operational_booking_reserved", "#/account/payments"],
-  ["operational_rsvp_confirmed", "#/account/payments"],
+  ["operational_rsvp_confirmed", "#/schedule"],
   ["operational_payment_approved", "#/account/payments"],
   ["operational_session_deferred", "#/account/payments"],
   ["operational_session_cancelled_no_defer", "#/schedule"],

@@ -561,6 +561,7 @@ do $$
 declare
   v_paid_booking uuid;
   v_rsvp_booking uuid;
+  v_rsvp_session constant text := 'lunch-2026-10-17';
   v_deferred_booking uuid;
   v_explicit_notification uuid;
   v_unique_cancel_booking uuid;
@@ -599,21 +600,21 @@ begin
     'paid reservation notification has exact payment destination'
   );
 
-  -- A new RSVP points to its exact Booking Details page.
+  -- A new RSVP points to the exact dated Activity Details page.
   perform set_config('request.jwt.claim.sub', 'ff000000-0000-0000-0000-00000000f001', true);
   set local role authenticated;
   select id into v_rsvp_booking
-    from reserve_operational_session('lunch-2026-10-17');
+    from reserve_operational_session(v_rsvp_session);
   reset role;
   perform pg_temp.op_assert(
-    exists (
+    v_rsvp_booking is not null and exists (
       select 1
         from public.notifications
        where profile_id = 'ff000000-0000-0000-0000-00000000f001'
          and kind = 'operational_rsvp_confirmed'
-         and destination = '#/booking/' || v_rsvp_booking::text
+         and destination = '#/activity/' || v_rsvp_session
     ),
-    'RSVP notification has exact Booking Details destination'
+    'RSVP notification has exact Activity Details destination'
   );
 
   -- Payment-marked Admin rows use the stable payments section; approval
@@ -814,7 +815,7 @@ begin
   );
 end $$;
 
--- Historical backfill fixtures cover seven independent classes. The nearby
+-- Historical backfill fixtures cover nine independent classes. The nearby
 -- booking exists before its notification to prove INSERT routing is exact;
 -- migration reapplication may fuzzily repair that booking row only. The
 -- historical cancellation gains an exact timestamp match after notification
@@ -833,6 +834,8 @@ declare
   v_explicit_at constant timestamptz := '2001-01-01 00:04:00+00';
   v_read_state_at constant timestamptz := '2001-01-01 00:05:00+00';
   v_historical_cancellation_at constant timestamptz := '2001-01-01 00:06:00+00';
+  v_rsvp_unique_at constant timestamptz := '2001-01-01 00:07:00+00';
+  v_rsvp_ambiguous_at constant timestamptz := '2001-01-01 00:08:00+00';
   v_read_at constant timestamptz := '2001-01-02 00:00:00+00';
   v_nearby_notification uuid;
   v_malformed_notification uuid;
@@ -841,6 +844,8 @@ declare
   v_explicit_notification uuid;
   v_read_state_notification uuid;
   v_historical_cancellation_notification uuid;
+  v_rsvp_unique_notification uuid;
+  v_rsvp_ambiguous_notification uuid;
 begin
   insert into public.notifications
     (profile_id, kind, title, body, destination, created_at)
@@ -890,6 +895,22 @@ begin
      v_historical_cancellation_at)
   returning id into v_historical_cancellation_notification;
 
+  insert into public.notifications
+    (profile_id, kind, title, body, created_at)
+  values
+    ('bb000000-0000-0000-0000-00000000b001',
+     'operational_rsvp_confirmed', 'Historical RSVP unique', 'No body parsing.',
+     v_rsvp_unique_at)
+  returning id into v_rsvp_unique_notification;
+
+  insert into public.notifications
+    (profile_id, kind, title, body, created_at)
+  values
+    ('bb000000-0000-0000-0000-00000000b001',
+     'operational_rsvp_confirmed', 'Historical RSVP ambiguous', 'No body parsing.',
+     v_rsvp_ambiguous_at)
+  returning id into v_rsvp_ambiguous_notification;
+
   insert into public.operational_bookings
     (id, profile_id, session_id, status, reserved_at, pay_deadline_at, snapshot)
   values
@@ -920,7 +941,19 @@ begin
     ('66000000-0000-0000-0000-000000000001',
      'bb000000-0000-0000-0000-00000000b001',
      'hyrox-2026-08-22', 'expired', v_read_state_at,
-     v_read_state_at + interval '1 day', '{}'::jsonb);
+     v_read_state_at + interval '1 day', '{}'::jsonb),
+    ('77000000-0000-0000-0000-000000000001',
+     'bb000000-0000-0000-0000-00000000b001',
+     'lunch-2026-08-22', 'expired', v_rsvp_unique_at,
+     v_rsvp_unique_at + interval '1 day', '{}'::jsonb),
+    ('88000000-0000-0000-0000-000000000001',
+     'bb000000-0000-0000-0000-00000000b001',
+     'lunch-2026-08-22', 'expired', v_rsvp_ambiguous_at,
+     v_rsvp_ambiguous_at + interval '1 day', '{}'::jsonb),
+    ('88000000-0000-0000-0000-000000000002',
+     'bb000000-0000-0000-0000-00000000b001',
+     'lunch-2026-08-29', 'expired', v_rsvp_ambiguous_at,
+     v_rsvp_ambiguous_at + interval '1 day', '{}'::jsonb);
 
   -- A booking four seconds away is eligible only for historical repair. It
   -- already exists when this row is inserted, so a fuzzy INSERT resolver
@@ -955,11 +988,13 @@ begin
     ('foreign-only', v_foreign_notification),
     ('valid-explicit', v_explicit_notification),
     ('read-state', v_read_state_notification),
+    ('historical-rsvp-unique', v_rsvp_unique_notification),
+    ('historical-rsvp-ambiguous', v_rsvp_ambiguous_notification),
     ('historical-cancellation', v_historical_cancellation_notification);
 
   perform pg_temp.op_assert(
-    (select count(*) from pg_temp.notification_routing_backfill_fixtures) = 7,
-    'seven historical notification fixture classes are present'
+    (select count(*) from pg_temp.notification_routing_backfill_fixtures) = 9,
+    'nine historical notification fixture classes are present'
   );
   perform pg_temp.op_assert(
     (select destination from public.notifications where id = v_nearby_notification) is null,
@@ -979,6 +1014,14 @@ begin
   perform pg_temp.op_assert(
     (select destination from public.notifications where id = v_historical_cancellation_notification) is null,
     'historical cancellation fixture starts unresolved before backfill'
+  );
+  perform pg_temp.op_assert(
+    (select destination from public.notifications where id = v_rsvp_unique_notification) is null,
+    'unique historical RSVP fixture starts unresolved before backfill'
+  );
+  perform pg_temp.op_assert(
+    (select destination from public.notifications where id = v_rsvp_ambiguous_notification) is null,
+    'ambiguous historical RSVP fixture starts unresolved before backfill'
   );
 end $$;
 
@@ -1021,6 +1064,24 @@ begin
       where f.fixture_class = 'foreign-only'
         and n.destination is null) = 1,
     'actual migration leaves exactly one foreign-only fixture unresolved'
+  );
+  perform pg_temp.op_assert(
+    (select n.destination
+       from public.notifications n
+       join pg_temp.notification_routing_backfill_fixtures f
+         on f.notification_id = n.id
+      where f.fixture_class = 'historical-rsvp-unique')
+      = '#/activity/lunch-2026-08-22',
+    'actual migration backfills a uniquely resolvable RSVP to Activity Details'
+  );
+  perform pg_temp.op_assert(
+    (select count(*)
+       from public.notifications n
+       join pg_temp.notification_routing_backfill_fixtures f
+         on f.notification_id = n.id
+      where f.fixture_class = 'historical-rsvp-ambiguous'
+        and n.destination is null) = 1,
+    'actual migration leaves an ambiguous historical RSVP unresolved'
   );
   perform pg_temp.op_assert(
     (select count(*)

@@ -154,6 +154,8 @@ for (const marker of [
   "v_cancelled_admin_after",
   "notification_routing_backfill_snapshot",
   "nearby-booking",
+  "historical-rsvp-unique",
+  "historical-rsvp-ambiguous",
   "historical-cancellation",
   "notification routing migration second reapplication is idempotent",
 ]) {
@@ -198,13 +200,20 @@ for (const fixtureClass of [
   "foreign-only",
   "valid-explicit",
   "read-state",
+  "historical-rsvp-unique",
+  "historical-rsvp-ambiguous",
   "historical-cancellation",
 ]) {
   if (!operationalBackendIntegrationSource.includes(`'${fixtureClass}'`)) {
     throw new Error(`notification integration missing historical fixture class ${fixtureClass}`);
   }
 }
-for (const fixtureClass of ["ambiguous-same-profile", "foreign-only", "historical-cancellation"]) {
+for (const fixtureClass of [
+  "ambiguous-same-profile",
+  "foreign-only",
+  "historical-rsvp-ambiguous",
+  "historical-cancellation",
+]) {
   const rowExistsOnceWithNull = new RegExp(
     `perform\\s+pg_temp\\.op_assert\\(\\s*\\(select\\s+count\\(\\*\\)[\\s\\S]*?where\\s+f\\.fixture_class\\s*=\\s*'${fixtureClass}'[\\s\\S]*?and\\s+n\\.destination\\s+is\\s+null\\s*\\)\\s*=\\s*1\\s*,`,
     "i"
@@ -354,7 +363,7 @@ console.log("ok  latest Notification domain markers coexist");
 {
   const notificationFallbacks = new Map([
     ["operational_booking_reserved", "#/account/payments"],
-    ["operational_rsvp_confirmed", "#/account/payments"],
+    ["operational_rsvp_confirmed", "#/schedule"],
     ["operational_payment_approved", "#/account/payments"],
     ["operational_session_deferred", "#/account/payments"],
     ["operational_session_cancelled_no_defer", "#/schedule"],

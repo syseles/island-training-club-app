@@ -2698,7 +2698,7 @@ export async function viewNotifications(now = new Date(), prefetchedRows = null)
   // malformed categories fall back safely without exposing operational rows.
   const visibleRows = rows.filter((notification) => {
     const kind = typeof notification?.kind === "string" ? notification.kind.trim() : "";
-    return admin || !kind.startsWith("admin_");
+    return !notification?.read_at && (admin || !kind.startsWith("admin_"));
   }).sort((a, b) => {
     const aTime = Date.parse(a?.created_at);
     const bTime = Date.parse(b?.created_at);

@@ -2,7 +2,7 @@
 
 ## Goal
 
-Make every known notification open the most relevant app page instead of falling back to Profile. In particular, `Booking reserved` must open the payment page for the exact booking that generated the notification.
+Make every known notification open the most relevant app page instead of falling back to Profile. In particular, `Booking reserved` must open the existing payment page for the exact booking that generated the notification, while `RSVP confirmed` must open Activity Details for its exact dated session.
 
 ## Root cause
 
@@ -14,20 +14,22 @@ The booking reservation RPC has the new booking ID at notification creation time
 
 Semantic routing is assigned at the database notification-insert boundary, where the related booking/session mutation from the same transaction is visible. A new migration adds one `BEFORE INSERT` routing trigger for Supabase notifications. Existing local prototype producers continue passing their existing links through the store seam; any missing local destinations are corrected at their source.
 
-The Inbox remains a renderer and router, not an entity-matching engine. It will continue to:
+The Inbox remains a renderer and router, not an entity-matching engine. It will:
 
 1. Prefer a valid explicit `destination` beginning with `#/`.
 2. Use kind-level fallback routes only when no explicit destination exists.
 3. Fall back safely to `#/account` for unknown kinds.
+4. Render only rows whose `read_at` is null.
+5. On activation, persist `read_at`, remove the row from the current notification window and update the unread count, then navigate. A failed read leaves the row and route in place.
 
-No generic entity-type or entity-ID columns are added.
+Read rows remain in the database for audit; the UI never deletes them. No generic entity-type or entity-ID columns are added.
 
 ## Routing map
 
 ### Member booking and RSVP
 
 - `operational_booking_reserved` → `#/pay/<booking-id>`
-- `operational_rsvp_confirmed` → `#/booking/<booking-id>`
+- `operational_rsvp_confirmed` → `#/activity/<session-id>`
 - `operational_payment_approved` → `#/booking/<booking-id>`
 - `operational_session_deferred` → `#/booking/<new-booking-id>`
 - `operational_session_cancelled_no_defer` → `#/activity/<cancelled-session-id>`
@@ -52,13 +54,13 @@ No generic entity-type or entity-ID columns are added.
 
 ## Supabase migration
 
-Create `supabase/migrations/20260829000007_notification_destinations.sql`. Migration numbers `00005` and `00006` are reserved by the Admin assigned-collector payout RPC and the RSVP six-argument lunch venue RPC respectively; `00007` avoids integration filename collisions while remaining forward-only.
+Use `supabase/migrations/20260829000007_notification_destinations.sql`. Because migration `00007` is known undeployed, this refinement amends it rather than adding a later migration. Migration numbers `00005` and `00006` remain reserved by the Admin assigned-collector payout RPC and the RSVP six-argument lunch venue RPC respectively.
 
 The migration will add a focused security-definer resolver and a `BEFORE INSERT` trigger on `public.notifications`. The trigger:
 
 - Leaves any valid explicit destination unchanged.
 - Assigns stable routes directly from notification kind.
-- Resolves reservation/RSVP creation from a same-profile booking whose `reserved_at` matches the notification transaction time.
+- Resolves reservation/RSVP creation from a same-profile booking whose `reserved_at` matches the notification transaction time; reservations use the booking ID and RSVPs use that booking's session ID.
 - Resolves payment approval from a same-profile booking whose `paid_at` matches the transaction time.
 - Resolves deferral from the newly created same-profile booking in that transaction.
 - Resolves session cancellation from the session whose `cancelled_at` matches the transaction time.
@@ -75,7 +77,7 @@ For booking-specific rows, the resolver matches an operational booking belonging
 Backfill:
 
 - `operational_booking_reserved` from `reserved_at` → `#/pay/<booking-id>`
-- `operational_rsvp_confirmed` from `reserved_at` → `#/booking/<booking-id>`
+- `operational_rsvp_confirmed` from `reserved_at` → `#/activity/<session-id>`
 - `operational_payment_approved` from `paid_at` → `#/booking/<booking-id>`
 - `operational_session_deferred` from the new booking’s `reserved_at` → `#/booking/<new-booking-id>`
 
@@ -89,7 +91,8 @@ Read state (`read_at`) is preserved. Previously read rows receive corrected dest
 
 Expand the pure `notificationDestination(kind, destination)` mapping for known kinds that have stable section-level routes. Booking-specific kinds cannot derive an entity ID from kind alone, so their fallback is:
 
-- `operational_booking_reserved` and other unresolved member booking kinds → `#/account/payments`
+- unresolved `operational_booking_reserved` and member payment/deferral kinds → `#/account/payments`
+- unresolved `operational_rsvp_confirmed` → `#/schedule`
 - unresolved Admin payment/gym kinds → `#/admin/payments`
 - unresolved session update/cancellation kinds → `#/schedule`
 
@@ -112,21 +115,22 @@ Verify:
 - Explicit valid destinations remain authoritative.
 - Unknown/malformed destinations use safe fallbacks.
 - Every stable known kind maps to its expected section.
-- A rendered `operational_booking_reserved` row with `#/pay/<booking-id>` contains that exact `data-destination`.
-- Read and unread rows use the same semantic destination.
-- Existing mark-read-before-navigation and failed-destination behavior remains unchanged.
+- A rendered unread `operational_booking_reserved` row with `#/pay/<booking-id>` contains that exact `data-destination` and opens the same existing payment view.
+- Read rows are excluded from every notification filter and an all-read result uses the empty state.
+- A successful click persists `read_at`, removes the row and updates the count before assigning the destination hash.
+- A failed read keeps the row and prevents navigation; a destination failure does not undo or misreport the successful read.
 
 ### Supabase migration coverage
 
 Add SQL assertions covering:
 
 - The insert trigger preserves explicit destinations and assigns a new reservation notification the exact booking payment route.
-- RSVP confirmation points to Booking Details.
+- RSVP confirmation points to exact dated Activity Details.
 - Payment approval points to Booking Details.
 - Payment marked and gym finalized point to Admin Payments.
 - Deferral and cancellation point to their related booking/session routes.
 - Admin and Giving notifications use their stable routes.
-- Existing reservation rows are backfilled only to same-profile uniquely matched bookings.
+- Existing reservation and RSVP rows are backfilled only from same-profile uniquely matched bookings; ambiguous RSVP rows remain unresolved.
 - Explicit destinations and `read_at` values are not overwritten.
 
-Run `node app/smoke.mjs`, `node app/live-auth-smoke.mjs`, relevant Supabase SQL tests available in the repository, and `git diff --check` before completion. The branch must contain executable application/migration changes—not documentation only—before notification routing is described as implemented. Do not claim live routing is fixed until migration `00007` is applied to Supabase.
+Run `node app/smoke.mjs`, `node app/live-auth-smoke.mjs`, the notification and operational safety verifiers, syntax checks, relevant Supabase SQL tests available in the repository, and `git diff --check` before completion. The branch must contain executable application/migration changes—not documentation only—before notification routing is described as implemented. Do not claim live routing is fixed until migration `00007` is applied to Supabase.
