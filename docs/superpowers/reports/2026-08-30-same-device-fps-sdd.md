@@ -20,7 +20,7 @@ The initial baseline smoke run also exposed a pre-existing date-sensitive Schedu
 
 - `node app/smoke.mjs` — passed; `All smoke tests passed.`
 - `node app/live-auth-smoke.mjs` — passed.
-- `node --check` over `app/js/*.js` and `app/*.mjs` — 12 files passed.
+- `node --check` over `app/js/*.js` and `app/*.mjs` — 13 files passed after adding the HTML binding test helper.
 - Runtime QR/scan/embedded-amount search over `app/js`, `app/styles.css`, and `app/index.html` — no matches.
 - `git diff --check` — passed.
 

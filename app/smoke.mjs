@@ -1,6 +1,8 @@
 // Headless smoke test: render every view for every user state.
 // Run: node --input-type=module < smoke.mjs  (from the app/ directory)
 
+import { assertFpsCopyBindings } from "./test-html.mjs";
+
 // --- localStorage shim ---
 const mem = new Map();
 globalThis.localStorage = {
@@ -2090,6 +2092,8 @@ installLocalFixtures();
 // --- HYROX payment system: member payment UI (Task 9) ---
 store.resetLocalData();
 installLocalFixtures();
+const bookingCollectorPhone = '+852 5000 & "0001"';
+store.currentUser().phone = bookingCollectorPhone;
 store.signIn("member@example.test");
 {
   const sess = store.upcomingSessions(14).find(
@@ -2105,7 +2109,7 @@ store.signIn("member@example.test");
   const suggestedReference = "ITC-ABC123";
   for (const marker of [
     "Assigned collector / payee", "FPS mobile number", "Exact amount",
-    "Suggested reference", "+852 5000 0001", suggestedReference,
+    "Suggested reference", suggestedReference,
     'data-action="copy-fps"', 'aria-label="Copy FPS number"',
     'data-action="copy-reference"', 'aria-label="Copy payment reference"',
     "Open your banking app", "pay by mobile number", "Paste the FPS number",
@@ -2115,6 +2119,16 @@ store.signIn("member@example.test");
   if (!pay.includes(`value="${suggestedReference}"`)) {
     throw new Error("suggested booking reference must prefill reconciliation input");
   }
+  assertFpsCopyBindings(pay, [
+    {
+      action: "copy-fps", kind: "number", label: "FPS mobile number",
+      value: bookingCollectorPhone, escaped: "+852 5000 &amp; &quot;0001&quot;",
+    },
+    {
+      action: "copy-reference", kind: "reference", label: "Suggested reference",
+      value: suggestedReference, escaped: "ITC-ABC123",
+    },
+  ], "booking FPS screen");
   if (/QR|Scan with your banking app|amount is embedded/i.test(pay)) {
     throw new Error("booking FPS flow must not show or claim QR behavior");
   }
@@ -2816,9 +2830,10 @@ store.leaveWaitlist("giving-member", "authz-waitlist-session");
 store.leaveInterest("giving-member", "authz-interest-session");
 console.log("ok  Payment seams enforce self-service/Admin boundaries and derive confirmation identity");
 
+const givingFpsId = `FPS<&"'>`;
 const givingCampaign = await store.saveGivingCampaign({
   title: "Member campaign", description: "Support the community.", goalHKD: 1000,
-  fpsId: "1234567", fpsPayee: "Island Training Club",
+  fpsId: givingFpsId, fpsPayee: "Island Training Club",
 });
 await store.publishGivingCampaign(givingCampaign.id);
 store.signIn("giving-member@example.test");
@@ -2827,11 +2842,12 @@ if (!/form-giving|Give via FPS/.test(memberGivingHtml)) throw new Error("approve
 views.givingState.step = 2;
 views.givingState.amount = 250;
 views.givingState.name = "Giving Member";
-views.givingState.ref = "GIVE-TEST";
+const givingCopyReference = `GIVE-<&"'>`;
+views.givingState.ref = givingCopyReference;
 views.givingState.campaignId = givingCampaign.id;
 const givingFpsHtml = await views.viewGiving();
 for (const marker of [
-  "FPS ID", "Payee", "HK$250", "GIVE-TEST",
+  "FPS ID", "Payee", "HK$250",
   'data-action="copy-fps"', 'aria-label="Copy FPS ID"',
   'data-action="copy-reference"', 'aria-label="Copy Giving reference"',
   "Open your banking app", "pay using the FPS ID", "Paste the FPS ID",
@@ -2841,7 +2857,18 @@ for (const marker of [
 if (/QR|scan|bank deep.link/i.test(givingFpsHtml)) {
   throw new Error("Giving FPS flow must not show QR or universal deep-link claims");
 }
+assertFpsCopyBindings(givingFpsHtml, [
+  {
+    action: "copy-fps", kind: "id", label: "FPS ID",
+    value: givingFpsId, escaped: "FPS&lt;&amp;&quot;&#39;&gt;",
+  },
+  {
+    action: "copy-reference", kind: "giving-reference", label: "Reference",
+    value: givingCopyReference, escaped: "GIVE-&lt;&amp;&quot;&#39;&gt;",
+  },
+], "Giving FPS screen");
 console.log("ok  Giving shows same-device FPS ID + reference copy guidance without QR claims");
+views.givingState.ref = "GIVE-TEST";
 await store.updateMyDonorId("member-1234");
 if (store.currentUser().donorId !== "MEMBER-1234") throw new Error("Giving donor ID must normalize and persist");
 const gift = store.recordDonation({ userId: "giving-member", name: "Giving Member", amount: 250, ref: "GIVE-TEST", campaignId: givingCampaign.id });
