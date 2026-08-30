@@ -63,7 +63,12 @@ const esc = (s) =>
 const todayISO = () => isoDate(todayLocal());
 
 const fmtDay = (ts) =>
-  new Date(ts).toLocaleDateString("en-HK", { day: "numeric", month: "short", year: "numeric" });
+  new Date(ts).toLocaleDateString("en-HK", {
+    timeZone: "Asia/Hong_Kong",
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+  });
 
 const fmtMonthYear = (ts) =>
   new Date(ts).toLocaleDateString("en-HK", { month: "short", year: "numeric" });

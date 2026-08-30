@@ -498,11 +498,28 @@ export const WEEKLY_VERSES = [
   },
 ];
 
-const VERSE_EPOCH = new Date(2026, 6, 26); // Sunday — week one shows verses[0]
+const CALENDAR_DAY_MS = 24 * 60 * 60 * 1000;
+const VERSE_EPOCH_DAY = Date.UTC(2026, 6, 26) / CALENDAR_DAY_MS;
+const HKT_DATE_PARTS = new Intl.DateTimeFormat("en-US", {
+  timeZone: "Asia/Hong_Kong",
+  calendar: "gregory",
+  numberingSystem: "latn",
+  year: "numeric",
+  month: "numeric",
+  day: "numeric",
+});
 
-export function weeklyVerse(date = todayLocal()) {
-  const sunday = addDays(date, -date.getDay()); // weeks run Sunday–Saturday
-  const weeks = Math.round((sunday - VERSE_EPOCH) / (7 * 24 * 60 * 60 * 1000));
+function hktCalendarDay(date) {
+  const parts = Object.fromEntries(
+    HKT_DATE_PARTS.formatToParts(date)
+      .filter(({ type }) => type !== "literal")
+      .map(({ type, value }) => [type, Number(value)])
+  );
+  return Date.UTC(parts.year, parts.month - 1, parts.day) / CALENDAR_DAY_MS;
+}
+
+export function weeklyVerse(date = new Date()) {
+  const weeks = Math.floor((hktCalendarDay(date) - VERSE_EPOCH_DAY) / 7);
   const n = WEEKLY_VERSES.length;
   return WEEKLY_VERSES[((weeks % n) + n) % n];
 }

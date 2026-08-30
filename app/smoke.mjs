@@ -1,6 +1,8 @@
 // Headless smoke test: render every view for every user state.
 // Run: node --input-type=module < smoke.mjs  (from the app/ directory)
 
+import { spawnSync } from "node:child_process";
+
 // --- localStorage shim ---
 const mem = new Map();
 globalThis.localStorage = {
@@ -207,6 +209,57 @@ if (
   failures++;
   console.error("FAIL announcement postedAt should resolve to 2026-08-06 local date");
 } else console.log("ok  announcement postedAt resolves to 2026-08-06 local date");
+
+// Weekly encouragement rotates on Hong Kong Sundays, regardless of the host
+// calendar. Each expected reference is hand-derived from the fixed HKT epoch.
+{
+  const verseCases = [
+    ["one second before the epoch boundary", "2026-07-25T15:59:59.000Z", "2 Timothy 4:7"],
+    ["one millisecond before the epoch boundary", "2026-07-25T15:59:59.999Z", "2 Timothy 4:7"],
+    ["at the epoch boundary", "2026-07-25T16:00:00.000Z", "Hebrews 12:1"],
+    ["one millisecond before the next boundary", "2026-08-01T15:59:59.999Z", "Hebrews 12:1"],
+    ["at the next boundary", "2026-08-01T16:00:00.000Z", "Isaiah 40:31"],
+    ["one week before the epoch", "2026-07-18T16:00:00.000Z", "2 Timothy 4:7"],
+    ["eight weeks before the epoch", "2026-05-30T16:00:00.000Z", "Hebrews 12:1"],
+    ["nine weeks before the epoch", "2026-05-23T16:00:00.000Z", "2 Timothy 4:7"],
+  ];
+  for (const [label, instant, expectedRef] of verseCases) {
+    const actualRef = data.weeklyVerse(new Date(instant)).ref;
+    if (actualRef !== expectedRef) {
+      throw new Error(`Weekly verse ${label} should be ${expectedRef}, got ${actualRef}`);
+    }
+  }
+
+  const dataModuleURL = new URL("./js/data.js", import.meta.url).href;
+  const fixedInstant = "2026-07-25T16:00:00.000Z";
+  const childSource = `
+    const RealDate = Date;
+    const fixedInstant = ${JSON.stringify(fixedInstant)};
+    globalThis.Date = class FixedDate extends RealDate {
+      constructor(...args) { super(...(args.length ? args : [fixedInstant])); }
+      static now() { return new RealDate(fixedInstant).getTime(); }
+    };
+    const { weeklyVerse } = await import(${JSON.stringify(dataModuleURL)});
+    const supplied = weeklyVerse(new RealDate(fixedInstant)).ref;
+    const defaulted = weeklyVerse().ref;
+    process.stdout.write(JSON.stringify({ supplied, defaulted }));
+  `;
+  for (const timeZone of ["Asia/Hong_Kong", "America/Los_Angeles"]) {
+    const child = spawnSync(process.execPath, ["--input-type=module", "--eval", childSource], {
+      encoding: "utf8",
+      env: { ...process.env, TZ: timeZone },
+    });
+    if (child.status !== 0) {
+      throw new Error(`Weekly verse ${timeZone} child failed: ${child.stderr.trim()}`);
+    }
+    const result = JSON.parse(child.stdout);
+    if (result.supplied !== "Hebrews 12:1" || result.defaulted !== "Hebrews 12:1") {
+      throw new Error(`Weekly verse should use the same HKT instant under ${timeZone}; got ${child.stdout}`);
+    }
+  }
+  console.log("ok  weekly verse rotates at deterministic HKT Sunday boundaries");
+  console.log("ok  weekly verse matches across HKT and Los Angeles host timezones");
+}
 
 // --- Visitor state ---
 store.signOut();
