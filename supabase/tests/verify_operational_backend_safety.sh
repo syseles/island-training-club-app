@@ -29,6 +29,71 @@ if ! grep -Fq 'operational_rsvp_concurrency.sh' "$verifier"; then
   exit 1
 fi
 
+# Source contracts protect fixture validity even when PostgreSQL is unavailable.
+# They intentionally validate the harness boundary that the schema enforces:
+# event-* template IDs, activity-date session IDs, and rollback-safe cleanup.
+python3 - "$concurrency" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+source = Path(sys.argv[1]).read_text()
+
+def fail(message):
+    print(f"FAIL: {message}", file=sys.stderr)
+    raise SystemExit(1)
+
+def assignment(name):
+    match = re.search(rf'^{re.escape(name)}="([^"]+)"$', source, re.MULTILINE)
+    if not match:
+        fail(f"concurrency harness is missing {name}")
+    return match.group(1)
+
+for name in ("paid_activity", "rsvp_activity"):
+    if not assignment(name).startswith("event-"):
+        fail(f"{name} must use a schema-valid event-* ID")
+
+expected_sessions = {
+    "paid_session": "${paid_activity}-${paid_date}",
+    "rsvp_session_a": "${rsvp_activity}-${rsvp_date_a}",
+    "rsvp_session_b": "${rsvp_activity}-${rsvp_date_b}",
+}
+for name, expected in expected_sessions.items():
+    if assignment(name) != expected:
+        fail(f"{name} must be derived as activity_id-session_date")
+
+for name in ("paid_date", "rsvp_date_a", "rsvp_date_b"):
+    if not re.search(rf"\b{re.escape(name)}\b", source):
+        fail(f"concurrency harness is missing dynamic date {name}")
+if "Asia/Hong_Kong" not in source:
+    fail("concurrency fixture dates must be derived dynamically in HKT")
+
+try:
+    cleanup = source.split("cleanup() {", 1)[1].split("trap cleanup EXIT", 1)[0]
+except IndexError:
+    fail("concurrency harness is missing EXIT cleanup")
+for contract in ('local original_status=$?', 'exit "$original_status"'):
+    if contract not in cleanup:
+        fail("cleanup must preserve the harness original exit status")
+
+cleanup_steps = [
+    "delete from public.operational_bookings",
+    "delete from public.operational_sessions",
+    "delete from public.operational_activity_templates",
+    "delete from auth.users",
+]
+positions = []
+for step in cleanup_steps:
+    position = cleanup.find(step)
+    if position < 0:
+        fail(f"cleanup is missing child-first step: {step}")
+    positions.append(position)
+if positions != sorted(positions):
+    fail("cleanup must delete bookings before sessions, templates, and users")
+
+print("PASS: concurrency source contracts enforce schema-valid fixtures and child-first cleanup")
+PY
+
 run_case() {
   local label="$1" expect="$2" command="$3"
   shift 3

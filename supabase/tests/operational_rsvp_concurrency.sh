@@ -37,19 +37,65 @@ if [[ "$("${psql_cmd[@]}" -Atqc "
   exit 3
 fi
 
+fixture_dates="$("${psql_cmd[@]}" -Atqc "
+  with dates as (
+    select (now() at time zone 'Asia/Hong_Kong')::date + 500 as paid_date
+  )
+  select concat_ws('|', paid_date, paid_date + 1, paid_date + 2)
+    from dates
+")"
+IFS='|' read -r paid_date rsvp_date_a rsvp_date_b <<<"$fixture_dates"
+if [[ -z "$paid_date" || -z "$rsvp_date_a" || -z "$rsvp_date_b" ]]; then
+  echo "ERROR: could not derive dynamic HKT fixture dates." >&2
+  exit 3
+fi
+
+member_a="91000000-0000-0000-0000-000000000001"
+member_b="91000000-0000-0000-0000-000000000002"
+member_c="91000000-0000-0000-0000-000000000003"
+paid_booking="92000000-0000-0000-0000-000000000001"
+rsvp_booking_a="92000000-0000-0000-0000-000000000002"
+rsvp_booking_b="92000000-0000-0000-0000-000000000003"
+paid_activity="event-concurrency-paid"
+rsvp_activity="event-concurrency-rsvp"
+paid_session="${paid_activity}-${paid_date}"
+rsvp_session_a="${rsvp_activity}-${rsvp_date_a}"
+rsvp_session_b="${rsvp_activity}-${rsvp_date_b}"
+
 work_dir="$(mktemp -d)"
 background_pids=()
-cleanup() {
-  for pid in "${background_pids[@]:-}"; do
-    kill "$pid" 2>/dev/null || true
-  done
-  rm -rf "$work_dir"
-}
-trap cleanup EXIT
 
 run_sql() {
   "${psql_cmd[@]}" -c "$1"
 }
+
+cleanup() {
+  local original_status=$?
+  trap - EXIT
+  set +e
+  for pid in "${background_pids[@]:-}"; do
+    kill "$pid" 2>/dev/null
+  done
+  for pid in "${background_pids[@]:-}"; do
+    wait "$pid" 2>/dev/null
+  done
+  "${psql_cmd[@]}" -c "
+    begin;
+    set local lock_timeout = '2s';
+    set local statement_timeout = '5s';
+    delete from public.operational_bookings
+     where session_id in ('$paid_session', '$rsvp_session_a', '$rsvp_session_b');
+    delete from public.operational_sessions
+     where id in ('$paid_session', '$rsvp_session_a', '$rsvp_session_b');
+    delete from public.operational_activity_templates
+     where activity_id in ('$paid_activity', '$rsvp_activity');
+    delete from auth.users where id in ('$member_a', '$member_b', '$member_c');
+    commit;
+  " >/dev/null 2>&1
+  rm -rf "$work_dir"
+  exit "$original_status"
+}
+trap cleanup EXIT
 
 run_pair() {
   local label="$1" sql_a="$2" sql_b="$3"
@@ -72,16 +118,6 @@ run_pair() {
   fi
 }
 
-member_a="91000000-0000-0000-0000-000000000001"
-member_b="91000000-0000-0000-0000-000000000002"
-member_c="91000000-0000-0000-0000-000000000003"
-paid_booking="92000000-0000-0000-0000-000000000001"
-rsvp_booking_a="92000000-0000-0000-0000-000000000002"
-rsvp_booking_b="92000000-0000-0000-0000-000000000003"
-paid_session="itc-concurrency-paid"
-rsvp_session_a="itc-concurrency-rsvp-a"
-rsvp_session_b="itc-concurrency-rsvp-b"
-
 run_sql "
   insert into auth.users (id, email, raw_user_meta_data) values
     ('$member_a', 'concurrency-a@itc.invalid', '{}'::jsonb),
@@ -93,29 +129,27 @@ run_sql "
     (activity_id, name, venue, weekday, start_time, duration_minutes,
      capacity, price_hkd, default_open, active, category, maps_query, requires_rsvp)
   values
-    ('itc-concurrency-paid', 'Concurrency Paid', 'BFT Causeway Bay', 6,
+    ('$paid_activity', 'Concurrency Paid', 'BFT Causeway Bay',
+     extract(dow from date '$paid_date')::integer,
      time '11:00', 60, 20, 180, true, false, 'HYROX', 'BFT Causeway Bay', false),
-    ('itc-concurrency-rsvp', 'Concurrency RSVP', 'TBC', 6,
+    ('$rsvp_activity', 'Concurrency RSVP', 'TBC',
+     extract(dow from date '$rsvp_date_a')::integer,
      time '12:00', 60, null, 0, true, false, 'Socials', null, true);
   insert into public.operational_sessions
     (id, activity_id, session_date, start_time, duration_minutes,
      venue, capacity, price_hkd, is_open)
   values
-    ('$paid_session', 'itc-concurrency-paid',
-     (now() at time zone 'Asia/Hong_Kong')::date + 500,
+    ('$paid_session', '$paid_activity', date '$paid_date',
      time '11:00', 60, 'BFT Causeway Bay', 20, 180, true),
-    ('$rsvp_session_a', 'itc-concurrency-rsvp',
-     (now() at time zone 'Asia/Hong_Kong')::date + 501,
+    ('$rsvp_session_a', '$rsvp_activity', date '$rsvp_date_a',
      time '12:00', 60, 'TBC', null, 0, true),
-    ('$rsvp_session_b', 'itc-concurrency-rsvp',
-     (now() at time zone 'Asia/Hong_Kong')::date + 502,
+    ('$rsvp_session_b', '$rsvp_activity', date '$rsvp_date_b',
      time '12:00', 60, 'TBC', null, 0, true);
   insert into public.operational_bookings
     (id, profile_id, session_id, status, pay_deadline_at, snapshot)
   values
     ('$paid_booking', '$member_a', '$paid_session', 'reserved', now() + interval '1 day',
-     jsonb_build_object('name', 'Concurrency Paid', 'session_date',
-       (now() at time zone 'Asia/Hong_Kong')::date + 500,
+     jsonb_build_object('name', 'Concurrency Paid', 'session_date', date '$paid_date',
        'start_time', '11:00', 'venue', 'BFT Causeway Bay', 'price_hkd', 180));
 "
 
@@ -256,11 +290,6 @@ run_sql "
     end if;
   end
   \$\$;
-  delete from public.operational_sessions
-   where id in ('$paid_session', '$rsvp_session_a', '$rsvp_session_b');
-  delete from public.operational_activity_templates
-   where activity_id in ('itc-concurrency-paid', 'itc-concurrency-rsvp');
-  delete from auth.users where id in ('$member_a', '$member_b', '$member_c');
 "
 
 echo "RSVP concurrency verification passed: paid updates avoid the serializer and RSVP mutations settle exactly."
