@@ -435,13 +435,15 @@ git commit -m "fix(events): count live lunch RSVPs"
 **Files:**
 - Create: `supabase/migrations/20260829000008_rsvp_integrity.sql`
 - Modify: `supabase/tests/operational_backend_integration.sql`
-- Modify: `app/js/operations.js` operational cache/hydration readers
+- Modify: `app/js/operations.js` operational cache/hydration and Realtime readers
 - Modify: `app/js/store.js` live count and date horizon
+- Modify: `app/js/views.js` owner Schedule count rendering
 - Test: `app/smoke.mjs`
 - Test: `app/live-auth-smoke.mjs`
 
 **Interfaces:**
-- Produces: `public.get_operational_rsvp_counts()` returning `table(session_id text, going_count bigint)` with no identity columns.
+- Produces: public read-only `operational_rsvp_counts(session_id, going_count, updated_at)` with no identity columns and transactional booking-trigger updates.
+- Produces: `public.get_operational_rsvp_counts()` returning `table(session_id text, going_count bigint)` from that table.
 - Produces: `liveOps.liveRsvpCountFor(sessionId)` returning an exact hydrated integer or null when count enrichment is degraded.
 - Preserves: `store.attendeeCountFor(session)` public API, paid reservation behavior, uncapped lunch, and optional non-fatal enrichment semantics.
 
@@ -484,29 +486,11 @@ Extend `supabase/tests/operational_backend_integration.sql` with rollback-safe a
 
 - [ ] **Step 4: Create migration `00008`**
 
-Add a `STABLE`, `SECURITY DEFINER`, fixed-search-path count function:
+Create public read-only `operational_rsvp_counts(session_id PK/FK, going_count nonnegative, updated_at)` with RLS public SELECT and no browser writes. Add a fixed-search-path, security-definer booking trigger that serializes per session and recalculates exact confirmed RSVP totals after insert/update/delete, including a retained zero after the final withdrawal. Backfill every existing RSVP session and revoke helper execution from `PUBLIC`, `anon`, and `authenticated`.
 
-```sql
-create or replace function public.get_operational_rsvp_counts()
-returns table(session_id text, going_count bigint)
-language sql
-stable
-security definer
-set search_path = public
-as $$
-  select b.session_id, count(*)::bigint
-    from public.operational_bookings b
-    join public.operational_sessions s on s.id = b.session_id
-    join public.operational_activity_templates t on t.activity_id = s.activity_id
-   where t.requires_rsvp
-     and b.status = 'confirmed'
-   group by b.session_id;
-$$;
-```
+Keep `get_operational_rsvp_counts()` `STABLE`, `SECURITY DEFINER`, and fixed-search-path, but make it read only `operational_rsvp_counts` and return only `session_id, going_count`. Revoke aggregate execution from `PUBLIC`, then grant it to `anon, authenticated`. Add the table to `supabase_realtime`.
 
-Revoke from `public`, then grant execution to `anon, authenticated`. Do not expose profile IDs.
-
-Replace the final reserve and withdraw functions from migrations `00004`/`00002`. Resolve `requires_rsvp` from the session’s activity template. Define RSVP as `price_hkd = 0 AND requires_rsvp`; reject zero-price non-RSVP reserve/withdraw attempts. Use this exact start comparison in both functions:
+Replace the final reserve and withdraw functions from migrations `00004`/`00002`. Explicitly revoke execution from `PUBLIC` and `anon` before granting `authenticated`. Resolve `requires_rsvp` from the session’s activity template. Define RSVP as `price_hkd = 0 AND requires_rsvp`; reject zero-price non-RSVP reserve/withdraw attempts. Use this exact start comparison in both functions:
 
 ```sql
 if (v_session.session_date + v_session.start_time)
@@ -529,7 +513,7 @@ export function liveRsvpCountFor(sessionId) {
 }
 ```
 
-Expose degraded status through `operationalStateStatus()`. Realtime booking refresh already reloads the aggregate; do not add another subscription.
+Expose degraded status through `operationalStateStatus()`. Add `operational_rsvp_counts` to `LIVE_TABLES` and subscribe to its Postgres Changes events. The count-table subscription is mandatory because booking RLS suppresses foreign members’ `operational_bookings` events; the existing booking subscription is not sufficient.
 
 In `store.attendeeCountFor(session)`, use the exact live aggregate when non-null, otherwise fall back to caller-visible confirmed bookings. Local behavior remains unchanged.
 
@@ -541,7 +525,7 @@ In live `upcomingSessions(days)`, compute today and an inclusive end date `days 
 
 Make the fake direct booking table enforce member RLS, while `get_operational_rsvp_counts` aggregates all confirmed RSVP bookings. Seed another member’s confirmed lunch booking and excluded-status rows. Assert an ordinary member sees that baseline total, then exact `+1` after join and exact `-1` after withdrawal without receiving the other member’s booking/profile row.
 
-Assert Schedule, Activity Details, and Admin render the same total. Add a rejected count-RPC hydration showing core sessions remain visible and count status degrades safely.
+Assert a foreign count-table event refreshes an ordinary member while the foreign booking event/row remains hidden by booking RLS. When that member is Going, assert Schedule still renders exact `N going` beside the badge; Activity Details and Admin must show the same total (Admin may use an Admin observer). Assert successful empty aggregate hydration initializes zero. Add a rejected count-RPC hydration showing core sessions remain visible and count status degrades safely.
 
 - [ ] **Step 8: Run verification**
 

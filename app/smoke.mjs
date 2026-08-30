@@ -95,6 +95,10 @@ const rsvpIntegrityMigrationSource = readFileSync(
   resolve(__dirnameSmoke, "../supabase/migrations/20260829000008_rsvp_integrity.sql"),
   "utf8"
 );
+const operationalIntegrationSource = readFileSync(
+  resolve(__dirnameSmoke, "../supabase/tests/operational_backend_integration.sql"),
+  "utf8"
+);
 for (const marker of [
   "get_operational_rsvp_counts",
   "requires_rsvp",
@@ -112,9 +116,57 @@ const rsvpCountReturnColumns = rsvpCountFunctionSource.match(
 )?.[1].replace(/\s+/g, " ").trim();
 assert.equal(rsvpCountReturnColumns, "session_id text, going_count bigint",
   "public RSVP counts must expose only session ID and confirmed total");
+assert.match(rsvpCountFunctionSource, /from public\.operational_rsvp_counts/,
+  "the public RSVP aggregate must read only the identity-free count table");
+assert.doesNotMatch(rsvpCountFunctionSource, /operational_bookings|profiles/,
+  "the public RSVP aggregate must not read identity-bearing tables");
+const rsvpCountTableSource = rsvpIntegrityMigrationSource.match(
+  /create table public\.operational_rsvp_counts[\s\S]*?\n\);/
+)?.[0] || "";
+for (const contract of [
+  /session_id text primary key[\s\S]*?references public\.operational_sessions\(id\)/,
+  /going_count bigint not null default 0[\s\S]*?check \(going_count >= 0\)/,
+  /updated_at timestamptz not null default now\(\)/,
+]) assert.match(rsvpCountTableSource, contract);
+assert.match(rsvpIntegrityMigrationSource,
+  /alter table public\.operational_rsvp_counts enable row level security/);
+assert.match(rsvpIntegrityMigrationSource,
+  /create policy[\s\S]*?on public\.operational_rsvp_counts[\s\S]*?for select[\s\S]*?using \(true\)/);
+assert.match(rsvpIntegrityMigrationSource,
+  /revoke all on table public\.operational_rsvp_counts from public, anon, authenticated/);
+assert.match(rsvpIntegrityMigrationSource,
+  /grant select on table public\.operational_rsvp_counts to anon, authenticated/);
 assert.doesNotMatch(rsvpIntegrityMigrationSource,
-  /grant\s+(?:all|select|insert|update|delete)[\s\S]*?on\s+(?:table\s+)?public\.operational_bookings/i,
+  /grant\s+(?:all|insert|update|delete|truncate|references|trigger)[\s\S]*?on\s+(?:table\s+)?public\.operational_rsvp_counts/i,
+  "browser roles must never receive RSVP count-table writes");
+assert.match(rsvpIntegrityMigrationSource,
+  /create or replace function public\.recalculate_operational_rsvp_count\(\s*p_session_id text\s*\)[\s\S]*?security definer/);
+assert.match(rsvpIntegrityMigrationSource,
+  /create trigger sync_operational_rsvp_count[\s\S]*?after insert or update or delete[\s\S]*?on public\.operational_bookings/);
+assert.match(rsvpIntegrityMigrationSource,
+  /revoke all on function public\.recalculate_operational_rsvp_count\(text\) from public, anon, authenticated/);
+assert.match(rsvpIntegrityMigrationSource,
+  /revoke all on function public\.sync_operational_rsvp_count\(\) from public, anon, authenticated/);
+assert.match(rsvpIntegrityMigrationSource,
+  /insert into public\.operational_rsvp_counts[\s\S]*?left join public\.operational_bookings[\s\S]*?where t\.requires_rsvp/,
+  "migration must backfill every existing RSVP session, including zero counts");
+assert.match(rsvpIntegrityMigrationSource,
+  /alter publication supabase_realtime add table public\.operational_rsvp_counts/);
+assert.match(rsvpIntegrityMigrationSource,
+  /revoke all on function public\.reserve_operational_session\(text\) from public, anon/);
+assert.match(rsvpIntegrityMigrationSource,
+  /revoke all on function public\.withdraw_operational_rsvp\(uuid\) from public, anon/);
+assert.doesNotMatch(rsvpIntegrityMigrationSource,
+  /grant[^\n]*(?:all|select|insert|update|delete)[^\n]*on\s+(?:table\s+)?public\.operational_bookings/i,
   "RSVP count migration must not grant direct booking-table access");
+assert.doesNotMatch(operationalIntegrationSource,
+  /from\s+(?:public\.)?reserve_operational_session\('hyrox-2026-/,
+  "successful SQL reservation fixtures must use dynamic future sessions");
+assert.match(operationalIntegrationSource,
+  /v_future_hk\s+timestamp := \(now\(\) \+ interval '1 hour'\) at time zone 'Asia\/Hong_Kong'/);
+assert.match(operationalIntegrationSource,
+  /session_date = v_at_start_hk::date,[\s\S]*?start_time = v_at_start_hk::time/,
+  "HKT boundary fixtures must derive date and time from the same timestamp");
 const upcomingSessionsSource = storeSource.match(
   /export function upcomingSessions\(days = 14\)[\s\S]*?\n}\n\nexport function nextSession/
 )?.[0] || "";
@@ -205,8 +257,8 @@ const integratedViewSource = readFileSync(resolve(__dirnameSmoke, "js/views.js")
 const integratedAppSource = readFileSync(resolve(__dirnameSmoke, "js/app.js"), "utf8");
 assert.equal(typeof store.attendeeCountFor, "function",
   "store must export attendeeCountFor for identity-independent RSVP counts");
-assert.equal((integratedViewSource.match(/store\.attendeeCountFor\(s\)/g) || []).length, 3,
-  "Schedule, RSVP Activity Details, and Admin controls must use attendeeCountFor");
+assert.equal((integratedViewSource.match(/store\.attendeeCountFor\(s\)/g) || []).length, 4,
+  "Schedule Going/RSVP states, RSVP Activity Details, and Admin controls must use attendeeCountFor");
 assert.doesNotMatch(integratedViewSource, /store\.attendeesFor\(s\)\.length/,
   "RSVP count surfaces must not derive counts from attendee identities");
 const combinedRuntimeSource = `${integratedViewSource}\n${integratedAppSource}`;

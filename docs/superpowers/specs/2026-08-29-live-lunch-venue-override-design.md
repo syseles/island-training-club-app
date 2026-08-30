@@ -32,7 +32,9 @@ Every “X going” label must count confirmed bookings directly, not depend on 
 
 Expose a dedicated count helper at the store seam and use it on Schedule, Activity Details, and Admin RSVP controls. Local mode may count confirmed prototype bookings directly. Live mode must use a count-only aggregate RPC because booking RLS exposes only a member’s own rows and Admins’ broader access must not determine what count members see. The aggregate returns session IDs and confirmed counts only—never profile IDs or names—and is readable by visitors and authenticated users because RSVP headcounts are already public UI data.
 
-Hydration stores these totals in a dedicated operational count map and refreshes them after join/withdraw through the existing RPC refresh cycle. Failure or absence of the count RPC must not abort core Schedule hydration; it may temporarily fall back to the caller-visible confirmed count while reporting degraded count data.
+Store exact totals in `operational_rsvp_counts`, a public read-only table containing only `session_id`, nonnegative `going_count`, and `updated_at`. A security-definer booking trigger recalculates the affected RSVP session inside each insert/update/delete transaction and retains a zero row after the final withdrawal. Browser roles receive public SELECT through RLS but no writes or helper execution. Backfill all existing RSVP sessions when migration `00008` is applied.
+
+Hydration stores these totals in a dedicated operational count map. Join/withdraw RPC completion refreshes the aggregate, and the client also subscribes directly to `operational_rsvp_counts` through Supabase Realtime. The count-table subscription is required: booking SELECT RLS suppresses another member’s `operational_bookings` event, so the booking subscription alone cannot keep public totals current. Failure or absence of the count RPC must not abort core Schedule hydration; it may temporarily fall back to the caller-visible confirmed count while reporting degraded count data.
 
 The count must update as follows:
 
@@ -81,12 +83,15 @@ Add `20260829000006_lunch_venue_meeting_point_rpc.sql`. The migration must:
 
 Add `20260829000008_rsvp_integrity.sql`. It must:
 
-1. Add `get_operational_rsvp_counts()` returning only `session_id` and confirmed `going_count` for templates whose `requires_rsvp` is true.
-2. Grant that aggregate to `anon` and `authenticated` without exposing booking/profile rows.
-3. Replace reserve/withdraw RPC implementations so zero-price behavior also requires `requires_rsvp = true`.
-4. Reject ordinary free-event reserve/withdraw attempts.
-5. Compare session start using `AT TIME ZONE 'Asia/Hong_Kong'`.
-6. Preserve paid reservation/payment behavior, uncapped RSVP behavior, notifications, authorization, and grants.
+1. Add public read-only `operational_rsvp_counts(session_id PK/FK, going_count nonnegative, updated_at)` with public SELECT RLS, no browser writes, and no identity columns.
+2. Add a security-definer booking trigger that transactionally recalculates insert/update/delete counts, preserves exact zero after withdrawal, backfills existing RSVP sessions, and is not executable by browser roles.
+3. Make `get_operational_rsvp_counts()` read only that table and return only `session_id` and confirmed `going_count`.
+4. Add `operational_rsvp_counts` to the `supabase_realtime` publication; the client must include it in `LIVE_TABLES` and subscribe directly.
+5. Grant the aggregate to `anon` and `authenticated` without exposing booking/profile rows, while explicitly revoking `PUBLIC`/`anon` execution from reserve/withdraw before the authenticated grants.
+6. Replace reserve/withdraw RPC implementations so zero-price behavior also requires `requires_rsvp = true`.
+7. Reject ordinary free-event reserve/withdraw attempts.
+8. Compare session start using `AT TIME ZONE 'Asia/Hong_Kong'`.
+9. Preserve paid reservation/payment behavior, uncapped RSVP behavior, notifications, authorization, and grants.
 
 Apply the migrations in order to the live Supabase project:
 
@@ -105,7 +110,9 @@ Update live-auth smoke coverage so the lunch session exercises the authoritative
 Verify:
 
 - A member sees other members’ confirmed RSVP total through the count-only aggregate despite booking-row RLS.
+- A foreign member’s count-table Realtime event refreshes an ordinary member even though booking RLS suppresses the foreign booking event and row.
 - A live RSVP changes the displayed aggregate by exactly `+1` after “Count me in” and exactly `-1` after withdrawal.
+- A successful empty aggregate initializes each RSVP session to exact zero.
 - Reserved, cancelled, deferred, and ordinary free-event rows do not contribute.
 - Schedule, Activity Details, and Admin RSVP controls derive the same aggregate count.
 - Ordinary free events reject reserve and withdraw RPC calls.

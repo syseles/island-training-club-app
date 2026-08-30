@@ -23,6 +23,7 @@ const LIVE_TABLES = [
   "collector_assignments",
   "collector_payout_profiles",
   "operational_session_venue_overrides",
+  "operational_rsvp_counts",
 ];
 
 const cutoverMarker = "itc.live.operations.backend.v1";
@@ -368,7 +369,13 @@ export async function ensureLiveSessionWindow() {
 export async function hydrateOperationalState({ force = false } = {}) {
   if (!isLive() || !supabase) return null;
   if (liveCache.loaded && !force) return liveCache;
-  if (hydrationPromise) return hydrationPromise;
+  if (hydrationPromise) {
+    const pending = hydrationPromise;
+    if (!force) return pending;
+    try { await pending; } catch {}
+    if (hydrationPromise && hydrationPromise !== pending) return hydrationPromise;
+    if (hydrationPromise === pending) hydrationPromise = null;
+  }
   liveCache.loading = Promise.resolve().then(async () => {
     try {
       const payload = await fetchOperationalState();
@@ -384,11 +391,12 @@ export async function hydrateOperationalState({ force = false } = {}) {
       liveCache.loading = null;
     }
   });
-  hydrationPromise = liveCache.loading;
+  const pending = liveCache.loading;
+  hydrationPromise = pending;
   try {
-    return await hydrationPromise;
+    return await pending;
   } finally {
-    hydrationPromise = null;
+    if (hydrationPromise === pending) hydrationPromise = null;
   }
 }
 
@@ -438,6 +446,9 @@ export async function startOperationalRealtime() {
       () => scheduleRealtimeRefresh())
     .on("postgres_changes",
       { event: "*", schema: "public", table: "operational_session_venue_overrides" },
+      () => scheduleRealtimeRefresh())
+    .on("postgres_changes",
+      { event: "*", schema: "public", table: "operational_rsvp_counts" },
       () => scheduleRealtimeRefresh())
     .subscribe();
   subscription = channel;

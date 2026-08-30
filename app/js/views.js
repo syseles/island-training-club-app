@@ -110,7 +110,9 @@ function sessionRow(s, { past, showDate = true, highlight } = {}) {
   if (s.cancelled) {
     end = `<span class="badge danger">Cancelled</span>`;
   } else if (booked) {
-    end = `<span class="badge free booked">${s.kind === "rsvp" ? "Going" : "Booked"}</span>`;
+    end = s.kind === "rsvp"
+      ? `<span class="badge free booked">Going</span><span class="spots">${store.attendeeCountFor(s)} going</span>`
+      : `<span class="badge free booked">Booked</span>`;
   } else if (reserved) {
     end = `<span class="badge warn">Pay by ${fmtDeadline(reserved.payDeadlineAt)}</span>`;
   } else if (s.kind === "rsvp") {

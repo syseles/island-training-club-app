@@ -6,6 +6,10 @@ import { existsSync, readFileSync } from "node:fs";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
+// The live app is Hong Kong-based. Pin the test process explicitly so host
+// timezone cannot shift calendar-day horizon or signing-date fixtures.
+process.env.TZ = "Asia/Hong_Kong";
+
 const __dirnameSmoke = dirname(fileURLToPath(import.meta.url));
 
 const mem = new Map();
@@ -168,6 +172,7 @@ let operationalRpcHandler = null;
 let operationalAuthSubOverride = null;
 let operationalVenueOverrideReadError = null;
 let operationalRsvpCountError = null;
+let operationalRsvpCountRowsOverride = null;
 const operationalRpcCalls = [];
 const operationalSubscriptions = [];
 const operationalTableRows = {
@@ -202,7 +207,7 @@ let releaseOAuth = null;
 let signOutCalls = 0;
 let releaseSignOut = null;
 const deferredAuthTasks = [];
-const LIVE_TABLES_COUNT = 7;
+const LIVE_TABLES_COUNT = 8;
 const fixedIso = "2026-08-05T02:00:00.000Z";
 const RealDate = Date;
 globalThis.Date = class extends RealDate {
@@ -498,7 +503,10 @@ const fakeSupabase = {
     const channel = {
       name,
       handlers: [],
-      on(_event, _filter, handler) { channel.handlers.push(handler); return channel; },
+      on(event, filter, handler) {
+        channel.handlers.push({ event, filter, handler });
+        return channel;
+      },
       subscribe() { operationalSubscriptions.push(channel); return channel; },
     };
     return channel;
@@ -718,6 +726,12 @@ operationalRpcHandler = (name, args) => {
   if (name === "get_operational_rsvp_counts") {
     if (operationalRsvpCountError) {
       return Promise.resolve({ data: null, error: operationalRsvpCountError });
+    }
+    if (operationalRsvpCountRowsOverride !== null) {
+      return Promise.resolve({
+        data: structuredClone(operationalRsvpCountRowsOverride),
+        error: null,
+      });
     }
     const counts = new Map();
     for (const booking of operationalTableRows.operational_bookings) {
@@ -957,8 +971,6 @@ horizonDay14.setDate(horizonDay14.getDate() + 13);
 const horizonDay15 = new Date();
 horizonDay15.setHours(0, 0, 0, 0);
 horizonDay15.setDate(horizonDay15.getDate() + 14);
-assert.equal(data.isoDate(horizonDay14), "2026-08-18", "day-14 fixture must remain date-stable");
-assert.equal(data.isoDate(horizonDay15), "2026-08-19", "day-15 fixture must remain date-stable");
 const socialStarted = new Date();
 socialStarted.setMinutes(socialStarted.getMinutes() - 1);
 const socialFuture = new Date();
@@ -1133,14 +1145,18 @@ assert.deepEqual(operations.getLiveVenueOverride("wnt-2026-08-05"), {
   setAt: Date.parse(fixedIso),
   memberNotifiedAt: Date.parse(fixedIso),
 });
-const venueChannel = operationalSubscriptions
-  .flatMap((channel) => channel.handlers)
-  .filter((handler) => handler);
+const realtimeHandlers = operationalSubscriptions
+  .flatMap((channel) => channel.handlers);
 assert.ok(
   operationalSubscriptions.some((channel) =>
     channel.handlers.length >= LIVE_TABLES_COUNT),
-  "Realtime channel should subscribe to every operational table including venue overrides"
+  "Realtime channel should subscribe to every operational table"
 );
+assert.ok(operations.LIVE_TABLES.includes("operational_rsvp_counts"),
+  "the count table must be part of the operational Realtime contract");
+assert.ok(realtimeHandlers.some(({ filter }) =>
+  filter.table === "operational_rsvp_counts"),
+"the operational channel must subscribe to identity-free RSVP count changes");
 assert.equal(operations.operationalStateStatus().loaded, true);
 
 // The mutation result is authoritative even when the best-effort full refresh
@@ -1747,6 +1763,11 @@ assert.equal(operations.liveRsvpCountFor(lunchSession.id), null,
   "degraded count hydration must expose null rather than a stale total");
 
 operationalRsvpCountError = null;
+operationalRsvpCountRowsOverride = [];
+await operations.refreshOperationalState();
+assert.equal(operations.liveRsvpCountFor(lunchSession.id), 0,
+  "a successful empty aggregate must initialize each RSVP session to zero");
+operationalRsvpCountRowsOverride = null;
 await operations.refreshOperationalState();
 assert.equal(operations.operationalStateStatus().rsvpCountError, null,
   "successful count hydration must clear degraded status");
@@ -1765,6 +1786,44 @@ const lunchHtml = views.viewActivity(lunchSession.id);
 if (!lunchHtml.includes('data-action="rsvp-join"') || lunchHtml.includes("Book & pay")) {
   throw new Error("live RSVP activity should offer Count me in, not checkout");
 }
+
+// Booking RLS suppresses another member's booking event, but the public
+// identity-free count-table event must still refresh this ordinary member.
+const foreignRealtimeBooking = {
+  ...structuredClone(operationalTableRows.operational_bookings
+    .find((booking) => booking.id === "rsvp-other-confirmed")),
+  id: "rsvp-foreign-realtime-confirmed",
+  profile_id: "rsvp-foreign-realtime-member",
+};
+operationalTableRows.operational_bookings.push(foreignRealtimeBooking);
+assert.equal(store.attendeeCountFor(lunchSession), 1,
+  "a foreign booking hidden by RLS must not update the cached aggregate by itself");
+const countTableHandler = realtimeHandlers.find(({ filter }) =>
+  filter.table === "operational_rsvp_counts");
+assert.ok(countTableHandler, "count-table Realtime handler must exist");
+const countRefresh = new Promise((resolve, reject) => {
+  const timeout = setTimeout(() => {
+    unsubscribe();
+    reject(new Error("count-table Realtime event did not refresh operational state"));
+  }, 1000);
+  const unsubscribe = operations.subscribeOperationalState(() => {
+    clearTimeout(timeout);
+    unsubscribe();
+    resolve();
+  });
+});
+countTableHandler.handler({
+  eventType: "UPDATE",
+  new: { session_id: lunchSession.id, going_count: 2, updated_at: fixedIso },
+  old: { session_id: lunchSession.id, going_count: 1, updated_at: fixedIso },
+});
+await countRefresh;
+assert.equal(store.attendeeCountFor(lunchSession), 2,
+  "a foreign count-table event must refresh the ordinary member's exact aggregate");
+assert.ok(!operations.liveBookingsForSession(lunchSession.id)
+  .some((booking) => booking.userId === foreignRealtimeBooking.profile_id),
+"the count refresh must not bypass booking RLS or hydrate the foreign owner");
+
 const countBeforeRsvp = store.attendeeCountFor(lunchSession);
 const rsvpBooking = await store.rsvpSession(authUser.id, lunchSession.id);
 if (rsvpBooking.status !== "confirmed") {
@@ -1781,9 +1840,6 @@ if (!goingHtml.includes("rsvp-withdraw")) {
 }
 const priorCountWeekOffset = views.scheduleState.weekOffset;
 const priorCountSelected = views.scheduleState.selected;
-const rsvpOwnerId = signedInOperationalUser.id;
-signedInOperationalUser.id = "rsvp-count-admin-viewer";
-signedInOperationalUser.role = "super_admin";
 views.scheduleState.weekOffset = Math.round(
   (data.mondayOf(data.parseISO(lunchSession.dateISO)) - data.mondayOf(data.todayLocal())) / (7 * 86400000)
 );
@@ -1791,8 +1847,14 @@ views.scheduleState.selected = lunchSession.dateISO;
 const countScheduleHtml = views.viewSchedule();
 views.scheduleState.weekOffset = priorCountWeekOffset;
 views.scheduleState.selected = priorCountSelected;
+const scheduleRowStart = countScheduleHtml.indexOf(`href="#/activity/${lunchSession.id}"`);
+const scheduleRowEnd = countScheduleHtml.indexOf("</a>", scheduleRowStart);
+const ownerScheduleRow = countScheduleHtml.slice(scheduleRowStart, scheduleRowEnd);
+assert.ok(ownerScheduleRow.includes(
+  `<span class="badge free booked">Going</span><span class="spots">${joinedTotal} going</span>`
+), "an RSVP owner must see the exact count beside Going on Schedule");
+signedInOperationalUser.role = "super_admin";
 const countAdminHtml = await views.viewAdmin("activities");
-signedInOperationalUser.id = rsvpOwnerId;
 signedInOperationalUser.role = "member";
 for (const [surface, html] of [
   ["Schedule", countScheduleHtml],
