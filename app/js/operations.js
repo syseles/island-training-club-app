@@ -45,6 +45,7 @@ const liveCache = {
   loaded: false,
   loading: null,
   error: null,
+  payoutError: null,
   updatedAt: 0,
 };
 
@@ -245,6 +246,7 @@ function replaceState(payload) {
   );
   liveCache.loaded = true;
   liveCache.error = null;
+  liveCache.payoutError = payload.payoutError || null;
   liveCache.updatedAt = Date.now();
 }
 
@@ -288,10 +290,30 @@ function operationalProblem(error) {
 
 let hydrationPromise = null;
 
+async function fetchAssignedPayoutRows() {
+  try {
+    const { data, error } = await supabase.rpc("get_assigned_collector_payout_profiles");
+    if (error) return { rows: [], error: operationalProblem(error) };
+    return { rows: data || [], error: null };
+  } catch (error) {
+    return { rows: [], error: operationalProblem(error) };
+  }
+}
+
 async function fetchOperationalState() {
   if (!isLive() || !supabase) return null;
   const since = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
-  const [sessions, bookings, queues, receipts, assignments, payouts, templates, venueOverrides] = await Promise.all([
+  const [
+    sessions,
+    bookings,
+    queues,
+    receipts,
+    assignments,
+    payouts,
+    assignedPayouts,
+    templates,
+    venueOverrides,
+  ] = await Promise.all([
     supabase.from("operational_sessions").select("*").gte("session_date", since).order("session_date"),
     supabase.from("operational_bookings").select("*"),
     supabase.from("operational_queue_entries").select("*")
@@ -300,16 +322,30 @@ async function fetchOperationalState() {
     supabase.from("operational_receipts").select("*").order("issued_at", { ascending: false }),
     supabase.from("collector_assignments").select("*"),
     supabase.from("collector_payout_profiles").select("*"),
+    fetchAssignedPayoutRows(),
     supabase.from("operational_activity_templates").select("*").order("activity_id"),
     supabase.from("operational_session_venue_overrides").select("*"),
   ]);
-  for (const result of [sessions, bookings, queues, receipts, assignments, payouts, templates, venueOverrides]) {
+  for (const result of [
+    sessions,
+    bookings,
+    queues,
+    receipts,
+    assignments,
+    payouts,
+    templates,
+    venueOverrides,
+  ]) {
     if (result.error) throw operationalProblem(result.error);
   }
   // Templates hydrate before sessions so one-off event rows (inactive
   // templates) can lend their name, category and maps query to the session.
   const templateRows = (templates.data || []).map(buildTemplateRow);
   const templatesById = new Map(templateRows.map((t) => [t.activity_id, t]));
+  const payoutRowsByProfile = new Map();
+  for (const row of assignedPayouts.rows) payoutRowsByProfile.set(row.profile_id, row);
+  // Normal-RLS rows win on duplicates while assigned rows fill the cold-member gap.
+  for (const row of payouts.data || []) payoutRowsByProfile.set(row.profile_id, row);
   return {
     sessions: (sessions.data || []).map((row) => buildSessionRow(row, templatesById)),
     templates: templateRows,
@@ -317,7 +353,8 @@ async function fetchOperationalState() {
     queues: (queues.data || []).map(buildQueueRow),
     receipts: (receipts.data || []).map(buildReceiptRow),
     assignments: (assignments.data || []).map(buildAssignmentRow),
-    payouts: (payouts.data || []).map(buildPayoutRow),
+    payouts: [...payoutRowsByProfile.values()].map(buildPayoutRow),
+    payoutError: assignedPayouts.error,
     venueOverrides: (venueOverrides.data || []).map(buildVenueOverrideRow),
   };
 }
@@ -379,6 +416,9 @@ export function operationalStateStatus() {
     loading: !!liveCache.loading,
     loaded: liveCache.loaded,
     error: liveCache.error ? String(liveCache.error.message || liveCache.error) : null,
+    payoutError: liveCache.payoutError
+      ? String(liveCache.payoutError.message || liveCache.payoutError)
+      : null,
     updatedAt: liveCache.updatedAt,
   };
 }

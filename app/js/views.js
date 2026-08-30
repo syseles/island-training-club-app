@@ -1816,6 +1816,8 @@ export function viewPay(bookingId) {
   const cname = collector ? esc(collector.preferredName || collector.fullName) : "the on-duty collector";
   const payme = collector?.paymeLink || "";
   const fps = collector?.fpsPhone || "";
+  const memberName = user.fullName || user.preferredName || "ITC Member";
+  const paymentNote = `${s.name} · ${fmtDate(s.dateISO)} · ${s.location || "Venue TBC"} · ${memberName}`;
 
   return `
     <a class="back-link" href="#/activity/${b.sessionId}">← ${esc(s.name)}</a>
@@ -1824,8 +1826,17 @@ export function viewPay(bookingId) {
     <p class="subcopy mt8">Deadline: <strong>${fmtDeadline(b.payDeadlineAt)}</strong> — unpaid spots go to the waitlist.</p>
     <div class="card mt16"><div class="card-body">
       <h3>PayMe</h3>
-      <p class="muted small">Opens PayMe straight to ${cname} with the amount ready.</p>
-      <a class="btn mt8" href="${esc(payme)}" target="_blank" rel="noopener">PayMe to ${cname} · ${fmtMoney(s.price)}</a>
+      ${payme ? `
+        <p class="muted small">PayMe opens the collector’s profile. Enter the displayed amount of <strong>${fmtMoney(s.price)}</strong> after it opens.</p>
+        <a class="btn mt8" href="${esc(payme)}" target="_blank" rel="noopener">PayMe to ${cname} · ${fmtMoney(s.price)}</a>
+      ` : `
+        <p class="muted small">PayMe is unavailable for this collector. Please use FPS below to send <strong>${fmtMoney(s.price)}</strong>.</p>
+        <button class="btn mt8" type="button" disabled>PayMe unavailable</button>
+      `}
+      <p class="muted small mt8">Suggested payment note</p>
+      <p><strong>${esc(paymentNote)}</strong>
+        <button class="btn ghost sm" type="button" data-action="copy-payment-note" data-note="${esc(paymentNote)}">Copy note</button>
+      </p>
       <h3 class="mt24">FPS to ${cname}</h3>
       <p class="muted small">Scan with your banking app — the amount is embedded in the QR — or copy the number.</p>
       <div class="fps-qr" aria-hidden="true"><span>FPS QR<br>(mock)</span></div>
@@ -1837,9 +1848,8 @@ export function viewPay(bookingId) {
       <div class="card"><div class="card-body">
         <h3>Done? Tell the collector</h3>
         <div class="field-row">
-          <label class="chip"><input type="radio" name="method" value="PayMe" checked> PayMe</label>
-          <label class="chip"><input type="radio" name="method" value="FPS"> FPS</label>
-        </div>
+          <label class="chip"><input type="radio" name="method" value="PayMe"${payme ? " checked" : " disabled"}> PayMe</label>
+          <label class="chip"><input type="radio" name="method" value="FPS"${payme ? "" : " checked"}> FPS</label>
         </div>
         <div class="field"><label for="pay-ref">Reference (optional)</label><input id="pay-ref" name="ref" placeholder="e.g. last 4 digits"></div>
         <p class="muted small mt8">${cname} confirms in-app when the money lands — your spot is held meanwhile.</p>
@@ -2114,13 +2124,12 @@ function adminOps(viewer, memberUsers, profilePhone = "") {
 }
 
 // Weekly paid-session controls (time, note, cancel, venue TBC, Midtown) live
-// on the Activities tab alongside the recurring defaults and free-event venue
-// overrides — setup and scheduling in one place.
-function adminWeeklySessions() {
+// on the Activities tab alongside the recurring defaults and free/RSVP event
+// controls — setup and scheduling in one place.
+function adminPaidSessionControls() {
   const upcoming = store.upcomingSessions(21).filter(
-    (s) => s.category === "HYROX" && s.kind === "paid" && !sessionStarted(s)
+    (s) => !s.oneOff && s.category === "HYROX" && s.kind === "paid" && !sessionStarted(s)
   );
-  if (!upcoming.length) return "";
   const sessionCards = upcoming.map((s) => {
     const confirmed = store.heldBookingsForSession(s.id).filter((b) => b.status === "confirmed");
     const atRisk = store.heldBookingsForSession(s.id).filter((b) => b.status === "reserved");
@@ -2157,11 +2166,9 @@ function adminWeeklySessions() {
       </div></div>`;
   }).join("");
   return `
-    <details class="admin-section mt24">
-      <summary><h2>Weekly Session Overrides</h2></summary>
-      <p class="muted small mt8">Change the time, venue status or note for one dated HYROX session — or cancel that week.</p>
-      ${sessionCards}
-    </details>`;
+    <h3 id="paid-sessions-title">Paid Sessions</h3>
+    <p class="muted small mt8">Change the time, venue status or note for one dated HYROX session — or cancel that week.</p>
+    ${sessionCards || `<div class="empty mt8">No upcoming paid sessions.</div>`}`;
 }
 
 // Money-side per-session work stays on the Payments tab: confirming paid
@@ -2202,15 +2209,13 @@ function adminFinalizeGym() {
     </details>`;
 }
 
-function adminFreeEventVenues() {
+function adminFreeEventControls() {
   const upcoming = store.upcomingSessions(21)
-    .filter((s) => s.kind !== "paid" && !sessionStarted(s));
-  if (!upcoming.length) return "";
+    .filter((s) => !s.oneOff && s.kind !== "paid" && !sessionStarted(s));
   return `
-    <details class="admin-section mt24">
-      <summary><h2>Weekly Venue Overrides</h2></summary>
+    <h3 id="free-rsvp-events-title">Free &amp; RSVP Events</h3>
     <p class="muted small mt8">Set a venue for one dated free or RSVP event. Later weeks keep the recurring default.</p>
-    ${upcoming.map((s) => {
+    ${upcoming.length ? upcoming.map((s) => {
       const override = store.weekVenueOverride(s.id);
       const recurring = store.getActivity(s.activityId);
       const safeId = esc(s.id);
@@ -2258,7 +2263,20 @@ function adminFreeEventVenues() {
             <button class="btn danger sm" type="submit">Cancel this week's event</button>
           </form>` : ""}
         </div></div>`;
-    }).join("")}
+    }).join("") : `<div class="empty mt8">No upcoming free or RSVP events.</div>`}`;
+}
+
+function adminWeeklyEventControls() {
+  return `
+    <details class="admin-section mt24">
+      <summary><h2>Weekly Event Controls</h2></summary>
+      <p class="muted small mt8">Manage one dated event without changing its recurring defaults.</p>
+      <section class="admin-control-group" aria-labelledby="free-rsvp-events-title">
+        ${adminFreeEventControls()}
+      </section>
+      <section class="admin-control-group mt24" aria-labelledby="paid-sessions-title">
+        ${adminPaidSessionControls()}
+      </section>
     </details>`;
 }
 
@@ -2500,13 +2518,12 @@ function adminActivities() {
     <details class="admin-section">
       <summary><h2>Recurring Activity Defaults</h2></summary>
     <p class="muted small mt8">${isLive()
-      ? "Live deployment — recurring defaults are bundled with the app build and read-only. Set a venue for one week with the dated overrides below."
+      ? "Live deployment — recurring defaults are bundled with the app build and read-only. Set a venue for one week with Weekly Event Controls &gt; Free &amp; RSVP Events below."
       : "Changes here affect all future weeks unless a dated override is set below."}</p>
     <div class="session-list">${activityRows}</div>
     ${isLive() ? "" : `<a class="btn ghost mt16" href="#/admin/activity/new">+ New activity</a>`}
     </details>
-    ${adminFreeEventVenues()}
-    ${adminWeeklySessions()}
+    ${adminWeeklyEventControls()}
     ${adminOneOffEvents()}`;
 }
 
@@ -2614,7 +2631,7 @@ export function viewAdminActivity(id) {
     <h1 class="display sm">${isNew ? "New activity." : "Edit activity."}</h1>
     ${liveReadOnly ? `
       <p class="badge neutral mt16">Live deployment — recurring defaults are bundled with the app build.</p>
-      <p class="muted small mt8">To change the venue for one week, use Weekly Venue Overrides on the Activities tab. Paid venues are administered in Supabase. This form is read-only here.</p>` : ""}
+      <p class="muted small mt8">To change the venue for one week, use Weekly Event Controls &gt; Free &amp; RSVP Events on the Activities tab. Paid venues are administered in Supabase. This form is read-only here.</p>` : ""}
     <form id="form-activity" class="mt16" data-activity="${esc(a.id)}" novalidate>
       ${liveReadOnly ? `<fieldset class="form-fieldset" disabled>` : ""}
       <div class="field"><label for="ac-name">Name *</label><input id="ac-name" name="name" value="${esc(a.name)}" required></div>

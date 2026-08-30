@@ -1,6 +1,8 @@
 // Headless smoke test: render every view for every user state.
 // Run: node --input-type=module < smoke.mjs  (from the app/ directory)
 
+import assert from "node:assert/strict";
+
 // --- localStorage shim ---
 const mem = new Map();
 globalThis.localStorage = {
@@ -77,6 +79,25 @@ const indemnityMigrationSource = readFileSync(
   resolve(__dirnameSmoke, "../supabase/migrations/20260827000001_hyrox_indemnity_fields.sql"),
   "utf8"
 );
+const assignedPayoutMigrationSource = readFileSync(
+  resolve(__dirnameSmoke, "../supabase/migrations/20260829000005_assigned_collector_payout_rpc.sql"),
+  "utf8"
+);
+for (const marker of [
+  "security definer",
+  "set search_path = public",
+  "current_user_role()",
+  "collector_assignments",
+  "collector_payout_profiles",
+  "revoke all on function public.get_assigned_collector_payout_profiles() from public",
+  "grant execute on function public.get_assigned_collector_payout_profiles() to authenticated",
+]) {
+  assert.ok(
+    assignedPayoutMigrationSource.toLowerCase().includes(marker),
+    `assigned collector payout migration missing ${marker}`
+  );
+}
+console.log("ok  assigned collector payout RPC migration keeps least-privilege controls");
 for (const column of [
   "waiver_signature_text",
   "waiver_signed_at",
@@ -1998,6 +2019,33 @@ installLocalFixtures(); store.signIn("member@example.test");
 }
 
 // --- HYROX payment system: duty roster (Task 7) ---
+assert.equal(
+  store.normalizePayMeLink("payme.hsbc.com.hk/1/collector-code"),
+  "https://payme.hsbc.com.hk/1/collector-code"
+);
+assert.equal(store.normalizePayMeLink(""), "");
+assert.equal(
+  store.normalizePayMeLink("https://payme.hsbc.com.hk/1/collector-code/?next=/#step/"),
+  "https://payme.hsbc.com.hk/1/collector-code?next=/#step/"
+);
+for (const invalid of [
+  "https://payme.hsbc.com.hk/",
+  "https://payme.hsbc.com.hk/1",
+  "https://payme.hsbc.com.hk/not-a-collector",
+  "http://payme.hsbc.com.hk/1/collector-code",
+  "https://example.com/collector",
+  "https://user:pass@payme.hsbc.com.hk/1/collector-code",
+  "https://payme.hsbc.com.hk:444/1/collector-code",
+  "https://payme.hsbc.com.hk/1/%2F",
+  "https://payme.hsbc.com.hk/1/%5C",
+  "not a url",
+]) {
+  assert.throws(
+    () => store.normalizePayMeLink(invalid),
+    /personal PayMe link/
+  );
+}
+
 store.resetLocalData();
 installLocalFixtures();
 // Add a second admin so we can exercise a handover.
@@ -2033,18 +2081,57 @@ installLocalFixtures();
     throw new Error("dutyFor should record the handover");
   if (store.collectorFor(sess.id)?.id !== "fixture-super")
     throw new Error("collectorFor should follow the handover");
+
+  const legacy = JSON.parse(mem.get("itc.prototype.v1"));
+  legacy.paymentPayouts["fixture-super"] = {
+    paymeLink: "payme.hsbc.com.hk/1/legacy-super",
+    fpsPhone: "+852 0000 0000",
+  };
+  mem.set("itc.prototype.v1", JSON.stringify(legacy));
+  store.load();
+  assert.equal(
+    store.collectorPayoutsFor("fixture-super").paymeLink,
+    "https://payme.hsbc.com.hk/1/legacy-super"
+  );
+  assert.equal(
+    store.collectorFor(sess.id).paymeLink,
+    "https://payme.hsbc.com.hk/1/legacy-super"
+  );
+
+  const invalidLegacy = JSON.parse(mem.get("itc.prototype.v1"));
+  invalidLegacy.paymentPayouts["fixture-super"].paymeLink = "https://example.com/not-payme";
+  mem.set("itc.prototype.v1", JSON.stringify(invalidLegacy));
+  store.load();
+  assert.equal(store.collectorPayoutsFor("fixture-super").paymeLink, "");
+  assert.equal(store.collectorFor(sess.id).paymeLink, "");
+
   store.updateCollectorPayouts("fixture-super", {
-    paymeLink: "https://payme.hsbc.com.hk/test-super",
+    paymeLink: "payme.hsbc.com.hk/1/test-super",
   });
+  assert.equal(
+    JSON.parse(mem.get("itc.prototype.v1")).paymentPayouts["fixture-super"].paymeLink,
+    "https://payme.hsbc.com.hk/1/test-super"
+  );
+  assert.throws(
+    () => store.updateCollectorPayouts("fixture-super", { paymeLink: "not a url" }),
+    /personal PayMe link/
+  );
+  assert.equal(
+    JSON.parse(mem.get("itc.prototype.v1")).paymentPayouts["fixture-super"].paymeLink,
+    "https://payme.hsbc.com.hk/1/test-super"
+  );
+
   store.signIn("super@example.test");
   const payoutHtml = await views.viewAdmin("payments");
-  if (payoutHtml.includes('name="fpsPhone"') || !payoutHtml.includes("+852 5000 0003"))
-    throw new Error("payout form should show the Membership Details phone without an FPS input");
+  if (payoutHtml.includes('name="fpsPhone"')
+      || !payoutHtml.includes("https://payme.hsbc.com.hk/1/test-super")
+      || !payoutHtml.includes("+852 5000 0003"))
+    throw new Error("payout form should show normalized PayMe and the Membership Details phone without an FPS input");
   const c = store.collectorFor(sess.id);
-  if (c.paymeLink !== "https://payme.hsbc.com.hk/test-super"
+  if (c.paymeLink !== "https://payme.hsbc.com.hk/1/test-super"
       || c.fpsPhone !== "+852 5000 0003")
-    throw new Error("collector payout details should use the profile phone");
-  console.log("ok  duty switch changes whose PayMe link and profile FPS phone are shown");
+    throw new Error("collector payout details should normalize PayMe and use the profile phone");
+  console.log("ok  duty switch normalizes PayMe and uses the profile FPS phone");
 }
 
 // --- HYROX payment system: schedule & activity surfacing (Task 8) ---
@@ -2055,6 +2142,9 @@ installLocalFixtures();
     (s) => s.activityId === "hyrox" && !data.sessionStarted(s)
   );
   store.setSessionNotice(sess.id, "Weather watch — check WhatsApp");
+  views.scheduleState.weekOffset = Math.round(
+    (data.mondayOf(data.parseISO(sess.dateISO)) - data.mondayOf(data.todayLocal())) / (7 * 86400000)
+  );
   views.scheduleState.selected = sess.dateISO;
   const row = views.viewSchedule();
   if (!row.includes("Weather watch"))
@@ -2069,10 +2159,14 @@ installLocalFixtures();
   if (!detail.includes("HYROX race weekend"))
     throw new Error("detail page should show the reason");
   console.log("ok  cancelled week shows in Schedule (badge + reason) and detail");
+  views.scheduleState.weekOffset = 0;
 }
 {
   const mid = store.upcomingSessions(14).find(
     (s) => s.activityId === "hyrox-midtown" && !data.sessionStarted(s)
+  );
+  views.scheduleState.weekOffset = Math.round(
+    (data.mondayOf(data.parseISO(mid.dateISO)) - data.mondayOf(data.todayLocal())) / (7 * 86400000)
   );
   views.scheduleState.selected = mid.dateISO;
   if (!views.viewSchedule().includes("Not yet open"))
@@ -2082,11 +2176,16 @@ installLocalFixtures();
   if (!detail.includes('data-action="join-interest"'))
     throw new Error("closed Midtown should offer wait-for-Midtown");
   console.log("ok  closed Midtown: badge + interest action");
+  views.scheduleState.weekOffset = 0;
 }
 
 // --- HYROX payment system: member payment UI (Task 9) ---
 store.resetLocalData();
 installLocalFixtures();
+store.signIn("admin@example.test");
+store.updateCollectorPayouts("fixture-admin", {
+  paymeLink: "payme.hsbc.com.hk/1/test-admin",
+});
 store.signIn("member@example.test");
 {
   const sess = store.upcomingSessions(14).find(
@@ -2097,12 +2196,93 @@ store.signIn("member@example.test");
     throw new Error("checkout should be a reserve screen (no card form)");
   console.log("ok  checkout is now a reserve screen");
   const b = store.reserveSession("fixture-member", sess);
+  b.snapshot.location = 'BFT & "Bay" <Deck>';
+  store.currentUser().fullName = 'Test & "Member" <Runner>';
   const pay = views.viewPay(b.id);
   if (!pay.includes("PayMe to") || !pay.includes("FPS to") || !pay.includes("HK$"))
     throw new Error("pay screen should show PayMe/FPS to the collector + amount");
   if (!pay.includes("Admin"))
     throw new Error("pay screen should name the on-duty collector");
-  console.log("ok  pay screen shows collector PayMe/FPS + amount");
+  const expectedNote = `${sess.name} · ${data.fmtDate(sess.dateISO)} · BFT & "Bay" <Deck> · Test & "Member" <Runner>`;
+  const escapedExpectedNote = `${sess.name} · ${data.fmtDate(sess.dateISO)} · BFT &amp; &quot;Bay&quot; &lt;Deck&gt; · Test &amp; &quot;Member&quot; &lt;Runner&gt;`;
+  const noteControlTag = [...pay.matchAll(/<button\b[^>]*>/g)]
+    .map((match) => match[0])
+    .find((tag) => /\bdata-action="copy-payment-note"/.test(tag));
+  const encodedNote = noteControlTag?.match(/\bdata-note="([^"]*)"/)?.[1];
+  const decodedNote = String(encodedNote || "")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&amp;/g, "&");
+  if (!pay.includes('href="https://payme.hsbc.com.hk/1/test-admin"')
+      || !pay.includes('target="_blank"')
+      || !pay.includes(`<strong>${escapedExpectedNote}</strong>`)
+      || encodedNote !== escapedExpectedNote
+      || decodedNote !== expectedNote) {
+    throw new Error("pay screen should escape visible/attribute notes and decode to the exact clipboard payload");
+  }
+
+  const paymentFormStart = pay.indexOf('<form id="form-mark-paid"');
+  const paymentSubmitStart = pay.indexOf('<button class="btn mt16" type="submit"', paymentFormStart);
+  const paymentFormBeforeSubmit = pay.slice(paymentFormStart, paymentSubmitStart);
+  const openDivClasses = [];
+  let unmatchedPaymentDiv = false;
+  let referenceInsideCardBody = false;
+  let confirmationInsideCardBody = false;
+  for (const tokenMatch of paymentFormBeforeSubmit.matchAll(
+    /<div\b[^>]*>|<\/div>|<input\b[^>]*id="pay-ref"[^>]*>|confirms in-app/g
+  )) {
+    const token = tokenMatch[0];
+    if (token.startsWith("<div")) {
+      openDivClasses.push(token.match(/\bclass="([^"]*)"/)?.[1] || "");
+    } else if (token === "</div>") {
+      if (openDivClasses.length) openDivClasses.pop();
+      else unmatchedPaymentDiv = true;
+    } else if (token.startsWith("<input")) {
+      referenceInsideCardBody = openDivClasses.includes("card-body");
+    } else {
+      confirmationInsideCardBody = openDivClasses.includes("card-body");
+    }
+  }
+  assert.equal((paymentFormBeforeSubmit.match(/<div class="card">/g) || []).length, 1);
+  assert.equal((paymentFormBeforeSubmit.match(/<div class="card-body">/g) || []).length, 1);
+  assert.equal(unmatchedPaymentDiv, false, "payment confirmation card must not contain an unmatched closing div");
+  assert.equal(openDivClasses.length, 0, "payment confirmation card wrappers must close before submit");
+  assert.equal(referenceInsideCardBody, true, "payment reference field must remain inside card-body");
+  assert.equal(confirmationInsideCardBody, true, "payment confirmation copy must remain inside card-body");
+
+  const methodInput = (html, method) => [...html.matchAll(/<input\b[^>]*>/g)]
+    .map((match) => match[0])
+    .find((tag) => tag.includes(`name="method"`) && tag.includes(`value="${method}"`)) || "";
+  const hasBooleanAttribute = (tag, attribute) =>
+    new RegExp(`\\s${attribute}(?:\\s|>)`).test(tag);
+  const paymeMethod = methodInput(pay, "PayMe");
+  const fpsMethod = methodInput(pay, "FPS");
+  if (!hasBooleanAttribute(paymeMethod, "checked")
+      || hasBooleanAttribute(paymeMethod, "disabled")
+      || hasBooleanAttribute(fpsMethod, "checked")
+      || hasBooleanAttribute(fpsMethod, "disabled")) {
+    throw new Error("pay screen with PayMe available should default to an enabled PayMe method");
+  }
+  if (pay.includes("amount ready")) {
+    throw new Error("PayMe instructions must not claim the amount is prefilled");
+  }
+  store.signIn("admin@example.test");
+  store.updateCollectorPayouts("fixture-admin", { paymeLink: "" });
+  store.signIn("member@example.test");
+  const fpsOnlyPay = views.viewPay(b.id);
+  const fpsOnlyPayMeMethod = methodInput(fpsOnlyPay, "PayMe");
+  const fpsOnlyFpsMethod = methodInput(fpsOnlyPay, "FPS");
+  if (/<a[^>]*>PayMe to/.test(fpsOnlyPay) || !fpsOnlyPay.includes("use FPS")
+      || !/<button[^>]*\sdisabled>PayMe unavailable<\/button>/.test(fpsOnlyPay)
+      || !hasBooleanAttribute(fpsOnlyPayMeMethod, "disabled")
+      || hasBooleanAttribute(fpsOnlyPayMeMethod, "checked")
+      || !hasBooleanAttribute(fpsOnlyFpsMethod, "checked")
+      || hasBooleanAttribute(fpsOnlyFpsMethod, "disabled")) {
+    throw new Error("pay screen without a PayMe link should natively disable PayMe and default the form to FPS");
+  }
+  console.log("ok  pay screen safely hands off PayMe with amount guidance, note, and FPS fallback");
   store.markBookingPaid(b.id, "PayMe", "");
   const awaiting = views.viewBooking(b.id);
   if (!awaiting.includes("being confirmed"))
@@ -2192,6 +2372,18 @@ store.signIn("admin@example.test");
       || !adminActivitiesHtml.includes("form-one-off-event")
       || !adminActivitiesHtml.includes("HYROX Race Day Send-off"))
     throw new Error("Activities tab should list one-off events and the add form");
+  const weeklyStart = adminActivitiesHtml.indexOf(">Weekly Event Controls<");
+  const oneOffStart = adminActivitiesHtml.indexOf(">One-off Events<");
+  const weeklyRegion = weeklyStart === -1 || oneOffStart === -1
+    ? ""
+    : adminActivitiesHtml.slice(weeklyStart, oneOffStart);
+  const oneOffRegion = oneOffStart === -1 ? "" : adminActivitiesHtml.slice(oneOffStart);
+  for (const event of [paidEvent, freeEvent]) {
+    if (weeklyRegion.includes(event.name) || weeklyRegion.includes(event.id))
+      throw new Error(`${event.name} must not receive recurring controls`);
+    if (!oneOffRegion.includes(event.name) || !oneOffRegion.includes(event.id))
+      throw new Error(`${event.name} must appear only in One-off Events`);
+  }
   // Deletion is refused once a booking exists; cancellation still works and
   // voids the booking (no same-activity follow-up session to defer to).
   store.signIn("member@example.test");
@@ -2217,7 +2409,9 @@ store.signIn("admin@example.test");
 store.resetLocalData();
 installLocalFixtures();
 {
-  const lunch = store.upcomingSessions(21).find((s) => s.kind === "rsvp");
+  const lunch = store.upcomingSessions(21).find(
+    (s) => s.kind === "rsvp" && !data.sessionStarted(s)
+  );
   if (!lunch || lunch.category !== "Socials" || lunch.name !== "Post-Training Lunch")
     throw new Error("local seeds must include the recurring RSVP lunch");
   if (lunch.capacity !== null || store.spotsLeft(lunch) !== null)
@@ -2258,13 +2452,14 @@ installLocalFixtures();
   const adminActsHtml = await views.viewAdmin("activities");
   if (!adminActsHtml.includes("Post-Training Lunch") || !adminActsHtml.includes(">RSVP</span>"))
     throw new Error("Activities list should badge the lunch as RSVP");
-  const weeklySection = adminActsHtml.split("Weekly Session Overrides")[1]?.split("One-off Events")[0] || "";
-  if (weeklySection.includes("lunch-") || weeklySection.includes("Post-Training Lunch"))
-    throw new Error("Weekly Session Overrides must stay HYROX-only — the lunch lives in Weekly Venue Overrides");
-  const venueSection = adminActsHtml.split("Weekly Venue Overrides")[1]?.split("Weekly Session Overrides")[0] || "";
-  if (!venueSection.includes("Post-Training Lunch") || !venueSection.includes("Cancel this week's event"))
+  const weeklyControlsRegion = adminActsHtml.split(">Weekly Event Controls<")[1]?.split(">One-off Events<")[0] || "";
+  const freeRsvpRegion = weeklyControlsRegion.split("Free &amp; RSVP Events")[1]?.split("Paid Sessions")[0] || "";
+  const paidSessionsRegion = weeklyControlsRegion.split("Paid Sessions")[1] || "";
+  if (paidSessionsRegion.includes("lunch-") || paidSessionsRegion.includes("Post-Training Lunch"))
+    throw new Error("Paid Sessions must stay paid-only — the lunch lives in Free & RSVP Events");
+  if (!freeRsvpRegion.includes("Post-Training Lunch") || !freeRsvpRegion.includes("Cancel this week's event"))
     throw new Error("the lunch venue card must offer the per-week cancel control");
-  if (venueSection.includes("cap"))
+  if (freeRsvpRegion.includes("cap"))
     throw new Error("the uncapped lunch must not show a capacity");
   store.signIn("member@example.test");
   store.signOut();
@@ -3273,7 +3468,6 @@ store.setWeekVenue(wntSession.id, {
 const activitiesHtml = await views.viewAdmin("activities");
 const hyroxAdminHtml = await views.viewAdmin("payments");
 if (!activitiesHtml.includes("Recurring Activity Defaults")
-    || !activitiesHtml.includes("Weekly Venue Overrides")
     || !activitiesHtml.includes("Only this session")
     || !activitiesHtml.includes("Google Maps search")
     || !activitiesHtml.includes("Save Weekly Venue")
@@ -3287,17 +3481,51 @@ if (!activitiesHtml.includes("Current venue: <strong>Victoria Park Swimming Pool
     || !activitiesHtml.includes("Recurring default: <strong>TBC</strong>")) {
   throw new Error("Activities must show distinct current and recurring venues for overridden Swimming");
 }
-if (!activitiesHtml.includes("Weekly Session Overrides")
-    || !activitiesHtml.includes("form-cancel-week")
-    || !activitiesHtml.includes('data-action="midtown-toggle"')
-    || !activitiesHtml.includes('data-action="venue-tbc-toggle"')) {
-  throw new Error("Activities must carry the weekly paid-session controls");
+if ((activitiesHtml.match(/>Weekly Event Controls</g) || []).length !== 1
+    || !activitiesHtml.includes("Free &amp; RSVP Events")
+    || !activitiesHtml.includes("Paid Sessions")) {
+  throw new Error("Activities should group weekly controls by free/RSVP and paid sessions");
 }
-const sectionOrder = ["Recurring Activity Defaults", "Weekly Venue Overrides", "Weekly Session Overrides"];
-const sectionPositions = sectionOrder.map((label) => activitiesHtml.indexOf(label));
-if (sectionPositions.some((p) => p === -1)
-    || !(sectionPositions[0] < sectionPositions[1] && sectionPositions[1] < sectionPositions[2])) {
-  throw new Error("Activities sections must be ordered: defaults, venue overrides, session overrides");
+const paidControlsSource = integratedViewSource
+  .split("function adminPaidSessionControls()")[1]?.split("function adminFinalizeGym()")[0] || "";
+const freeControlsSource = integratedViewSource
+  .split("function adminFreeEventControls()")[1]?.split("function adminWeeklyEventControls()")[0] || "";
+if (!paidControlsSource.includes('<div class="empty mt8">No upcoming paid sessions.</div>')) {
+  throw new Error("Paid Sessions must retain its concise empty-group state");
+}
+if (!freeControlsSource.includes('<div class="empty mt8">No upcoming free or RSVP events.</div>')) {
+  throw new Error("Free & RSVP Events must retain its concise empty-group state");
+}
+if (activitiesHtml.includes(">Weekly Venue Overrides<")
+    || activitiesHtml.includes(">Weekly Session Overrides<")) {
+  throw new Error("legacy weekly override headings should be removed");
+}
+const weeklyControlsStart = activitiesHtml.indexOf(">Weekly Event Controls<");
+const oneOffEventsStart = activitiesHtml.indexOf(">One-off Events<");
+const weeklyControlsHtml = weeklyControlsStart === -1 || oneOffEventsStart === -1
+  ? ""
+  : activitiesHtml.slice(weeklyControlsStart, oneOffEventsStart);
+for (const marker of [
+  'data-action="form-week-venue"',
+  'data-action="reset-week-venue"',
+  "Cancel this week's event",
+  'id="form-session-time"',
+  'id="form-session-notice"',
+  'data-action="venue-tbc-toggle"',
+  'data-action="midtown-toggle"',
+  'id="form-cancel-week"',
+]) {
+  if (!weeklyControlsHtml.includes(marker)) {
+    throw new Error(`Weekly Event Controls must preserve ${marker}`);
+  }
+}
+if (!/\d+ going/.test(weeklyControlsHtml)) {
+  throw new Error("Weekly Event Controls must preserve the RSVP count");
+}
+if (!(activitiesHtml.indexOf("Recurring Activity Defaults") < weeklyControlsStart
+    && weeklyControlsStart < oneOffEventsStart)
+    || !/aria-labelledby="paid-sessions-title">[\s\S]*<\/section>\s*<\/details>\s*<details class="admin-section mt24">\s*<summary><h2>One-off Events<\/h2>/.test(activitiesHtml)) {
+  throw new Error("One-off Events must remain a separate section after Weekly Event Controls");
 }
 if (!activitiesHtml.includes("Club Operations") || activitiesHtml.includes("Club ops.")) {
   throw new Error("Admin heading must read Club Operations");
@@ -3305,9 +3533,9 @@ if (!activitiesHtml.includes("Club Operations") || activitiesHtml.includes("Club
 if (!activitiesHtml.includes('<details class="admin-section') || !activitiesHtml.includes("<summary>")) {
   throw new Error("Activities sections must collapse behind their headers");
 }
-if (hyroxAdminHtml.includes("Weekly Venue Overrides")
+if (hyroxAdminHtml.includes("Weekly Event Controls")
     || hyroxAdminHtml.includes('data-action="form-week-venue"')) {
-  throw new Error("HYROX must not contain free-event weekly venue controls");
+  throw new Error("Payments must not contain weekly event controls");
 }
 if (!hyroxAdminHtml.includes(">Payments</a>")
     || hyroxAdminHtml.includes(">HYROX</a>")

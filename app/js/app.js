@@ -1003,6 +1003,19 @@ document.addEventListener("click", async (e) => {
       }
       break;
 
+    case "copy-payment-note":
+      if (el.dataset.note && navigator.clipboard?.writeText) {
+        try {
+          await navigator.clipboard.writeText(el.dataset.note);
+          toast("Payment note copied");
+        } catch {
+          toast("Unable to copy payment note", true);
+        }
+      } else {
+        toast("Copy unsupported on this device");
+      }
+      break;
+
     case "copy-gym":
       if (navigator.clipboard?.writeText) {
         await navigator.clipboard.writeText(el.dataset.msg);
@@ -1285,16 +1298,24 @@ document.addEventListener("submit", async (e) => {
 
     case "form-payouts": {
       e.preventDefault();
+      const control = form.querySelector('[type="submit"]');
+      const controls = [...form.querySelectorAll("input, button")];
       const fd = new FormData(form);
-      const member = store.currentUser();
-      const application = await store.getMyApplication();
-      const profilePhone = String(application?.mobile || application?.phone || member?.phone || "").trim();
-      store.updateCollectorPayouts(member.id, {
-        paymeLink: fd.get("paymeLink"),
-        fpsPhone: profilePhone,
-      });
-      toast("Payout details saved");
-      render();
+      await withBusyControl(control, "Saving…", async () => {
+        try {
+          const member = store.currentUser();
+          const application = await store.getMyApplication();
+          const profilePhone = String(application?.mobile || application?.phone || member?.phone || "").trim();
+          await store.updateCollectorPayouts(member.id, {
+            paymeLink: fd.get("paymeLink"),
+            fpsPhone: profilePhone,
+          });
+          toast("Payout details saved");
+          render();
+        } catch (err) {
+          toast(err.message || "Unable to save payout details", true);
+        }
+      }, { busyKey: form, controls });
       break;
     }
 
