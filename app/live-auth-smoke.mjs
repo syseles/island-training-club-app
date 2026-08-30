@@ -1116,6 +1116,119 @@ operationalTableRows.collector_payout_profiles = operationalTableRows.collector_
 await store.hydrateLiveOperations({ force: true });
 console.log("ok  payout RPC degradation preserves sessions and successful enrichment recovers");
 
+// Both optional enrichments share one hydration without sharing failure state.
+// Exercise forced calls in each direction with an assigned collector hidden
+// from the member's direct payout query, then recover both channels. All fake
+// auth, RPC, aggregate, and table state is restored for later live fixtures.
+{
+  const successfulCombinedOperationalRpcHandler = operationalRpcHandler;
+  const combinedLunch = store.upcomingSessions(21).find((session) => session.kind === "rsvp");
+  const combinedAssignedId = "combined-assigned-collector";
+  const combinedAssignedPayout = {
+    profile_id: combinedAssignedId,
+    payme_link: "https://payme.hsbc.com.hk/1/combined-assigned",
+    fps_phone: "+852 6999 0000",
+  };
+  assert.ok(combinedLunch, "combined hydration requires a live RSVP lunch");
+  operationalTableRows.collector_assignments.push({
+    week_start: combinedLunch.dateISO,
+    collector_profile_id: combinedAssignedId,
+    assigned_by: "approved-admin",
+    assigned_at: fixedIso,
+  });
+  operationalTableRows.collector_payout_profiles.push(combinedAssignedPayout);
+
+  const combinedOriginalAuthIdentity = structuredClone(authUser);
+  const combinedOriginalProfileIdentity = structuredClone(profile);
+  const optionalRpcCallCount = (name) => operationalRpcCalls
+    .filter((call) => call.name === name).length;
+  const forceCombinedHydration = async (label) => {
+    const payoutCallsBefore = optionalRpcCallCount("get_assigned_collector_payout_profiles");
+    const countCallsBefore = optionalRpcCallCount("get_operational_rsvp_counts");
+    await store.hydrateLiveOperations({ force: true });
+    assert.equal(
+      optionalRpcCallCount("get_assigned_collector_payout_profiles"),
+      payoutCallsBefore + 1,
+      `${label} must force assigned-payout hydration`,
+    );
+    assert.equal(
+      optionalRpcCallCount("get_operational_rsvp_counts"),
+      countCallsBefore + 1,
+      `${label} must force RSVP-count hydration`,
+    );
+  };
+
+  try {
+    Object.assign(authUser, { id: "approved-member", email: "micah.member@example.com" });
+    Object.assign(profile, {
+      id: "approved-member",
+      email: "micah.member@example.com",
+      role: "member",
+    });
+
+    operationalRsvpCountRowsOverride = [{ session_id: combinedLunch.id, going_count: 4 }];
+    operationalRpcHandler = (name, args) => {
+      if (name === "get_assigned_collector_payout_profiles") {
+        operationalRpcCalls.push({ name, args: structuredClone(args) });
+        return Promise.resolve({
+          data: null,
+          error: { message: "assigned payout unavailable" },
+        });
+      }
+      return successfulCombinedOperationalRpcHandler(name, args);
+    };
+    await forceCombinedHydration("combined payout failure");
+    assert.equal(operations.operationalStateStatus().error, null);
+    assert.equal(operations.operationalStateStatus().payoutError, "assigned payout unavailable");
+    assert.equal(operations.operationalStateStatus().rsvpCountError, null);
+    assert.equal(store.attendeeCountFor(combinedLunch), 4,
+      "successful RSVP counts must survive assigned-payout degradation");
+    assert.equal(operations.livePayoutFor(combinedAssignedId), null,
+      "the member must not receive an assigned payout when its enrichment fails");
+    assert.ok(store.upcomingSessions(21).some((session) => session.kind === "paid"));
+    assert.ok(store.upcomingSessions(21).some((session) => session.kind === "rsvp"));
+
+    operationalRpcHandler = successfulCombinedOperationalRpcHandler;
+    operationalRsvpCountRowsOverride = null;
+    operationalRsvpCountError = { message: "RSVP count unavailable" };
+    await forceCombinedHydration("combined RSVP count failure");
+    assert.equal(operations.operationalStateStatus().error, null);
+    assert.equal(operations.operationalStateStatus().payoutError, null);
+    assert.equal(operations.operationalStateStatus().rsvpCountError, "RSVP count unavailable");
+    assert.deepEqual(operations.livePayoutFor(combinedAssignedId), {
+      profileId: combinedAssignedId,
+      paymeLink: "https://payme.hsbc.com.hk/1/combined-assigned",
+      fpsPhone: "+852 6999 0000",
+    }, "assigned payout hydration must survive RSVP-count degradation");
+    assert.ok(store.getSession(combinedLunch.id),
+      "RSVP-count degradation must preserve the core RSVP session");
+    assert.ok(store.upcomingSessions(21).some((session) => session.kind === "paid"),
+      "RSVP-count degradation must preserve core paid sessions");
+
+    operationalRsvpCountError = null;
+    await forceCombinedHydration("combined enrichment recovery");
+    assert.equal(operations.operationalStateStatus().error, null);
+    assert.equal(operations.operationalStateStatus().payoutError, null);
+    assert.equal(operations.operationalStateStatus().rsvpCountError, null);
+    assert.equal(store.attendeeCountFor(combinedLunch), 1,
+      "recovered RSVP hydration must restore the fixture's one confirmed attendee");
+    assert.ok(operations.livePayoutFor(combinedAssignedId),
+      "recovered payout hydration must retain the assigned collector");
+    console.log("ok  optional payout and RSVP-count hydration fail independently and recover with core sessions");
+  } finally {
+    operationalRpcHandler = successfulCombinedOperationalRpcHandler;
+    operationalRsvpCountRowsOverride = null;
+    operationalRsvpCountError = null;
+    Object.assign(authUser, combinedOriginalAuthIdentity);
+    Object.assign(profile, combinedOriginalProfileIdentity);
+    operationalTableRows.collector_assignments = operationalTableRows.collector_assignments
+      .filter((row) => row.collector_profile_id !== combinedAssignedId);
+    operationalTableRows.collector_payout_profiles = operationalTableRows.collector_payout_profiles
+      .filter((row) => row.profile_id !== combinedAssignedId);
+    await store.hydrateLiveOperations({ force: true });
+  }
+}
+
 // Live callers receive exactly their requested HKT calendar-day horizon. The
 // Social preview applies its additional rolling HKT start-time boundary.
 const horizonDay14Iso = "2026-08-18";

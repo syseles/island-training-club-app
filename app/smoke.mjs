@@ -2872,6 +2872,73 @@ store.signIn("member@example.test");
     throw new Error("pay screen should escape visible/attribute notes and decode to the exact clipboard payload");
   }
 
+  // A paid reservation notification must retain its exact booking route, and
+  // following that route must render the final composed PayMe + same-device
+  // FPS view rather than either branch's pre-integration payment fragment.
+  const paymentDestination = `#/pay/${b.id}`;
+  const previousPaidNotificationFilter = views.notificationFilters.kind;
+  let paidInboxHtml;
+  try {
+    views.notificationFilters.kind = "all";
+    paidInboxHtml = await views.viewNotifications(new Date(), [{
+      id: "combined-paid-route",
+      kind: "operational_booking_reserved",
+      title: "Booking reserved",
+      body: "Pay now to keep your spot.",
+      destination: paymentDestination,
+      read_at: null,
+      created_at: "2026-08-05T02:00:00.000Z",
+    }]);
+  } finally {
+    views.notificationFilters.kind = previousPaidNotificationFilter;
+  }
+  const paidNotificationControl = [...paidInboxHtml.matchAll(
+    /<button class="notification-row[\s\S]*?<\/button>/g
+  )].map((match) => match[0]).find(
+    (tag) => tag.includes('data-notification-id="combined-paid-route"')
+  ) || "";
+  if (!paidNotificationControl.includes('data-action="notification-open"')
+      || !paidNotificationControl.includes(`data-destination="${paymentDestination}"`)) {
+    throw new Error("paid notification must render its exact Payment destination on the open control");
+  }
+  if (data.notificationDestination("operational_booking_reserved", paymentDestination)
+      !== paymentDestination) {
+    throw new Error("paid notification resolver must return the exact Payment destination");
+  }
+  const routedPaymentHtml = views.viewPay(paymentDestination.slice("#/pay/".length));
+  if (typeof routedPaymentHtml !== "string") {
+    throw new Error("paid notification destination must render its owned reserved Payment view");
+  }
+  const routedPayMeControl = [...routedPaymentHtml.matchAll(/<a\b[^>]*>[^<]*<\/a>/g)]
+    .map((match) => match[0])
+    .find((tag) => tag.includes(">PayMe to ")) || "";
+  if (!routedPayMeControl.includes('href="https://payme.hsbc.com.hk/1/test-admin"')
+      || !routedPayMeControl.includes('target="_blank"')
+      || !routedPayMeControl.includes('rel="noopener"')) {
+    throw new Error("notification-routed Payment view must keep the normalized safe PayMe handoff");
+  }
+  const routedNoteControl = [...routedPaymentHtml.matchAll(/<button\b[^>]*>/g)]
+    .map((match) => match[0])
+    .find((tag) => tag.includes('data-action="copy-payment-note"')) || "";
+  if (!routedPaymentHtml.includes(`<strong>${escapedExpectedNote}</strong>`)
+      || !routedNoteControl.includes(`data-note="${escapedExpectedNote}"`)) {
+    throw new Error("notification-routed Payment view must keep the exact escaped PayMe note");
+  }
+  assertFpsCopyBindings(routedPaymentHtml, [
+    {
+      action: "copy-fps", kind: "number", label: "FPS mobile number",
+      value: bookingCollectorPhone, escaped: "+852 5000 &amp; &quot;0001&quot;",
+    },
+    {
+      action: "copy-reference", kind: "reference", label: "Suggested reference",
+      value: suggestedReference, escaped: "ITC-ABC123",
+    },
+  ], "notification-routed booking FPS screen");
+  if (/QR|Scan with your banking app|amount is embedded/i.test(routedPaymentHtml)) {
+    throw new Error("notification-routed Payment view must remain QR-free");
+  }
+  console.log("ok  paid notification exact route renders composed safe PayMe + QR-free FPS view");
+
   const paymentFormStart = pay.indexOf('<form id="form-mark-paid"');
   const paymentSubmitStart = pay.indexOf('<button class="btn mt16" type="submit"', paymentFormStart);
   const paymentFormBeforeSubmit = pay.slice(paymentFormStart, paymentSubmitStart);
@@ -3249,6 +3316,114 @@ installLocalFixtures();
   const checkout = views.viewCheckout(lunch.id);
   if (typeof checkout !== "string" || !checkout.includes("doesn’t exist"))
     throw new Error("RSVP sessions must not render checkout");
+
+  // The exact RSVP notification route, Sunday-first Schedule row, Activity
+  // Details banner, and dated card inside grouped Admin controls must agree on
+  // the same literal count. Each surface is isolated to this lunch/session ID.
+  const rsvpDestination = `#/activity/${lunch.id}`;
+  const previousRsvpNotificationFilter = views.notificationFilters.kind;
+  let rsvpInboxHtml;
+  try {
+    views.notificationFilters.kind = "all";
+    rsvpInboxHtml = await views.viewNotifications(new Date(), [{
+      id: "combined-rsvp-route",
+      kind: "operational_rsvp_confirmed",
+      title: "RSVP confirmed",
+      body: "You are counted in.",
+      destination: rsvpDestination,
+      read_at: null,
+      created_at: "2026-08-05T02:00:00.000Z",
+    }]);
+  } finally {
+    views.notificationFilters.kind = previousRsvpNotificationFilter;
+  }
+  const rsvpNotificationControl = [...rsvpInboxHtml.matchAll(
+    /<button class="notification-row[\s\S]*?<\/button>/g
+  )].map((match) => match[0]).find(
+    (tag) => tag.includes('data-notification-id="combined-rsvp-route"')
+  ) || "";
+  if (!rsvpNotificationControl.includes(`data-destination="${rsvpDestination}"`)
+      || data.notificationDestination("operational_rsvp_confirmed", rsvpDestination)
+        !== rsvpDestination) {
+    throw new Error("RSVP notification must render and resolve the exact dated Activity destination");
+  }
+
+  const priorCombinedSchedule = { ...views.scheduleState };
+  let combinedRsvpScheduleHtml;
+  try {
+    views.scheduleState.weekOffset = Math.round(
+      (data.sundayOf(data.parseISO(lunch.dateISO)) - data.sundayOf(data.todayLocal()))
+        / (7 * 86400000)
+    );
+    views.scheduleState.selected = lunch.dateISO;
+    combinedRsvpScheduleHtml = views.viewSchedule();
+  } finally {
+    Object.assign(views.scheduleState, priorCombinedSchedule);
+  }
+  const combinedScheduleRowStart = combinedRsvpScheduleHtml.indexOf(
+    `href="${rsvpDestination}"`
+  );
+  const combinedScheduleRowEnd = combinedRsvpScheduleHtml.indexOf(
+    "</a>", combinedScheduleRowStart
+  );
+  const combinedScheduleRow = combinedScheduleRowStart < 0 || combinedScheduleRowEnd < 0
+    ? ""
+    : combinedRsvpScheduleHtml.slice(combinedScheduleRowStart, combinedScheduleRowEnd);
+  if (!combinedScheduleRow.includes('<span class="badge free booked">Going</span>')
+      || !combinedScheduleRow.includes('<span class="spots">1 going</span>')) {
+    throw new Error("dated Sunday Schedule RSVP row must render the exact confirmed count of 1");
+  }
+  const combinedScheduleLabels = [...combinedRsvpScheduleHtml.matchAll(
+    /data-date="[^"]+">\s*([A-Z][a-z]{2})<strong/g
+  )].map((match) => match[1]);
+  if (JSON.stringify(combinedScheduleLabels)
+      !== JSON.stringify(["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"])) {
+    throw new Error(`combined RSVP Schedule must remain Sunday-first; got ${combinedScheduleLabels.join(" ")}`);
+  }
+  const combinedActivityHtml = views.viewActivity(lunch.id);
+  if (!combinedActivityHtml.includes("1 going — see you there.")) {
+    throw new Error("exact RSVP Activity Details must render the confirmed count of 1");
+  }
+
+  let combinedAdminHtml;
+  try {
+    store.signIn("admin@example.test");
+    combinedAdminHtml = await views.viewAdmin("activities");
+  } finally {
+    store.signIn("member@example.test");
+  }
+  const combinedWeeklyStart = combinedAdminHtml.indexOf(">Weekly Event Controls<");
+  const combinedOneOffStart = combinedAdminHtml.indexOf(">One-off Events<", combinedWeeklyStart);
+  const combinedWeeklyHtml = combinedWeeklyStart < 0 || combinedOneOffStart < 0
+    ? ""
+    : combinedAdminHtml.slice(combinedWeeklyStart, combinedOneOffStart);
+  const combinedFreeStart = combinedWeeklyHtml.indexOf("Free &amp; RSVP Events");
+  const combinedPaidStart = combinedWeeklyHtml.indexOf("Paid Sessions", combinedFreeStart);
+  const combinedFreeRsvpHtml = combinedFreeStart < 0 || combinedPaidStart < 0
+    ? ""
+    : combinedWeeklyHtml.slice(combinedFreeStart, combinedPaidStart);
+  const combinedLunchTarget = combinedFreeRsvpHtml.indexOf(`data-session="${lunch.id}"`);
+  const combinedLunchCardStart = combinedFreeRsvpHtml.lastIndexOf(
+    '<div class="card mt16 free-event-venue-card">', combinedLunchTarget
+  );
+  const combinedNextFreeCard = combinedFreeRsvpHtml.indexOf(
+    '<div class="card mt16 free-event-venue-card">', combinedLunchTarget + 1
+  );
+  const combinedLunchCard = combinedLunchTarget < 0 || combinedLunchCardStart < 0
+    ? ""
+    : combinedFreeRsvpHtml.slice(
+      combinedLunchCardStart,
+      combinedNextFreeCard < 0 ? combinedFreeRsvpHtml.length : combinedNextFreeCard
+    );
+  if (!combinedWeeklyHtml.includes(">Weekly Event Controls<")
+      || !combinedFreeRsvpHtml.includes("Free &amp; RSVP Events")
+      || !combinedWeeklyHtml.includes("Paid Sessions")
+      || !combinedLunchCard.includes("Post-Training Lunch")
+      || !combinedLunchCard.includes('<p class="muted small mt8">1 going</p>')) {
+    throw new Error("dated RSVP Admin card must render count 1 inside grouped Weekly Event Controls");
+  }
+  console.log("ok  RSVP exact route and count agree across Sunday Schedule, Activity, and grouped Admin");
+
   await store.withdrawRsvp(rsvp.id);
   if (store.getBooking(rsvp.id).status !== "cancelled")
     throw new Error("withdraw should cancel the RSVP booking");
