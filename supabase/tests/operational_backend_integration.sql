@@ -238,7 +238,8 @@ create temp table operational_time_fixtures (
   routing_rsvp_session text not null,
   window_last_session text not null,
   unique_cancel_date date not null,
-  unique_cancel_session text not null
+  unique_cancel_session text not null,
+  historical_cancel_session text not null
 ) on commit drop;
 
 with hkt_clock as (
@@ -262,7 +263,8 @@ select base_date,
        'lunch-' || (base_date + 42)::text,
        'hyrox-' || (base_date + 105)::text,
        base_date + 126,
-       'hyrox-' || (base_date + 126)::text
+       'hyrox-' || (base_date + 126)::text,
+       'hyrox-midtown-' || (base_date + 49)::text
   from fixture_date;
 
 select ensure_operational_sessions(base_date, 16)
@@ -937,7 +939,11 @@ declare
   v_historical_cancellation_notification uuid;
   v_rsvp_unique_notification uuid;
   v_rsvp_ambiguous_notification uuid;
+  v_historical_cancel_session text;
 begin
+  select historical_cancel_session into v_historical_cancel_session
+    from operational_time_fixtures;
+
   insert into public.notifications
     (profile_id, kind, title, body, destination, created_at)
   values
@@ -1062,7 +1068,18 @@ begin
          cancelled_by = 'aa000000-0000-0000-0000-00000000a001',
          cancelled_source = 'admin',
          cancel_reason = 'Historical routing evidence'
-   where id = 'hyrox-midtown-2026-12-05';
+   where id = v_historical_cancel_session;
+
+  perform pg_temp.op_assert(
+    exists (
+      select 1
+        from public.operational_sessions
+       where id = v_historical_cancel_session
+         and activity_id = 'hyrox-midtown'
+         and id = activity_id || '-' || session_date::text
+    ),
+    'historical cancellation fixture is a generated Midtown row with matching ID and date'
+  );
 
   -- The insert trigger correctly discarded the malformed route while no
   -- candidate existed; restore it to model a genuinely historical bad value.
@@ -1099,7 +1116,7 @@ begin
   perform pg_temp.op_assert(
     (select cancelled_at
        from public.operational_sessions
-      where id = 'hyrox-midtown-2026-12-05') = v_historical_cancellation_at,
+      where id = v_historical_cancel_session) = v_historical_cancellation_at,
     'historical cancellation fixture has one exact session candidate'
   );
   perform pg_temp.op_assert(

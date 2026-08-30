@@ -214,10 +214,38 @@ for (const marker of [
   "v_paid_session",
   "v_rsvp_session",
   "v_unique_cancel_session",
+  "historical_cancel_session",
+  "v_historical_cancel_session",
 ]) {
   if (!operationalBackendIntegrationSource.includes(marker)) {
     throw new Error(`notification integration missing time-stable fixture marker ${marker}`);
   }
+}
+// Fixed HYROX dates are allowed only in the deterministic August fixture
+// window. Any future-guarded workflow must use the HKT-relative fixture table;
+// the lone static reservation is cancelled and therefore rejects before its
+// date guard. This allowlist forces every new fixed date to document its source.
+const explicitlyGeneratedFixedHyroxSessions = new Set([
+  "hyrox-2026-08-15",
+  "hyrox-midtown-2026-08-15",
+  "hyrox-2026-08-22",
+  "hyrox-midtown-2026-08-22",
+  "hyrox-2026-08-29",
+  "hyrox-midtown-2026-08-29",
+]);
+const fixedHyroxSessionIds = new Set(
+  operationalBackendIntegrationSource.match(/\bhyrox(?:-midtown)?-\d{4}-\d{2}-\d{2}\b/g) || []
+);
+const ungroundedFixedHyroxSessions = [...fixedHyroxSessionIds].filter(
+  (sessionId) => !explicitlyGeneratedFixedHyroxSessions.has(sessionId)
+);
+if (ungroundedFixedHyroxSessions.length) {
+  throw new Error(
+    `notification integration retains fixed HYROX sessions outside its explicit generator: ${ungroundedFixedHyroxSessions.join(", ")}`
+  );
+}
+if (!/ensure_operational_sessions\s*\(\s*date\s+'2026-08-01'\s*,\s*5\s*\)/i.test(operationalBackendIntegrationSource)) {
+  throw new Error("notification integration missing the explicit five-week August HYROX fixture generator");
 }
 const staticFutureGuardedCalls = [
   ...operationalBackendIntegrationSource.matchAll(
