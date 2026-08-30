@@ -677,6 +677,21 @@ export async function liveWithdrawRsvp(bookingId) {
   });
 }
 
+export async function liveReleaseReservation(bookingId) {
+  const row = await runOperationalRpc("release_operational_reservation", {
+    p_booking_id: bookingId,
+  }, {
+    applyResult(result) {
+      if (!result?.id) return;
+      const booking = buildBookingRow(result);
+      const index = liveCache.bookings.findIndex((item) => item.id === booking.id);
+      if (index >= 0) liveCache.bookings[index] = booking;
+      else liveCache.bookings.push(booking);
+    },
+  });
+  return buildBookingRow(row);
+}
+
 export async function liveMarkBookingPaid(bookingId, method, reference) {
   return runOperationalRpc("mark_operational_payment", {
     p_booking_id: bookingId,

@@ -131,5 +131,8 @@ echo "Running Giving integration checks"
 "${psql_cmd[@]}" -f "$repo_root/supabase/tests/giving_campaigns_integration.sql" >/dev/null
 echo "Running shared operational backend integration checks"
 "${psql_cmd[@]}" -f "$repo_root/supabase/tests/operational_backend_integration.sql"
+echo "Running bounded RSVP concurrency checks"
+ITC_OPERATIONS_PSQL_BIN="$psql_bin" \
+  bash "$repo_root/supabase/tests/operational_rsvp_concurrency.sh"
 
 echo "All operational backend verifications passed."

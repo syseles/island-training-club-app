@@ -1115,6 +1115,9 @@ export function confirmBookingPayment(bookingId, now = Date.now()) {
 // Releasing an unpaid reservation is member self-service; confirmed booking
 // cancellation/refund remains an Admin operation while policy is unresolved.
 export function releaseReservation(bookingId, now = Date.now()) {
+  if (isLive()) {
+    return liveOps.liveReleaseReservation(bookingId);
+  }
   const booking = getBooking(bookingId);
   if (!booking || booking.status !== "reserved" || booking.paymentMarkedAt) return null;
   requireAuthorizedPaymentOwner(booking.userId);

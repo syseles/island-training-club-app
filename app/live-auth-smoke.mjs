@@ -2778,6 +2778,7 @@ if (missingPrivacy?.redirect || !missingPrivacy.includes("Application details un
 
 const domListeners = new Map();
 const windowListeners = new Map();
+let documentVisibilityState = "visible";
 let activeElement = null;
 const makeElement = () => {
   const classes = new Set();
@@ -2823,6 +2824,7 @@ const elements = new Map([
 ]);
 globalThis.document = {
   get activeElement() { return activeElement; },
+  get visibilityState() { return documentVisibilityState; },
   getElementById: (id) => elements.get(id),
   createElement: () => makeElement(),
   addEventListener: (event, callback) => domListeners.set(event, callback),
@@ -2938,8 +2940,9 @@ assert.equal(routeLoader.hidden, true, "route loading feedback must clear");
 // feedback and out-of-order completion cannot replace the newest route.
 const deferred = () => {
   let resolve;
-  const promise = new Promise((done) => { resolve = done; });
-  return { promise, resolve };
+  let reject;
+  const promise = new Promise((done, fail) => { resolve = done; reject = fail; });
+  return { promise, resolve, reject };
 };
 const oldestGate = deferred();
 const middleGate = deferred();
@@ -3398,28 +3401,661 @@ for (const [errorType, setError] of [
 const click = domListeners.get("click");
 const change = domListeners.get("change");
 
-// Rendered Payment controls must reach their store seams through delegated
-// handling, mutate state, and route to the moved booking.
+// Assigned payout rows for another collector are RLS-suppressed from an
+// ordinary member's Realtime stream. Entering/restoring Payment must therefore
+// force the narrow assigned-payout hydration, and stale completions must not
+// replace a newer route.
+Object.assign(authUser, {
+  id: "approved-member",
+  email: "micah.member@example.com",
+  user_metadata: { full_name: "Micah Member", avatar_url: "" },
+});
+Object.assign(profile, {
+  id: "approved-member", email: "micah.member@example.com",
+  full_name: "Micah Member", avatar_url: "", role: "member",
+});
+await store.getCurrentUser();
+const assignedCollectorPayout = operationalTableRows.collector_payout_profiles
+  .find((row) => row.profile_id === "live-user-1");
+Object.assign(assignedCollectorPayout, {
+  payme_link: "https://payme.hsbc.com.hk/1/route-version-a",
+  fps_phone: "+852 6111 0001",
+});
+await operations.refreshOperationalState();
+Object.assign(assignedCollectorPayout, {
+  payme_link: "https://payme.hsbc.com.hk/1/route-version-b",
+  fps_phone: "+852 6111 0002",
+});
+const assignedCallsBeforePayRoute = operationalRpcCalls
+  .filter((call) => call.name === "get_assigned_collector_payout_profiles").length;
+location.hash = `#/pay/${memberPayBooking.id}`;
+await windowListeners.get("hashchange")();
+assert.equal(
+  operationalRpcCalls.filter((call) => call.name === "get_assigned_collector_payout_profiles").length,
+  assignedCallsBeforePayRoute + 1,
+  "entering an approved live Payment route must force assigned-payout hydration"
+);
+assert.match(viewEl.innerHTML, /route-version-b/);
+assert.doesNotMatch(viewEl.innerHTML, /route-version-a/);
+assert.doesNotMatch(
+  operationalPayoutDirectReads.at(-1)?.profileIds.join(",") || "",
+  /live-user-1|unassigned-super/,
+  "Payment refresh must not bypass foreign payout-table RLS"
+);
+assert.equal(operations.livePayoutFor("unassigned-super"), null,
+  "Payment refresh must not retain an unassigned payout row");
+assert.equal(JSON.parse(mem.get("itc.prototype.v1")).users.length, 0,
+  "Payment refresh must not persist collector identity rows locally");
+
+Object.assign(assignedCollectorPayout, {
+  payme_link: "https://payme.hsbc.com.hk/1/route-version-c",
+  fps_phone: "+852 6111 0003",
+});
+documentVisibilityState = "visible";
+await domListeners.get("visibilitychange")();
+assert.match(viewEl.innerHTML, /route-version-c/,
+  "restoring a visible Payment route must reconcile a suppressed payout update");
+assert.doesNotMatch(viewEl.innerHTML, /route-version-b/);
+
+Object.assign(assignedCollectorPayout, {
+  payme_link: "https://payme.hsbc.com.hk/1/route-version-d",
+  fps_phone: "+852 6111 0004",
+});
+const payoutRouteGate = deferred();
+const payoutRouteBaseHandler = operationalRpcHandler;
+operationalRpcHandler = (name, args) => {
+  if (name === "get_assigned_collector_payout_profiles") {
+    operationalRpcCalls.push({ name, args: structuredClone(args) });
+    return payoutRouteGate.promise;
+  }
+  return payoutRouteBaseHandler(name, args);
+};
+location.hash = `#/pay/${memberPayBooking.id}`;
+const stalePayoutRoute = windowListeners.get("hashchange")();
+await new Promise(setImmediate);
+location.hash = "#/home";
+await windowListeners.get("hashchange")();
+const homeAfterStalePayoutRoute = viewEl.innerHTML;
+assert.match(homeAfterStalePayoutRoute, /Good to see you, Micah\./);
+payoutRouteGate.resolve({ data: [structuredClone(assignedCollectorPayout)], error: null });
+await stalePayoutRoute;
+assert.equal(viewEl.innerHTML, homeAfterStalePayoutRoute,
+  "a delayed Payment hydration must not overwrite a newer route generation");
+operationalRpcHandler = payoutRouteBaseHandler;
+Object.assign(authUser, {
+  id: "live-user-1", email: "runner@example.com",
+  user_metadata: { full_name: "Riley Runner", avatar_url: "https://example.com/avatar.jpg" },
+});
+Object.assign(profile, {
+  id: "live-user-1", email: "runner@example.com", full_name: "Riley Runner",
+  avatar_url: "https://example.com/avatar.jpg", role: "super_admin",
+});
+await store.getCurrentUser();
+await store.listPaymentUsers();
+await operations.refreshOperationalState();
+console.log("ok  Payment route and visibility refresh RLS-suppressed assigned payouts safely");
+
+// Reserve and mark-paid form delegation must remain pending with the live RPC,
+// capture values before controls are disabled, suppress duplicates, and expose
+// success/navigation only after authoritative settlement.
 const routingSessions = store.upcomingSessions(28).filter((session) =>
   session.kind === "paid" && !store.isMidtown(session) && !session.cancelled
   && !store.userReservationFor(authUser.id, session.id)
   && !store.userBookingFor(authUser.id, session.id)
 );
 if (routingSessions.length < 2) throw new Error("Payment routing regression needs two sessions");
-const routedReleaseBooking = await store.reserveSession(authUser.id, routingSessions[0], Date.now());
-const routedDeferBooking = await store.reserveSession(authUser.id, routingSessions[1], Date.now());
-const routedDeferMarked = await store.markBookingPaid(routedDeferBooking.id, "FPS", "ROUTING", Date.now());
-if (!routedDeferMarked) throw new Error("Live deferral routing must mark payment");
-await store.confirmBookingPayment(routedDeferBooking.id, Date.now());
-const routedDeferTarget = store.deferTargetsFor(routedDeferBooking)[0];
-if (!routedDeferTarget) throw new Error("Payment routing regression needs a defer target");
+const delegatedBaseOperationalRpcHandler = operationalRpcHandler;
+const operationControl = (tagName, name = "", textContent = "") => {
+  const control = makeElement();
+  control.tagName = tagName;
+  control.name = name;
+  control.textContent = textContent;
+  control.disabled = false;
+  return control;
+};
+const equipOperationForm = (form, fields = {}) => {
+  const inputs = Object.keys(fields).map((name) => operationControl("INPUT", name));
+  const submit = operationControl("BUTTON", "", "Submit");
+  submit.type = "submit";
+  form.fields = { ...fields };
+  form.nativeControls = [...inputs, submit];
+  form.querySelector = (selector) => selector === '[type="submit"]' ? submit : null;
+  form.querySelectorAll = (selector) => selector === "input, button" ? [...inputs, submit] : [];
+  return { inputs, submit, controls: [...inputs, submit] };
+};
+const operationalBookingRow = (id, session, overrides = {}) => ({
+  id,
+  profile_id: authUser.id,
+  session_id: session.id,
+  status: "reserved",
+  reserved_at: fixedIso,
+  pay_deadline_at: fixedIso,
+  payment_marked_at: null,
+  payment_method: null,
+  payment_reference: null,
+  paid_at: null,
+  confirmed_by: null,
+  deferred_from_booking_id: null,
+  deferred_to_booking_id: null,
+  snapshot: {
+    name: session.name,
+    session_date: session.dateISO,
+    start_time: `${session.time}:00`,
+    venue: session.location,
+    price_hkd: session.price,
+  },
+  created_at: fixedIso,
+  updated_at: fixedIso,
+  ...overrides,
+});
+
+const reserveForm = new HTMLFormElement();
+reserveForm.id = "form-reserve";
+reserveForm.dataset = { session: routingSessions[0].id };
+const reserveControls = equipOperationForm(reserveForm);
+const reserveGate = deferred();
+let reserveRpcArgs = null;
+operationalRpcHandler = (name, args) => {
+  if (name === "reserve_operational_session") {
+    operationalRpcCalls.push({ name, args: structuredClone(args) });
+    reserveRpcArgs = structuredClone(args);
+    return reserveGate.promise;
+  }
+  return delegatedBaseOperationalRpcHandler(name, args);
+};
+location.hash = `#/checkout/${routingSessions[0].id}`;
+toastStack.children.length = 0;
+let reserveSettled = false;
+const reserveSubmit = domListeners.get("submit")({ target: reserveForm, preventDefault() {} })
+  .then(() => { reserveSettled = true; });
+const duplicateReserveSubmit = domListeners.get("submit")({ target: reserveForm, preventDefault() {} });
+await new Promise(setImmediate);
+assert.deepEqual(reserveRpcArgs, { p_session_id: routingSessions[0].id });
+assert.equal(reserveSettled, false, "reserve form must remain pending with the live RPC");
+assert.equal(
+  operationalRpcCalls.filter((call) => call.name === "reserve_operational_session"
+    && call.args.p_session_id === routingSessions[0].id).length,
+  1,
+  "duplicate reserve submit must issue one RPC"
+);
+assert.equal(location.hash, `#/checkout/${routingSessions[0].id}`);
+assert.equal(toastStack.children.length, 0, "reserve success must wait for settlement");
+assert.equal(reserveControls.submit.disabled, true);
+assert.equal(reserveControls.submit.getAttribute("aria-busy"), "true");
+const routedDeferServerRow = operationalBookingRow("booking-form-reserve", routingSessions[0]);
+operationalTableRows.operational_bookings.push(routedDeferServerRow);
+reserveGate.resolve({ data: structuredClone(routedDeferServerRow), error: null });
+await Promise.all([reserveSubmit, duplicateReserveSubmit]);
+const routedDeferBooking = store.getBooking(routedDeferServerRow.id);
+assert.ok(routedDeferBooking);
+assert.equal(location.hash, `#/pay/${routedDeferBooking.id}`);
+assert.deepEqual(toastStack.children.map((item) => item.textContent), [
+  "Spot reserved — pay before the deadline",
+]);
+assert.equal(reserveControls.submit.disabled, false);
+assert.equal(reserveControls.submit.hasAttribute("aria-busy"), false);
+
+const rejectedReserveForm = new HTMLFormElement();
+rejectedReserveForm.id = "form-reserve";
+rejectedReserveForm.dataset = { session: routingSessions[1].id };
+const rejectedReserveControls = equipOperationForm(rejectedReserveForm);
+const rejectedReserveGate = deferred();
+operationalRpcHandler = (name, args) => {
+  if (name === "reserve_operational_session") {
+    operationalRpcCalls.push({ name, args: structuredClone(args) });
+    return rejectedReserveGate.promise;
+  }
+  return delegatedBaseOperationalRpcHandler(name, args);
+};
+location.hash = `#/checkout/${routingSessions[1].id}`;
+toastStack.children.length = 0;
+const rejectedReserveSubmit = domListeners.get("submit")({
+  target: rejectedReserveForm, preventDefault() {},
+});
+await new Promise(setImmediate);
+assert.equal(rejectedReserveControls.submit.disabled, true);
+rejectedReserveGate.resolve({ data: null, error: { message: "Reservation service unavailable" } });
+await rejectedReserveSubmit;
+assert.equal(location.hash, `#/checkout/${routingSessions[1].id}`);
+assert.deepEqual(toastStack.children.map((item) => item.textContent), [
+  "Reservation service unavailable",
+]);
+assert.equal(toastStack.children[0].getAttribute("role"), "alert");
+assert.equal(rejectedReserveControls.submit.disabled, false);
+assert.equal(rejectedReserveControls.submit.hasAttribute("aria-busy"), false);
+
+const markPaidForm = new HTMLFormElement();
+markPaidForm.id = "form-mark-paid";
+markPaidForm.dataset = { booking: routedDeferBooking.id };
+const markPaidControls = equipOperationForm(markPaidForm, { method: "FPS", ref: "FORM-PAID-REF" });
+const markPaidGate = deferred();
+let markPaidRpcArgs = null;
+operationalRpcHandler = (name, args) => {
+  if (name === "mark_operational_payment") {
+    operationalRpcCalls.push({ name, args: structuredClone(args) });
+    markPaidRpcArgs = structuredClone(args);
+    return markPaidGate.promise;
+  }
+  return delegatedBaseOperationalRpcHandler(name, args);
+};
+location.hash = `#/pay/${routedDeferBooking.id}`;
+toastStack.children.length = 0;
+let markPaidSettled = false;
+const markPaidSubmit = domListeners.get("submit")({ target: markPaidForm, preventDefault() {} })
+  .then(() => { markPaidSettled = true; });
+const duplicateMarkPaidSubmit = domListeners.get("submit")({ target: markPaidForm, preventDefault() {} });
+await new Promise(setImmediate);
+assert.deepEqual(markPaidRpcArgs, {
+  p_booking_id: routedDeferBooking.id,
+  p_method: "fps",
+  p_reference: "FORM-PAID-REF",
+}, "mark-paid must capture FormData before disabling its fields");
+assert.equal(markPaidSettled, false, "mark-paid form must remain pending with the live RPC");
+assert.equal(
+  operationalRpcCalls.filter((call) => call.name === "mark_operational_payment"
+    && call.args.p_booking_id === routedDeferBooking.id).length,
+  1,
+  "duplicate mark-paid submit must issue one RPC"
+);
+assert.equal(location.hash, `#/pay/${routedDeferBooking.id}`);
+assert.equal(toastStack.children.length, 0, "mark-paid success must wait for settlement");
+for (const control of markPaidControls.controls) assert.equal(control.disabled, true);
+assert.equal(markPaidControls.submit.getAttribute("aria-busy"), "true");
+Object.assign(routedDeferServerRow, {
+  payment_marked_at: fixedIso,
+  payment_method: "fps",
+  payment_reference: "FORM-PAID-REF",
+});
+markPaidGate.resolve({ data: structuredClone(routedDeferServerRow), error: null });
+await Promise.all([markPaidSubmit, duplicateMarkPaidSubmit]);
+assert.equal(location.hash, `#/booking/${routedDeferBooking.id}`);
+assert.deepEqual(toastStack.children.map((item) => item.textContent), [
+  "Payment marked — awaiting collector confirmation",
+]);
+for (const control of markPaidControls.controls) assert.equal(control.disabled, false);
+assert.equal(markPaidControls.submit.hasAttribute("aria-busy"), false);
+
+operationalRpcHandler = delegatedBaseOperationalRpcHandler;
+const routedReleaseBooking = await store.reserveSession(authUser.id, routingSessions[1], Date.now());
+const rejectedMarkPaidForm = new HTMLFormElement();
+rejectedMarkPaidForm.id = "form-mark-paid";
+rejectedMarkPaidForm.dataset = { booking: routedReleaseBooking.id };
+const rejectedMarkPaidControls = equipOperationForm(rejectedMarkPaidForm, {
+  method: "PayMe", ref: "REJECTED-REF",
+});
+const rejectedMarkPaidGate = deferred();
+operationalRpcHandler = (name, args) => {
+  if (name === "mark_operational_payment") {
+    operationalRpcCalls.push({ name, args: structuredClone(args) });
+    return rejectedMarkPaidGate.promise;
+  }
+  return delegatedBaseOperationalRpcHandler(name, args);
+};
+location.hash = `#/pay/${routedReleaseBooking.id}`;
+toastStack.children.length = 0;
+const rejectedMarkPaidSubmit = domListeners.get("submit")({
+  target: rejectedMarkPaidForm, preventDefault() {},
+});
+await new Promise(setImmediate);
+assert.equal(rejectedMarkPaidControls.submit.disabled, true);
+rejectedMarkPaidGate.reject(new Error("Payment transport unavailable"));
+await rejectedMarkPaidSubmit;
+await new Promise(setImmediate);
+assert.equal(location.hash, `#/pay/${routedReleaseBooking.id}`);
+assert.deepEqual(toastStack.children.map((item) => item.textContent), [
+  "Payment transport unavailable",
+]);
+assert.equal(toastStack.children[0].getAttribute("role"), "alert");
+assert.equal(rejectedMarkPaidControls.submit.disabled, false);
+assert.equal(rejectedMarkPaidControls.submit.hasAttribute("aria-busy"), false);
+assert.equal(escapedRejections.length, 0, "mark-paid rejection must not escape its delegated handler");
+console.log("ok  live reserve and mark-paid forms await, guard duplicates, and catch failures");
+
+// Adjacent operations all return Promises in live mode. Each delegated seam
+// must remain busy and duplicate-safe until its exact RPC settles.
+const delayedClickMutation = async ({
+  action, dataset, rpcName, expectedArgs, result = null, beforeResolve = () => {}, successToast,
+}) => {
+  const gate = deferred();
+  operationalRpcHandler = (name, args) => {
+    if (name === rpcName) {
+      operationalRpcCalls.push({ name, args: structuredClone(args) });
+      return gate.promise;
+    }
+    return delegatedBaseOperationalRpcHandler(name, args);
+  };
+  const control = operationControl("BUTTON", "", "Action");
+  control.dataset = { action, ...dataset };
+  control.closest = () => control;
+  toastStack.children.length = 0;
+  const callsBefore = operationalRpcCalls.filter((call) => call.name === rpcName).length;
+  let settled = false;
+  const first = click({ target: control, preventDefault() {} }).then(() => { settled = true; });
+  const duplicate = click({ target: control, preventDefault() {} });
+  await new Promise(setImmediate);
+  assert.equal(settled, false, `${action} must wait for ${rpcName}`);
+  assert.equal(operationalRpcCalls.filter((call) => call.name === rpcName).length,
+    callsBefore + 1, `${action} duplicate must issue one ${rpcName} RPC`);
+  assert.deepEqual(operationalRpcCalls.filter((call) => call.name === rpcName).at(-1)?.args,
+    expectedArgs, `${action} must send the normalized RPC payload`);
+  assert.equal(control.disabled, true, `${action} must disable its control while pending`);
+  assert.equal(control.getAttribute("aria-busy"), "true");
+  assert.equal(toastStack.children.length, 0, `${action} success must wait for settlement`);
+  beforeResolve();
+  gate.resolve({ data: structuredClone(result), error: null });
+  await Promise.all([first, duplicate]);
+  assert.equal(control.disabled, false);
+  assert.equal(control.hasAttribute("aria-busy"), false);
+  assert.ok(toastStack.children.some((item) => item.textContent === successToast),
+    `${action} must report success after settlement`);
+};
+
+const queueMidtown = store.upcomingSessions(28).find((session) => store.isMidtown(session) && !session.cancelled);
+assert.ok(queueMidtown, "adjacent async audit needs a Midtown session");
+const interestRow = {
+  id: "queue-interest-async", session_id: queueMidtown.id, profile_id: authUser.id,
+  kind: "interest", status: "active", joined_at: fixedIso, resolved_at: null,
+};
+await delayedClickMutation({
+  action: "join-interest",
+  dataset: { session: queueMidtown.id },
+  rpcName: "join_operational_queue",
+  expectedArgs: { p_session_id: queueMidtown.id, p_kind: "interest" },
+  result: interestRow,
+  beforeResolve: () => operationalTableRows.operational_queue_entries.push(interestRow),
+  successToast: "You're #1 in line for Midtown",
+});
+await delayedClickMutation({
+  action: "leave-interest",
+  dataset: { session: queueMidtown.id },
+  rpcName: "leave_operational_queue",
+  expectedArgs: { p_entry_id: interestRow.id },
+  result: { ...interestRow, status: "left", resolved_at: fixedIso },
+  beforeResolve: () => Object.assign(interestRow, { status: "left", resolved_at: fixedIso }),
+  successToast: "Left the Midtown list",
+});
+const waitlistRow = {
+  id: "queue-waitlist-async", session_id: routingSessions[1].id, profile_id: authUser.id,
+  kind: "waitlist", status: "active", joined_at: fixedIso, resolved_at: null,
+};
+await delayedClickMutation({
+  action: "join-waitlist",
+  dataset: { session: routingSessions[1].id },
+  rpcName: "join_operational_queue",
+  expectedArgs: { p_session_id: routingSessions[1].id, p_kind: "waitlist" },
+  result: waitlistRow,
+  beforeResolve: () => operationalTableRows.operational_queue_entries.push(waitlistRow),
+  successToast: "You're #1 on the waitlist",
+});
+await delayedClickMutation({
+  action: "leave-waitlist",
+  dataset: { session: routingSessions[1].id },
+  rpcName: "leave_operational_queue",
+  expectedArgs: { p_entry_id: waitlistRow.id },
+  result: { ...waitlistRow, status: "left", resolved_at: fixedIso },
+  beforeResolve: () => Object.assign(waitlistRow, { status: "left", resolved_at: fixedIso }),
+  successToast: "Left the waitlist",
+});
+const dutyWeek = routingSessions[0].dateISO;
+const dutyRow = {
+  week_start: dutyWeek, collector_profile_id: authUser.id,
+  assigned_by: authUser.id, assigned_at: fixedIso,
+};
+await delayedClickMutation({
+  action: "duty-claim",
+  dataset: { week: dutyWeek },
+  rpcName: "set_collector_assignment",
+  expectedArgs: { p_week_start: dutyWeek, p_profile_id: authUser.id },
+  result: dutyRow,
+  beforeResolve: () => {
+    const index = operationalTableRows.collector_assignments
+      .findIndex((row) => row.week_start === dutyWeek);
+    if (index >= 0) operationalTableRows.collector_assignments[index] = dutyRow;
+    else operationalTableRows.collector_assignments.push(dutyRow);
+  },
+  successToast: "You're on duty this week",
+});
+const confirmedServerRow = { ...routedDeferServerRow, status: "confirmed", paid_at: fixedIso, confirmed_by: authUser.id };
+await delayedClickMutation({
+  action: "confirm-payment",
+  dataset: { booking: routedDeferBooking.id },
+  rpcName: "approve_operational_payment",
+  expectedArgs: { p_booking_id: routedDeferBooking.id },
+  result: confirmedServerRow,
+  beforeResolve: () => Object.assign(routedDeferServerRow, confirmedServerRow),
+  successToast: "Payment confirmed — member notified",
+});
+const midtownServerRow = operationalTableRows.operational_sessions.find((row) => row.id === queueMidtown.id);
+await delayedClickMutation({
+  action: "midtown-toggle",
+  dataset: { session: queueMidtown.id, open: "1" },
+  rpcName: "set_operational_midtown_open",
+  expectedArgs: { p_session_id: queueMidtown.id, p_enabled: true },
+  result: { ...midtownServerRow, is_open: true },
+  beforeResolve: () => { midtownServerRow.is_open = true; },
+  successToast: "Midtown opened — interest list converting",
+});
+const paidControlServerRow = operationalTableRows.operational_sessions
+  .find((row) => row.id === routingSessions[0].id);
+await delayedClickMutation({
+  action: "venue-tbc-toggle",
+  dataset: { session: routingSessions[0].id, on: "1" },
+  rpcName: "set_operational_venue_tbc",
+  expectedArgs: { p_session_id: routingSessions[0].id, p_enabled: true },
+  result: { ...paidControlServerRow, venue_tbc: true },
+  beforeResolve: () => { paidControlServerRow.venue_tbc = true; },
+  successToast: "Venue marked TBC",
+});
+
+const dutySetGate = deferred();
+operationalRpcHandler = (name, args) => {
+  if (name === "set_collector_assignment") {
+    operationalRpcCalls.push({ name, args: structuredClone(args) });
+    return dutySetGate.promise;
+  }
+  return delegatedBaseOperationalRpcHandler(name, args);
+};
+const dutySetControl = operationControl("SELECT");
+dutySetControl.value = "approved-admin";
+dutySetControl.dataset = { change: "duty-set", week: dutyWeek };
+dutySetControl.closest = () => dutySetControl;
+toastStack.children.length = 0;
+const dutySetChange = change({ target: dutySetControl });
+const duplicateDutySetChange = change({ target: dutySetControl });
+await new Promise(setImmediate);
+assert.equal(dutySetControl.disabled, true);
+assert.equal(dutySetControl.getAttribute("aria-busy"), "true");
+assert.equal(operationalRpcCalls.filter((call) => call.name === "set_collector_assignment"
+  && call.args.p_profile_id === "approved-admin").length, 1);
+assert.equal(toastStack.children.length, 0);
+const handedDutyRow = { ...dutyRow, collector_profile_id: "approved-admin" };
+const dutyIndex = operationalTableRows.collector_assignments.findIndex((row) => row.week_start === dutyWeek);
+operationalTableRows.collector_assignments[dutyIndex] = handedDutyRow;
+dutySetGate.resolve({ data: handedDutyRow, error: null });
+await Promise.all([dutySetChange, duplicateDutySetChange]);
+assert.equal(dutySetControl.disabled, false);
+assert.equal(dutySetControl.hasAttribute("aria-busy"), false);
+assert.ok(toastStack.children.some((item) => item.textContent === "Duty handed over"));
+
+const delayedFormMutation = async ({
+  formAction, session, fields, rpcName, expectedArgs, result, beforeResolve, successToast,
+}) => {
+  const form = new HTMLFormElement();
+  form.id = formAction;
+  form.dataset = { session };
+  form.reportValidity = () => true;
+  const equipped = equipOperationForm(form, fields);
+  const gate = deferred();
+  operationalRpcHandler = (name, args) => {
+    if (name === rpcName) {
+      operationalRpcCalls.push({ name, args: structuredClone(args) });
+      return gate.promise;
+    }
+    return delegatedBaseOperationalRpcHandler(name, args);
+  };
+  toastStack.children.length = 0;
+  const callsBefore = operationalRpcCalls.filter((call) => call.name === rpcName).length;
+  let settled = false;
+  const first = domListeners.get("submit")({ target: form, preventDefault() {} })
+    .then(() => { settled = true; });
+  const duplicate = domListeners.get("submit")({ target: form, preventDefault() {} });
+  await new Promise(setImmediate);
+  assert.equal(settled, false, `${formAction} must wait for ${rpcName}`);
+  assert.equal(operationalRpcCalls.filter((call) => call.name === rpcName).length, callsBefore + 1);
+  assert.deepEqual(operationalRpcCalls.filter((call) => call.name === rpcName).at(-1)?.args,
+    expectedArgs, `${formAction} must capture its form values before disabling`);
+  for (const control of equipped.controls) assert.equal(control.disabled, true);
+  assert.equal(equipped.submit.getAttribute("aria-busy"), "true");
+  assert.equal(toastStack.children.length, 0);
+  beforeResolve();
+  gate.resolve({ data: structuredClone(result), error: null });
+  await Promise.all([first, duplicate]);
+  for (const control of equipped.controls) assert.equal(control.disabled, false);
+  assert.equal(equipped.submit.hasAttribute("aria-busy"), false);
+  assert.ok(toastStack.children.some((item) => item.textContent === successToast));
+};
 window.confirm = () => true;
 globalThis.confirm = window.confirm;
-const releaseControl = makeElement();
+await delayedFormMutation({
+  formAction: "form-session-time",
+  session: routingSessions[0].id,
+  fields: { time: "12:30" },
+  rpcName: "set_operational_session_time",
+  expectedArgs: { p_session_id: routingSessions[0].id, p_time: "12:30" },
+  result: { ...paidControlServerRow, start_time: "12:30:00" },
+  beforeResolve: () => { paidControlServerRow.start_time = "12:30:00"; },
+  successToast: "Session time updated",
+});
+await delayedFormMutation({
+  formAction: "form-session-notice",
+  session: routingSessions[0].id,
+  fields: { notice: "Bring a towel" },
+  rpcName: "set_operational_notice",
+  expectedArgs: { p_session_id: routingSessions[0].id, p_notice: "Bring a towel" },
+  result: { ...paidControlServerRow, notice: "Bring a towel" },
+  beforeResolve: () => { paidControlServerRow.notice = "Bring a towel"; },
+  successToast: "Session note posted",
+});
+await delayedFormMutation({
+  formAction: "form-cancel-week",
+  session: routingSessions[1].id,
+  fields: { reason: "Storm warning" },
+  rpcName: "cancel_operational_session",
+  expectedArgs: { p_session_id: routingSessions[1].id, p_reason: "Storm warning" },
+  result: {
+    ...operationalTableRows.operational_sessions.find((row) => row.id === routingSessions[1].id),
+    cancelled_at: fixedIso, cancelled_source: "admin", cancel_reason: "Storm warning",
+  },
+  beforeResolve: () => Object.assign(
+    operationalTableRows.operational_sessions.find((row) => row.id === routingSessions[1].id),
+    { cancelled_at: fixedIso, cancelled_source: "admin", cancel_reason: "Storm warning" }
+  ),
+  successToast: "Session cancelled — members notified",
+});
+
+const rejectedMidtownGate = deferred();
+operationalRpcHandler = (name, args) => {
+  if (name === "set_operational_midtown_open") {
+    operationalRpcCalls.push({ name, args: structuredClone(args) });
+    return rejectedMidtownGate.promise;
+  }
+  return delegatedBaseOperationalRpcHandler(name, args);
+};
+const rejectedMidtownControl = operationControl("BUTTON", "", "Close Midtown");
+rejectedMidtownControl.dataset = { action: "midtown-toggle", session: queueMidtown.id, open: "0" };
+rejectedMidtownControl.closest = () => rejectedMidtownControl;
+toastStack.children.length = 0;
+const rejectedMidtownClick = click({ target: rejectedMidtownControl, preventDefault() {} });
+await new Promise(setImmediate);
+rejectedMidtownGate.reject(new Error("Midtown controls unavailable"));
+await rejectedMidtownClick;
+assert.deepEqual(toastStack.children.map((item) => item.textContent), ["Midtown controls unavailable"]);
+assert.equal(toastStack.children[0].getAttribute("role"), "alert");
+assert.equal(rejectedMidtownControl.disabled, false);
+assert.equal(rejectedMidtownControl.hasAttribute("aria-busy"), false);
+assert.equal(escapedRejections.length, 0);
+console.log("ok  adjacent live queue, duty, confirmation, Midtown, session, and cancellation controls await RPCs");
+
+// Release is authoritative in live mode: the cache and backend stay reserved
+// while pending, success survives forced hydration, and rejection remains
+// reserved without fake JavaScript waitlist promotion.
+operationalRpcHandler = delegatedBaseOperationalRpcHandler;
+window.confirm = () => true;
+globalThis.confirm = window.confirm;
+const releaseGate = deferred();
+let releaseRpcArgs = null;
+operationalRpcHandler = (name, args) => {
+  if (name === "release_operational_reservation") {
+    operationalRpcCalls.push({ name, args: structuredClone(args) });
+    releaseRpcArgs = structuredClone(args);
+    return releaseGate.promise;
+  }
+  return delegatedBaseOperationalRpcHandler(name, args);
+};
+const releaseControl = operationControl("BUTTON", "", "Release spot");
 releaseControl.dataset = { action: "release-reservation", booking: routedReleaseBooking.id };
 releaseControl.closest = () => releaseControl;
-await click({ target: releaseControl, preventDefault() {} });
+toastStack.children.length = 0;
+let releaseSettled = false;
+const releaseClick = click({ target: releaseControl, preventDefault() {} })
+  .then(() => { releaseSettled = true; });
+const duplicateReleaseClick = click({ target: releaseControl, preventDefault() {} });
+await new Promise(setImmediate);
+assert.deepEqual(releaseRpcArgs, { p_booking_id: routedReleaseBooking.id });
+assert.equal(releaseSettled, false);
+assert.equal(operationalRpcCalls.filter((call) => call.name === "release_operational_reservation"
+  && call.args.p_booking_id === routedReleaseBooking.id).length, 1);
+assert.equal(store.getBooking(routedReleaseBooking.id).status, "reserved");
+assert.equal(operationalTableRows.operational_bookings
+  .find((row) => row.id === routedReleaseBooking.id)?.status, "reserved");
+assert.equal(releaseControl.disabled, true);
+assert.equal(releaseControl.getAttribute("aria-busy"), "true");
+assert.equal(toastStack.children.length, 0);
+const releaseServerRow = operationalTableRows.operational_bookings
+  .find((row) => row.id === routedReleaseBooking.id);
+releaseServerRow.status = "cancelled";
+releaseGate.resolve({ data: structuredClone(releaseServerRow), error: null });
+await Promise.all([releaseClick, duplicateReleaseClick]);
 assert.equal(store.getBooking(routedReleaseBooking.id).status, "cancelled");
+await operations.refreshOperationalState();
+assert.equal(store.getBooking(routedReleaseBooking.id).status, "cancelled",
+  "released live reservation must remain cancelled after forced hydration");
+assert.deepEqual(toastStack.children.map((item) => item.textContent), ["Reservation released"]);
+assert.equal(releaseControl.disabled, false);
+assert.equal(releaseControl.hasAttribute("aria-busy"), false);
+
+operationalRpcHandler = delegatedBaseOperationalRpcHandler;
+const rejectedReleaseBooking = await store.reserveSession(authUser.id, routingSessions[1], Date.now());
+const rejectedReleaseGate = deferred();
+operationalRpcHandler = (name, args) => {
+  if (name === "release_operational_reservation") {
+    operationalRpcCalls.push({ name, args: structuredClone(args) });
+    return rejectedReleaseGate.promise;
+  }
+  return delegatedBaseOperationalRpcHandler(name, args);
+};
+const rejectedReleaseControl = operationControl("BUTTON", "", "Release spot");
+rejectedReleaseControl.dataset = { action: "release-reservation", booking: rejectedReleaseBooking.id };
+rejectedReleaseControl.closest = () => rejectedReleaseControl;
+toastStack.children.length = 0;
+const rejectedReleaseClick = click({ target: rejectedReleaseControl, preventDefault() {} });
+await new Promise(setImmediate);
+rejectedReleaseGate.resolve({ data: null, error: { message: "Release service unavailable" } });
+await rejectedReleaseClick;
+assert.equal(store.getBooking(rejectedReleaseBooking.id).status, "reserved");
+await operations.refreshOperationalState();
+assert.equal(store.getBooking(rejectedReleaseBooking.id).status, "reserved");
+assert.equal(operationalTableRows.operational_bookings
+  .find((row) => row.id === rejectedReleaseBooking.id)?.status, "reserved");
+assert.deepEqual(toastStack.children.map((item) => item.textContent), ["Release service unavailable"]);
+assert.equal(toastStack.children[0].getAttribute("role"), "alert");
+assert.equal(rejectedReleaseControl.disabled, false);
+assert.equal(rejectedReleaseControl.hasAttribute("aria-busy"), false);
+console.log("ok  delegated release persists authoritatively and restores failure state");
+
+operationalRpcHandler = delegatedBaseOperationalRpcHandler;
+const routedDeferTarget = store.deferTargetsFor(routedDeferBooking)[0];
+if (!routedDeferTarget) throw new Error("Payment routing regression needs a defer target");
 const deferControl = makeElement();
 deferControl.dataset = { action: "defer-to", booking: routedDeferBooking.id, session: routedDeferTarget.id };
 deferControl.closest = () => deferControl;

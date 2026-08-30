@@ -36,10 +36,10 @@ The design review remains available at `http://127.0.0.1:4173/references/itc-mob
 
 - Zero dependencies, no build step. Plain ES modules so the codebase stays easy to refine; the production stack is still an open decision.
 - The combined Testing candidate has explicit ownership boundaries:
-  - **Supabase:** identity, roles, applications, notifications, Giving campaigns, and donor profiles.
-  - **`localStorage`:** Payment operations and Community prototype interactions. Payment reservations, bookings, queues, collector duty, payout details, confirmations, receipts, and prototype donation records are keyed by the authenticated Supabase profile UUID. No real money is moved.
-- Navigation combines the Notification bell with a signed-in-only Giving tab. Admin navigation contains Approvals, Members, Activities, Giving, HYROX, and Payments / Ops.
-- Persisted prototype state is **v14** and accepts/migrates existing **v9–v13** snapshots without discarding genuine domain records.
+  - **Supabase in configured live mode:** identity, roles, applications, notifications, Giving campaigns, donor profiles, and operational sessions, bookings, queues, collector assignments, payout profiles, confirmations, RSVP totals, and receipts. Browser mutations use scoped RPCs; no real money is moved.
+  - **`localStorage`:** local-mode prototype state plus device-local Community interactions and application drafts. In live mode it may retain a UUID-keyed payout handoff cache only after an authoritative Supabase save; forced hydration remains authoritative.
+- Navigation combines the Notification bell with a signed-in-only Giving tab. Admin navigation contains Approvals, Members, Activities, Giving, and Payments. Dated free/RSVP and paid session administration is grouped under **Activities → Weekly Event Controls**.
+- Persisted prototype state is **v16** and accepts/migrates existing **v9–v15** snapshots without discarding genuine domain records.
 - With Supabase configured, a new Google profile remains `pending` until its application is submitted and an Admin approves it. Pending and declined profiles cannot use Payment or Giving controls.
 - Without Supabase configuration, local state starts empty. Apply through the membership flow to create a local pending profile, which can then sign in again by email (no password).
 - `app/js/store.js` remains the backend seam across both ownership domains until a production backend is selected.

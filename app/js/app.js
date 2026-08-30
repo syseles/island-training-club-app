@@ -435,6 +435,9 @@ async function render(generation = renderGeneration) {
       out = views.viewCheckout(arg);
       break;
     case "pay":
+      if (isLive() && routeUser?.status === "approved") {
+        await store.hydrateLiveOperations({ force: true });
+      }
       out = views.viewPay(arg);
       break;
     case "booking":
@@ -817,11 +820,16 @@ document.addEventListener("click", async (e) => {
       break;
 
     case "release-reservation":
-      if (confirm("Release this reservation? Your spot may go to the waitlist.")) {
+      if (controlBusy.has(el)) break;
+      if (confirm(isLive()
+        ? "Release this reservation?"
+        : "Release this reservation? Your spot may go to the waitlist.")) {
         try {
-          const released = store.releaseReservation(el.dataset.booking);
-          toast(released ? "Reservation released" : "Nothing to release", !released);
-          render();
+          await withBusyControl(el, "Releasing…", async () => {
+            const released = await store.releaseReservation(el.dataset.booking);
+            toast(released ? "Reservation released" : "Nothing to release", !released);
+            await renderWithFeedback();
+          });
         } catch (err) { toast(err.message || "Unable to release reservation", true); }
       }
       break;
@@ -902,55 +910,85 @@ document.addEventListener("click", async (e) => {
 
     case "join-waitlist":
       try {
-        const pos = store.joinWaitlist(store.currentUser().id, el.dataset.session);
-        toast(`You're #${pos} on the waitlist`);
-      } catch (err) { toast(err.message, true); }
-      render();
+        await withBusyControl(el, "Joining…", async () => {
+          await store.joinWaitlist(store.currentUser().id, el.dataset.session);
+          const pos = store.waitlistPosition(store.currentUser().id, el.dataset.session);
+          toast(pos ? `You're #${pos} on the waitlist` : "Joined the waitlist");
+          await renderWithFeedback();
+        });
+      } catch (err) { toast(err.message || "Unable to join the waitlist", true); }
       break;
 
     case "leave-waitlist":
-      store.leaveWaitlist(store.currentUser().id, el.dataset.session);
-      toast("Left the waitlist");
-      render();
+      try {
+        await withBusyControl(el, "Leaving…", async () => {
+          await store.leaveWaitlist(store.currentUser().id, el.dataset.session);
+          toast("Left the waitlist");
+          await renderWithFeedback();
+        });
+      } catch (err) { toast(err.message || "Unable to leave the waitlist", true); }
       break;
 
     case "join-interest":
       try {
-        const pos = store.joinInterest(store.currentUser().id, el.dataset.session);
-        toast(`You're #${pos} in line for Midtown`);
-      } catch (err) { toast(err.message, true); }
-      render();
+        await withBusyControl(el, "Joining…", async () => {
+          await store.joinInterest(store.currentUser().id, el.dataset.session);
+          const pos = store.interestPosition(store.currentUser().id, el.dataset.session);
+          toast(pos ? `You're #${pos} in line for Midtown` : "Joined the Midtown list");
+          await renderWithFeedback();
+        });
+      } catch (err) { toast(err.message || "Unable to join the Midtown list", true); }
       break;
 
     case "leave-interest":
-      store.leaveInterest(store.currentUser().id, el.dataset.session);
-      toast("Left the Midtown list");
-      render();
+      try {
+        await withBusyControl(el, "Leaving…", async () => {
+          await store.leaveInterest(store.currentUser().id, el.dataset.session);
+          toast("Left the Midtown list");
+          await renderWithFeedback();
+        });
+      } catch (err) { toast(err.message || "Unable to leave the Midtown list", true); }
       break;
 
     case "duty-claim":
-      store.setDuty(store.currentUser().id, el.dataset.week);
-      toast("You're on duty this week");
-      render();
+      try {
+        await withBusyControl(el, "Claiming…", async () => {
+          await store.setDuty(store.currentUser().id, el.dataset.week);
+          toast("You're on duty this week");
+          await renderWithFeedback();
+        });
+      } catch (err) { toast(err.message || "Unable to claim collector duty", true); }
       break;
 
     case "confirm-payment": {
-      const res = store.confirmBookingPayment(el.dataset.booking);
-      toast(res ? "Payment confirmed — member notified" : "Nothing to confirm", !res);
-      render();
+      try {
+        await withBusyControl(el, "Confirming…", async () => {
+          const res = await store.confirmBookingPayment(el.dataset.booking);
+          toast(res ? "Payment confirmed — member notified" : "Nothing to confirm", !res);
+          await renderWithFeedback();
+        });
+      } catch (err) { toast(err.message || "Unable to confirm payment", true); }
       break;
     }
 
     case "midtown-toggle":
-      store.setMidtownOpen(el.dataset.session, el.dataset.open === "1");
-      toast(el.dataset.open === "1" ? "Midtown opened — interest list converting" : "Midtown closed");
-      render();
+      try {
+        await withBusyControl(el, "Updating…", async () => {
+          await store.setMidtownOpen(el.dataset.session, el.dataset.open === "1");
+          toast(el.dataset.open === "1" ? "Midtown opened — interest list converting" : "Midtown closed");
+          await renderWithFeedback();
+        });
+      } catch (err) { toast(err.message || "Unable to update Midtown", true); }
       break;
 
     case "venue-tbc-toggle":
-      store.setVenueTBC(el.dataset.session, el.dataset.on === "1");
-      toast(el.dataset.on === "1" ? "Venue marked TBC" : "Venue confirmed");
-      render();
+      try {
+        await withBusyControl(el, "Updating…", async () => {
+          await store.setVenueTBC(el.dataset.session, el.dataset.on === "1");
+          toast(el.dataset.on === "1" ? "Venue marked TBC" : "Venue confirmed");
+          await renderWithFeedback();
+        });
+      } catch (err) { toast(err.message || "Unable to update the venue status", true); }
       break;
 
     case "delete-event": {
@@ -1165,10 +1203,14 @@ document.addEventListener("submit", async (e) => {
       e.preventDefault();
       const user = store.currentUser();
       if (!form.dataset.session || !user || user.status !== "approved") return;
+      const control = form.querySelector('[type="submit"]');
+      const controls = [...form.querySelectorAll("input, button")];
       try {
-        const booking = store.reserveSession(user.id, form.dataset.session);
-        toast("Spot reserved — pay before the deadline");
-        location.hash = `#/pay/${booking.id}`;
+        await withBusyControl(control, "Reserving…", async () => {
+          const booking = await store.reserveSession(user.id, form.dataset.session);
+          toast("Spot reserved — pay before the deadline");
+          location.hash = `#/pay/${booking.id}`;
+        }, { busyKey: form, controls });
       } catch (err) {
         toast(err.message || "Unable to reserve this spot", true);
       }
@@ -1181,10 +1223,14 @@ document.addEventListener("submit", async (e) => {
       const user = store.currentUser();
       if (!booking || !user || booking.userId !== user.id) return;
       const fd = new FormData(form);
+      const control = form.querySelector('[type="submit"]');
+      const controls = [...form.querySelectorAll("input, button")];
       try {
-        store.markBookingPaid(booking.id, fd.get("method"), fd.get("ref"));
-        toast("Payment marked — awaiting collector confirmation");
-        location.hash = `#/booking/${booking.id}`;
+        await withBusyControl(control, "Marking paid…", async () => {
+          await store.markBookingPaid(booking.id, fd.get("method"), fd.get("ref"));
+          toast("Payment marked — awaiting collector confirmation");
+          location.hash = `#/booking/${booking.id}`;
+        }, { busyKey: form, controls });
       } catch (err) {
         toast(err.message || "Unable to mark payment", true);
       }
@@ -1277,9 +1323,17 @@ document.addEventListener("submit", async (e) => {
       if (!form.reportValidity()) return;
       const reason = String(new FormData(form).get("reason") || "").trim();
       if (!confirm("Cancel this session? Paid bookings auto-defer; waitlists dissolve.")) return;
-      store.cancelSessionWeek(form.dataset.session, reason);
-      toast("Session cancelled — members notified");
-      render();
+      const control = form.querySelector('[type="submit"]');
+      const controls = [...form.querySelectorAll("input, button")];
+      try {
+        await withBusyControl(control, "Cancelling…", async () => {
+          await store.cancelSessionWeek(form.dataset.session, reason);
+          toast("Session cancelled — members notified");
+          await renderWithFeedback();
+        }, { busyKey: form, controls });
+      } catch (err) {
+        toast(err.message || "Unable to cancel the session", true);
+      }
       break;
     }
 
@@ -1313,17 +1367,35 @@ document.addEventListener("submit", async (e) => {
 
     case "form-session-time": {
       e.preventDefault();
-      store.setSessionTime(form.dataset.session, new FormData(form).get("time"));
-      toast("Session time updated");
-      render();
+      const time = new FormData(form).get("time");
+      const control = form.querySelector('[type="submit"]');
+      const controls = [...form.querySelectorAll("input, button")];
+      try {
+        await withBusyControl(control, "Saving…", async () => {
+          await store.setSessionTime(form.dataset.session, time);
+          toast("Session time updated");
+          await renderWithFeedback();
+        }, { busyKey: form, controls });
+      } catch (err) {
+        toast(err.message || "Unable to update the session time", true);
+      }
       break;
     }
 
     case "form-session-notice": {
       e.preventDefault();
-      store.setSessionNotice(form.dataset.session, new FormData(form).get("notice"));
-      toast("Session note posted");
-      render();
+      const notice = new FormData(form).get("notice");
+      const control = form.querySelector('[type="submit"]');
+      const controls = [...form.querySelectorAll("input, button")];
+      try {
+        await withBusyControl(control, "Posting…", async () => {
+          await store.setSessionNotice(form.dataset.session, notice);
+          toast("Session note posted");
+          await renderWithFeedback();
+        }, { busyKey: form, controls });
+      } catch (err) {
+        toast(err.message || "Unable to post the session note", true);
+      }
       break;
     }
 
@@ -1470,9 +1542,15 @@ document.addEventListener("change", async (e) => {
 
     case "duty-set":
       if (el.value) {
-        store.setDuty(el.value, el.dataset.week);
-        toast("Duty handed over");
-        render();
+        try {
+          await withBusyControl(el, "Updating…", async () => {
+            await store.setDuty(el.value, el.dataset.week);
+            toast("Duty handed over");
+            await renderWithFeedback();
+          });
+        } catch (err) {
+          toast(err.message || "Unable to hand over collector duty", true);
+        }
       }
       break;
 
@@ -1552,6 +1630,18 @@ async function boot() {
       await renderWithFeedback();
     } catch (err) {
       toast(err.message || "Unable to load your account", true);
+    }
+  });
+
+  // Assigned collector payout changes can be RLS-suppressed from an ordinary
+  // member's Realtime stream. Restoring an open Payment route reruns the same
+  // forced, least-privilege hydration used on route entry.
+  document.addEventListener("visibilitychange", async () => {
+    if (document.visibilityState !== "visible" || parseHash()[0] !== "pay") return;
+    try {
+      await renderWithFeedback();
+    } catch (err) {
+      toast(err.message || "Unable to refresh payment details", true);
     }
   });
 

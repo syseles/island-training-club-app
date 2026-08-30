@@ -137,6 +137,59 @@ begin
       or not has_function_privilege('authenticated', 'public.withdraw_operational_rsvp(uuid)', 'execute') then
     raise notice 'FAIL: RSVP mutation RPC ACLs violate least privilege'; failures := failures + 1;
   end if;
+  if to_regprocedure('public.release_operational_reservation(uuid)') is null
+      or exists (
+        select 1
+          from pg_proc p
+          cross join lateral aclexplode(coalesce(p.proacl, acldefault('f', p.proowner))) acl
+         where p.oid = 'public.release_operational_reservation(uuid)'::regprocedure
+           and acl.grantee = 0
+           and acl.privilege_type = 'EXECUTE'
+      )
+      or has_function_privilege('anon', 'public.release_operational_reservation(uuid)', 'execute')
+      or not has_function_privilege('authenticated', 'public.release_operational_reservation(uuid)', 'execute') then
+    raise notice 'FAIL: release reservation RPC ACLs violate least privilege'; failures := failures + 1;
+  end if;
+  if exists (
+    select 1
+      from pg_trigger t
+      join pg_class c on c.oid = t.tgrelid
+      join pg_namespace n on n.oid = c.relnamespace
+     where n.nspname = 'public'
+       and c.relname = 'operational_bookings'
+       and t.tgname = 'sync_operational_rsvp_count'
+       and not t.tgisinternal
+  ) then
+    raise notice 'FAIL: broad RSVP count trigger still exists'; failures := failures + 1;
+  end if;
+  if (
+    select array_agg(t.tgname order by t.tgname)
+      from pg_trigger t
+      join pg_class c on c.oid = t.tgrelid
+      join pg_namespace n on n.oid = c.relnamespace
+     where n.nspname = 'public'
+       and c.relname = 'operational_bookings'
+       and t.tgname like 'sync_operational_rsvp_count_%'
+       and not t.tgisinternal
+  ) <> array[
+    'sync_operational_rsvp_count_delete',
+    'sync_operational_rsvp_count_insert',
+    'sync_operational_rsvp_count_update'
+  ]::name[] then
+    raise notice 'FAIL: selective RSVP count triggers are incomplete'; failures := failures + 1;
+  end if;
+  if not exists (
+    select 1
+      from pg_trigger t
+      join pg_class c on c.oid = t.tgrelid
+      join pg_namespace n on n.oid = c.relnamespace
+     where n.nspname = 'public'
+       and c.relname = 'operational_bookings'
+       and t.tgname = 'sync_operational_rsvp_count_update'
+       and pg_get_triggerdef(t.oid) like '%UPDATE OF status, session_id%'
+  ) then
+    raise notice 'FAIL: RSVP update trigger is not status/session scoped'; failures := failures + 1;
+  end if;
   if not exists (
     select 1 from information_schema.columns
      where table_schema = 'public'
@@ -279,7 +332,8 @@ insert into auth.users (id, email, raw_user_meta_data) values
   ('cc000000-0000-0000-0000-00000000c001', 'pending-test@itc.invalid', '{}'::jsonb),
   ('dd000000-0000-0000-0000-00000000d001', 'other-test@itc.invalid', '{}'::jsonb),
   ('ee000000-0000-0000-0000-00000000e001', 'extra-member@itc.invalid', '{}'::jsonb),
-  ('ff000000-0000-0000-0000-00000000f001', 'super-test@itc.invalid', '{}'::jsonb);
+  ('ff000000-0000-0000-0000-00000000f001', 'super-test@itc.invalid', '{}'::jsonb),
+  ('ab000000-0000-0000-0000-00000000d001', 'declined-test@itc.invalid', '{}'::jsonb);
 
 update public.profiles set full_name = 'Admin Test', role = 'admin'
   where id = 'aa000000-0000-0000-0000-00000000a001';
@@ -293,6 +347,8 @@ update public.profiles set full_name = 'Extra Member', role = 'member'
   where id = 'ee000000-0000-0000-0000-00000000e001';
 update public.profiles set full_name = 'Super Test', role = 'super_admin'
   where id = 'ff000000-0000-0000-0000-00000000f001';
+update public.profiles set full_name = 'Declined Test', role = 'declined'
+  where id = 'ab000000-0000-0000-0000-00000000d001';
 
 -- Assigned payout reads add only the collector rows needed by approved members.
 insert into public.collector_assignments
@@ -369,9 +425,13 @@ begin
 end $$;
 
 -- Prove the actual migration backfills bookings that predate its trigger. The
--- disposable verifier applied 00008 once during setup, so remove only its
--- booking trigger, create pre-migration rows, and reapply the migration file.
+-- The disposable verifier applied 00008 and its forward locking correction
+-- during setup. Remove every count trigger, create pre-migration rows, then
+-- reapply 00008 followed by the forward correction in deployment order.
 drop trigger if exists sync_operational_rsvp_count on public.operational_bookings;
+drop trigger if exists sync_operational_rsvp_count_insert on public.operational_bookings;
+drop trigger if exists sync_operational_rsvp_count_delete on public.operational_bookings;
+drop trigger if exists sync_operational_rsvp_count_update on public.operational_bookings;
 
 do $$
 declare
@@ -426,6 +486,7 @@ begin
 end $$;
 
 \ir ../migrations/20260829000008_rsvp_integrity.sql
+\ir ../migrations/20260830000001_rsvp_count_trigger_locking.sql
 
 do $$
 declare
@@ -855,6 +916,160 @@ begin
   perform set_config('request.jwt.claim.sub', '', true);
 end $$;
 
+-- Selective RSVP trigger behavior: paid/payment noise must not create or touch
+-- aggregate rows; only confirmed contribution changes recalculate exact totals.
+do $$
+declare
+  v_rsvp_date_a date := (now() at time zone 'Asia/Hong_Kong')::date + 410;
+  v_rsvp_date_b date := (now() at time zone 'Asia/Hong_Kong')::date + 411;
+  v_paid_date date := (now() at time zone 'Asia/Hong_Kong')::date + 412;
+  v_rsvp_a text;
+  v_rsvp_b text;
+  v_paid text;
+  v_confirmed uuid;
+  v_transition uuid;
+  v_paid_booking uuid;
+  v_a_updated_at timestamptz;
+begin
+  v_rsvp_a := 'event-rsvp-trigger-a-' || v_rsvp_date_a::text;
+  v_rsvp_b := 'event-rsvp-trigger-b-' || v_rsvp_date_b::text;
+  v_paid := 'event-paid-trigger-noise-' || v_paid_date::text;
+
+  insert into public.operational_activity_templates
+    (activity_id, name, venue, weekday, start_time, duration_minutes,
+     capacity, price_hkd, default_open, active, category, maps_query, requires_rsvp)
+  values
+    ('event-rsvp-trigger-a', 'Trigger RSVP A', 'TBC',
+     extract(dow from v_rsvp_date_a)::integer, time '12:00', 60,
+     null, 0, true, false, 'Socials', null, true),
+    ('event-rsvp-trigger-b', 'Trigger RSVP B', 'TBC',
+     extract(dow from v_rsvp_date_b)::integer, time '12:00', 60,
+     null, 0, true, false, 'Socials', null, true),
+    ('event-paid-trigger-noise', 'Trigger Paid Noise', 'BFT Causeway Bay',
+     extract(dow from v_paid_date)::integer, time '12:00', 60,
+     20, 180, true, false, 'HYROX', 'BFT Causeway Bay', false)
+  on conflict (activity_id) do update
+    set requires_rsvp = excluded.requires_rsvp,
+        price_hkd = excluded.price_hkd,
+        capacity = excluded.capacity;
+
+  insert into public.operational_sessions
+    (id, activity_id, session_date, start_time, duration_minutes,
+     venue, capacity, price_hkd, is_open)
+  values
+    (v_rsvp_a, 'event-rsvp-trigger-a', v_rsvp_date_a, time '12:00', 60,
+     'TBC', null, 0, true),
+    (v_rsvp_b, 'event-rsvp-trigger-b', v_rsvp_date_b, time '12:00', 60,
+     'TBC', null, 0, true),
+    (v_paid, 'event-paid-trigger-noise', v_paid_date, time '12:00', 60,
+     'BFT Causeway Bay', 20, 180, true);
+
+  insert into public.operational_bookings
+    (profile_id, session_id, status, pay_deadline_at, paid_at, snapshot)
+  values
+    ('bb000000-0000-0000-0000-00000000b001', v_rsvp_a,
+     'confirmed', now(), now(),
+     jsonb_build_object('name', 'Trigger RSVP A', 'session_date', v_rsvp_date_a,
+       'start_time', '12:00', 'venue', 'TBC', 'price_hkd', 0))
+  returning id into v_confirmed;
+  perform pg_temp.op_assert(
+    (select going_count = 1 from public.operational_rsvp_counts where session_id = v_rsvp_a),
+    'confirmed RSVP insert creates exact count one'
+  );
+
+  select updated_at into v_a_updated_at
+    from public.operational_rsvp_counts where session_id = v_rsvp_a;
+
+  insert into public.operational_bookings
+    (profile_id, session_id, status, pay_deadline_at, snapshot)
+  values
+    ('dd000000-0000-0000-0000-00000000d001', v_rsvp_a,
+     'reserved', now(),
+     jsonb_build_object('name', 'Trigger RSVP A', 'session_date', v_rsvp_date_a,
+       'start_time', '12:00', 'venue', 'TBC', 'price_hkd', 0))
+  returning id into v_transition;
+  update public.operational_bookings
+     set payment_reference = 'RSVP-NOISE',
+         payment_marked_at = now()
+   where id = v_transition;
+  perform pg_temp.op_assert(
+    (select going_count = 1 and updated_at = v_a_updated_at
+       from public.operational_rsvp_counts where session_id = v_rsvp_a),
+    'reserved RSVP insert and payment-field noise do not recalculate'
+  );
+
+  insert into public.operational_bookings
+    (profile_id, session_id, status, pay_deadline_at, snapshot)
+  values
+    ('ee000000-0000-0000-0000-00000000e001', v_paid,
+     'reserved', now(),
+     jsonb_build_object('name', 'Trigger Paid Noise', 'session_date', v_paid_date,
+       'start_time', '12:00', 'venue', 'BFT Causeway Bay', 'price_hkd', 180))
+  returning id into v_paid_booking;
+  update public.operational_bookings
+     set payment_marked_at = now(),
+         payment_method = 'payme',
+         payment_reference = 'PAID-NOISE'
+   where id = v_paid_booking;
+  update public.operational_bookings set status = 'confirmed' where id = v_paid_booking;
+  update public.operational_bookings set payment_reference = 'PAID-NOISE-2' where id = v_paid_booking;
+  delete from public.operational_bookings where id = v_paid_booking;
+  perform pg_temp.op_assert(
+    not exists (select 1 from public.operational_rsvp_counts where session_id = v_paid)
+    and (select updated_at = v_a_updated_at
+           from public.operational_rsvp_counts where session_id = v_rsvp_a),
+    'paid inserts, status transitions, payment updates and deletes never mutate RSVP counts'
+  );
+
+  update public.operational_bookings set status = 'confirmed' where id = v_transition;
+  perform pg_temp.op_assert(
+    (select going_count = 2 from public.operational_rsvp_counts where session_id = v_rsvp_a),
+    'reserved to confirmed RSVP increments exact total'
+  );
+  update public.operational_bookings set status = 'cancelled' where id = v_confirmed;
+  perform pg_temp.op_assert(
+    (select going_count = 1 from public.operational_rsvp_counts where session_id = v_rsvp_a),
+    'confirmed to cancelled RSVP decrements exact total'
+  );
+
+  update public.operational_bookings set session_id = v_rsvp_b where id = v_transition;
+  perform pg_temp.op_assert(
+    (select going_count = 0 from public.operational_rsvp_counts where session_id = v_rsvp_a)
+    and (select going_count = 1 from public.operational_rsvp_counts where session_id = v_rsvp_b),
+    'RSVP to RSVP move recounts old and new sessions exactly'
+  );
+  update public.operational_bookings set session_id = v_paid where id = v_transition;
+  perform pg_temp.op_assert(
+    (select going_count = 0 from public.operational_rsvp_counts where session_id = v_rsvp_b)
+    and not exists (select 1 from public.operational_rsvp_counts where session_id = v_paid),
+    'RSVP to non-RSVP move decrements only the RSVP side'
+  );
+  update public.operational_bookings set session_id = v_rsvp_b where id = v_transition;
+  perform pg_temp.op_assert(
+    (select going_count = 1 from public.operational_rsvp_counts where session_id = v_rsvp_b)
+    and not exists (select 1 from public.operational_rsvp_counts where session_id = v_paid),
+    'non-RSVP to RSVP move increments only the RSVP side'
+  );
+  delete from public.operational_bookings where id = v_transition;
+  perform pg_temp.op_assert(
+    (select going_count = 0 from public.operational_rsvp_counts where session_id = v_rsvp_b),
+    'final confirmed RSVP delete retains exact zero'
+  );
+
+  perform pg_temp.op_assert(
+    not exists (
+      select 1
+        from public.operational_rsvp_counts c
+       where c.session_id in (v_rsvp_a, v_rsvp_b)
+         and c.going_count <> (
+           select count(*) from public.operational_bookings b
+            where b.session_id = c.session_id and b.status = 'confirmed'
+         )
+    ),
+    'stored RSVP totals equal a full confirmed-booking recount after every transition'
+  );
+end $$;
+
 -- run tests as a SQL function that can switch auth.uid() per case.
 do $$
 declare
@@ -969,6 +1184,207 @@ begin
   end;
 
   reset role;
+end $$;
+
+-- Authoritative unpaid-reservation release: owner/Admin only, unmarked
+-- reserved state only, idempotent failure, rollback-safe, and no direct writes.
+do $$
+declare
+  v_base_date date := (now() at time zone 'Asia/Hong_Kong')::date + 430;
+  v_owner_session text;
+  v_admin_session text;
+  v_other_session text;
+  v_membership_session text;
+  v_marked_session text;
+  v_status_session text;
+  v_rollback_session text;
+  v_owner_booking uuid;
+  v_fresh_booking uuid;
+  v_admin_booking uuid;
+  v_other_booking uuid;
+  v_membership_booking uuid;
+  v_marked_booking uuid;
+  v_confirmed_booking uuid;
+  v_cancelled_booking uuid;
+  v_expired_booking uuid;
+  v_deferred_booking uuid;
+  v_rollback_booking uuid;
+  v_status text;
+begin
+  v_owner_session := 'event-release-owner-' || v_base_date::text;
+  v_admin_session := 'event-release-admin-' || (v_base_date + 1)::text;
+  v_other_session := 'event-release-other-' || (v_base_date + 2)::text;
+  v_membership_session := 'event-release-membership-' || (v_base_date + 3)::text;
+  v_marked_session := 'event-release-marked-' || (v_base_date + 4)::text;
+  v_status_session := 'event-release-status-' || (v_base_date + 5)::text;
+  v_rollback_session := 'event-release-rollback-' || (v_base_date + 6)::text;
+
+  insert into public.operational_activity_templates
+    (activity_id, name, venue, weekday, start_time, duration_minutes,
+     capacity, price_hkd, default_open, active, category, maps_query, requires_rsvp)
+  values
+    ('event-release-owner', 'Release Owner', 'BFT Causeway Bay', 1, time '12:00', 60, 20, 180, true, false, 'HYROX', 'BFT Causeway Bay', false),
+    ('event-release-admin', 'Release Admin', 'BFT Causeway Bay', 2, time '12:00', 60, 20, 180, true, false, 'HYROX', 'BFT Causeway Bay', false),
+    ('event-release-other', 'Release Other', 'BFT Causeway Bay', 3, time '12:00', 60, 20, 180, true, false, 'HYROX', 'BFT Causeway Bay', false),
+    ('event-release-membership', 'Release Membership', 'BFT Causeway Bay', 4, time '12:00', 60, 20, 180, true, false, 'HYROX', 'BFT Causeway Bay', false),
+    ('event-release-marked', 'Release Marked', 'BFT Causeway Bay', 5, time '12:00', 60, 20, 180, true, false, 'HYROX', 'BFT Causeway Bay', false),
+    ('event-release-status', 'Release Status', 'BFT Causeway Bay', 6, time '12:00', 60, 20, 180, true, false, 'HYROX', 'BFT Causeway Bay', false),
+    ('event-release-rollback', 'Release Rollback', 'BFT Causeway Bay', 0, time '12:00', 60, 20, 180, true, false, 'HYROX', 'BFT Causeway Bay', false);
+
+  insert into public.operational_sessions
+    (id, activity_id, session_date, start_time, duration_minutes,
+     venue, capacity, price_hkd, is_open)
+  values
+    (v_owner_session, 'event-release-owner', v_base_date, time '12:00', 60, 'BFT Causeway Bay', 20, 180, true),
+    (v_admin_session, 'event-release-admin', v_base_date + 1, time '12:00', 60, 'BFT Causeway Bay', 20, 180, true),
+    (v_other_session, 'event-release-other', v_base_date + 2, time '12:00', 60, 'BFT Causeway Bay', 20, 180, true),
+    (v_membership_session, 'event-release-membership', v_base_date + 3, time '12:00', 60, 'BFT Causeway Bay', 20, 180, true),
+    (v_marked_session, 'event-release-marked', v_base_date + 4, time '12:00', 60, 'BFT Causeway Bay', 20, 180, true),
+    (v_status_session, 'event-release-status', v_base_date + 5, time '12:00', 60, 'BFT Causeway Bay', 20, 180, true),
+    (v_rollback_session, 'event-release-rollback', v_base_date + 6, time '12:00', 60, 'BFT Causeway Bay', 20, 180, true);
+
+  perform set_config('request.jwt.claim.sub', 'bb000000-0000-0000-0000-00000000b001', true);
+  set local role authenticated;
+  select id into v_owner_booking from public.reserve_operational_session(v_owner_session);
+  select status into v_status from public.release_operational_reservation(v_owner_booking);
+  reset role;
+  perform pg_temp.op_assert(v_status = 'cancelled'
+    and (select status = 'cancelled' from public.operational_bookings where id = v_owner_booking),
+    'owner releases an unmarked reservation authoritatively');
+  perform pg_temp.op_assert(
+    (select count(*) = 0 from public.operational_bookings
+      where session_id = v_owner_session and status in ('reserved', 'confirmed')),
+    'release drops the authoritative active booking count');
+
+  perform set_config('request.jwt.claim.sub', 'bb000000-0000-0000-0000-00000000b001', true);
+  set local role authenticated;
+  begin
+    perform public.release_operational_reservation(v_owner_booking);
+    raise exception 'repeated release should fail';
+  exception when others then
+    if sqlerrm not like '%Reservation is no longer releasable.%' then raise; end if;
+  end;
+  select id into v_fresh_booking from public.reserve_operational_session(v_owner_session);
+  reset role;
+  perform pg_temp.op_assert(
+    (select status = 'reserved' from public.operational_bookings where id = v_fresh_booking),
+    'release permits a fresh later reservation for the same owner/session');
+
+  perform set_config('request.jwt.claim.sub', 'dd000000-0000-0000-0000-00000000d001', true);
+  set local role authenticated;
+  select id into v_admin_booking from public.reserve_operational_session(v_admin_session);
+  perform set_config('request.jwt.claim.sub', 'aa000000-0000-0000-0000-00000000a001', true);
+  perform public.release_operational_reservation(v_admin_booking);
+  reset role;
+  perform pg_temp.op_assert(
+    (select status = 'cancelled' from public.operational_bookings where id = v_admin_booking),
+    'Admin releases an owner reservation on their behalf');
+
+  perform set_config('request.jwt.claim.sub', 'bb000000-0000-0000-0000-00000000b001', true);
+  set local role authenticated;
+  select id into v_other_booking from public.reserve_operational_session(v_other_session);
+  perform set_config('request.jwt.claim.sub', 'dd000000-0000-0000-0000-00000000d001', true);
+  begin
+    perform public.release_operational_reservation(v_other_booking);
+    raise exception 'another member release should fail';
+  exception when others then
+    if sqlerrm not like '%Not authorized for this booking.%' then raise; end if;
+  end;
+  reset role;
+  perform pg_temp.op_assert(
+    (select status = 'reserved' from public.operational_bookings where id = v_other_booking),
+    'another member cannot mutate the reservation');
+
+  perform set_config('request.jwt.claim.sub', 'bb000000-0000-0000-0000-00000000b001', true);
+  set local role authenticated;
+  select id into v_membership_booking from public.reserve_operational_session(v_membership_session);
+  for v_status in select unnest(array[
+    'cc000000-0000-0000-0000-00000000c001',
+    'ab000000-0000-0000-0000-00000000d001'
+  ]) loop
+    perform set_config('request.jwt.claim.sub', v_status, true);
+    begin
+      perform public.release_operational_reservation(v_membership_booking);
+      raise exception 'unapproved release should fail';
+    exception when others then
+      if sqlerrm not like '%Approved membership required.%' then raise; end if;
+    end;
+  end loop;
+  reset role;
+  perform pg_temp.op_assert(
+    (select status = 'reserved' from public.operational_bookings where id = v_membership_booking),
+    'pending and declined callers cannot mutate a reservation');
+
+  perform set_config('request.jwt.claim.sub', 'bb000000-0000-0000-0000-00000000b001', true);
+  set local role authenticated;
+  select id into v_marked_booking from public.reserve_operational_session(v_marked_session);
+  perform public.mark_operational_payment(v_marked_booking, 'payme', 'RELEASE-MARKED');
+  begin
+    perform public.release_operational_reservation(v_marked_booking);
+    raise exception 'payment-marked release should fail';
+  exception when others then
+    if sqlerrm not like '%Payment has already been marked.%' then raise; end if;
+  end;
+  reset role;
+  perform pg_temp.op_assert(
+    (select status = 'reserved' and payment_marked_at is not null
+       from public.operational_bookings where id = v_marked_booking),
+    'payment-marked reservation remains untouched');
+
+  insert into public.operational_bookings
+    (profile_id, session_id, status, pay_deadline_at, paid_at, snapshot)
+  values
+    ('bb000000-0000-0000-0000-00000000b001', v_status_session, 'confirmed', now(), now(), '{}'::jsonb),
+    ('dd000000-0000-0000-0000-00000000d001', v_status_session, 'cancelled', now(), null, '{}'::jsonb),
+    ('ee000000-0000-0000-0000-00000000e001', v_status_session, 'expired', now(), null, '{}'::jsonb),
+    ('aa000000-0000-0000-0000-00000000a001', v_status_session, 'deferred', now(), now(), '{}'::jsonb);
+  select id into v_confirmed_booking from public.operational_bookings
+   where profile_id = 'bb000000-0000-0000-0000-00000000b001' and session_id = v_status_session;
+  select id into v_cancelled_booking from public.operational_bookings
+   where profile_id = 'dd000000-0000-0000-0000-00000000d001' and session_id = v_status_session;
+  select id into v_expired_booking from public.operational_bookings
+   where profile_id = 'ee000000-0000-0000-0000-00000000e001' and session_id = v_status_session;
+  select id into v_deferred_booking from public.operational_bookings
+   where profile_id = 'aa000000-0000-0000-0000-00000000a001' and session_id = v_status_session;
+  perform set_config('request.jwt.claim.sub', 'aa000000-0000-0000-0000-00000000a001', true);
+  set local role authenticated;
+  foreach v_owner_booking in array array[
+    v_confirmed_booking, v_cancelled_booking, v_expired_booking, v_deferred_booking
+  ] loop
+    begin
+      perform public.release_operational_reservation(v_owner_booking);
+      raise exception 'non-reserved release should fail';
+    exception when others then
+      if sqlerrm not like '%Reservation is no longer releasable.%' then raise; end if;
+    end;
+  end loop;
+  begin
+    perform public.release_operational_reservation('00000000-0000-0000-0000-000000000000');
+    raise exception 'unknown release should fail';
+  exception when others then
+    if sqlerrm not like '%Booking not found.%' then raise; end if;
+  end;
+  reset role;
+
+  perform set_config('request.jwt.claim.sub', 'bb000000-0000-0000-0000-00000000b001', true);
+  set local role authenticated;
+  select id into v_rollback_booking from public.reserve_operational_session(v_rollback_session);
+  begin
+    perform public.release_operational_reservation(v_rollback_booking);
+    raise exception 'forced release rollback';
+  exception when others then
+    if sqlerrm <> 'forced release rollback' then raise; end if;
+  end;
+  begin
+    update public.operational_bookings set status = 'cancelled' where id = v_rollback_booking;
+    raise exception 'direct authenticated update should fail';
+  exception when insufficient_privilege then
+    null;
+  end;
+  reset role;
+  perform pg_temp.op_assert(
+    (select status = 'reserved' from public.operational_bookings where id = v_rollback_booking),
+    'forced rollback and denied direct UPDATE preserve the reservation');
 end $$;
 
 -- Admin scenario: approve payment, finalize, defer, queue join promotion.
