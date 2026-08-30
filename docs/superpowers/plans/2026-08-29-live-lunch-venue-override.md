@@ -480,21 +480,26 @@ Extend `supabase/tests/operational_backend_integration.sql` with rollback-safe a
 1. Create two confirmed lunch bookings for different approved members plus reserved/cancelled/deferred noise; assert the aggregate returns exactly `2` for that lunch and no identity columns are exposed.
 2. Call `reserve_operational_session()` directly for a zero-price one-off/free template with `requires_rsvp = false`; assert rejection and no booking row.
 3. Call `withdraw_operational_rsvp()` for an ordinary free-event row; assert rejection/no mutation.
-4. Set a lunch date/time around a Hong Kong boundary and use transaction-local clock controls or direct resolver conditions to prove the RPC rejects at/after Hong Kong start while preserving pre-start behavior.
-5. Assert paid HYROX reservation and uncapped lunch RSVP still work.
-6. Assert `anon` and `authenticated` can execute only the count aggregate while direct booking RLS remains unchanged.
+4. Derive separate pre-start and at-start RSVP fixture IDs/dates/times from the same interval-adjusted HKT timestamps, so 23:xx rollover cannot violate the session ID/date constraint.
+5. Assert paid sessions reject the entire current HKT date, accept the next HKT date, and preserve later HYROX payment behavior.
+6. Create pre-trigger confirmed bookings, reapply the actual `00008` file, assert migration-time backfill, then DELETE bookings and assert exact totals `2 → 1 → 0`.
+7. Assert `anon` and `authenticated` can execute only the count aggregate while direct booking RLS remains unchanged.
 
 - [ ] **Step 4: Create migration `00008`**
 
-Create public read-only `operational_rsvp_counts(session_id PK/FK, going_count nonnegative, updated_at)` with RLS public SELECT and no browser writes. Add a fixed-search-path, security-definer booking trigger that serializes per session and recalculates exact confirmed RSVP totals after insert/update/delete, including a retained zero after the final withdrawal. Backfill every existing RSVP session and revoke helper execution from `PUBLIC`, `anon`, and `authenticated`.
+Create public read-only `operational_rsvp_counts(session_id PK/FK, going_count nonnegative, updated_at)` with RLS public SELECT and no browser writes. Add a fixed-search-path, security-definer booking trigger that serializes per session and recalculates exact confirmed RSVP totals after insert/update/delete, including a retained zero after the final withdrawal or DELETE. Backfill every existing RSVP session and revoke helper execution from `PUBLIC`, `anon`, and `authenticated`. Make the undeployed migration re-runnable in the disposable verifier with `CREATE TABLE IF NOT EXISTS`, drop/recreate policy, idempotent function/trigger replacement, upsert backfill, and guarded Realtime publication membership.
 
 Keep `get_operational_rsvp_counts()` `STABLE`, `SECURITY DEFINER`, and fixed-search-path, but make it read only `operational_rsvp_counts` and return only `session_id, going_count`. Revoke aggregate execution from `PUBLIC`, then grant it to `anon, authenticated`. Add the table to `supabase_realtime`.
 
-Replace the final reserve and withdraw functions from migrations `00004`/`00002`. Explicitly revoke execution from `PUBLIC` and `anon` before granting `authenticated`. Resolve `requires_rsvp` from the session’s activity template. Define RSVP as `price_hkd = 0 AND requires_rsvp`; reject zero-price non-RSVP reserve/withdraw attempts. Use this exact start comparison in both functions:
+Replace the final reserve and withdraw functions from migrations `00004`/`00002`. Explicitly revoke execution from `PUBLIC` and `anon` before granting `authenticated`. Resolve `requires_rsvp` from the session’s activity template. Define RSVP as `price_hkd = 0 AND requires_rsvp`; reject zero-price non-RSVP reserve/withdraw attempts. Use the exact HKT instant only for RSVP reserve and withdraw. In reserve, retain the paid date cutoff as a separate branch:
 
 ```sql
-if (v_session.session_date + v_session.start_time)
-     at time zone 'Asia/Hong_Kong' <= now() then
+if v_is_rsvp then
+  if (v_session.session_date + v_session.start_time)
+       at time zone 'Asia/Hong_Kong' <= now() then
+    raise exception 'Session has already started.' using errcode = '23514';
+  end if;
+elsif v_session.session_date <= (now() at time zone 'Asia/Hong_Kong')::date then
   raise exception 'Session has already started.' using errcode = '23514';
 end if;
 ```
@@ -519,7 +524,7 @@ In `store.attendeeCountFor(session)`, use the exact live aggregate when non-null
 
 - [ ] **Step 6: Restore the live date horizon**
 
-In live `upcomingSessions(days)`, compute today and an inclusive end date `days - 1` calendar days later using local date arithmetic. Filter `s.dateISO >= todayISO && s.dateISO <= endISO` before sorting/decorating. Add date-stable tests proving 14-day callers exclude day 15 while the rolling Social preview still uses event start time.
+Add `todayHktISO()` and `hktEventStartMs(dateISO, time)` pure helpers. In live `upcomingSessions(days)`, compute HKT today and an inclusive end date `days - 1` later. Filter `s.dateISO >= todayISO && s.dateISO <= endISO` before sorting/decorating. Make `nextSocialSession()` and `sessionStarted()` resolve event wall times through the HKT instant helper. Add date-stable tests proving 14-day callers exclude day 15 and Social selection is identical under HKT and Los Angeles host timezones.
 
 - [ ] **Step 7: Add behavioral live-auth coverage**
 
@@ -532,8 +537,10 @@ Assert a foreign count-table event refreshes an ordinary member while the foreig
 Run:
 
 ```bash
-node app/smoke.mjs
-node app/live-auth-smoke.mjs
+TZ=Asia/Hong_Kong node app/smoke.mjs
+TZ=America/Los_Angeles node app/smoke.mjs
+TZ=Asia/Hong_Kong node app/live-auth-smoke.mjs
+TZ=America/Los_Angeles node app/live-auth-smoke.mjs
 bash supabase/tests/verify_operational_backend_safety.sh
 git diff --check
 ```
@@ -550,3 +557,29 @@ git add docs/superpowers/specs/2026-08-29-live-lunch-venue-override-design.md \
   app/js/operations.js app/js/store.js app/smoke.mjs app/live-auth-smoke.mjs
 git commit -m "fix(events): publish exact RSVP totals"
 ```
+
+---
+
+### Task 7: Final review fix wave
+
+**Files:**
+- Modify: `supabase/migrations/20260829000008_rsvp_integrity.sql`
+- Modify: `supabase/tests/operational_backend_integration.sql`
+- Modify: `app/js/data.js`, `app/js/store.js`, `app/js/views.js`
+- Modify: `app/smoke.mjs`, `app/live-auth-smoke.mjs`
+- Modify: the Generic Social and RSVP design/plan documents
+- Create: `.superpowers/sdd/2026-08-29-live-lunch-venue-override/final-fix-report-2.md`
+
+**Interfaces:**
+- Produces: separate paid HKT date and RSVP HKT instant guards.
+- Produces: timezone-independent `todayHktISO(now?)` and `hktEventStartMs(dateISO, time)` helpers.
+- Preserves: count-table RLS/grants/trigger/Realtime semantics, identity privacy, exact `+1/-1/0`, free-event rejection, uncapped RSVP, and existing venue behavior.
+
+- [x] **Step 1:** Add failing paid cutoff, HKT helper, host-timezone, isolated Social-boundary, backfill, and DELETE scenarios.
+- [x] **Step 2:** Restore paid date cutoff while retaining exact RSVP start/withdraw boundaries.
+- [x] **Step 3:** Make SQL fixtures future-derived, rollover-safe, and based on explicit existence preconditions.
+- [x] **Step 4:** Reapply actual re-runnable `00008` after pre-trigger fixtures and assert backfill plus DELETE totals.
+- [x] **Step 5:** Use HKT helpers for horizons/event starts and remove the live test timezone pin.
+- [x] **Step 6:** Isolate exact day-seven inclusion and beyond-seven exclusion.
+- [x] **Step 7:** Run both suites under HKT and Los Angeles, all safety/syntax/diff checks, and self-review.
+- [x] **Step 8:** Write `final-fix-report-2.md` and prepare the single final-fix commit.

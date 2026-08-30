@@ -24,6 +24,7 @@ import {
   parseISO,
   mondayOf,
   addDays,
+  todayHktISO,
   todayLocal,
   isoDate,
   fmtDate,
@@ -64,13 +65,22 @@ const esc = (s) =>
     "'": "&#39;",
   })[c]);
 
-const todayISO = () => isoDate(todayLocal());
+const todayISO = () => todayHktISO();
 
 const fmtDay = (ts) =>
-  new Date(ts).toLocaleDateString("en-HK", { day: "numeric", month: "short", year: "numeric" });
+  new Date(ts).toLocaleDateString("en-HK", {
+    timeZone: "Asia/Hong_Kong",
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+  });
 
 const fmtMonthYear = (ts) =>
-  new Date(ts).toLocaleDateString("en-HK", { month: "short", year: "numeric" });
+  new Date(ts).toLocaleDateString("en-HK", {
+    timeZone: "Asia/Hong_Kong",
+    month: "short",
+    year: "numeric",
+  });
 
 // --- Shared fragments ---------------------------------------------------------
 

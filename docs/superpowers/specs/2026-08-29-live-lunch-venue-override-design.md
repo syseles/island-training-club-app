@@ -49,15 +49,15 @@ Keep attendee-name formatting separate. No placeholder identity rows should be c
 
 Only templates with `requires_rsvp = true` may use the zero-price reserve/withdraw flow. Ordinary free events remain show-up events even though their price is also zero; direct RPC calls must not create hidden confirmed bookings for them.
 
-Session-start enforcement uses the session’s Hong Kong wall time:
+RSVP session-start enforcement uses the session’s Hong Kong wall time:
 
 ```sql
 (session_date + start_time) at time zone 'Asia/Hong_Kong'
 ```
 
-Joining or withdrawing at or after that instant is rejected. This avoids treating a Hong Kong lunch time as UTC.
+Joining or withdrawing at or after that instant is rejected. Paid reservations retain their earlier, stricter contract: reject the entire session date once that date begins in HKT. The two reserve branches must remain distinct so a paid same-day session cannot create a hold whose payment deadline is already expired.
 
-Live `upcomingSessions(days)` must honor the same date horizon as local mode: today through `days - 1` calendar days, inclusive. Social preview can still apply its rolling seven-day start-time filter, while Home and Admin callers do not receive months of generated sessions.
+Client date handling follows the same timezone contract. `todayHktISO()` supplies the HKT calendar date and `hktEventStartMs(dateISO, time)` resolves an event wall time to its absolute HKT instant. Live `upcomingSessions(days)` must cover HKT today through `days - 1`, inclusive; Social preview applies its rolling exact-instant seven-day filter without constructing sessions in the browser timezone.
 
 ## Application changes
 
@@ -84,14 +84,14 @@ Add `20260829000006_lunch_venue_meeting_point_rpc.sql`. The migration must:
 Add `20260829000008_rsvp_integrity.sql`. It must:
 
 1. Add public read-only `operational_rsvp_counts(session_id PK/FK, going_count nonnegative, updated_at)` with public SELECT RLS, no browser writes, and no identity columns.
-2. Add a security-definer booking trigger that transactionally recalculates insert/update/delete counts, preserves exact zero after withdrawal, backfills existing RSVP sessions, and is not executable by browser roles.
+2. Add a security-definer booking trigger that transactionally recalculates insert/update/delete counts, preserves exact zero after withdrawal or DELETE, backfills existing RSVP sessions, and is not executable by browser roles. Because `00008` is undeployed, make it safely re-runnable in the disposable verifier (`IF NOT EXISTS`, policy recreation, and guarded Realtime publication membership) so the actual migration file can be reapplied after pre-migration fixtures.
 3. Make `get_operational_rsvp_counts()` read only that table and return only `session_id` and confirmed `going_count`.
 4. Add `operational_rsvp_counts` to the `supabase_realtime` publication; the client must include it in `LIVE_TABLES` and subscribe directly.
 5. Grant the aggregate to `anon` and `authenticated` without exposing booking/profile rows, while explicitly revoking `PUBLIC`/`anon` execution from reserve/withdraw before the authenticated grants.
 6. Replace reserve/withdraw RPC implementations so zero-price behavior also requires `requires_rsvp = true`.
 7. Reject ordinary free-event reserve/withdraw attempts.
-8. Compare session start using `AT TIME ZONE 'Asia/Hong_Kong'`.
-9. Preserve paid reservation/payment behavior, uncapped RSVP behavior, notifications, authorization, and grants.
+8. Compare RSVP start using `AT TIME ZONE 'Asia/Hong_Kong'`, while paid reserve rejects `session_date <= (now() AT TIME ZONE 'Asia/Hong_Kong')::date`.
+9. Preserve paid reservation/payment behavior, uncapped RSVP behavior, notifications, authorization, grants, RLS, trigger semantics, and Realtime publication.
 
 Apply the migrations in order to the live Supabase project:
 
@@ -116,8 +116,11 @@ Verify:
 - Reserved, cancelled, deferred, and ordinary free-event rows do not contribute.
 - Schedule, Activity Details, and Admin RSVP controls derive the same aggregate count.
 - Ordinary free events reject reserve and withdraw RPC calls.
-- RSVP start boundaries use Hong Kong time.
-- Live session queries honor the requested calendar-day horizon.
+- RSVP exact-start boundaries and paid same-HKT-date/next-date boundaries remain distinct.
+- Boundary fixture IDs, dates, and times derive from the same HKT timestamps across 23:xx rollover.
+- The actual `00008` file backfills preexisting confirmed bookings when reapplied in the disposable transaction.
+- Trigger DELETE transitions produce exact decremented and retained-zero totals.
+- Live session queries honor the requested HKT calendar-day horizon in both HKT and Los Angeles host timezones.
 - The count works while live `state.users` remains empty and does not create local identity records.
 - The client’s six named RPC arguments resolve to an implementation that admits lunch.
 - Saving a complete lunch venue does not throw `Activity venue is fixed.`

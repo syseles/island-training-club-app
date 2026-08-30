@@ -196,6 +196,21 @@ function pad(n) {
   return String(n).padStart(2, "0");
 }
 
+const HKT_OFFSET_MS = 8 * 60 * 60 * 1000;
+
+export function todayHktISO(now = Date.now()) {
+  const instant = now instanceof Date ? now.getTime() : Number(now);
+  return new Date(instant + HKT_OFFSET_MS).toISOString().slice(0, 10);
+}
+
+export function hktEventStartMs(dateISO, time) {
+  const wallTime = String(time || "").trim();
+  const normalizedTime = /^\d{2}:\d{2}$/.test(wallTime)
+    ? `${wallTime}:00`
+    : wallTime;
+  return Date.parse(`${dateISO}T${normalizedTime}+08:00`);
+}
+
 export function todayLocal() {
   const d = new Date();
   return new Date(d.getFullYear(), d.getMonth(), d.getDate());
@@ -330,10 +345,7 @@ export function sessionsInRange(activities, fromDate, days) {
 // check would keep this morning's session "upcoming" (and bookable) all day.
 // Works for live sessions and booking snapshots (both carry dateISO + time).
 export function sessionStarted(s) {
-  const [h, m] = s.time.split(":").map(Number);
-  const start = parseISO(s.dateISO);
-  start.setHours(h, m, 0, 0);
-  return start.getTime() <= Date.now();
+  return hktEventStartMs(s.dateISO, s.time) <= Date.now();
 }
 
 export function findSession(activities, sessionId) {

@@ -20,9 +20,9 @@ The event name and date are rendered from the selected upcoming social, so a fut
 
 Add a small store-level selector for the next social event. It will:
 
-1. Read the app's existing upcoming-session data across enough calendar days to include the rolling seven-day window. Use an eight-day source window so the next Saturday can be considered when today's Saturday event has already started.
+1. Read the app's existing upcoming-session data across enough HKT calendar days to include the rolling seven-day window. Use an eight-day source window so the next Saturday can be considered when today's Saturday event has already started.
 2. Keep sessions whose category is exactly `Socials`.
-3. Calculate each session's local Hong Kong start timestamp from `dateISO` and `time`, then keep only sessions whose start is from the current time through seven days from now. This means a not-yet-started social today is eligible, while a social that has already started is not.
+3. Resolve each session's `dateISO` and `time` as an `Asia/Hong_Kong` event-start instant, then keep only sessions whose start is from the current instant through exactly seven days from now. Never construct the event in the browser timezone. This means a not-yet-started social today is eligible, while a social that has already started is not.
 4. Sort by ISO date and then start time, matching Schedule ordering.
 5. Return the earliest session or `null` when none exists.
 
@@ -43,7 +43,8 @@ Update local smoke coverage to verify:
 - The CTA points to that event's activity route.
 - A later Socials event is not selected when an earlier one exists.
 - A Socials event later today is selected before a later event, while a started event today is skipped.
-- An event exactly seven days out is eligible when its start is within the rolling boundary; events beyond it are not.
+- An event at the exact seven-day HKT instant is eligible in an isolated fixture, while a separate event one minute beyond it is excluded.
+- HKT date/start helpers and Social selection return the same result when both suites run under `TZ=Asia/Hong_Kong` and `TZ=America/Los_Angeles`.
 - Non-Socials events do not displace the selected social.
 - The no-result fallback points to Schedule.
 

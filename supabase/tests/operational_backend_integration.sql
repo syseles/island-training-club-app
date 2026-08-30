@@ -217,6 +217,100 @@ update public.profiles set full_name = 'Extra Member', role = 'member'
 update public.profiles set full_name = 'Super Test', role = 'super_admin'
   where id = 'ff000000-0000-0000-0000-00000000f001';
 
+-- Prove the actual migration backfills bookings that predate its trigger. The
+-- disposable verifier applied 00008 once during setup, so remove only its
+-- booking trigger, create pre-migration rows, and reapply the migration file.
+drop trigger if exists sync_operational_rsvp_count on public.operational_bookings;
+
+do $$
+declare
+  v_backfill_date date := (now() at time zone 'Asia/Hong_Kong')::date + 403;
+  v_backfill_session text;
+begin
+  v_backfill_session := 'lunch-' || v_backfill_date::text;
+
+  insert into public.operational_sessions
+    (id, activity_id, session_date, start_time, duration_minutes,
+     venue, capacity, price_hkd, is_open)
+  values
+    (v_backfill_session, 'lunch', v_backfill_date, time '12:45', 75,
+     'TBC', null, 0, true)
+  on conflict (id) do update
+    set session_date = excluded.session_date,
+        start_time = excluded.start_time,
+        cancelled_at = null,
+        cancelled_by = null,
+        cancelled_source = null,
+        cancel_reason = null,
+        capacity = null,
+        price_hkd = 0,
+        is_open = true;
+
+  delete from public.operational_bookings
+   where session_id = v_backfill_session;
+  delete from public.operational_rsvp_counts
+   where session_id = v_backfill_session;
+
+  insert into public.operational_bookings
+    (profile_id, session_id, status, pay_deadline_at, paid_at, snapshot)
+  values
+    ('bb000000-0000-0000-0000-00000000b001', v_backfill_session,
+     'confirmed', now(), now(),
+     jsonb_build_object('name', 'Post-Training Lunch',
+       'session_date', v_backfill_date, 'start_time', '12:45',
+       'venue', 'TBC', 'price_hkd', 0)),
+    ('dd000000-0000-0000-0000-00000000d001', v_backfill_session,
+     'confirmed', now(), now(),
+     jsonb_build_object('name', 'Post-Training Lunch',
+       'session_date', v_backfill_date, 'start_time', '12:45',
+       'venue', 'TBC', 'price_hkd', 0));
+
+  perform pg_temp.op_assert(
+    not exists (
+      select 1 from public.operational_rsvp_counts
+       where session_id = v_backfill_session
+    ),
+    'pre-migration RSVP fixture has no copied count row'
+  );
+end $$;
+
+\ir ../migrations/20260829000008_rsvp_integrity.sql
+
+do $$
+declare
+  v_backfill_date date := (now() at time zone 'Asia/Hong_Kong')::date + 403;
+  v_backfill_session text;
+begin
+  v_backfill_session := 'lunch-' || v_backfill_date::text;
+
+  perform pg_temp.op_assert(
+    (select going_count = 2
+       from public.operational_rsvp_counts
+      where session_id = v_backfill_session),
+    'actual 00008 migration backfills two preexisting confirmed RSVPs'
+  );
+
+  delete from public.operational_bookings
+   where session_id = v_backfill_session
+     and profile_id = 'bb000000-0000-0000-0000-00000000b001';
+  perform pg_temp.op_assert(
+    (select going_count = 1
+       from public.operational_rsvp_counts
+      where session_id = v_backfill_session),
+    'booking DELETE decrements the exact RSVP total from two to one'
+  );
+
+  delete from public.operational_bookings
+   where session_id = v_backfill_session
+     and profile_id = 'dd000000-0000-0000-0000-00000000d001';
+  perform pg_temp.op_assert(
+    (select going_count = 0
+       from public.operational_rsvp_counts
+      where session_id = v_backfill_session),
+    'final booking DELETE retains the exact zero RSVP total'
+  );
+end $$;
+
 -- generate sessions and pre-cancel 15 August.
 select ensure_operational_sessions(date '2026-08-01', 5);
 update public.operational_sessions
@@ -237,25 +331,33 @@ declare
   v_super           constant uuid := 'ff000000-0000-0000-0000-00000000f001';
   v_future_hk       timestamp := (now() + interval '1 hour') at time zone 'Asia/Hong_Kong';
   v_at_start_hk     timestamp := now() at time zone 'Asia/Hong_Kong';
+  v_hk_today        date := (now() at time zone 'Asia/Hong_Kong')::date;
   v_count_date      date := (now() at time zone 'Asia/Hong_Kong')::date + 400;
   v_paid_date       date := (now() at time zone 'Asia/Hong_Kong')::date + 401;
   v_free_date       date := (now() at time zone 'Asia/Hong_Kong')::date + 402;
-  v_boundary_date   date := v_future_hk::date;
   v_count_session   text;
   v_paid_session    text;
+  v_paid_same_day_session text;
+  v_paid_next_day_session text;
   v_free_session    text;
-  v_boundary_session text;
+  v_boundary_before_session text;
+  v_boundary_at_session text;
   v_free_booking    uuid;
-  v_boundary_booking uuid;
+  v_boundary_before_booking uuid;
+  v_boundary_at_booking uuid;
   v_paid_booking    uuid;
+  v_paid_next_day_booking uuid;
   v_lunch_booking   uuid;
   v_going_count     bigint;
   v_visible_count   integer;
 begin
   v_count_session := 'lunch-' || v_count_date::text;
   v_paid_session := 'hyrox-' || v_paid_date::text;
+  v_paid_same_day_session := 'event-paid-integrity-' || v_hk_today::text;
+  v_paid_next_day_session := 'event-paid-integrity-' || (v_hk_today + 1)::text;
   v_free_session := 'event-free-integrity-' || v_free_date::text;
-  v_boundary_session := 'lunch-' || v_boundary_date::text;
+  v_boundary_before_session := 'event-rsvp-boundary-before-' || v_future_hk::date::text;
+  v_boundary_at_session := 'event-rsvp-boundary-at-' || v_at_start_hk::date::text;
 
   insert into public.operational_activity_templates
     (activity_id, name, venue, weekday, start_time, duration_minutes,
@@ -263,9 +365,20 @@ begin
   values
     ('event-free-integrity', 'Integrity Free Event', 'Tamar Park',
      extract(dow from v_free_date)::integer, time '19:00', 60,
-     20, 0, true, false, 'Socials', 'Tamar Park', false)
+     20, 0, true, false, 'Socials', 'Tamar Park', false),
+    ('event-paid-integrity', 'Integrity Paid Event', 'BFT Causeway Bay',
+     extract(dow from v_hk_today)::integer, time '23:59:59', 60,
+     20, 180, true, false, 'HYROX', 'BFT Causeway Bay', false),
+    ('event-rsvp-boundary-before', 'Boundary RSVP Before', 'TBC',
+     extract(dow from v_future_hk::date)::integer, v_future_hk::time, 60,
+     null, 0, true, false, 'Socials', null, true),
+    ('event-rsvp-boundary-at', 'Boundary RSVP At', 'TBC',
+     extract(dow from v_at_start_hk::date)::integer, v_at_start_hk::time, 60,
+     null, 0, true, false, 'Socials', null, true)
   on conflict (activity_id) do update
-    set price_hkd = excluded.price_hkd,
+    set start_time = excluded.start_time,
+        capacity = excluded.capacity,
+        price_hkd = excluded.price_hkd,
         requires_rsvp = excluded.requires_rsvp,
         active = excluded.active;
 
@@ -277,10 +390,23 @@ begin
      'TBC', null, 0, true),
     (v_paid_session, 'hyrox', v_paid_date, time '11:15', 60,
      'BFT Causeway Bay', 20, 180, true),
+    (v_paid_same_day_session, 'event-paid-integrity', v_hk_today,
+     time '23:59:59.999999', 60, 'BFT Causeway Bay', 20, 180, true),
+    (v_paid_next_day_session, 'event-paid-integrity', v_hk_today + 1,
+     time '00:00', 60, 'BFT Causeway Bay', 20, 180, true),
     (v_free_session, 'event-free-integrity', v_free_date, time '19:00', 60,
-     'Tamar Park', 20, 0, true)
+     'Tamar Park', 20, 0, true),
+    (v_boundary_before_session, 'event-rsvp-boundary-before', v_future_hk::date,
+     v_future_hk::time, 60, 'TBC', null, 0, true),
+    (v_boundary_at_session, 'event-rsvp-boundary-at', v_at_start_hk::date,
+     v_at_start_hk::time, 60, 'TBC', null, 0, true)
   on conflict (id) do update
-    set start_time = excluded.start_time,
+    set session_date = excluded.session_date,
+        start_time = excluded.start_time,
+        cancelled_at = null,
+        cancelled_by = null,
+        cancelled_source = null,
+        cancel_reason = null,
         capacity = excluded.capacity,
         price_hkd = excluded.price_hkd,
         is_open = excluded.is_open;
@@ -398,42 +524,30 @@ begin
     'rejected ordinary free withdraw does not mutate its booking row'
   );
 
-  -- now() is transaction-stable. Split that same instant into Hong Kong date
-  -- and wall time so equality proves the at-start rejection exactly.
-  delete from public.operational_bookings where session_id = v_boundary_session;
-  insert into public.operational_sessions
-    (id, activity_id, session_date, start_time, duration_minutes,
-     venue, capacity, price_hkd, is_open)
-  values
-    (v_boundary_session, 'lunch', v_future_hk::date,
-     v_future_hk::time, 75, 'TBC', null, 0, true)
-  on conflict (id) do update
-    set start_time = excluded.start_time,
-        cancelled_at = null,
-        cancelled_by = null,
-        cancelled_source = null,
-        cancel_reason = null,
-        capacity = null,
-        price_hkd = 0,
-        is_open = true;
-
+  -- now() is transaction-stable. Each boundary session derives its ID, date,
+  -- and wall time from one HKT timestamp, including across 23:xx rollover.
   perform set_config('request.jwt.claim.sub', v_member_a::text, true);
   set local role authenticated;
-  select id into v_boundary_booking
-    from public.reserve_operational_session(v_boundary_session);
+  select id into v_boundary_before_booking
+    from public.reserve_operational_session(v_boundary_before_session);
   reset role;
-  perform pg_temp.op_assert(v_boundary_booking is not null,
-    'lunch RSVP succeeds before its Hong Kong start time');
+  perform pg_temp.op_assert(v_boundary_before_booking is not null,
+    'RSVP succeeds before its exact Hong Kong start instant');
 
-  update public.operational_sessions
-     set session_date = v_at_start_hk::date,
-         start_time = v_at_start_hk::time
-   where id = v_boundary_session;
+  insert into public.operational_bookings
+    (profile_id, session_id, status, pay_deadline_at, paid_at, snapshot)
+  values
+    (v_member_a, v_boundary_at_session, 'confirmed', now(), now(),
+     jsonb_build_object('name', 'Boundary RSVP At',
+       'session_date', v_at_start_hk::date,
+       'start_time', v_at_start_hk::time,
+       'venue', 'TBC', 'price_hkd', 0))
+  returning id into v_boundary_at_booking;
 
   perform set_config('request.jwt.claim.sub', v_member_b::text, true);
   set local role authenticated;
   begin
-    perform public.reserve_operational_session(v_boundary_session);
+    perform public.reserve_operational_session(v_boundary_at_session);
     raise exception 'RSVP at Hong Kong start should fail';
   exception when others then
     if sqlerrm not like '%Session has already started.%' then raise; end if;
@@ -441,14 +555,14 @@ begin
   reset role;
   perform pg_temp.op_assert(
     not exists (select 1 from public.operational_bookings
-      where profile_id = v_member_b and session_id = v_boundary_session),
+      where profile_id = v_member_b and session_id = v_boundary_at_session),
     'at-start Hong Kong reserve creates no booking row'
   );
 
   perform set_config('request.jwt.claim.sub', v_member_a::text, true);
   set local role authenticated;
   begin
-    perform public.withdraw_operational_rsvp(v_boundary_booking);
+    perform public.withdraw_operational_rsvp(v_boundary_at_booking);
     raise exception 'RSVP withdraw at Hong Kong start should fail';
   exception when others then
     if sqlerrm not like '%Session has already started.%' then raise; end if;
@@ -456,11 +570,39 @@ begin
   reset role;
   perform pg_temp.op_assert(
     (select status = 'confirmed' from public.operational_bookings
-      where id = v_boundary_booking),
+      where id = v_boundary_at_booking),
     'at-start Hong Kong withdraw leaves RSVP confirmed'
   );
 
-  -- Paid HYROX remains reserved with capacity/payment semantics.
+  -- Paid reservations reject the entire current HKT session date, even when
+  -- its wall-clock start is later; the next HKT date remains reservable.
+  perform set_config('request.jwt.claim.sub', v_member_c::text, true);
+  set local role authenticated;
+  begin
+    perform public.reserve_operational_session(v_paid_same_day_session);
+    raise exception 'same-day paid reservation should fail';
+  exception when others then
+    if sqlerrm not like '%Session has already started.%' then raise; end if;
+  end;
+  reset role;
+  perform pg_temp.op_assert(
+    not exists (select 1 from public.operational_bookings
+      where profile_id = v_member_c and session_id = v_paid_same_day_session),
+    'same-HKT-date paid rejection creates no expired reservation'
+  );
+
+  perform set_config('request.jwt.claim.sub', v_member_c::text, true);
+  set local role authenticated;
+  select id into v_paid_next_day_booking
+    from public.reserve_operational_session(v_paid_next_day_session);
+  reset role;
+  perform pg_temp.op_assert(
+    (select status = 'reserved'
+       from public.operational_bookings where id = v_paid_next_day_booking),
+    'paid reservation accepts the next HKT session date'
+  );
+
+  -- A later paid HYROX still retains its capacity/payment semantics.
   perform set_config('request.jwt.claim.sub', v_member_c::text, true);
   set local role authenticated;
   select id into v_paid_booking
@@ -521,22 +663,50 @@ declare
   v_other_id2 uuid;
   v_pending_book uuid;
   v_open_date date := (now() at time zone 'Asia/Hong_Kong')::date + 410;
+  v_midtown_date date := (now() at time zone 'Asia/Hong_Kong')::date + 411;
+  v_defer_target_date date := (now() at time zone 'Asia/Hong_Kong')::date + 417;
   v_open_session text;
+  v_midtown_session text;
+  v_defer_target_session text;
 begin
   v_open_session := 'hyrox-' || v_open_date::text;
+  v_midtown_session := 'hyrox-midtown-' || v_midtown_date::text;
+  v_defer_target_session := 'hyrox-' || v_defer_target_date::text;
   insert into public.operational_sessions
     (id, activity_id, session_date, start_time, duration_minutes,
      venue, capacity, price_hkd, is_open)
   values
     (v_open_session, 'hyrox', v_open_date, time '11:15', 60,
+     'BFT Causeway Bay', 20, 180, true),
+    (v_midtown_session, 'hyrox-midtown', v_midtown_date, time '11:00', 60,
+     'Midtown28 Fitness', 12, 180, false),
+    (v_defer_target_session, 'hyrox', v_defer_target_date, time '11:15', 60,
      'BFT Causeway Bay', 20, 180, true)
   on conflict (id) do update
-    set session_date = excluded.session_date,
+    set activity_id = excluded.activity_id,
+        session_date = excluded.session_date,
         start_time = excluded.start_time,
+        venue = excluded.venue,
         cancelled_at = null,
+        cancelled_by = null,
+        cancelled_source = null,
+        cancel_reason = null,
         capacity = excluded.capacity,
         price_hkd = excluded.price_hkd,
-        is_open = true;
+        is_open = excluded.is_open;
+
+  perform pg_temp.op_assert(
+    exists (
+      select 1 from public.operational_sessions
+       where id = v_midtown_session
+         and activity_id = 'hyrox-midtown'
+         and session_date = v_midtown_date
+         and session_date > (now() at time zone 'Asia/Hong_Kong')::date
+         and not is_open
+         and cancelled_at is null
+    ),
+    'member queue fixture is an existing future closed active Midtown session'
+  );
 
   -- Pending cannot reserve.
   perform set_config('request.jwt.claim.sub', 'cc000000-0000-0000-0000-00000000c001', true);
@@ -565,7 +735,8 @@ begin
     if sqlerrm not like '%Already booked%' then raise; end if;
   end;
 
-  -- Cancelled session refuses reservation.
+  -- This historical seed is deliberately static: cancellation is checked
+  -- before the paid HKT date guard, and this scenario verifies that priority.
   begin
     perform reserve_operational_session('hyrox-2026-08-15');
     raise exception 'cancelled should not reserve';
@@ -575,18 +746,18 @@ begin
 
   -- Closed session also refuses reservation.
   begin
-    perform reserve_operational_session('hyrox-midtown-2026-08-22');
+    perform reserve_operational_session(v_midtown_session);
     raise exception 'closed session should not reserve';
   exception when others then
     if sqlerrm not like '%Session is not open%' then raise; end if;
   end;
 
-  -- Interest can join on closed midtown.
-  perform join_operational_queue('hyrox-midtown-2026-08-22', 'interest');
+  -- Interest can join on a proven future closed Midtown session.
+  perform join_operational_queue(v_midtown_session, 'interest');
 
-  -- Waitlist cannot join on closed session.
+  -- Waitlist cannot join on that closed session.
   begin
-    perform join_operational_queue('hyrox-midtown-2026-08-22', 'waitlist');
+    perform join_operational_queue(v_midtown_session, 'waitlist');
     raise exception 'waitlist should not join on closed session';
   exception when others then
     if sqlerrm not like '%Session is not open%' then raise; end if;
@@ -615,7 +786,7 @@ begin
 
   -- Member cannot defer because booking is still reserved (not confirmed).
   begin
-    perform defer_operational_booking(v_pending_book, 'hyrox-2026-08-29');
+    perform defer_operational_booking(v_pending_book, v_defer_target_session);
     raise exception 'reserved should not defer';
   exception when others then
     if sqlerrm not like '%Only confirmed bookings can be deferred%' then raise; end if;

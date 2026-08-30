@@ -10,7 +10,7 @@
 -- Public, identity-free RSVP totals
 -- =====================================================================
 
-create table public.operational_rsvp_counts (
+create table if not exists public.operational_rsvp_counts (
   session_id text primary key
     references public.operational_sessions(id) on delete cascade,
   going_count bigint not null default 0 check (going_count >= 0),
@@ -22,6 +22,8 @@ alter table public.operational_rsvp_counts enable row level security;
 revoke all on table public.operational_rsvp_counts from public, anon, authenticated;
 grant select on table public.operational_rsvp_counts to anon, authenticated;
 
+drop policy if exists "public read operational RSVP counts"
+  on public.operational_rsvp_counts;
 create policy "public read operational RSVP counts"
   on public.operational_rsvp_counts
   for select
@@ -144,8 +146,21 @@ grant execute on function public.get_operational_rsvp_counts() to anon, authenti
 
 -- Count rows contain no member identity and have public SELECT RLS, so all
 -- browsers receive the same invalidation even when booking RLS hides the
--- booking mutation that caused it.
-alter publication supabase_realtime add table public.operational_rsvp_counts;
+-- booking mutation that caused it. Guard membership so the undeployed
+-- migration can be reapplied by the disposable integration verifier.
+do $$
+begin
+  if not exists (
+    select 1
+      from pg_publication_tables
+     where pubname = 'supabase_realtime'
+       and schemaname = 'public'
+       and tablename = 'operational_rsvp_counts'
+  ) then
+    alter publication supabase_realtime add table public.operational_rsvp_counts;
+  end if;
+end;
+$$;
 
 -- =====================================================================
 -- Reservation: paid sessions or explicitly configured zero-price RSVPs
@@ -204,8 +219,14 @@ begin
     raise exception 'Session does not require RSVP.' using errcode = '23514';
   end if;
 
-  if (v_session.session_date + v_session.start_time)
-       at time zone 'Asia/Hong_Kong' <= now() then
+  if v_is_rsvp then
+    if (v_session.session_date + v_session.start_time)
+         at time zone 'Asia/Hong_Kong' <= now() then
+      raise exception 'Session has already started.' using errcode = '23514';
+    end if;
+  elsif v_session.session_date <= (now() at time zone 'Asia/Hong_Kong')::date then
+    -- Paid reservations retain the original date cutoff: once the Hong Kong
+    -- session date begins, no already-expired payment hold can be created.
     raise exception 'Session has already started.' using errcode = '23514';
   end if;
 

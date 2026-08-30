@@ -6,10 +6,6 @@ import { existsSync, readFileSync } from "node:fs";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
-// The live app is Hong Kong-based. Pin the test process explicitly so host
-// timezone cannot shift calendar-day horizon or signing-date fixtures.
-process.env.TZ = "Asia/Hong_Kong";
-
 const __dirnameSmoke = dirname(fileURLToPath(import.meta.url));
 
 const mem = new Map();
@@ -527,20 +523,17 @@ globalThis.window = {
 // Seed operational fake tables with at least one upcoming paid session so
 // scheduled live-mode views can render.
 const today = new Date();
+const fixedHktTodayIso = "2026-08-05";
 const aug15Iso = "2026-08-15";
 const seededCancelled = new Set(["hyrox-2026-08-15", "hyrox-midtown-2026-08-15"]);
 const normalWeeklyFixtureDates = [];
-const firstNormalSaturday = new Date(today.getFullYear(), today.getMonth(), today.getDate());
-const daysUntilNextSaturday = ((6 - firstNormalSaturday.getDay() + 7) % 7) || 7;
-firstNormalSaturday.setDate(firstNormalSaturday.getDate() + daysUntilNextSaturday);
+const firstNormalSaturday = new RealDate(`${fixedHktTodayIso}T00:00:00.000Z`);
+const daysUntilNextSaturday = ((6 - firstNormalSaturday.getUTCDay() + 7) % 7) || 7;
+firstNormalSaturday.setUTCDate(firstNormalSaturday.getUTCDate() + daysUntilNextSaturday);
 for (let week = 0; normalWeeklyFixtureDates.length < 4; week += 1) {
-  const d = new Date(firstNormalSaturday);
-  d.setDate(firstNormalSaturday.getDate() + week * 7);
-  const iso = [
-    d.getFullYear(),
-    String(d.getMonth() + 1).padStart(2, "0"),
-    String(d.getDate()).padStart(2, "0"),
-  ].join("-");
+  const d = new RealDate(firstNormalSaturday);
+  d.setUTCDate(firstNormalSaturday.getUTCDate() + week * 7);
+  const iso = d.toISOString().slice(0, 10);
   if (iso === aug15Iso) continue;
   normalWeeklyFixtureDates.push(iso);
   operationalTableRows.operational_sessions.push({
@@ -959,29 +952,26 @@ const store = await import("./js/store.js");
 const views = await import("./js/views.js");
 const data = await import("./js/data.js");
 const operations = await import("./js/operations.js");
-const todayISO = data.isoDate(data.todayLocal());
+const todayISO = data.todayHktISO();
+assert.equal(todayISO, fixedHktTodayIso,
+  "fixed live smoke instant must resolve to the same HKT date in every host timezone");
+assert.equal(
+  data.hktEventStartMs("2026-08-05", "10:00:00"),
+  RealDate.parse(fixedIso),
+  "live event wall time must resolve as an HKT instant in every host timezone",
+);
 store.load();
 await store.hydrateLiveOperations();
 
-// Live callers receive exactly their requested calendar-day horizon. The
-// Social preview applies its additional rolling start-time boundary.
-const horizonDay14 = new Date();
-horizonDay14.setHours(0, 0, 0, 0);
-horizonDay14.setDate(horizonDay14.getDate() + 13);
-const horizonDay15 = new Date();
-horizonDay15.setHours(0, 0, 0, 0);
-horizonDay15.setDate(horizonDay15.getDate() + 14);
-const socialStarted = new Date();
-socialStarted.setMinutes(socialStarted.getMinutes() - 1);
-const socialFuture = new Date();
-socialFuture.setMinutes(socialFuture.getMinutes() + 1);
-const fixtureTime = (date) =>
-  `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}:00`;
+// Live callers receive exactly their requested HKT calendar-day horizon. The
+// Social preview applies its additional rolling HKT start-time boundary.
+const horizonDay14Iso = "2026-08-18";
+const horizonDay15Iso = "2026-08-19";
 const temporaryHorizonRows = [
   {
     id: "hyrox-horizon-day-14",
     activity_id: "hyrox",
-    session_date: data.isoDate(horizonDay14),
+    session_date: horizonDay14Iso,
     start_time: "11:15:00",
     duration_minutes: 60,
     venue: "BFT Causeway Bay",
@@ -1003,7 +993,7 @@ const temporaryHorizonRows = [
   {
     id: "hyrox-horizon-day-15",
     activity_id: "hyrox",
-    session_date: data.isoDate(horizonDay15),
+    session_date: horizonDay15Iso,
     start_time: "11:15:00",
     duration_minutes: 60,
     venue: "BFT Causeway Bay",
@@ -1023,13 +1013,13 @@ const temporaryHorizonRows = [
     updated_at: fixedIso,
   },
   ...[
-    ["lunch-social-started", socialStarted],
-    ["lunch-social-future", socialFuture],
-  ].map(([id, start]) => ({
+    ["lunch-social-started", "09:59:00"],
+    ["lunch-social-future", "10:01:00"],
+  ].map(([id, startTime]) => ({
     id,
     activity_id: "lunch",
-    session_date: data.isoDate(start),
-    start_time: fixtureTime(start),
+    session_date: fixedHktTodayIso,
+    start_time: startTime,
     duration_minutes: 30,
     venue: "TBC",
     capacity: null,

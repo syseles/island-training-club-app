@@ -9,8 +9,10 @@ import {
   SEED_ACTIVITIES,
   sessionsInRange,
   sessionStarted,
+  hktEventStartMs,
   parseISO,
   findSession,
+  todayHktISO,
   todayLocal,
   isoDate,
   saturdayOnOrAfter,
@@ -584,7 +586,7 @@ function normalizeIndemnityAcceptance({
   const validDate = /^\d{4}-\d{2}-\d{2}$/.test(normalizedSignedAt)
     && isoDate(parseISO(normalizedSignedAt)) === normalizedSignedAt;
   if (!validDate) throw new Error("Enter a valid signing date");
-  if (normalizedSignedAt > isoDate(todayLocal())) {
+  if (normalizedSignedAt > todayHktISO()) {
     throw new Error("Signing date cannot be in the future");
   }
   if (formVersion !== INDEMNITY_VERSION) {
@@ -1356,9 +1358,9 @@ export function weekVenueOverride(sessionId) {
 // --- Next relevant activity (home) ---------------------------------------------------
 
 export function upcomingSessions(days = 14) {
+  const todayISO = todayHktISO();
+  const today = parseISO(todayISO);
   if (isLive()) {
-    const today = todayLocal();
-    const todayISO = isoDate(today);
     const end = new Date(today);
     end.setDate(end.getDate() + days - 1);
     const endISO = isoDate(end);
@@ -1390,7 +1392,6 @@ export function upcomingSessions(days = 14) {
       a.dateISO.localeCompare(b.dateISO) || String(a.time).localeCompare(String(b.time))
     );
   }
-  const today = todayLocal();
   const todayStart = today.getTime();
   const horizon = todayStart + days * 24 * 60 * 60 * 1000;
   const oneOffs = state.oneOffEvents
@@ -1421,10 +1422,7 @@ export function nextSocialSession() {
   const latest = now + 7 * 24 * 60 * 60 * 1000;
   return upcomingSessions(8).find((session) => {
     if (session.category !== "Socials") return false;
-    const start = parseISO(session.dateISO);
-    const [hours, minutes] = String(session.time || "").split(":").map(Number);
-    start.setHours(hours, minutes, 0, 0);
-    const startMs = start.getTime();
+    const startMs = hktEventStartMs(session.dateISO, session.time);
     return startMs >= now && startMs <= latest;
   }) ?? null;
 }

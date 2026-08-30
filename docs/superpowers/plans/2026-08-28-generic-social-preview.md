@@ -4,7 +4,7 @@
 
 **Goal:** Make the Community feature card link directly to the earliest Socials event whose start time falls within the next seven days, using generic event copy.
 
-**Architecture:** Add `store.nextSocialSession()` as the single selection seam. Preserve the existing broad future-live-session behavior while removing its arbitrary truncation; then read an eight-day local source window and filter candidates to the rolling `[now, now + 7 days]` start-time interval and `category === "Socials"`. `communityHome()` will render the selected event and direct activity link, with a Schedule fallback when no result exists.
+**Architecture:** Keep `store.nextSocialSession()` as the single selection seam. Read an eight-day HKT-calendar source window and filter candidates to `category === "Socials"` and the rolling `[now, now + 7 days]` HKT event-start interval. Shared `todayHktISO()` and `hktEventStartMs(dateISO, time)` helpers prevent browser timezone from changing the live horizon or selected Social.
 
 **Tech Stack:** Vanilla ES modules, hand-rendered HTML templates, localStorage-backed store, existing Node smoke tests.
 
@@ -14,7 +14,8 @@
 - Include all sessions categorized `Socials`, including recurring RSVP sessions and one-off socials.
 - Follow a rolling seven-day event-start window: from the current local Hong Kong time through seven days from now.
 - Include a not-yet-started event today and skip an event whose start time has passed, even if it is today.
-- Use existing local Hong Kong date helpers and existing date/time ordering.
+- Use `todayHktISO()` for HKT calendar horizons and `hktEventStartMs(dateISO, time)` for event instants; do not construct Hong Kong sessions in the browser timezone.
+- Run both Node suites under `TZ=Asia/Hong_Kong` and `TZ=America/Los_Angeles` and require identical fixed-fixture horizon/Social results.
 - Preserve `aria-labelledby="next-connection-title"` and escape dynamic event content with existing view helpers.
 - Do not add dependencies, a build step, a migration, or a second event data source.
 - Run `node app/smoke.mjs`, `node app/live-auth-smoke.mjs`, and `git diff --check` before declaring the change complete.
@@ -24,20 +25,27 @@
 ### Task 1: Add the rolling 7-day Socials selector
 
 **Files:**
-- Modify: `app/js/store.js` in the live `upcomingSessions(days)` branch and near `nextSession()`
+- Modify: `app/js/data.js` near the pure date helpers
+- Modify: `app/js/store.js` in `upcomingSessions(days)` and near `nextSession()`
 - Test: `app/smoke.mjs` in the Community/schedule smoke coverage
+- Test: `app/live-auth-smoke.mjs` in the live horizon fixture
 
 **Interfaces:**
 - Produces: `export function nextSocialSession()` returning the earliest matching session object or `null`.
-- Consumes: `upcomingSessions(8)`, which merges local/live sessions and sorts by `dateISO` and `time`; Task 1 preserves all future live sessions without arbitrary truncation.
+- Consumes: `upcomingSessions(8)`, which merges local/live sessions inside the requested HKT calendar horizon and sorts by `dateISO` and `time`.
+- Consumes: `todayHktISO(now?)` and `hktEventStartMs(dateISO, time)` from `app/js/data.js`.
 
 - [ ] **Step 1: Write the failing selector test**
 
 After resetting local state and installing fixtures, sign in as the local admin and create these one-off events with `store.createOneOffEvent()`:
 
 ```js
-const today = data.todayLocal();
-const datePlus = (days) => data.isoDate(data.addDays(today, days));
+const todayISO = data.todayHktISO();
+const datePlus = (days) => {
+  const date = new Date(`${todayISO}T00:00:00.000Z`);
+  date.setUTCDate(date.getUTCDate() + days);
+  return date.toISOString().slice(0, 10);
+};
 await store.createOneOffEvent({
   name: "Already Started Social",
   dateISO: datePlus(0),
@@ -107,9 +115,9 @@ Expected: FAIL because `store.nextSocialSession` is not defined.
 
 - [ ] **Step 3: Preserve the live source contract and implement the selector**
 
-In the live branch of `upcomingSessions(days)`, preserve its existing date filter for all future live sessions and remove the `.slice(0, days * 2)` truncation so a valid Socials event cannot be omitted behind other sessions. Preserve the existing date/time sort and free-session merge.
+In `upcomingSessions(days)`, anchor the calendar source to `todayHktISO()` and preserve the inclusive `days - 1` upper date. Keep the existing date/time sort and free/live merge.
 
-Then add this export immediately after `nextSession()` in `app/js/store.js`, using the existing `parseISO` helper to compare local event start timestamps:
+Then keep the selector immediately after `nextSession()` in `app/js/store.js`, resolving each wall time through the HKT helper:
 
 ```js
 export function nextSocialSession() {
@@ -117,16 +125,13 @@ export function nextSocialSession() {
   const latest = now + 7 * 24 * 60 * 60 * 1000;
   return upcomingSessions(8).find((session) => {
     if (session.category !== "Socials") return false;
-    const start = parseISO(session.dateISO);
-    const [hours, minutes] = String(session.time || "").split(":").map(Number);
-    start.setHours(hours, minutes, 0, 0);
-    const startMs = start.getTime();
+    const startMs = hktEventStartMs(session.dateISO, session.time);
     return startMs >= now && startMs <= latest;
   }) ?? null;
 }
 ```
 
-The eight-day local source includes the next calendar Saturday when today’s event has already started; the timestamp filter implements the rolling seven-day boundary for both local and live sessions. Existing chronological ordering ensures the first match is earliest.
+The eight-day HKT source includes the next calendar Saturday when today’s event has already started; the instant filter implements the rolling seven-day boundary for both local and live sessions. Existing chronological ordering ensures the first match is earliest. Isolate exact day-seven inclusion and beyond-seven exclusion in separate fixtures so an earlier event cannot mask either assertion.
 
 - [ ] **Step 4: Run the smoke test and verify it passes**
 
