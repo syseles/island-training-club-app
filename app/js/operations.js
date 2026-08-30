@@ -23,6 +23,7 @@ const LIVE_TABLES = [
   "collector_assignments",
   "collector_payout_profiles",
   "operational_session_venue_overrides",
+  "operational_rsvp_counts",
 ];
 
 const cutoverMarker = "itc.live.operations.backend.v1";
@@ -42,6 +43,8 @@ const liveCache = {
   assignments: new Map(),
   payout: new Map(),
   venueOverrides: new Map(),
+  rsvpCounts: new Map(),
+  rsvpCountError: null,
   loaded: false,
   loading: null,
   error: null,
@@ -244,6 +247,19 @@ function replaceState(payload) {
   liveCache.venueOverrides = new Map(
     (payload.venueOverrides || []).map((row) => [row.sessionId, row])
   );
+  liveCache.rsvpCounts = new Map();
+  liveCache.rsvpCountError = payload.rsvpCountError || null;
+  if (!liveCache.rsvpCountError) {
+    for (const session of payload.sessions) {
+      if (session.kind === "rsvp") liveCache.rsvpCounts.set(session.id, 0);
+    }
+    for (const row of payload.rsvpCounts || []) {
+      const count = Number(row.going_count);
+      if (row.session_id && Number.isInteger(count) && count >= 0) {
+        liveCache.rsvpCounts.set(row.session_id, count);
+      }
+    }
+  }
   liveCache.loaded = true;
   liveCache.error = null;
   liveCache.payoutError = payload.payoutError || null;
@@ -300,6 +316,16 @@ async function fetchAssignedPayoutRows() {
   }
 }
 
+async function fetchRsvpCounts() {
+  try {
+    const { data, error } = await supabase.rpc("get_operational_rsvp_counts");
+    if (error) throw operationalProblem(error);
+    return { rows: data || [], error: null };
+  } catch (err) {
+    return { rows: [], error: operationalProblem(err) };
+  }
+}
+
 async function fetchOperationalState() {
   if (!isLive() || !supabase) return null;
   const since = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
@@ -313,6 +339,7 @@ async function fetchOperationalState() {
     assignedPayouts,
     templates,
     venueOverrides,
+    rsvpCounts,
   ] = await Promise.all([
     supabase.from("operational_sessions").select("*").gte("session_date", since).order("session_date"),
     supabase.from("operational_bookings").select("*"),
@@ -325,6 +352,7 @@ async function fetchOperationalState() {
     fetchAssignedPayoutRows(),
     supabase.from("operational_activity_templates").select("*").order("activity_id"),
     supabase.from("operational_session_venue_overrides").select("*"),
+    fetchRsvpCounts(),
   ]);
   for (const result of [
     sessions,
@@ -356,6 +384,8 @@ async function fetchOperationalState() {
     payouts: [...payoutRowsByProfile.values()].map(buildPayoutRow),
     payoutError: assignedPayouts.error,
     venueOverrides: (venueOverrides.data || []).map(buildVenueOverrideRow),
+    rsvpCounts: rsvpCounts.rows,
+    rsvpCountError: rsvpCounts.error,
   };
 }
 
@@ -377,7 +407,13 @@ export async function ensureLiveSessionWindow() {
 export async function hydrateOperationalState({ force = false } = {}) {
   if (!isLive() || !supabase) return null;
   if (liveCache.loaded && !force) return liveCache;
-  if (hydrationPromise) return hydrationPromise;
+  if (hydrationPromise) {
+    const pending = hydrationPromise;
+    if (!force) return pending;
+    try { await pending; } catch {}
+    if (hydrationPromise && hydrationPromise !== pending) return hydrationPromise;
+    if (hydrationPromise === pending) hydrationPromise = null;
+  }
   liveCache.loading = Promise.resolve().then(async () => {
     try {
       const payload = await fetchOperationalState();
@@ -393,11 +429,12 @@ export async function hydrateOperationalState({ force = false } = {}) {
       liveCache.loading = null;
     }
   });
-  hydrationPromise = liveCache.loading;
+  const pending = liveCache.loading;
+  hydrationPromise = pending;
   try {
-    return await hydrationPromise;
+    return await pending;
   } finally {
-    hydrationPromise = null;
+    if (hydrationPromise === pending) hydrationPromise = null;
   }
 }
 
@@ -418,6 +455,9 @@ export function operationalStateStatus() {
     error: liveCache.error ? String(liveCache.error.message || liveCache.error) : null,
     payoutError: liveCache.payoutError
       ? String(liveCache.payoutError.message || liveCache.payoutError)
+      : null,
+    rsvpCountError: liveCache.rsvpCountError
+      ? String(liveCache.rsvpCountError.message || liveCache.rsvpCountError)
       : null,
     updatedAt: liveCache.updatedAt,
   };
@@ -447,6 +487,9 @@ export async function startOperationalRealtime() {
       () => scheduleRealtimeRefresh())
     .on("postgres_changes",
       { event: "*", schema: "public", table: "operational_session_venue_overrides" },
+      () => scheduleRealtimeRefresh())
+    .on("postgres_changes",
+      { event: "*", schema: "public", table: "operational_rsvp_counts" },
       () => scheduleRealtimeRefresh())
     .subscribe();
   subscription = channel;
@@ -541,6 +584,12 @@ export function liveConfirmedBookingsForSession(sessionId) {
   return liveCache.bookings.filter(
     (b) => b.sessionId === sessionId && b.status === "confirmed"
   );
+}
+
+export function liveRsvpCountFor(sessionId) {
+  return liveCache.rsvpCounts.has(sessionId)
+    ? liveCache.rsvpCounts.get(sessionId)
+    : null;
 }
 
 export function liveQueueForSession(sessionId) {

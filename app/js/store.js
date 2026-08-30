@@ -9,8 +9,10 @@ import {
   SEED_ACTIVITIES,
   sessionsInRange,
   sessionStarted,
+  hktEventStartMs,
   parseISO,
   findSession,
+  todayHktISO,
   todayLocal,
   isoDate,
   saturdayOnOrAfter,
@@ -584,7 +586,7 @@ function normalizeIndemnityAcceptance({
   const validDate = /^\d{4}-\d{2}-\d{2}$/.test(normalizedSignedAt)
     && isoDate(parseISO(normalizedSignedAt)) === normalizedSignedAt;
   if (!validDate) throw new Error("Enter a valid signing date");
-  if (normalizedSignedAt > isoDate(todayLocal())) {
+  if (normalizedSignedAt > todayHktISO()) {
     throw new Error("Signing date cannot be in the future");
   }
   if (formVersion !== INDEMNITY_VERSION) {
@@ -806,6 +808,15 @@ export function spotsLeft(session) {
     return Math.max(0, session.capacity - liveOps.liveHeldBookingsForSession(session.id).length);
   }
   return Math.max(0, session.capacity - heldBookingsForSession(session.id).length);
+}
+
+export function attendeeCountFor(session) {
+  if (!session?.id) return 0;
+  if (isLive()) {
+    const exactCount = liveOps.liveRsvpCountFor(session.id);
+    if (exactCount !== null) return exactCount;
+  }
+  return activeBookingsForSession(session.id).length;
 }
 
 export function attendeesFor(session) {
@@ -1347,14 +1358,17 @@ export function weekVenueOverride(sessionId) {
 // --- Next relevant activity (home) ---------------------------------------------------
 
 export function upcomingSessions(days = 14) {
+  const todayISO = todayHktISO();
+  const today = parseISO(todayISO);
   if (isLive()) {
-    const today = todayLocal().getTime();
+    const end = new Date(today);
+    end.setDate(end.getDate() + days - 1);
+    const endISO = isoDate(end);
     const livePaid = liveOps.listLiveSessions()
-      .filter((s) => parseISO(s.dateISO).getTime() >= today)
+      .filter((s) => s.dateISO >= todayISO && s.dateISO <= endISO)
       .sort((a, b) =>
         a.dateISO.localeCompare(b.dateISO) || String(a.time).localeCompare(String(b.time))
       )
-      .slice(0, days * 2)
       .map((s) => ({
         ...s,
         spots: spotsLeft(s),
@@ -1362,7 +1376,7 @@ export function upcomingSessions(days = 14) {
       }));
     const freeSessions = sessionsInRange(
       state.activities.filter((a) => a.kind === "free"),
-      todayLocal(),
+      today,
       days
     ).map((s) => {
       const decorated = decorateFreeSession(s);
@@ -1378,7 +1392,6 @@ export function upcomingSessions(days = 14) {
       a.dateISO.localeCompare(b.dateISO) || String(a.time).localeCompare(String(b.time))
     );
   }
-  const today = todayLocal();
   const todayStart = today.getTime();
   const horizon = todayStart + days * 24 * 60 * 60 * 1000;
   const oneOffs = state.oneOffEvents
@@ -1402,6 +1415,16 @@ export function upcomingSessions(days = 14) {
 
 export function nextSession() {
   return upcomingSessions(14)[0] ?? null;
+}
+
+export function nextSocialSession() {
+  const now = Date.now();
+  const latest = now + 7 * 24 * 60 * 60 * 1000;
+  return upcomingSessions(8).find((session) => {
+    if (session.category !== "Socials") return false;
+    const startMs = hktEventStartMs(session.dateISO, session.time);
+    return startMs >= now && startMs <= latest;
+  }) ?? null;
 }
 
 // --- Community: prayer requests ------------------------------------------------
@@ -1883,12 +1906,14 @@ export function confirmGymBooking(sessionId, note, now = Date.now()) {
 export function setWeekVenue(sessionId, {
   location, mapsQuery, meetingLat = null, meetingLng = null,
 } = {}) {
-  const cleanLocation = String(location || "").trim();
-  const cleanMapsQuery = String(mapsQuery || "").trim();
-  const overrideActivityId = String(sessionId).replace(/-\d{4}-\d{2}-\d{2}$/, "");
+  const before = getSession(sessionId);
+  const fallbackActivityId = String(sessionId).replace(/-\d{4}-\d{2}-\d{2}$/, "");
+  const overrideActivityId = before?.activityId || fallbackActivityId;
   if (!new Set(["wnt", "run", "water", "lunch"]).has(overrideActivityId)) {
     throw new Error("Activity venue is fixed.");
   }
+  const cleanLocation = String(location || "").trim();
+  const cleanMapsQuery = String(mapsQuery || "").trim();
   const rawPointProvided = ![meetingLat, meetingLng].every(
     (value) => value === null || value === undefined || value === ""
   );
@@ -1899,7 +1924,6 @@ export function setWeekVenue(sessionId, {
     throw new Error("Choose a valid meeting point.");
   }
   const meetingPoint = acceptsPoint ? normalizedPoint : null;
-  const before = getSession(sessionId);
   if (isLive()) {
     const wasTBC = before?.location === "TBC"
       || !hasConfirmedVenue(before?.location, before?.mapsQuery);

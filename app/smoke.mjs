@@ -15,6 +15,15 @@ const store = await import("./js/store.js");
 const views = await import("./js/views.js");
 const data = await import("./js/data.js");
 
+const hktRolloverInstant = Date.parse("2026-08-05T16:30:00.000Z");
+assert.equal(data.todayHktISO(hktRolloverInstant), "2026-08-06",
+  "current HKT date must not depend on the browser timezone");
+assert.equal(
+  data.hktEventStartMs("2026-08-06", "00:30:00"),
+  hktRolloverInstant,
+  "Hong Kong event wall time must resolve to the same instant in every browser timezone",
+);
+
 let failures = 0;
 async function check(label, fn) {
   try {
@@ -57,6 +66,15 @@ const { existsSync, readFileSync } = await import("node:fs");
 const { resolve, dirname } = await import("node:path");
 const { fileURLToPath } = await import("node:url");
 const __dirnameSmoke = dirname(fileURLToPath(import.meta.url));
+const storeSource = readFileSync(resolve(__dirnameSmoke, "js/store.js"), "utf8");
+const weekVenueSource = storeSource.match(
+  /export function setWeekVenue[\s\S]*?\/\/ --- Giving/
+)?.[0] || "";
+const orderedWeekVenueAuthorization = /const before = getSession\(sessionId\);\s*const fallbackActivityId = String\(sessionId\)\.replace\([^\n]+\);\s*const overrideActivityId = before\?\.activityId \|\| fallbackActivityId;\s*if \(!new Set\(\["wnt", "run", "water", "lunch"\]\)\.has\(overrideActivityId\)\) \{/;
+if (!orderedWeekVenueAuthorization.test(weekVenueSource)) {
+  throw new Error("setWeekVenue should resolve the session before fallback authorization and the allow-list");
+}
+
 for (const relativePath of [
   "js/config.js",
   "live-auth-smoke.mjs",
@@ -98,6 +116,160 @@ for (const marker of [
   );
 }
 console.log("ok  assigned collector payout RPC migration keeps least-privilege controls");
+
+const lunchMeetingRpcMigrationSource = readFileSync(
+  resolve(__dirnameSmoke, "../supabase/migrations/20260829000006_lunch_venue_meeting_point_rpc.sql"),
+  "utf8"
+);
+const rsvpIntegrityMigrationSource = readFileSync(
+  resolve(__dirnameSmoke, "../supabase/migrations/20260829000008_rsvp_integrity.sql"),
+  "utf8"
+);
+const operationalIntegrationSource = readFileSync(
+  resolve(__dirnameSmoke, "../supabase/tests/operational_backend_integration.sql"),
+  "utf8"
+);
+for (const marker of [
+  "get_operational_rsvp_counts",
+  "requires_rsvp",
+  "status = 'confirmed'",
+  "at time zone 'Asia/Hong_Kong'",
+  "reserve_operational_session",
+  "withdraw_operational_rsvp",
+  "grant execute on function public.get_operational_rsvp_counts() to anon, authenticated",
+]) assert.ok(rsvpIntegrityMigrationSource.includes(marker));
+const rsvpCountFunctionSource = rsvpIntegrityMigrationSource.match(
+  /create or replace function public\.get_operational_rsvp_counts\(\)[\s\S]*?\n\$\$;/
+)?.[0] || "";
+const rsvpCountReturnColumns = rsvpCountFunctionSource.match(
+  /returns table\s*\(([\s\S]*?)\)/i
+)?.[1].replace(/\s+/g, " ").trim();
+assert.equal(rsvpCountReturnColumns, "session_id text, going_count bigint",
+  "public RSVP counts must expose only session ID and confirmed total");
+assert.match(rsvpCountFunctionSource, /from public\.operational_rsvp_counts/,
+  "the public RSVP aggregate must read only the identity-free count table");
+assert.doesNotMatch(rsvpCountFunctionSource, /operational_bookings|profiles/,
+  "the public RSVP aggregate must not read identity-bearing tables");
+const rsvpCountTableSource = rsvpIntegrityMigrationSource.match(
+  /create table(?: if not exists)? public\.operational_rsvp_counts[\s\S]*?\n\);/
+)?.[0] || "";
+for (const contract of [
+  /session_id text primary key[\s\S]*?references public\.operational_sessions\(id\)/,
+  /going_count bigint not null default 0[\s\S]*?check \(going_count >= 0\)/,
+  /updated_at timestamptz not null default now\(\)/,
+]) assert.match(rsvpCountTableSource, contract);
+assert.match(rsvpIntegrityMigrationSource,
+  /create table if not exists public\.operational_rsvp_counts/,
+  "undeployed RSVP integrity migration must be safe to reapply in disposable integration tests");
+assert.match(rsvpIntegrityMigrationSource,
+  /alter table public\.operational_rsvp_counts enable row level security/);
+assert.match(rsvpIntegrityMigrationSource,
+  /drop policy if exists "public read operational RSVP counts"[\s\S]*?create policy "public read operational RSVP counts"/,
+  "RSVP count policy recreation must be safe when the migration is reapplied");
+assert.match(rsvpIntegrityMigrationSource,
+  /create policy[\s\S]*?on public\.operational_rsvp_counts[\s\S]*?for select[\s\S]*?using \(true\)/);
+assert.match(rsvpIntegrityMigrationSource,
+  /revoke all on table public\.operational_rsvp_counts from public, anon, authenticated/);
+assert.match(rsvpIntegrityMigrationSource,
+  /grant select on table public\.operational_rsvp_counts to anon, authenticated/);
+assert.doesNotMatch(rsvpIntegrityMigrationSource,
+  /grant\s+(?:all|insert|update|delete|truncate|references|trigger)[\s\S]*?on\s+(?:table\s+)?public\.operational_rsvp_counts/i,
+  "browser roles must never receive RSVP count-table writes");
+assert.match(rsvpIntegrityMigrationSource,
+  /create or replace function public\.recalculate_operational_rsvp_count\(\s*p_session_id text\s*\)[\s\S]*?security definer/);
+assert.match(rsvpIntegrityMigrationSource,
+  /create trigger sync_operational_rsvp_count[\s\S]*?after insert or update or delete[\s\S]*?on public\.operational_bookings/);
+assert.match(rsvpIntegrityMigrationSource,
+  /revoke all on function public\.recalculate_operational_rsvp_count\(text\) from public, anon, authenticated/);
+assert.match(rsvpIntegrityMigrationSource,
+  /revoke all on function public\.sync_operational_rsvp_count\(\) from public, anon, authenticated/);
+assert.match(rsvpIntegrityMigrationSource,
+  /insert into public\.operational_rsvp_counts[\s\S]*?left join public\.operational_bookings[\s\S]*?where t\.requires_rsvp/,
+  "migration must backfill every existing RSVP session, including zero counts");
+assert.match(rsvpIntegrityMigrationSource,
+  /if not exists \([\s\S]*?from pg_publication_tables[\s\S]*?tablename = 'operational_rsvp_counts'[\s\S]*?\) then[\s\S]*?alter publication supabase_realtime add table public\.operational_rsvp_counts/,
+  "RSVP count publication membership must be guarded for migration reapplication");
+const reserveOperationalSessionSource = rsvpIntegrityMigrationSource.match(
+  /create or replace function public\.reserve_operational_session\([\s\S]*?\n\$\$;/
+)?.[0] || "";
+assert.match(reserveOperationalSessionSource,
+  /if v_is_rsvp then[\s\S]*?at time zone 'Asia\/Hong_Kong' <= now\(\)[\s\S]*?elsif v_session\.session_date <= \(now\(\) at time zone 'Asia\/Hong_Kong'\)::date then/,
+  "RSVP must use its exact HKT start while paid reservations reject the entire HKT session date");
+assert.match(rsvpIntegrityMigrationSource,
+  /revoke all on function public\.reserve_operational_session\(text\) from public, anon/);
+assert.match(rsvpIntegrityMigrationSource,
+  /revoke all on function public\.withdraw_operational_rsvp\(uuid\) from public, anon/);
+assert.doesNotMatch(rsvpIntegrityMigrationSource,
+  /grant[^\n]*(?:all|select|insert|update|delete)[^\n]*on\s+(?:table\s+)?public\.operational_bookings/i,
+  "RSVP count migration must not grant direct booking-table access");
+assert.doesNotMatch(operationalIntegrationSource,
+  /from\s+(?:public\.)?reserve_operational_session\('hyrox-2026-/,
+  "successful SQL reservation fixtures must use dynamic future sessions");
+assert.doesNotMatch(operationalIntegrationSource,
+  /join_operational_queue\('hyrox-midtown-\d{4}-\d{2}-\d{2}',\s*'(?:interest|waitlist)'\)/,
+  "queue guard scenarios must use a deterministic future Midtown fixture");
+assert.match(operationalIntegrationSource,
+  /v_future_hk\s+timestamp := \(now\(\) \+ interval '1 hour'\) at time zone 'Asia\/Hong_Kong'/);
+assert.match(operationalIntegrationSource,
+  /v_boundary_before_session := 'event-rsvp-boundary-before-' \|\| v_future_hk::date::text/,
+  "pre-start boundary ID must derive from the same future HKT timestamp as its date/time");
+assert.match(operationalIntegrationSource,
+  /v_boundary_at_session := 'event-rsvp-boundary-at-' \|\| v_at_start_hk::date::text/,
+  "at-start boundary ID must derive from the same HKT timestamp as its date/time");
+assert.equal(
+  (operationalIntegrationSource.match(/\\ir \.\.\/migrations\/20260829000008_rsvp_integrity\.sql/g) || []).length,
+  1,
+  "integration must reapply the actual RSVP migration once after backfill fixtures exist",
+);
+const cancellationQueueIntegrationSource = operationalIntegrationSource.match(
+  /-- Admin cancellation atomicity\.[\s\S]*?-- Cancellation rollback test:/
+)?.[0] || "";
+assert.match(cancellationQueueIntegrationSource,
+  /v_midtown_date date := \(now\(\) at time zone 'Asia\/Hong_Kong'\)::date \+ \d+;/,
+  "cancellation coverage must derive its closed Midtown fixture from a future Hong Kong date");
+assert.match(cancellationQueueIntegrationSource,
+  /v_midtown_session text;[\s\S]*?v_midtown_session := 'hyrox-midtown-' \|\| v_midtown_date::text;/,
+  "cancellation coverage must derive the Midtown session ID from its future date");
+assert.match(cancellationQueueIntegrationSource,
+  /perform pg_temp\.op_assert\(\s*exists \([\s\S]*?where id = v_midtown_session[\s\S]*?and activity_id = 'hyrox-midtown'[\s\S]*?and session_date = v_midtown_date[\s\S]*?and not is_open[\s\S]*?and cancelled_at is null[\s\S]*?\),[\s\S]*?'closed Midtown interest fixture exists with required properties'[\s\S]*?\);/,
+  "cancellation coverage must explicitly prove the Midtown fixture exists, is future-derived, closed, and active");
+assert.match(cancellationQueueIntegrationSource,
+  /join_operational_queue\(v_midtown_session, 'interest'\)/,
+  "cancellation coverage must join interest through the dynamic Midtown fixture variable");
+assert.doesNotMatch(cancellationQueueIntegrationSource,
+  /join_operational_queue\('hyrox-midtown-\d{4}-\d{2}-\d{2}', 'interest'\)/,
+  "cancellation coverage must not call the interest queue with a dated Midtown literal");
+const upcomingSessionsSource = storeSource.match(
+  /export function upcomingSessions\(days = 14\)[\s\S]*?\n}\n\nexport function nextSession/
+)?.[0] || "";
+assert.match(upcomingSessionsSource,
+  /end\.setDate\(end\.getDate\(\) \+ days - 1\)/,
+  "live upcomingSessions must compute an inclusive calendar-day end date");
+assert.match(upcomingSessionsSource,
+  /s\.dateISO >= todayISO && s\.dateISO <= endISO/,
+  "live upcomingSessions must apply its inclusive upper date bound");
+assert.match(upcomingSessionsSource, /todayHktISO\(\)/,
+  "upcomingSessions must anchor its calendar horizon to the current HKT date");
+const nextSocialSessionSource = storeSource.match(
+  /export function nextSocialSession\(\)[\s\S]*?\n}\n\n\/\/ --- Community/
+)?.[0] || "";
+assert.match(nextSocialSessionSource, /hktEventStartMs\(session\.dateISO, session\.time\)/,
+  "nextSocialSession must compare Hong Kong event-start instants");
+assert.doesNotMatch(nextSocialSessionSource, /setHours\(/,
+  "nextSocialSession must not interpret Hong Kong wall time in the browser timezone");
+const lunchMeetingRpcSixArgumentSource = lunchMeetingRpcMigrationSource.match(
+  /create or replace function public\.set_session_venue\([\s\S]*?p_meeting_lat double precision,[\s\S]*?p_meeting_lng double precision[\s\S]*?\n\$\$;/
+)?.[0] || "";
+assert.match(lunchMeetingRpcSixArgumentSource,
+  /set_session_venue\([\s\S]*?p_meeting_lat double precision,[\s\S]*?p_meeting_lng double precision/);
+assert.match(lunchMeetingRpcSixArgumentSource,
+  /v_activity_id not in \('wnt', 'run', 'water', 'lunch'\)/);
+assert.match(lunchMeetingRpcSixArgumentSource,
+  /v_is_wnt_tamar := v_activity_id = 'wnt'/);
+assert.match(lunchMeetingRpcSixArgumentSource,
+  /when 'lunch' then 'Post-Training Lunch'/);
+assert.match(lunchMeetingRpcMigrationSource,
+  /select public\.set_session_venue\([\s\S]*?p_was_tbc, null, null[\s\S]*?\);/);
 for (const column of [
   "waiver_signature_text",
   "waiver_signed_at",
@@ -164,6 +336,12 @@ console.log("ok  integration source-tip provenance is explicit");
 
 const integratedViewSource = readFileSync(resolve(__dirnameSmoke, "js/views.js"), "utf8");
 const integratedAppSource = readFileSync(resolve(__dirnameSmoke, "js/app.js"), "utf8");
+assert.equal(typeof store.attendeeCountFor, "function",
+  "store must export attendeeCountFor for identity-independent RSVP counts");
+assert.equal((integratedViewSource.match(/store\.attendeeCountFor\(s\)/g) || []).length, 4,
+  "Schedule Going/RSVP states, RSVP Activity Details, and Admin controls must use attendeeCountFor");
+assert.doesNotMatch(integratedViewSource, /store\.attendeesFor\(s\)\.length/,
+  "RSVP count surfaces must not derive counts from attendee identities");
 const combinedRuntimeSource = `${integratedViewSource}\n${integratedAppSource}`;
 for (const marker of [
   "Continue with Google",
@@ -378,9 +556,10 @@ if (!commHtml.includes("Find your place in the crew.")) {
   console.error("FAIL visitor Community heading is not personalized");
 } else console.log("ok  visitor Community heading is personalized");
 for (const required of [
-  "Next connection",
-  "Post-training lunch",
-  "See the next lunch",
+  "Socials",
+  "Connect beyond training",
+  "Meet up, share a meal, and find your people.",
+  "View next social",
   "Latest from ITC",
   "Island Training Club turns 2",
   "Ways to connect",
@@ -391,9 +570,18 @@ for (const required of [
     console.error(`FAIL Community Pulse missing ${required}`);
   }
 }
-if (!commHtml.includes('href="#/schedule"')) {
+const selectedCommunitySocial = store.nextSocialSession();
+if (!selectedCommunitySocial
+    || !commHtml.includes(`Next up: ${selectedCommunitySocial.name}`)
+    || !commHtml.includes(data.fmtDate(selectedCommunitySocial.dateISO))
+    || !commHtml.includes(`href="#/activity/${selectedCommunitySocial.id}"`)) {
   failures++;
-  console.error("FAIL Community Pulse meal CTA should link to the Schedule tab");
+  console.error("FAIL Community Pulse should show and link to the next Socials event");
+}
+if (commHtml.includes("Post-training lunch") || commHtml.includes("Every Saturday after HYROX")
+    || commHtml.includes("See the next lunch")) {
+  failures++;
+  console.error("FAIL Community Pulse should not use lunch-specific preview copy");
 }
 const coexistenceSurface = `${integratedViewSource}\n${localVisitorHome}\n${commHtml}`;
 for (const marker of ["Home", "notificationBellHTML", '#/giving', "community-pulse", "HYROX"]) {
@@ -2334,6 +2522,157 @@ store.signIn("member@example.test");
   console.log("ok  collector confirms payment from ops");
 }
 
+// --- Generic Socials preview: rolling seven-day selector ---
+store.resetLocalData();
+installLocalFixtures();
+store.signIn("admin@example.test");
+{
+  const today = data.todayLocal();
+  const datePlus = (days) => data.isoDate(data.addDays(today, days));
+  await store.createOneOffEvent({
+    name: "Already Started Social",
+    dateISO: datePlus(0),
+    time: "00:00",
+    durationMin: 90,
+    location: "Central",
+    mapsQuery: "Central, Hong Kong",
+    category: "Socials",
+    price: 0,
+    capacity: 20,
+  });
+  const earliestSocial = await store.createOneOffEvent({
+    name: "Community Breakfast",
+    dateISO: datePlus(1),
+    time: "08:00",
+    durationMin: 90,
+    location: "Central",
+    mapsQuery: "Central, Hong Kong",
+    category: "Socials",
+    price: 0,
+    capacity: 20,
+  });
+  await store.createOneOffEvent({
+    name: "Community Dinner",
+    dateISO: datePlus(2),
+    time: "19:00",
+    durationMin: 90,
+    location: "Wan Chai",
+    mapsQuery: "Wan Chai, Hong Kong",
+    category: "Socials",
+    price: 0,
+    capacity: 20,
+  });
+  await store.createOneOffEvent({
+    name: "Strength Workshop",
+    dateISO: datePlus(1),
+    time: "07:00",
+    durationMin: 60,
+    location: "Central",
+    mapsQuery: "Central, Hong Kong",
+    category: "Strength",
+    price: 0,
+    capacity: 20,
+  });
+  await store.createOneOffEvent({
+    name: "Next Week Social",
+    dateISO: datePlus(7),
+    time: "08:00",
+    durationMin: 90,
+    location: "Central",
+    mapsQuery: "Central, Hong Kong",
+    category: "Socials",
+    price: 0,
+    capacity: 20,
+  });
+  const nextSocial = store.nextSocialSession();
+  if (!nextSocial || nextSocial.id !== earliestSocial.id) {
+    throw new Error("nextSocialSession should skip started socials and select the earliest rolling-window social");
+  }
+  console.log("ok  Socials selector skips started events and ignores later/non-Socials events");
+}
+
+// Isolate both rolling-window edges so an earlier fixture cannot make either
+// assertion pass without evaluating the seven-day candidate itself.
+{
+  const RealDateForSocialBoundary = globalThis.Date;
+  const fixedNow = "2026-08-05T02:00:00.000Z"; // 10:00 HKT
+  globalThis.Date = class extends RealDateForSocialBoundary {
+    constructor(...args) {
+      super(...(args.length ? args : [fixedNow]));
+    }
+    static now() {
+      return RealDateForSocialBoundary.parse(fixedNow);
+    }
+    static parse(value) {
+      return RealDateForSocialBoundary.parse(value);
+    }
+    static UTC(...args) {
+      return RealDateForSocialBoundary.UTC(...args);
+    }
+  };
+  const resetWithoutSocials = () => {
+    store.resetLocalData();
+    installLocalFixtures();
+    const boundaryState = JSON.parse(mem.get("itc.prototype.v1"));
+    boundaryState.activities = boundaryState.activities
+      .filter((activity) => activity.category !== "Socials");
+    boundaryState.oneOffEvents = [];
+    mem.set("itc.prototype.v1", JSON.stringify(boundaryState));
+    store.load();
+    store.signIn("admin@example.test");
+  };
+  try {
+    resetWithoutSocials();
+    const exactDaySeven = await store.createOneOffEvent({
+      name: "Exact Day Seven Social",
+      dateISO: "2026-08-12",
+      time: "10:00",
+      durationMin: 60,
+      location: "Central",
+      mapsQuery: "Central, Hong Kong",
+      category: "Socials",
+      price: 0,
+      capacity: 20,
+    });
+    assert.equal(store.nextSocialSession()?.id, exactDaySeven.id,
+      "a Social starting at the exact seven-day HKT instant must be included");
+
+    resetWithoutSocials();
+    await store.createOneOffEvent({
+      name: "Beyond Day Seven Social",
+      dateISO: "2026-08-12",
+      time: "10:01",
+      durationMin: 60,
+      location: "Central",
+      mapsQuery: "Central, Hong Kong",
+      category: "Socials",
+      price: 0,
+      capacity: 20,
+    });
+    assert.equal(store.nextSocialSession(), null,
+      "a Social starting beyond the seven-day HKT instant must be excluded");
+    console.log("ok  Socials selector isolates exact and beyond-seven HKT boundaries");
+  } finally {
+    globalThis.Date = RealDateForSocialBoundary;
+  }
+}
+store.resetLocalData();
+installLocalFixtures();
+{
+  const fallbackState = JSON.parse(mem.get("itc.prototype.v1"));
+  fallbackState.activities = fallbackState.activities.filter((activity) => activity.category !== "Socials");
+  fallbackState.oneOffEvents = [];
+  mem.set("itc.prototype.v1", JSON.stringify(fallbackState));
+  store.load();
+  const fallbackCommunity = views.viewCommunity();
+  if (store.nextSocialSession() !== null || !fallbackCommunity.includes('href="#/schedule"')) {
+    throw new Error("Community Pulse should fall back to Schedule when no Socials event starts within seven days");
+  }
+  console.log("ok  Community Socials preview falls back to Schedule when no event is available");
+}
+store.resetLocalData();
+installLocalFixtures();
+
 // --- One-off events (local mode) ---
 store.resetLocalData();
 installLocalFixtures();
@@ -2423,6 +2762,10 @@ installLocalFixtures();
   const rsvp = await store.rsvpSession("fixture-member", lunch.id);
   if (rsvp.status !== "confirmed" || rsvp.snapshot.price !== 0)
     throw new Error("RSVP should confirm instantly with no payment");
+  assert.equal(store.attendeeCountFor(lunch), 1,
+    "local RSVP count must include the confirmed booking");
+  assert.deepEqual(store.attendeesFor(lunch), ["Tester M."],
+    "attendeesFor must preserve attendee name formatting independently of counts");
   const goingHtml = views.viewActivity(lunch.id);
   if (!goingHtml.includes("You're going") || !goingHtml.includes("rsvp-withdraw"))
     throw new Error("RSVP'd member should see the Going state and a withdraw action");

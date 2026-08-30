@@ -24,6 +24,7 @@ import {
   parseISO,
   mondayOf,
   addDays,
+  todayHktISO,
   todayLocal,
   isoDate,
   fmtDate,
@@ -64,13 +65,22 @@ const esc = (s) =>
     "'": "&#39;",
   })[c]);
 
-const todayISO = () => isoDate(todayLocal());
+const todayISO = () => todayHktISO();
 
 const fmtDay = (ts) =>
-  new Date(ts).toLocaleDateString("en-HK", { day: "numeric", month: "short", year: "numeric" });
+  new Date(ts).toLocaleDateString("en-HK", {
+    timeZone: "Asia/Hong_Kong",
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+  });
 
 const fmtMonthYear = (ts) =>
-  new Date(ts).toLocaleDateString("en-HK", { month: "short", year: "numeric" });
+  new Date(ts).toLocaleDateString("en-HK", {
+    timeZone: "Asia/Hong_Kong",
+    month: "short",
+    year: "numeric",
+  });
 
 // --- Shared fragments ---------------------------------------------------------
 
@@ -110,11 +120,13 @@ function sessionRow(s, { past, showDate = true, highlight } = {}) {
   if (s.cancelled) {
     end = `<span class="badge danger">Cancelled</span>`;
   } else if (booked) {
-    end = `<span class="badge free booked">${s.kind === "rsvp" ? "Going" : "Booked"}</span>`;
+    end = s.kind === "rsvp"
+      ? `<span class="badge free booked">Going</span><span class="spots">${store.attendeeCountFor(s)} going</span>`
+      : `<span class="badge free booked">Booked</span>`;
   } else if (reserved) {
     end = `<span class="badge warn">Pay by ${fmtDeadline(reserved.payDeadlineAt)}</span>`;
   } else if (s.kind === "rsvp") {
-    const going = store.attendeesFor(s).length;
+    const going = store.attendeeCountFor(s);
     end = `<span class="badge free">RSVP</span><span class="spots">${going} going</span>`;
   } else if (s.kind === "free") {
     end = `<span class="badge free">Free</span><span class="spots">Just show up</span>`;
@@ -483,7 +495,7 @@ export function viewActivity(sessionId) {
   } else if (s.kind === "rsvp") {
     // RSVP sessions (e.g. the post-training lunch): no payment moves in-app,
     // but the organizer needs a headcount — joining confirms instantly.
-    const goingCount = store.attendeesFor(s).length;
+    const goingCount = store.attendeeCountFor(s);
     if (booking) {
       actionBlock = `
         <div class="banner mt16">
@@ -854,6 +866,11 @@ function communityHeading(user) {
 function communityHome() {
   const user = store.currentUser();
   const announcement = ANNOUNCEMENTS[0];
+  const nextSocial = store.nextSocialSession();
+  const socialHref = nextSocial ? `#/activity/${nextSocial.id}` : "#/schedule";
+  const socialDetail = nextSocial
+    ? `<p class="muted small mt8">Next up: ${esc(nextSocial.name)} · ${esc(fmtDate(nextSocial.dateISO))}</p>`
+    : "";
   return `
     <div class="community-pulse">
       <div class="kicker">Community</div>
@@ -861,11 +878,12 @@ function communityHome() {
       <p class="subcopy mt8">Island Training Club is a Hong Kong training community with a Christian foundation — open to everyone. Training is the doorway; find your next way to connect.</p>
 
       <section class="community-feature" aria-labelledby="next-connection-title">
-        <span class="kicker">Next connection</span>
-        <h2 id="next-connection-title">Post-training lunch</h2>
-        <p>Every Saturday after HYROX. Everyone pays their own bill — RSVP so the organizer can book a table.</p>
+        <span class="kicker">Socials</span>
+        <h2 id="next-connection-title">Connect beyond training</h2>
+        <p>Meet up, share a meal, and find your people.</p>
+        ${socialDetail}
         <div class="community-feature-actions">
-          <a class="btn sm" href="#/schedule">See the next lunch</a>
+          <a class="btn sm" href="${socialHref}">View next social</a>
         </div>
       </section>
 
@@ -2257,7 +2275,7 @@ function adminFreeEventControls() {
             </div>
           </form>
           ${s.kind === "rsvp" ? `
-          <p class="muted small mt8">${store.attendeesFor(s).length} going${s.capacity != null ? ` · cap ${s.capacity}` : ""}</p>
+          <p class="muted small mt8">${store.attendeeCountFor(s)} going${s.capacity != null ? ` · cap ${s.capacity}` : ""}</p>
           <form id="form-cancel-week" data-session="${safeId}" class="mt8">
             <div class="field"><label>Cancel this week — reason (required)</label><input name="reason" placeholder="e.g. Organizer away" required></div>
             <button class="btn danger sm" type="submit">Cancel this week's event</button>

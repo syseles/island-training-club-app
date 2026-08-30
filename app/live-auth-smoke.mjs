@@ -172,6 +172,8 @@ let givingCampaignRows = [];
 let operationalRpcHandler = null;
 let operationalAuthSubOverride = null;
 let operationalVenueOverrideReadError = null;
+let operationalRsvpCountError = null;
+let operationalRsvpCountRowsOverride = null;
 const operationalRpcCalls = [];
 const operationalPayoutDirectReads = [];
 const operationalSubscriptions = [];
@@ -207,7 +209,7 @@ let releaseOAuth = null;
 let signOutCalls = 0;
 let releaseSignOut = null;
 const deferredAuthTasks = [];
-const LIVE_TABLES_COUNT = 7;
+const LIVE_TABLES_COUNT = 8;
 const fixedIso = "2026-08-05T02:00:00.000Z";
 const RealDate = Date;
 globalThis.Date = class extends RealDate {
@@ -471,12 +473,16 @@ const fakeSupabase = {
         if (table === "operational_session_venue_overrides") {
           operationalVenueOverrideReadError = null;
         }
+        const role = operationalRoleFor(authUser.id);
         let visibleRows = rows;
+        if (table === "operational_bookings"
+            && !["admin", "super_admin"].includes(role)) {
+          visibleRows = visibleRows.filter((row) => row.profile_id === authUser.id);
+        }
         if (table === "collector_payout_profiles") {
-          const role = operationalRoleFor(authUser.id);
           visibleRows = ["admin", "super_admin"].includes(role)
-            ? rows
-            : rows.filter((row) => row.profile_id === authUser.id);
+            ? visibleRows
+            : visibleRows.filter((row) => row.profile_id === authUser.id);
           operationalPayoutDirectReads.push({
             profileId: authUser.id,
             profileIds: visibleRows.map((row) => row.profile_id),
@@ -510,7 +516,10 @@ const fakeSupabase = {
     const channel = {
       name,
       handlers: [],
-      on(_event, _filter, handler) { channel.handlers.push(handler); return channel; },
+      on(event, filter, handler) {
+        channel.handlers.push({ event, filter, handler });
+        return channel;
+      },
       subscribe() { operationalSubscriptions.push(channel); return channel; },
     };
     return channel;
@@ -531,10 +540,19 @@ globalThis.window = {
 // Seed operational fake tables with at least one upcoming paid session so
 // scheduled live-mode views can render.
 const today = new Date();
+const fixedHktTodayIso = "2026-08-05";
+const aug15Iso = "2026-08-15";
 const seededCancelled = new Set(["hyrox-2026-08-15", "hyrox-midtown-2026-08-15"]);
-for (let i = 0; i < 4; i++) {
-  const d = new Date(today.getTime() + (7 + i * 7) * 24 * 60 * 60 * 1000);
+const normalWeeklyFixtureDates = [];
+const firstNormalSaturday = new RealDate(`${fixedHktTodayIso}T00:00:00.000Z`);
+const daysUntilNextSaturday = ((6 - firstNormalSaturday.getUTCDay() + 7) % 7) || 7;
+firstNormalSaturday.setUTCDate(firstNormalSaturday.getUTCDate() + daysUntilNextSaturday);
+for (let week = 0; normalWeeklyFixtureDates.length < 4; week += 1) {
+  const d = new RealDate(firstNormalSaturday);
+  d.setUTCDate(firstNormalSaturday.getUTCDate() + week * 7);
   const iso = d.toISOString().slice(0, 10);
+  if (iso === aug15Iso) continue;
+  normalWeeklyFixtureDates.push(iso);
   operationalTableRows.operational_sessions.push({
     id: `hyrox-${iso}`,
     activity_id: "hyrox",
@@ -604,7 +622,6 @@ for (let i = 0; i < 4; i++) {
 }
 
 // Seed the 15 August 2026 cancelled sessions with system provenance.
-const aug15Iso = "2026-08-15";
 operationalTableRows.operational_sessions.push({
   id: "hyrox-2026-08-15",
   activity_id: "hyrox",
@@ -650,6 +667,66 @@ operationalTableRows.operational_sessions.push({
   updated_at: today.toISOString(),
 });
 
+assert.equal(normalWeeklyFixtureDates.length, 4, "live smoke needs four normal weekly fixtures");
+assert.ok(!normalWeeklyFixtureDates.includes(aug15Iso), "normal weekly fixtures must skip the cancelled race weekend");
+assert.ok(
+  normalWeeklyFixtureDates.every((iso) => new RealDate(`${iso}T00:00:00Z`).getUTCDay() === 6),
+  "normal weekly fixture dates must all be Saturdays",
+);
+const operationalSessionIds = operationalTableRows.operational_sessions.map((row) => row.id);
+assert.equal(
+  new Set(operationalSessionIds).size,
+  operationalSessionIds.length,
+  "live operational fixture IDs must be unique",
+);
+
+const seededRsvpLunchId = `lunch-${normalWeeklyFixtureDates[0]}`;
+const seededRsvpSnapshot = {
+  name: "Post-Training Lunch",
+  session_date: normalWeeklyFixtureDates[0],
+  start_time: "12:45:00",
+  venue: "TBC",
+  price_hkd: 0,
+};
+operationalTableRows.operational_bookings.push(
+  {
+    id: "rsvp-other-confirmed",
+    profile_id: "rsvp-other-member",
+    session_id: seededRsvpLunchId,
+    status: "confirmed",
+    reserved_at: fixedIso,
+    pay_deadline_at: fixedIso,
+    payment_marked_at: null,
+    payment_method: null,
+    payment_reference: null,
+    paid_at: fixedIso,
+    confirmed_by: null,
+    deferred_from_booking_id: null,
+    deferred_to_booking_id: null,
+    snapshot: structuredClone(seededRsvpSnapshot),
+    created_at: fixedIso,
+    updated_at: fixedIso,
+  },
+  ...["reserved", "cancelled", "deferred"].map((status) => ({
+    id: `rsvp-noise-${status}`,
+    profile_id: `rsvp-noise-member-${status}`,
+    session_id: seededRsvpLunchId,
+    status,
+    reserved_at: fixedIso,
+    pay_deadline_at: fixedIso,
+    payment_marked_at: null,
+    payment_method: null,
+    payment_reference: null,
+    paid_at: status === "deferred" ? fixedIso : null,
+    confirmed_by: null,
+    deferred_from_booking_id: null,
+    deferred_to_booking_id: null,
+    snapshot: structuredClone(seededRsvpSnapshot),
+    created_at: fixedIso,
+    updated_at: fixedIso,
+  })),
+);
+
 operationalRpcHandler = (name, args) => {
   operationalRpcCalls.push({ name, args: structuredClone(args) });
   const override = operationalAuthSubOverride;
@@ -669,6 +746,31 @@ operationalRpcHandler = (name, args) => {
       .filter((row) => assignedIds.has(row.profile_id) && !seen.has(row.profile_id) && seen.add(row.profile_id))
       .map((row) => structuredClone(row));
     return Promise.resolve({ data: assignedPayouts, error: null });
+  }
+  if (name === "get_operational_rsvp_counts") {
+    if (operationalRsvpCountError) {
+      return Promise.resolve({ data: null, error: operationalRsvpCountError });
+    }
+    if (operationalRsvpCountRowsOverride !== null) {
+      return Promise.resolve({
+        data: structuredClone(operationalRsvpCountRowsOverride),
+        error: null,
+      });
+    }
+    const counts = new Map();
+    for (const booking of operationalTableRows.operational_bookings) {
+      if (booking.status !== "confirmed") continue;
+      const session = operationalTableRows.operational_sessions
+        .find((row) => row.id === booking.session_id);
+      const template = operationalTableRows.operational_activity_templates
+        .find((row) => row.activity_id === session?.activity_id);
+      if (!template?.requires_rsvp) continue;
+      counts.set(booking.session_id, (counts.get(booking.session_id) || 0) + 1);
+    }
+    return Promise.resolve({
+      data: [...counts].map(([session_id, going_count]) => ({ session_id, going_count })),
+      error: null,
+    });
   }
   if (name === "create_operational_event") {
     const activityId = `event-${operationalTableRows.operational_activity_templates.length + 1}`;
@@ -732,7 +834,10 @@ operationalRpcHandler = (name, args) => {
   if (name === "reserve_operational_session") {
     const sessionRow = operationalTableRows.operational_sessions.find((s) => s.id === args.p_session_id);
     const templateRow = operationalTableRows.operational_activity_templates.find((t) => t.activity_id === sessionRow?.activity_id);
-    const isRsvp = sessionRow && Number(sessionRow.price_hkd) === 0;
+    const isRsvp = sessionRow && Number(sessionRow.price_hkd) === 0 && templateRow?.requires_rsvp;
+    if (sessionRow && Number(sessionRow.price_hkd) === 0 && !isRsvp) {
+      return Promise.resolve({ data: null, error: { message: "Session does not require RSVP." } });
+    }
     const id = "b-" + (operationalTableRows.operational_bookings.length + 1);
     const booking = {
       id,
@@ -768,7 +873,9 @@ operationalRpcHandler = (name, args) => {
   if (name === "withdraw_operational_rsvp") {
     const row = operationalTableRows.operational_bookings.find((b) => b.id === args.p_booking_id);
     const sRow = operationalTableRows.operational_sessions.find((s) => s.id === row?.session_id);
-    if (!row || row.profile_id !== actingProfile || !sRow || Number(sRow.price_hkd) > 0 || row.status !== "confirmed") {
+    const templateRow = operationalTableRows.operational_activity_templates.find((t) => t.activity_id === sRow?.activity_id);
+    if (!row || row.profile_id !== actingProfile || !sRow || Number(sRow.price_hkd) > 0
+        || !templateRow?.requires_rsvp || row.status !== "confirmed") {
       return Promise.resolve({ data: null, error: { message: "Only your own confirmed RSVP can be withdrawn." } });
     }
     row.status = "cancelled";
@@ -876,7 +983,14 @@ const store = await import("./js/store.js");
 const views = await import("./js/views.js");
 const data = await import("./js/data.js");
 const operations = await import("./js/operations.js");
-const todayISO = data.isoDate(data.todayLocal());
+const todayISO = data.todayHktISO();
+assert.equal(todayISO, fixedHktTodayIso,
+  "fixed live smoke instant must resolve to the same HKT date in every host timezone");
+assert.equal(
+  data.hktEventStartMs("2026-08-05", "10:00:00"),
+  RealDate.parse(fixedIso),
+  "live event wall time must resolve as an HKT instant in every host timezone",
+);
 store.load();
 await store.hydrateLiveOperations();
 
@@ -919,6 +1033,8 @@ for (const failure of assignedPayoutFailures) {
   assert.equal(status.error, null, `${failure.label} must not become a core operations error`);
   assert.equal(status.payoutError, failure.message,
     `${failure.label} must report only payout degradation`);
+  assert.equal(status.rsvpCountError, null,
+    `${failure.label} payout degradation must not affect RSVP count hydration`);
 }
 
 operationalRpcHandler = successfulAssignedPayoutHandler;
@@ -944,6 +1060,8 @@ for (const operationalIdentity of [
     `${operationalIdentity.label} payout gating must not become a core operations error`);
   assert.equal(status.payoutError, "Approved membership required.",
     `${operationalIdentity.label} must report payout-only membership degradation`);
+  assert.equal(status.rsvpCountError, null,
+    `${operationalIdentity.label} payout gating must not affect RSVP count hydration`);
   assert.ok(store.upcomingSessions(21).some((session) => session.kind === "paid"),
     `${operationalIdentity.label} public Schedule source must retain paid sessions`);
   assert.ok(store.upcomingSessions(21).some((session) => session.kind === "rsvp"),
@@ -977,6 +1095,8 @@ Object.assign(profile, {
 await store.hydrateLiveOperations({ force: true });
 assert.equal(operations.operationalStateStatus().payoutError, null,
   "successful payout enrichment must clear prior degradation");
+assert.equal(operations.operationalStateStatus().rsvpCountError, null,
+  "successful payout enrichment must coexist with RSVP count hydration");
 assert.deepEqual(operations.livePayoutFor("assigned-enrichment-collector"), {
   profileId: "assigned-enrichment-collector",
   paymeLink: "https://payme.hsbc.com.hk/1/assigned-enrichment",
@@ -995,6 +1115,96 @@ operationalTableRows.collector_payout_profiles = operationalTableRows.collector_
   .filter((row) => ![assignedPayoutFixture.profile_id, directPayoutFixture.profile_id].includes(row.profile_id));
 await store.hydrateLiveOperations({ force: true });
 console.log("ok  payout RPC degradation preserves sessions and successful enrichment recovers");
+
+// Live callers receive exactly their requested HKT calendar-day horizon. The
+// Social preview applies its additional rolling HKT start-time boundary.
+const horizonDay14Iso = "2026-08-18";
+const horizonDay15Iso = "2026-08-19";
+const temporaryHorizonRows = [
+  {
+    id: "hyrox-horizon-day-14",
+    activity_id: "hyrox",
+    session_date: horizonDay14Iso,
+    start_time: "11:15:00",
+    duration_minutes: 60,
+    venue: "BFT Causeway Bay",
+    capacity: 20,
+    price_hkd: 180,
+    is_open: true,
+    venue_tbc: false,
+    notice: null,
+    cancelled_at: null,
+    cancelled_by: null,
+    cancelled_source: null,
+    cancel_reason: null,
+    gym_confirmed_at: null,
+    gym_confirmed_by: null,
+    gym_note: null,
+    created_at: fixedIso,
+    updated_at: fixedIso,
+  },
+  {
+    id: "hyrox-horizon-day-15",
+    activity_id: "hyrox",
+    session_date: horizonDay15Iso,
+    start_time: "11:15:00",
+    duration_minutes: 60,
+    venue: "BFT Causeway Bay",
+    capacity: 20,
+    price_hkd: 180,
+    is_open: true,
+    venue_tbc: false,
+    notice: null,
+    cancelled_at: null,
+    cancelled_by: null,
+    cancelled_source: null,
+    cancel_reason: null,
+    gym_confirmed_at: null,
+    gym_confirmed_by: null,
+    gym_note: null,
+    created_at: fixedIso,
+    updated_at: fixedIso,
+  },
+  ...[
+    ["lunch-social-started", "09:59:00"],
+    ["lunch-social-future", "10:01:00"],
+  ].map(([id, startTime]) => ({
+    id,
+    activity_id: "lunch",
+    session_date: fixedHktTodayIso,
+    start_time: startTime,
+    duration_minutes: 30,
+    venue: "TBC",
+    capacity: null,
+    price_hkd: 0,
+    is_open: true,
+    venue_tbc: false,
+    notice: null,
+    cancelled_at: null,
+    cancelled_by: null,
+    cancelled_source: null,
+    cancel_reason: null,
+    gym_confirmed_at: null,
+    gym_confirmed_by: null,
+    gym_note: null,
+    created_at: fixedIso,
+    updated_at: fixedIso,
+  })),
+];
+operationalTableRows.operational_sessions.push(...temporaryHorizonRows);
+await operations.refreshOperationalState();
+const fourteenDayIds = store.upcomingSessions(14).map((session) => session.id);
+assert.ok(fourteenDayIds.includes("hyrox-horizon-day-14"),
+  "14-day live horizon must include its final calendar day");
+assert.ok(!fourteenDayIds.includes("hyrox-horizon-day-15"),
+  "14-day live horizon must exclude calendar day 15");
+assert.equal(store.nextSocialSession()?.id, "lunch-social-future",
+  "rolling Social preview must skip a same-day event whose start time passed");
+const temporaryHorizonIds = new Set(temporaryHorizonRows.map((row) => row.id));
+operationalTableRows.operational_sessions = operationalTableRows.operational_sessions
+  .filter((row) => !temporaryHorizonIds.has(row.id));
+await operations.refreshOperationalState();
+console.log("ok  live horizon is inclusive through day 14 and Socials use start time");
 
 const hydratedWntPoint = store.getSession("wnt-2026-08-26");
 assert.equal(hydratedWntPoint.meetingLat, 22.2825);
@@ -1078,14 +1288,23 @@ assert.deepEqual(operations.getLiveVenueOverride("wnt-2026-08-05"), {
   setAt: Date.parse(fixedIso),
   memberNotifiedAt: Date.parse(fixedIso),
 });
-const venueChannel = operationalSubscriptions
-  .flatMap((channel) => channel.handlers)
-  .filter((handler) => handler);
+const realtimeHandlers = operationalSubscriptions
+  .flatMap((channel) => channel.handlers);
 assert.ok(
   operationalSubscriptions.some((channel) =>
     channel.handlers.length >= LIVE_TABLES_COUNT),
-  "Realtime channel should subscribe to every operational table including venue overrides"
+  "Realtime channel should subscribe to every operational table"
 );
+assert.ok(operations.LIVE_TABLES.includes("collector_payout_profiles"),
+  "the payout table must remain part of the operational Realtime contract");
+assert.ok(realtimeHandlers.some(({ filter }) =>
+  filter.table === "collector_payout_profiles"),
+"the operational channel must retain assigned-payout refreshes");
+assert.ok(operations.LIVE_TABLES.includes("operational_rsvp_counts"),
+  "the count table must be part of the operational Realtime contract");
+assert.ok(realtimeHandlers.some(({ filter }) =>
+  filter.table === "operational_rsvp_counts"),
+"the operational channel must subscribe to identity-free RSVP count changes");
 assert.equal(operations.operationalStateStatus().loaded, true);
 
 // The mutation result is authoritative even when the best-effort full refresh
@@ -1681,7 +1900,7 @@ if (!freeEventSession || !freeEventSession.oneOff
     || freeEventSession.kind !== "free" || freeEventSession.weekday !== 6) {
   throw new Error("live one-off free event must hydrate with template name and free kind");
 }
-if (!store.upcomingSessions(30).some((s) => s.id === freeEventRow.id)) {
+if (!store.upcomingSessions(45).some((s) => s.id === freeEventRow.id)) {
   throw new Error("live one-off event must appear in upcoming sessions");
 }
 const paidEventRow = await store.createOneOffEvent({
@@ -1719,23 +1938,154 @@ if (!lunchSession || lunchSession.category !== "Socials" || lunchSession.name !=
 if (lunchSession.capacity !== null || store.spotsLeft(lunchSession) !== null) {
   throw new Error("the lunch is uncapped — capacity and spots must be null");
 }
+const otherLunchSession = store.upcomingSessions(28).find(
+  (session) => session.activityId === "lunch"
+    && session.id !== lunchSession.id
+    && session.dateISO !== lunchSession.dateISO
+);
+if (!otherLunchSession || otherLunchSession.location !== "TBC") {
+  throw new Error("live smoke needs another dated lunch at TBC to verify venue isolation");
+}
+const savedProfileRole = profile.role;
+const signedInOperationalUser = store.currentUser();
+const savedCurrentRole = signedInOperationalUser.role;
+profile.role = "member";
+signedInOperationalUser.role = "member";
+signedInOperationalUser.status = "approved";
+
+// Count enrichment is optional: a rejected aggregate must not poison core
+// sessions, and the status must identify count-only degradation.
+operationalRsvpCountError = { message: "permission denied for function get_operational_rsvp_counts" };
+await operations.refreshOperationalState();
+assert.equal(operations.operationalStateStatus().loaded, true);
+assert.equal(operations.operationalStateStatus().error, null);
+assert.equal(operations.operationalStateStatus().payoutError, null,
+  "RSVP count degradation must not affect assigned payout hydration");
+assert.match(operations.operationalStateStatus().rsvpCountError || "",
+  /permission denied for function get_operational_rsvp_counts/);
+assert.ok(store.getSession(lunchSession.id),
+  "a failed RSVP count RPC must leave core live sessions visible");
+assert.equal(operations.liveRsvpCountFor(lunchSession.id), null,
+  "degraded count hydration must expose null rather than a stale total");
+
+operationalRsvpCountError = null;
+operationalRsvpCountRowsOverride = [];
+await operations.refreshOperationalState();
+assert.equal(operations.liveRsvpCountFor(lunchSession.id), 0,
+  "a successful empty aggregate must initialize each RSVP session to zero");
+operationalRsvpCountRowsOverride = null;
+await operations.refreshOperationalState();
+assert.equal(operations.operationalStateStatus().rsvpCountError, null,
+  "successful count hydration must clear degraded status");
+assert.equal(operations.operationalStateStatus().payoutError, null,
+  "successful count recovery must preserve assigned payout hydration");
+assert.equal(operations.liveRsvpCountFor(lunchSession.id), 1,
+  "count aggregate must include another member's confirmed lunch RSVP");
+assert.equal(store.attendeeCountFor(lunchSession), 1,
+  "ordinary members must see the exact baseline despite booking RLS");
+assert.ok(!operations.liveBookingsForSession(lunchSession.id)
+  .some((booking) => booking.userId === "rsvp-other-member"),
+"ordinary members must not receive another member's direct booking row");
+assert.ok(![...approvedProfiles, ...pendingProfiles, ...declinedProfiles]
+  .some((row) => row.id === "rsvp-other-member"),
+"the aggregate must not hydrate another RSVP member's profile row");
+
 const lunchHtml = views.viewActivity(lunchSession.id);
 if (!lunchHtml.includes('data-action="rsvp-join"') || lunchHtml.includes("Book & pay")) {
   throw new Error("live RSVP activity should offer Count me in, not checkout");
 }
+
+// Booking RLS suppresses another member's booking event, but the public
+// identity-free count-table event must still refresh this ordinary member.
+const foreignRealtimeBooking = {
+  ...structuredClone(operationalTableRows.operational_bookings
+    .find((booking) => booking.id === "rsvp-other-confirmed")),
+  id: "rsvp-foreign-realtime-confirmed",
+  profile_id: "rsvp-foreign-realtime-member",
+};
+operationalTableRows.operational_bookings.push(foreignRealtimeBooking);
+assert.equal(store.attendeeCountFor(lunchSession), 1,
+  "a foreign booking hidden by RLS must not update the cached aggregate by itself");
+const countTableHandler = realtimeHandlers.find(({ filter }) =>
+  filter.table === "operational_rsvp_counts");
+assert.ok(countTableHandler, "count-table Realtime handler must exist");
+const countRefresh = new Promise((resolve, reject) => {
+  const timeout = setTimeout(() => {
+    unsubscribe();
+    reject(new Error("count-table Realtime event did not refresh operational state"));
+  }, 1000);
+  const unsubscribe = operations.subscribeOperationalState(() => {
+    clearTimeout(timeout);
+    unsubscribe();
+    resolve();
+  });
+});
+countTableHandler.handler({
+  eventType: "UPDATE",
+  new: { session_id: lunchSession.id, going_count: 2, updated_at: fixedIso },
+  old: { session_id: lunchSession.id, going_count: 1, updated_at: fixedIso },
+});
+await countRefresh;
+assert.equal(store.attendeeCountFor(lunchSession), 2,
+  "a foreign count-table event must refresh the ordinary member's exact aggregate");
+assert.ok(!operations.liveBookingsForSession(lunchSession.id)
+  .some((booking) => booking.userId === foreignRealtimeBooking.profile_id),
+"the count refresh must not bypass booking RLS or hydrate the foreign owner");
+
+const countBeforeRsvp = store.attendeeCountFor(lunchSession);
 const rsvpBooking = await store.rsvpSession(authUser.id, lunchSession.id);
 if (rsvpBooking.status !== "confirmed") {
   throw new Error("live RSVP should confirm instantly without payment");
 }
+assert.equal(store.attendeeCountFor(lunchSession), countBeforeRsvp + 1,
+  "Count me in must increase the all-member RSVP count by exactly one");
+assert.deepEqual(JSON.parse(mem.get("itc.prototype.v1")).users, [],
+  "live RSVP join must not copy identity rows into prototype state");
+const joinedTotal = countBeforeRsvp + 1;
 const goingHtml = views.viewActivity(lunchSession.id);
 if (!goingHtml.includes("rsvp-withdraw")) {
   throw new Error("RSVP'd member should see a withdraw action");
 }
+const priorCountWeekOffset = views.scheduleState.weekOffset;
+const priorCountSelected = views.scheduleState.selected;
+views.scheduleState.weekOffset = Math.round(
+  (data.mondayOf(data.parseISO(lunchSession.dateISO)) - data.mondayOf(data.todayLocal())) / (7 * 86400000)
+);
+views.scheduleState.selected = lunchSession.dateISO;
+const countScheduleHtml = views.viewSchedule();
+views.scheduleState.weekOffset = priorCountWeekOffset;
+views.scheduleState.selected = priorCountSelected;
+const scheduleRowStart = countScheduleHtml.indexOf(`href="#/activity/${lunchSession.id}"`);
+const scheduleRowEnd = countScheduleHtml.indexOf("</a>", scheduleRowStart);
+const ownerScheduleRow = countScheduleHtml.slice(scheduleRowStart, scheduleRowEnd);
+assert.ok(ownerScheduleRow.includes(
+  `<span class="badge free booked">Going</span><span class="spots">${joinedTotal} going</span>`
+), "an RSVP owner must see the exact count beside Going on Schedule");
+signedInOperationalUser.role = "super_admin";
+const countAdminHtml = await views.viewAdmin("activities");
+signedInOperationalUser.role = "member";
+for (const [surface, html] of [
+  ["Schedule", countScheduleHtml],
+  ["Activity Details", goingHtml],
+  ["Admin", countAdminHtml],
+]) {
+  assert.ok(html.includes(`${joinedTotal} going`),
+    `${surface} must render the same exact RSVP aggregate`);
+}
+
 await store.withdrawRsvp(rsvpBooking.id);
+assert.equal(store.attendeeCountFor(lunchSession), countBeforeRsvp,
+  "withdrawal must decrease the all-member RSVP count by exactly one");
+assert.deepEqual(JSON.parse(mem.get("itc.prototype.v1")).users, [],
+  "live RSVP withdrawal must leave prototype identity rows empty");
 if (store.getBooking(rsvpBooking.id).status !== "cancelled") {
   throw new Error("withdraw should cancel the RSVP");
 }
-console.log("ok  live RSVP events confirm instantly and withdraw cleanly");
+profile.role = savedProfileRole;
+signedInOperationalUser.role = savedCurrentRole;
+signedInOperationalUser.status = "approved";
+await operations.refreshOperationalState();
+console.log("ok  exact RSVP aggregates survive member RLS and degrade without hiding core sessions");
 
 // Same-day live sessions order by start time, and weekly venue overrides
 // apply to live RSVP sessions (not just locally-seeded free events).
@@ -1754,7 +2104,37 @@ const overriddenLunch = store.getSession(lunchSession.id);
 if (overriddenLunch.location !== "Cafe Deco, Central" || overriddenLunch.mapsQuery !== "Cafe Deco, Central") {
   throw new Error("weekly venue override must apply to live RSVP sessions");
 }
-console.log("ok  live sessions order by start time and lunch accepts weekly venue overrides");
+if (store.getSession(otherLunchSession.id)?.location !== "TBC") {
+  throw new Error("saving a live lunch venue must not change another dated lunch");
+}
+const priorScheduleWeekOffset = views.scheduleState.weekOffset;
+const priorScheduleSelected = views.scheduleState.selected;
+views.scheduleState.weekOffset = Math.round(
+  (data.mondayOf(data.parseISO(lunchSession.dateISO)) - data.mondayOf(data.todayLocal())) / (7 * 86400000)
+);
+views.scheduleState.selected = lunchSession.dateISO;
+const lunchScheduleHtml = views.viewSchedule();
+const lunchDetailHtml = views.viewActivity(lunchSession.id);
+if (!lunchScheduleHtml.includes("Cafe Deco, Central")
+    || !lunchDetailHtml.includes("Cafe Deco, Central")) {
+  throw new Error("live lunch venue override must appear on Schedule and Activity Details");
+}
+views.scheduleState.weekOffset = priorScheduleWeekOffset;
+views.scheduleState.selected = priorScheduleSelected;
+await store.setWeekVenue(lunchSession.id, {
+  location: null,
+  mapsQuery: null,
+  meetingLat: null,
+  meetingLng: null,
+});
+const resetLunch = store.getSession(lunchSession.id);
+if (resetLunch.location !== "TBC") {
+  throw new Error("resetting a live lunch venue should restore its TBC recurring default");
+}
+if (store.getSession(otherLunchSession.id)?.location !== "TBC") {
+  throw new Error("resetting a live lunch venue must not change another dated lunch");
+}
+console.log("ok  live sessions order by start time and lunch accepts isolated weekly venue overrides");
 
 // A live Admin must compose the Supabase UUID directory with device-local
 // Payment operations without copying editable identity records into storage.
