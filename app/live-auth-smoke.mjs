@@ -3056,7 +3056,15 @@ assert.equal(location.hash, exactPaymentDestination,
 await windowListeners.get("hashchange")();
 assert.ok(viewEl.innerHTML.includes(`data-booking="${uuidBooking.id}"`),
   "the same existing payment view must accept the current member's reserved booking");
-assert.doesNotMatch(viewEl.innerHTML, /Booking not found\./);
+for (const marker of [
+  "PayMe", "Suggested payment note", 'data-action="copy-payment-note"',
+  "Assigned collector / payee", "FPS mobile number", "Exact amount", "Suggested reference",
+  'data-action="copy-fps"', 'data-action="copy-reference"',
+]) {
+  assert.ok(viewEl.innerHTML.includes(marker),
+    `notification-routed Payment view missing integrated marker: ${marker}`);
+}
+assert.doesNotMatch(viewEl.innerHTML, /Booking not found\.|QR|Scan with your banking app|amount is embedded/i);
 notificationRows.splice(notificationRows.indexOf(bookingReservedNotification), 1);
 location.hash = "#/notifications";
 await windowListeners.get("hashchange")();
@@ -3308,33 +3316,97 @@ const routedMovedBooking = store.bookingsForUser(authUser.id).find((booking) =>
 );
 if (!routedMovedBooking) throw new Error("defer-to must create the moved booking");
 assert.equal(location.hash, `#/booking/${routedMovedBooking.id}`);
-let copiedPaymentText = null;
+const copiedValues = [];
 Object.defineProperty(globalThis.navigator, "clipboard", {
   configurable: true,
-  value: { writeText: async (value) => { copiedPaymentText = value; } },
+  value: { writeText: async (value) => { copiedValues.push(value); } },
 });
-const fpsControl = makeElement();
-fpsControl.dataset = { action: "copy-fps", phone: "+852 6123 4567" };
-fpsControl.closest = () => fpsControl;
-await click({ target: fpsControl, preventDefault() {} });
-assert.equal(copiedPaymentText, "+852 6123 4567");
+for (const [action, copyValue, copyKind, expectedToast] of [
+  ["copy-fps", "+852 6123 4567", "number", "FPS number copied"],
+  ["copy-fps", "1234567", "id", "FPS ID copied"],
+  ["copy-reference", "ITC-A1B2C3", "reference", "Payment reference copied"],
+  ["copy-reference", "GIVE-TEST", "giving-reference", "Giving reference copied"],
+]) {
+  toastStack.children.length = 0;
+  const control = makeElement();
+  control.dataset = { action, copyValue, copyKind };
+  control.closest = () => control;
+  await click({ target: control, preventDefault() {} });
+  assert.equal(copiedValues.at(-1), copyValue);
+  assert.deepEqual(toastStack.children.map((item) => item.textContent), [expectedToast]);
+  assert.equal(toastStack.children[0].getAttribute("role"), "status");
+}
+for (const clipboard of [
+  undefined,
+  { writeText: async () => { throw new Error("permission denied"); } },
+]) {
+  Object.defineProperty(globalThis.navigator, "clipboard", {
+    configurable: true,
+    value: clipboard,
+  });
+  toastStack.children.length = 0;
+  const control = makeElement();
+  control.dataset = { action: "copy-reference", copyValue: "ITC-A1B2C3", copyKind: "reference" };
+  control.closest = () => control;
+  await click({ target: control, preventDefault() {} });
+  assert.deepEqual(toastStack.children.map((item) => item.textContent), [
+    "Copy unavailable — select and copy the value manually",
+  ]);
+  assert.equal(toastStack.children[0].getAttribute("role"), "alert");
+}
+let emptyCopyCalls = 0;
+Object.defineProperty(globalThis.navigator, "clipboard", {
+  configurable: true,
+  value: { writeText: async () => { emptyCopyCalls++; } },
+});
+toastStack.children.length = 0;
+const emptyCopyControl = makeElement();
+emptyCopyControl.dataset = { action: "copy-fps", copyValue: "", copyKind: "number" };
+emptyCopyControl.closest = () => emptyCopyControl;
+await click({ target: emptyCopyControl, preventDefault() {} });
+assert.equal(emptyCopyCalls, 0);
+assert.deepEqual(toastStack.children.map((item) => item.textContent), [
+  "Copy unavailable — select and copy the value manually",
+]);
+assert.equal(toastStack.children[0].getAttribute("role"), "alert");
+Object.defineProperty(globalThis.navigator, "clipboard", {
+  configurable: true,
+  value: { writeText: async (value) => { copiedValues.push(value); } },
+});
 const paymentNoteControl = makeElement();
 paymentNoteControl.dataset = { action: "copy-payment-note", note: renderedPaymentNotePayload };
 paymentNoteControl.closest = () => paymentNoteControl;
 await click({ target: paymentNoteControl, preventDefault() {} });
-assert.equal(copiedPaymentText, renderedPaymentNote,
+assert.equal(copiedValues.at(-1), renderedPaymentNote,
   "delegated copy must receive the exact payload rendered by viewPay");
-toastStack.children.length = 0;
+for (const clipboard of [
+  undefined,
+  { writeText: async () => { throw new Error("Clipboard permission denied"); } },
+]) {
+  Object.defineProperty(globalThis.navigator, "clipboard", {
+    configurable: true,
+    value: clipboard,
+  });
+  toastStack.children.length = 0;
+  await assert.doesNotReject(() => click({ target: paymentNoteControl, preventDefault() {} }),
+    "missing or rejected clipboard access must be handled by delegated payment-note copying");
+  assert.deepEqual(toastStack.children.map((item) => [item.textContent, item.getAttribute("role")]), [
+    ["Unable to copy payment note", "alert"],
+  ]);
+}
+let blankPaymentNoteCopyCalls = 0;
 Object.defineProperty(globalThis.navigator, "clipboard", {
   configurable: true,
-  value: { writeText: async () => { throw new Error("Clipboard permission denied"); } },
+  value: { writeText: async () => { blankPaymentNoteCopyCalls++; } },
 });
-await assert.doesNotReject(() => click({ target: paymentNoteControl, preventDefault() {} }),
-  "clipboard rejection must be handled by delegated payment-note copying");
+toastStack.children.length = 0;
+paymentNoteControl.dataset.note = "   ";
+await click({ target: paymentNoteControl, preventDefault() {} });
+assert.equal(blankPaymentNoteCopyCalls, 0);
 assert.deepEqual(toastStack.children.map((item) => [item.textContent, item.getAttribute("role")]), [
   ["Unable to copy payment note", "alert"],
 ]);
-console.log("ok  delegated release, deferral, FPS copy, and payment-note copy controls execute prototype behavior");
+console.log("ok  delegated release, deferral, safe FPS/reference copy, and payment-note copy controls execute prototype behavior");
 
 // Gym finalization must travel through the delegated submit seam, persist the
 // authorized Admin mutation, and rerender the confirmed state.

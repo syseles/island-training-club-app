@@ -784,14 +784,25 @@ function givingFpsStep(campaign) {
     <div class="card mt16"><div class="card-body">
       <span class="kicker">Step 2 · Complete the transfer</span>
       <h3 class="mt8">Pay ${fmtMoney(givingState.amount)} via FPS</h3>
-      <div class="fps-qr" aria-hidden="true">FPS QR<br>placeholder</div>
       <div class="receipt-lines">
         <div class="line"><span>FPS ID</span><strong class="mono">${esc(campaign.fpsId)}</strong></div>
         <div class="line"><span>Payee</span><strong>${esc(campaign.fpsPayee)}</strong></div>
         <div class="line"><span>Amount</span><strong>${fmtMoney(givingState.amount)}</strong></div>
         <div class="line total"><span>Reference</span><strong class="mono">${esc(givingState.ref)}</strong></div>
       </div>
-      <p class="muted small mt8">Open your banking app, choose FPS, and pay using the details above. Put the reference in the transfer remarks so a leader can match your gift.</p>
+      <div class="btn-row two">
+        <button class="btn ghost" type="button" data-action="copy-fps"
+          data-copy-value="${esc(campaign.fpsId)}" data-copy-kind="id" aria-label="Copy FPS ID">Copy FPS ID</button>
+        <button class="btn ghost" type="button" data-action="copy-reference"
+          data-copy-value="${esc(givingState.ref)}" data-copy-kind="giving-reference" aria-label="Copy Giving reference">Copy reference</button>
+      </div>
+      <ol class="muted small mt16">
+        <li>Open your banking app.</li>
+        <li>Choose FPS and pay using the FPS ID.</li>
+        <li>Paste the FPS ID.</li>
+        <li>Enter ${fmtMoney(givingState.amount)} and reference <span class="mono">${esc(givingState.ref)}</span>.</li>
+        <li>Return here and select <strong>I’ve made the transfer</strong>.</li>
+      </ol>
       <div class="btn-row">
         <button class="btn" type="button" data-action="giving-confirm">I’ve made the transfer</button>
         <button class="btn ghost" type="button" data-action="giving-back">Back</button>
@@ -1823,6 +1834,14 @@ export function viewCheckout(sessionId) {
 
 // --- PayMe / FPS payment screen ----------------------------------------------------------------
 
+function bookingPaymentReference(booking) {
+  const suffix = String(booking?.id || "")
+    .replace(/[^a-z0-9]/gi, "")
+    .slice(-6)
+    .toUpperCase();
+  return `ITC-${suffix || "PAYMENT"}`;
+}
+
 export function viewPay(bookingId) {
   const b = store.getBooking(bookingId);
   const user = store.currentUser();
@@ -1832,8 +1851,10 @@ export function viewPay(bookingId) {
   const s = b.snapshot;
   const collector = store.collectorFor(b.sessionId);
   const cname = collector ? esc(collector.preferredName || collector.fullName) : "the on-duty collector";
-  const payme = collector?.paymeLink || "";
-  const fps = collector?.fpsPhone || "";
+  const payouts = collector ? store.collectorPayoutsFor(collector.id) : null;
+  const payme = payouts?.paymeLink || collector?.paymeLink || "";
+  const fps = payouts?.fpsPhone || collector?.fpsPhone || "";
+  const paymentReference = bookingPaymentReference(b);
   const memberName = user.fullName || user.preferredName || "ITC Member";
   const paymentNote = `${s.name} · ${fmtDate(s.dateISO)} · ${s.location || "Venue TBC"} · ${memberName}`;
 
@@ -1856,11 +1877,28 @@ export function viewPay(bookingId) {
         <button class="btn ghost sm" type="button" data-action="copy-payment-note" data-note="${esc(paymentNote)}">Copy note</button>
       </p>
       <h3 class="mt24">FPS to ${cname}</h3>
-      <p class="muted small">Scan with your banking app — the amount is embedded in the QR — or copy the number.</p>
-      <div class="fps-qr" aria-hidden="true"><span>FPS QR<br>(mock)</span></div>
-      <p class="mt8"><strong>${esc(fps)}</strong> · ${fmtMoney(s.price)}
-        <button class="btn ghost sm" type="button" data-action="copy-fps" data-phone="${esc(fps)}">Copy number</button>
-      </p>
+      <p class="muted small">Copy these details, then switch to your banking app to make the transfer.</p>
+      <div class="receipt-lines">
+        <div class="line"><span>Assigned collector / payee</span><strong>${cname}</strong></div>
+        <div class="line"><span>FPS mobile number</span><strong class="mono">${fps ? esc(fps) : "Not available"}</strong></div>
+        <div class="line"><span>Exact amount</span><strong>${fmtMoney(s.price)}</strong></div>
+        <div class="line total"><span>Suggested reference</span><strong class="mono">${esc(paymentReference)}</strong></div>
+      </div>
+      <div class="btn-row two">
+        ${fps ? `<button class="btn ghost" type="button" data-action="copy-fps"
+          data-copy-value="${esc(fps)}" data-copy-kind="number" aria-label="Copy FPS number">Copy FPS number</button>` : ""}
+        <button class="btn ghost" type="button" data-action="copy-reference"
+          data-copy-value="${esc(paymentReference)}" data-copy-kind="reference" aria-label="Copy payment reference">Copy reference</button>
+      </div>
+      ${fps ? `
+        <ol class="muted small mt16">
+          <li>Open your banking app.</li>
+          <li>Choose FPS and pay by mobile number.</li>
+          <li>Paste the FPS number.</li>
+          <li>Enter ${fmtMoney(s.price)} and reference <span class="mono">${esc(paymentReference)}</span>.</li>
+          <li>Return here and select <strong>I’ve paid</strong>.</li>
+        </ol>
+      ` : `<p class="muted small mt16">The collector’s FPS mobile number is not available. Ask an ITC leader for payment details before marking this booking paid.</p>`}
     </div></div>
     <form id="form-mark-paid" class="mt16" data-booking="${b.id}">
       <div class="card"><div class="card-body">
@@ -1869,7 +1907,7 @@ export function viewPay(bookingId) {
           <label class="chip"><input type="radio" name="method" value="PayMe"${payme ? " checked" : " disabled"}> PayMe</label>
           <label class="chip"><input type="radio" name="method" value="FPS"${payme ? "" : " checked"}> FPS</label>
         </div>
-        <div class="field"><label for="pay-ref">Reference (optional)</label><input id="pay-ref" name="ref" placeholder="e.g. last 4 digits"></div>
+        <div class="field"><label for="pay-ref">Reference (optional)</label><input id="pay-ref" name="ref" value="${esc(paymentReference)}"></div>
         <p class="muted small mt8">${cname} confirms in-app when the money lands — your spot is held meanwhile.</p>
       </div></div>
       <button class="btn mt16" type="submit">I’ve paid</button>

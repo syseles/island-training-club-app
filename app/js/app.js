@@ -1014,26 +1014,41 @@ document.addEventListener("click", async (e) => {
     }
 
     case "copy-fps":
-      if (el.dataset.phone && navigator.clipboard?.writeText) {
-        await navigator.clipboard.writeText(el.dataset.phone);
-        toast("FPS number copied");
-      } else {
-        toast("Copy unsupported on this device");
+    case "copy-reference": {
+      const value = String(el.dataset.copyValue || "").trim();
+      const successMessage = {
+        id: "FPS ID copied",
+        number: "FPS number copied",
+        reference: "Payment reference copied",
+        "giving-reference": "Giving reference copied",
+      }[el.dataset.copyKind] || "Copied";
+      if (!value || !navigator.clipboard?.writeText) {
+        toast("Copy unavailable — select and copy the value manually", true);
+        break;
+      }
+      try {
+        await navigator.clipboard.writeText(value);
+        toast(successMessage);
+      } catch (_err) {
+        toast("Copy unavailable — select and copy the value manually", true);
       }
       break;
+    }
 
-    case "copy-payment-note":
-      if (el.dataset.note && navigator.clipboard?.writeText) {
-        try {
-          await navigator.clipboard.writeText(el.dataset.note);
-          toast("Payment note copied");
-        } catch {
-          toast("Unable to copy payment note", true);
-        }
-      } else {
-        toast("Copy unsupported on this device");
+    case "copy-payment-note": {
+      const note = String(el.dataset.note || "");
+      if (!note.trim() || !navigator.clipboard?.writeText) {
+        toast("Unable to copy payment note", true);
+        break;
+      }
+      try {
+        await navigator.clipboard.writeText(note);
+        toast("Payment note copied");
+      } catch {
+        toast("Unable to copy payment note", true);
       }
       break;
+    }
 
     case "copy-gym":
       if (navigator.clipboard?.writeText) {

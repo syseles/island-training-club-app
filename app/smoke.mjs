@@ -2,6 +2,7 @@
 // Run: node --input-type=module < smoke.mjs  (from the app/ directory)
 
 import assert from "node:assert/strict";
+import { assertFpsCopyBindings } from "./test-html.mjs";
 
 // --- localStorage shim ---
 const mem = new Map();
@@ -2680,7 +2681,9 @@ installLocalFixtures();
 // --- HYROX payment system: member payment UI (Task 9) ---
 store.resetLocalData();
 installLocalFixtures();
+const bookingCollectorPhone = '+852 5000 & "0001"';
 store.signIn("admin@example.test");
+store.currentUser().phone = bookingCollectorPhone;
 store.updateCollectorPayouts("fixture-admin", {
   paymeLink: "payme.hsbc.com.hk/1/test-admin",
 });
@@ -2694,9 +2697,36 @@ store.signIn("member@example.test");
     throw new Error("checkout should be a reserve screen (no card form)");
   console.log("ok  checkout is now a reserve screen");
   const b = store.reserveSession("fixture-member", sess);
+  b.id = "b-abc123";
   b.snapshot.location = 'BFT & "Bay" <Deck>';
   store.currentUser().fullName = 'Test & "Member" <Runner>';
   const pay = views.viewPay(b.id);
+  const suggestedReference = "ITC-ABC123";
+  for (const marker of [
+    "Assigned collector / payee", "FPS mobile number", "Exact amount",
+    "Suggested reference", suggestedReference,
+    'data-action="copy-fps"', 'aria-label="Copy FPS number"',
+    'data-action="copy-reference"', 'aria-label="Copy payment reference"',
+    "Open your banking app", "pay by mobile number", "Paste the FPS number",
+  ]) {
+    if (!pay.includes(marker)) throw new Error(`same-device booking FPS UI missing ${marker}`);
+  }
+  if (!pay.includes(`value="${suggestedReference}"`)) {
+    throw new Error("suggested booking reference must prefill reconciliation input");
+  }
+  assertFpsCopyBindings(pay, [
+    {
+      action: "copy-fps", kind: "number", label: "FPS mobile number",
+      value: bookingCollectorPhone, escaped: "+852 5000 &amp; &quot;0001&quot;",
+    },
+    {
+      action: "copy-reference", kind: "reference", label: "Suggested reference",
+      value: suggestedReference, escaped: "ITC-ABC123",
+    },
+  ], "booking FPS screen");
+  if (/QR|Scan with your banking app|amount is embedded/i.test(pay)) {
+    throw new Error("booking FPS flow must not show or claim QR behavior");
+  }
   if (!pay.includes("PayMe to") || !pay.includes("FPS to") || !pay.includes("HK$"))
     throw new Error("pay screen should show PayMe/FPS to the collector + amount");
   if (!pay.includes("Admin"))
@@ -2780,7 +2810,19 @@ store.signIn("member@example.test");
       || hasBooleanAttribute(fpsOnlyFpsMethod, "disabled")) {
     throw new Error("pay screen without a PayMe link should natively disable PayMe and default the form to FPS");
   }
+  store.signIn("admin@example.test");
+  store.currentUser().phone = "";
+  store.updateCollectorPayouts("fixture-admin", { paymeLink: "", fpsPhone: "" });
+  store.signIn("member@example.test");
+  const missingFpsPay = views.viewPay(b.id);
+  if (!missingFpsPay.includes("Not available")
+      || missingFpsPay.includes('aria-label="Copy FPS number"')
+      || !missingFpsPay.includes('aria-label="Copy payment reference"')
+      || !missingFpsPay.includes("Ask an ITC leader for payment details")) {
+    throw new Error("pay screen must safely explain missing FPS data without copying a blank destination");
+  }
   console.log("ok  pay screen safely hands off PayMe with amount guidance, note, and FPS fallback");
+  console.log("ok  pay screen shows same-device collector FPS details + amount/reference copies");
   store.markBookingPaid(b.id, "PayMe", "");
   const awaiting = views.viewBooking(b.id);
   if (!awaiting.includes("being confirmed"))
@@ -3644,14 +3686,45 @@ store.leaveWaitlist("giving-member", "authz-waitlist-session");
 store.leaveInterest("giving-member", "authz-interest-session");
 console.log("ok  Payment seams enforce self-service/Admin boundaries and derive confirmation identity");
 
+const givingFpsId = `FPS<&"'>`;
 const givingCampaign = await store.saveGivingCampaign({
   title: "Member campaign", description: "Support the community.", goalHKD: 1000,
-  fpsId: "1234567", fpsPayee: "Island Training Club",
+  fpsId: givingFpsId, fpsPayee: "Island Training Club",
 });
 await store.publishGivingCampaign(givingCampaign.id);
 store.signIn("giving-member@example.test");
 const memberGivingHtml = await views.viewGiving();
 if (!/form-giving|Give via FPS/.test(memberGivingHtml)) throw new Error("approved members must access Giving transfer controls");
+views.givingState.step = 2;
+views.givingState.amount = 250;
+views.givingState.name = "Giving Member";
+const givingCopyReference = `GIVE-<&"'>`;
+views.givingState.ref = givingCopyReference;
+views.givingState.campaignId = givingCampaign.id;
+const givingFpsHtml = await views.viewGiving();
+for (const marker of [
+  "FPS ID", "Payee", "HK$250",
+  'data-action="copy-fps"', 'aria-label="Copy FPS ID"',
+  'data-action="copy-reference"', 'aria-label="Copy Giving reference"',
+  "Open your banking app", "pay using the FPS ID", "Paste the FPS ID",
+]) {
+  if (!givingFpsHtml.includes(marker)) throw new Error(`same-device Giving FPS UI missing ${marker}`);
+}
+if (/QR|scan|bank deep.link/i.test(givingFpsHtml)) {
+  throw new Error("Giving FPS flow must not show QR or universal deep-link claims");
+}
+assertFpsCopyBindings(givingFpsHtml, [
+  {
+    action: "copy-fps", kind: "id", label: "FPS ID",
+    value: givingFpsId, escaped: "FPS&lt;&amp;&quot;&#39;&gt;",
+  },
+  {
+    action: "copy-reference", kind: "giving-reference", label: "Reference",
+    value: givingCopyReference, escaped: "GIVE-&lt;&amp;&quot;&#39;&gt;",
+  },
+], "Giving FPS screen");
+console.log("ok  Giving shows same-device FPS ID + reference copy guidance without QR claims");
+views.givingState.ref = "GIVE-TEST";
 await store.updateMyDonorId("member-1234");
 if (store.currentUser().donorId !== "MEMBER-1234") throw new Error("Giving donor ID must normalize and persist");
 const gift = store.recordDonation({ userId: "giving-member", name: "Giving Member", amount: 250, ref: "GIVE-TEST", campaignId: givingCampaign.id });
