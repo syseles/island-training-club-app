@@ -2530,17 +2530,60 @@ const routedMovedBooking = store.bookingsForUser(authUser.id).find((booking) =>
 );
 if (!routedMovedBooking) throw new Error("defer-to must create the moved booking");
 assert.equal(location.hash, `#/booking/${routedMovedBooking.id}`);
-let copiedFps = null;
+const copiedValues = [];
 Object.defineProperty(globalThis.navigator, "clipboard", {
   configurable: true,
-  value: { writeText: async (value) => { copiedFps = value; } },
+  value: { writeText: async (value) => { copiedValues.push(value); } },
 });
-const fpsControl = makeElement();
-fpsControl.dataset = { action: "copy-fps", phone: "+852 6123 4567" };
-fpsControl.closest = () => fpsControl;
-await click({ target: fpsControl, preventDefault() {} });
-assert.equal(copiedFps, "+852 6123 4567");
-console.log("ok  delegated release, deferral, and FPS copy controls execute prototype behavior");
+for (const [action, copyValue, copyKind, expectedToast] of [
+  ["copy-fps", "+852 6123 4567", "number", "FPS number copied"],
+  ["copy-fps", "1234567", "id", "FPS ID copied"],
+  ["copy-reference", "ITC-A1B2C3", "reference", "Payment reference copied"],
+  ["copy-reference", "GIVE-TEST", "giving-reference", "Giving reference copied"],
+]) {
+  toastStack.children.length = 0;
+  const control = makeElement();
+  control.dataset = { action, copyValue, copyKind };
+  control.closest = () => control;
+  await click({ target: control, preventDefault() {} });
+  assert.equal(copiedValues.at(-1), copyValue);
+  assert.deepEqual(toastStack.children.map((item) => item.textContent), [expectedToast]);
+  assert.equal(toastStack.children[0].getAttribute("role"), "status");
+}
+for (const clipboard of [
+  undefined,
+  { writeText: async () => { throw new Error("permission denied"); } },
+]) {
+  Object.defineProperty(globalThis.navigator, "clipboard", {
+    configurable: true,
+    value: clipboard,
+  });
+  toastStack.children.length = 0;
+  const control = makeElement();
+  control.dataset = { action: "copy-reference", copyValue: "ITC-A1B2C3", copyKind: "reference" };
+  control.closest = () => control;
+  await click({ target: control, preventDefault() {} });
+  assert.deepEqual(toastStack.children.map((item) => item.textContent), [
+    "Copy unavailable — select and copy the value manually",
+  ]);
+  assert.equal(toastStack.children[0].getAttribute("role"), "alert");
+}
+let emptyCopyCalls = 0;
+Object.defineProperty(globalThis.navigator, "clipboard", {
+  configurable: true,
+  value: { writeText: async () => { emptyCopyCalls++; } },
+});
+toastStack.children.length = 0;
+const emptyCopyControl = makeElement();
+emptyCopyControl.dataset = { action: "copy-fps", copyValue: "", copyKind: "number" };
+emptyCopyControl.closest = () => emptyCopyControl;
+await click({ target: emptyCopyControl, preventDefault() {} });
+assert.equal(emptyCopyCalls, 0);
+assert.deepEqual(toastStack.children.map((item) => item.textContent), [
+  "Copy unavailable — select and copy the value manually",
+]);
+assert.equal(toastStack.children[0].getAttribute("role"), "alert");
+console.log("ok  delegated release, deferral, and safe FPS/reference copy controls execute prototype behavior");
 
 // Gym finalization must travel through the delegated submit seam, persist the
 // authorized Admin mutation, and rerender the confirmed state.

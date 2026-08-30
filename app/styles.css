@@ -656,16 +656,6 @@ a.profile-row:hover .pr-text strong { color: var(--accent); }
 .chip { font-family: var(--font-display); font-size: 12px; font-weight: 800; letter-spacing: .04em; padding: 8px 12px; border: 1px solid var(--line); border-radius: 999px; background: var(--surface-2); color: var(--ink); cursor: pointer; }
 .chip.active { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
 
-/* Mock FPS QR placeholder — real version generated server-side. */
-.fps-qr {
-  width: 148px; height: 148px; margin-top: 12px;
-  display: grid; place-items: center; text-align: center;
-  border: 1px dashed var(--line, #3a3f3a); border-radius: 12px;
-  color: var(--muted, #9aa39a); font-size: 12px;
-  background:
-    repeating-linear-gradient(45deg, transparent 0 6px, rgba(255,255,255,0.04) 6px 12px);
-}
-
 /* The next upcoming session on Home, highlighted in the club's neon accent. */
 .session-row.next {
   border: 1px solid var(--accent);
