@@ -65,3 +65,78 @@ Smoke evidence:
 PostgreSQL runtime/concurrency replay was not run because `psql` is unavailable, `ITC_OPERATIONS_TEST_DATABASE_URL` is unset, and the Docker daemon is unavailable. A fresh acknowledged disposable Supabase-compatible database remains required before deployment claims.
 
 No push or fast-forward testing was performed.
+
+## Final approval blocker follow-up
+
+Date: 2026-08-30
+
+The final approval review found that the first harness correction still used
+fixed template IDs and that its safety gate could pass corrupted source. This
+follow-up replaces that false-positive-capable source inspection with an
+executed SQL-boundary contract.
+
+### RED evidence
+
+- The original safety script passed a temporary harness whose paid and RSVP
+  activity IDs were both `event-concurrency-paid`; this reproduced the reported
+  false positive before implementation.
+- `/tmp/integration-blocker-red-behavioral.out` records two complete real harness
+  executions through fake `psql`, followed by the expected failure:
+  `template activity ID is not tokenized and SQL-safe: event-concurrency-paid`.
+- `/tmp/integration-blocker-red-static-dates.out` records an internally
+  consistent mutation to fixed 2099 setup/session/cleanup dates being accepted
+  before the validator linked rendered fixtures to the executable HKT query.
+
+### Implementation and behavioral proof
+
+- Every harness process now builds a UTC timestamp/PID/random raw token,
+  lowercases it, removes every character outside `[a-z0-9]`, refuses an empty
+  result, and renders `event-concurrency-paid-<token>` plus
+  `event-concurrency-rsvp-<token>`.
+- Session IDs remain exact `activity_id-date` values. Existing variable flow
+  carries the same IDs through setup, paid/RSVP child connections, assertions,
+  and EXIT cleanup.
+- `verify_operational_backend_safety.sh` now runs the actual harness twice
+  against a controlled fake `psql`; the fake only replaces unavailable database
+  execution and captures every actual SQL payload crossing the process boundary.
+- `verify_operational_rsvp_capture.py` parses those captures and enforces:
+  distinct lowercase-alphanumeric run tokens and `event-*` activities; exact
+  activity/session/date relationships; dates equal to the future consecutive
+  values requested by executable HKT SQL; paid capacity 20 / HKD 180 /
+  `requires_rsvp=false`; RSVP uncapped / HKD 0 / `requires_rsvp=true`; no
+  foreign fixture ID in any captured connection; identical setup/cleanup IDs;
+  and bookings-before-sessions-before-templates-before-users cleanup.
+- The final capture gate observed distinct tokens
+  `202608301538484707977975840` and `20260830153848471482225214642`.
+- Adversarial copies made from actual captures are each rejected with exit 1:
+  duplicate activity IDs, an invalid session ID in only the `FOR SHARE` child
+  connection, static dates that ignore the HKT
+  query, inverted paid/RSVP semantics, and parent-first cleanup.
+- A real harness lifecycle run through fake `psql` forced body exit 7 and cleanup
+  exit 99. Actual cleanup SQL was captured and the harness returned the original
+  exit 7.
+
+Final behavioral output:
+`/tmp/integration-blocker-verify-verify_operational_backend_safety.out`.
+
+### Fresh complete verification
+
+Passed after the final code change:
+
+- six smoke runs: default/HKT/Los Angeles local runs each produced 217 `ok`
+  checks across 223 lines and ended `All smoke tests passed.`; matching live
+  runs each produced 41 `ok` checks;
+- `app/test-html.mjs` (exit 0);
+- syntax for 13 tracked JS/MJS files, 7 tracked shell files, and the Python
+  capture validator;
+- all three tracked `*_safety.sh` scripts;
+- five feature-tip ancestry checks and the exact five-merge parent chain;
+- byte-identical owner migrations `00005`–`00008`, their exact order, forward
+  RSVP SQL reapplication order, and integration-before-concurrency dispatch;
+- protected map/venue/indemnity/auth files and markers, retired-QR and stale-doc
+  scans, blocker Shop/Giving scope, conflict-marker scans, and whitespace diffs.
+
+PostgreSQL runtime remains unavailable: `psql` is absent,
+`ITC_OPERATIONS_TEST_DATABASE_URL` is unset, and `docker info` exits 1 because
+the daemon socket is unavailable. No database, push, Testing fast-forward, or
+production-readiness claim is included.

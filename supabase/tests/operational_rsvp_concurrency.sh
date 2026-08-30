@@ -56,8 +56,18 @@ member_c="91000000-0000-0000-0000-000000000003"
 paid_booking="92000000-0000-0000-0000-000000000001"
 rsvp_booking_a="92000000-0000-0000-0000-000000000002"
 rsvp_booking_b="92000000-0000-0000-0000-000000000003"
-paid_activity="event-concurrency-paid"
-rsvp_activity="event-concurrency-rsvp"
+raw_run_token="$(date -u +%Y%m%d%H%M%S)-$$-${RANDOM}-${RANDOM}"
+run_token="$(
+  printf '%s' "$raw_run_token" \
+    | LC_ALL=C tr '[:upper:]' '[:lower:]' \
+    | LC_ALL=C tr -cd 'a-z0-9'
+)"
+if [[ -z "$run_token" || ! "$run_token" =~ ^[a-z0-9]+$ ]]; then
+  echo "ERROR: could not derive a SQL-safe concurrency run token." >&2
+  exit 3
+fi
+paid_activity="event-concurrency-paid-${run_token}"
+rsvp_activity="event-concurrency-rsvp-${run_token}"
 paid_session="${paid_activity}-${paid_date}"
 rsvp_session_a="${rsvp_activity}-${rsvp_date_a}"
 rsvp_session_b="${rsvp_activity}-${rsvp_date_b}"
