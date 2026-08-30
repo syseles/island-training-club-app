@@ -21,7 +21,7 @@
 - The selection changes exactly at `2026-07-25T16:00:00.000Z`, including on hosts set to Asia/Hong_Kong or America/Los_Angeles.
 - A missing argument means the current instant, not browser-local midnight.
 - Instants before the epoch use floor-based week indexing and normalized negative modulo.
-- Existing HKT-facing profile day summaries remain Hong Kong dates when live smoke runs under another host timezone.
+- Announcement formatting and seeds remain unchanged by the verse refinement.
 
 ---
 
@@ -42,7 +42,6 @@
 
 **Files:**
 - Modify: `app/js/data.js`
-- Modify: `app/js/views.js`
 - Test: `app/smoke.mjs`
 
 **Interfaces:**
@@ -51,14 +50,13 @@
 
 - [ ] Extract Hong Kong year/month/day parts with `Intl.DateTimeFormat(..., { timeZone: "Asia/Hong_Kong" })`.
 - [ ] Convert HKT parts and the literal `2026-07-26` epoch to integer UTC day serials, use `Math.floor(dayDelta / 7)`, then normalize modulo.
-- [ ] Pin the existing profile day formatter to Asia/Hong_Kong so the required cross-timezone live smoke reflects its established HKT expectation.
+- [ ] Leave announcement formatting and seeds unchanged.
 - [ ] Run smoke under both required timezones and keep all Sunday Schedule assertions green.
 
 ### Task 3: Verify scope and commit intended paths only
 
-**Files:**
+**Files (3 final committed paths):**
 - Modify: `app/js/data.js`
-- Modify: `app/js/views.js`
 - Modify: `app/smoke.mjs`
 - Create: `docs/superpowers/plans/2026-08-30-weekly-verse-hkt-boundary.md`
 
@@ -67,4 +65,4 @@
 
 - [ ] Run smoke and live-auth smoke under Asia/Hong_Kong and America/Los_Angeles, JavaScript syntax checks, and `git diff --check`.
 - [ ] Review the working diff and compare the final untracked list with the recorded baseline.
-- [ ] Stage only the three paths listed above, inspect the cached diff, commit, and do not push or merge.
+- [ ] Stage only the three final committed paths listed above, inspect the cached diff, commit, and do not push or merge.
