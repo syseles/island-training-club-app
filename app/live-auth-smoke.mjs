@@ -1695,6 +1695,14 @@ const categoryRows = [
     read_at: null,
   },
   {
+    id: "notification-role-unread",
+    kind: "admin_role_promoted",
+    title: "Member promoted",
+    body: "A member became an administrator.",
+    created_at: "2026-08-05T06:33:30.000Z",
+    read_at: null,
+  },
+  {
     id: "notification-club",
     kind: "giving_campaign_published",
     title: "Giving campaign published",
@@ -1709,10 +1717,57 @@ for (const badge of ["Application", "Decision", "Role change", "Club update", "M
   assert.match(categoryNotificationsHtml, new RegExp(`class="notification-kind-badge">${badge}<`));
 }
 assert.match(categoryNotificationsHtml, /Giving campaign published[\s\S]*?data-destination="#\/giving"|data-destination="#\/giving"[\s\S]*?Giving campaign published/);
+const semanticFallbackRows = [
+  {
+    id: "notification-booking-reserved",
+    kind: "operational_booking_reserved",
+    title: "Booking reserved",
+    body: "Complete payment for your reservation.",
+    created_at: "2026-08-05T06:38:00.000Z",
+    read_at: null,
+  },
+  {
+    id: "notification-rsvp-confirmed",
+    kind: "operational_rsvp_confirmed",
+    title: "You're in",
+    body: "See you at lunch.",
+    created_at: "2026-08-05T06:37:30.000Z",
+    read_at: null,
+  },
+  {
+    id: "notification-payment-marked",
+    kind: "operational_payment_marked",
+    title: "Payment marked",
+    body: "Review the member payment.",
+    created_at: "2026-08-05T06:37:00.000Z",
+    read_at: null,
+  },
+  {
+    id: "notification-session-cancelled",
+    kind: "operational_session_cancelled_no_defer",
+    title: "Session cancelled without deferral",
+    body: "Review the schedule.",
+    created_at: "2026-08-05T06:36:00.000Z",
+    read_at: null,
+  },
+];
+const semanticFallbackHtml = await views.viewNotifications(notificationNow, semanticFallbackRows);
+const semanticFallbackButtons = semanticFallbackHtml.match(/<button class="notification-row[\s\S]*?<\/button>/g) || [];
+for (const [title, destination] of [
+  ["Booking reserved", "#/account/payments"],
+  ["You&#39;re in", "#/schedule"],
+  ["Payment marked", "#/admin/payments"],
+  ["Session cancelled without deferral", "#/schedule"],
+]) {
+  const button = semanticFallbackButtons.find((row) => row.includes(`<strong>${title}</strong>`));
+  assert.ok(button, `${title} must render as a notification row`);
+  assert.match(button, new RegExp(`data-destination="${destination}"`),
+    `${title} must render its semantic section fallback without an explicit destination`);
+}
 const categoryFilterCases = [
   ["application", "Application &lt;submitted&gt;"],
   ["decision", "Application approved"],
-  ["role", "Role changed"],
+  ["role", "Member promoted"],
   ["club", "Giving campaign published"],
 ];
 for (const [kind, expectedTitle] of categoryFilterCases) {
@@ -1736,28 +1791,32 @@ assert.doesNotMatch(adminNotificationsHtml, /<h2[^>]*>Club operations<\/h2>|<h2[
 assert.equal((adminNotificationsHtml.match(/class="notification-list"/g) || []).length, 1,
   "Notifications must render one chronological list");
 assert.ok(adminNotificationsHtml.indexOf("Application &lt;submitted&gt;") < adminNotificationsHtml.indexOf("Welcome to ITC"));
-assert.ok(adminNotificationsHtml.indexOf("Welcome to ITC") < adminNotificationsHtml.indexOf("Role changed"));
 assert.doesNotMatch(adminNotificationsHtml, /Application <submitted>|Riley & approve/,
   "Notification content must be HTML escaped");
+assert.doesNotMatch(adminNotificationsHtml, /Role changed|Imported notification/,
+  "Read notification history must not render in the notification window");
 const notificationButtons = adminNotificationsHtml.match(/<button class="notification-row[\s\S]*?<\/button>/g) || [];
-assert.equal(notificationButtons.length, 4, "Every valid or malformed notification row must remain visible");
+assert.equal(notificationButtons.length, 2, "Only unread notification rows must remain visible");
 for (const button of notificationButtons) {
-  assert.match(button, /<span class="notification-unread"/,
-    "Read and unread rows must have the same grid indicator structure");
+  assert.match(button, /class="notification-row unread"[^>]*type="button"/,
+    "Every rendered notification row must be unread");
   assert.match(button, /class="notification-kind-badge"/,
     "Every notification row must show its category badge");
+  assert.match(button, /class="notification-unread" aria-label="Unread"/);
+  assert.doesNotMatch(button, /data-notification-read="true"/);
 }
-assert.match(adminNotificationsHtml, /class="notification-row unread"[^>]*type="button"/);
-assert.match(adminNotificationsHtml, /class="notification-row"[^>]*[\s\S]*?class="notification-unread" aria-hidden="true"/,
-  "Read rows must retain a hidden indicator placeholder");
-assert.match(adminNotificationsHtml, /class="notification-unread" aria-label="Unread"/);
 assert.match(adminNotificationsHtml, /5 minutes ago/);
 assert.match(adminNotificationsHtml, /5 Aug 2026, 2:32 PM HKT/);
-assert.match(adminNotificationsHtml, /Imported notification[\s\S]*?Time unavailable/,
-  "Malformed metadata must fall back without dropping the row");
 assert.doesNotMatch(adminNotificationsHtml, /Invalid Date|NaN/);
 assert.match(adminNotificationsHtml, /data-destination="#\/admin\/approvals"/);
 assert.match(adminNotificationsHtml, /data-destination="#\/account"/);
+const allReadNotificationsHtml = await views.viewNotifications(
+  notificationNow,
+  notificationRows.filter((row) => row.read_at)
+);
+assert.match(allReadNotificationsHtml, /No any notifications\./,
+  "An inbox containing only audited read rows must render the unread empty state");
+assert.doesNotMatch(allReadNotificationsHtml, /class="notification-row/);
 renderedUser.role = "member";
 views.notificationFilters.kind = "all";
 const memberNotificationsHtml = await views.viewNotifications(notificationNow);
@@ -2261,6 +2320,9 @@ Object.assign(profile, {
 });
 await store.getCurrentUser();
 await store.listPaymentUsers();
+await operations.refreshOperationalState();
+assert.ok(store.getBooking(uuidBooking.id),
+  "restoring the Admin auth fixture must rehydrate its existing paid booking");
 console.log("ok  live member payout survives Admin sign-out, member sign-in, and local reload");
 console.log("ok  live Admin composes Supabase members with UUID-keyed local Payment Ops");
 
@@ -2941,6 +3003,65 @@ await domListeners.get("click")({
   },
 });
 
+// The live reservation notification must preserve its exact booking-owned pay
+// route from rendered HTML through the real click delegate. Reopening the same
+// now-read row must keep that route without issuing a second read update.
+const exactPaymentDestination = `#/pay/${uuidBooking.id}`;
+const bookingReservedNotification = {
+  id: "notification-booking-reserved-exact",
+  kind: "operational_booking_reserved",
+  title: "Booking reserved",
+  body: "Complete payment for your reservation.",
+  destination: exactPaymentDestination,
+  created_at: "2026-08-05T06:39:45.000Z",
+  read_at: null,
+};
+notificationRows.push(bookingReservedNotification);
+const renderedNotificationControl = async () => {
+  const html = await views.viewNotifications(notificationNow, [bookingReservedNotification]);
+  const button = (html.match(/<button class="notification-row[\s\S]*?<\/button>/g) || [])
+    .find((row) => row.includes("<strong>Booking reserved</strong>"));
+  assert.ok(button, "Booking reserved must render as a notification row");
+  const attribute = (name) => button.match(new RegExp(`${name}="([^"]*)"`))?.[1];
+  const destination = attribute("data-destination");
+  assert.equal(destination, exactPaymentDestination,
+    "Booking reserved must render the exact reserved-booking payment route");
+  assert.notEqual(destination, "#/account");
+  assert.notEqual(destination, "#/account/payments");
+
+  const control = makeElement();
+  control.tagName = "BUTTON";
+  control.textContent = "Booking reserved Complete payment for your reservation.";
+  control.dataset = {
+    action: attribute("data-action"),
+    notificationId: attribute("data-notification-id"),
+    notificationRead: attribute("data-notification-read"),
+    destination,
+  };
+  control.closest = () => control;
+  return control;
+};
+
+const unreadBookingReservedControl = await renderedNotificationControl();
+assert.equal(unreadBookingReservedControl.dataset.notificationRead, "false");
+const updatesBeforeBookingReservedOpen = notificationUpdates.length;
+await domListeners.get("click")({ target: unreadBookingReservedControl });
+assert.equal(notificationUpdates.length, updatesBeforeBookingReservedOpen + 1,
+  "opening the unread reservation notification must complete one read update");
+assert.equal(notificationUpdates.at(-1)?.id, bookingReservedNotification.id);
+assert.ok(bookingReservedNotification.read_at,
+  "opening the unread reservation notification must persist its read state");
+assert.equal(location.hash, exactPaymentDestination,
+  "the unread reservation notification must navigate to its exact payment route");
+await windowListeners.get("hashchange")();
+assert.ok(viewEl.innerHTML.includes(`data-booking="${uuidBooking.id}"`),
+  "the same existing payment view must accept the current member's reserved booking");
+assert.doesNotMatch(viewEl.innerHTML, /Booking not found\./);
+notificationRows.splice(notificationRows.indexOf(bookingReservedNotification), 1);
+location.hash = "#/notifications";
+await windowListeners.get("hashchange")();
+console.log("ok  exact Booking reserved notification routes to the owned existing payment view");
+
 // Unread row activation is checked, duplicate-safe, and row-safe. It does not
 // navigate until one unread row is confirmed updated, then advances the render
 // generation so an older same-route count cannot overwrite the new badge.
@@ -2961,6 +3082,21 @@ notificationControl.dataset = {
 notificationControl.closest = () => notificationControl;
 const updatesBeforeOpen = notificationUpdates.length;
 const notificationHtmlBeforeOpen = viewEl.innerHTML;
+let notificationNavigationSnapshot = null;
+let observedNotificationHash = location.hash;
+Object.defineProperty(location, "hash", {
+  configurable: true,
+  get: () => observedNotificationHash,
+  set: (value) => {
+    if (value === "#/admin/approvals" && !notificationNavigationSnapshot) {
+      notificationNavigationSnapshot = {
+        html: viewEl.innerHTML,
+        bellLabel: notificationBell.getAttribute("aria-label"),
+      };
+    }
+    observedNotificationHash = value;
+  },
+});
 const markReadRender = domListeners.get("click")({ target: notificationControl });
 const duplicateOpen = domListeners.get("click")({ target: notificationControl });
 assert.equal(notificationUpdates.length, updatesBeforeOpen + 1, "double activation must send one update");
@@ -2972,12 +3108,22 @@ assert.equal(notificationControl.classList.contains("is-busy"), true);
 assert.equal(notificationControl.textContent, "Application submitted Review Riley",
   "structured notification content must not be replaced by a busy label");
 await duplicateOpen;
+assert.equal(location.hash, "#/notifications",
+  "a duplicate activation must not navigate before the first read update succeeds");
 updateGate.resolve();
 await markReadRender;
 notificationUpdateGate = null;
 assert.equal(location.hash, "#/admin/approvals");
-assert.equal(viewEl.innerHTML, notificationHtmlBeforeOpen,
-  "notification activation must not explicitly render in addition to hashchange");
+assert.notEqual(viewEl.innerHTML, notificationHtmlBeforeOpen,
+  "successful mark-read must update the notification window before navigation");
+assert.doesNotMatch(viewEl.innerHTML, /Application &lt;submitted&gt;/,
+  "the read row must be removed from the notification window immediately");
+assert.match(viewEl.innerHTML, /Welcome to ITC/,
+  "other unread rows must remain in the notification window");
+assert.doesNotMatch(notificationNavigationSnapshot?.html || "", /Application &lt;submitted&gt;/,
+  "the row must already be absent when the destination hash is assigned");
+assert.equal(notificationNavigationSnapshot?.bellLabel, "Notifications, 1 unread",
+  "the unread count must already be updated when navigation starts");
 await windowListeners.get("hashchange")();
 assert.match(viewEl.innerHTML, /Ready for review/);
 assert.equal(notificationBell.getAttribute("aria-label"), "Notifications, 1 unread");

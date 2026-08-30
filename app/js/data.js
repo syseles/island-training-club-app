@@ -477,14 +477,30 @@ export function notificationHktTime(value) {
   return `${formatted.replace(/\b(am|pm)\b/i, (period) => period.toUpperCase())} HKT`;
 }
 
+const NOTIFICATION_DESTINATIONS = new Map([
+  ["operational_booking_reserved", "#/account/payments"],
+  ["operational_rsvp_confirmed", "#/schedule"],
+  ["operational_payment_approved", "#/account/payments"],
+  ["operational_session_deferred", "#/account/payments"],
+  ["operational_session_cancelled_no_defer", "#/schedule"],
+  ["operational_payment_marked", "#/admin/payments"],
+  ["operational_gym_finalized", "#/admin/payments"],
+  ["operational_session_cancelled", "#/schedule"],
+  ["operational_session_venue_updated", "#/schedule"],
+  ["admin_application_submitted", "#/admin/approvals"],
+  ["admin_application_approved", "#/admin/members"],
+  ["admin_application_declined", "#/admin/members"],
+  ["admin_role_promoted", "#/admin/members"],
+  ["admin_role_demoted", "#/admin/members"],
+  ["admin_membership_revoked", "#/admin/members"],
+  ["admin_role_changed", "#/admin/members"],
+  ["giving_campaign_published", "#/giving"],
+  ["welcome", "#/account"],
+]);
+
 export function notificationDestination(kind, destination = null) {
   if (typeof destination === "string" && destination.startsWith("#/")) return destination;
-  const normalizedKind = notificationKind(kind);
-  if (normalizedKind === "admin_application_submitted") return "#/admin/approvals";
-  if (normalizedKind.startsWith("admin_")) return "#/admin/members";
-  if (normalizedKind === "operational_session_venue_updated") return "#/schedule";
-  if (normalizedKind === "giving_campaign_published") return "#/giving";
-  return "#/account";
+  return NOTIFICATION_DESTINATIONS.get(notificationKind(kind)) || "#/account";
 }
 
 // --- Weekly encouragement verse ------------------------------------------

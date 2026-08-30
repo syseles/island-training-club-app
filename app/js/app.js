@@ -317,6 +317,14 @@ export async function maybeRedirectToApply() {
   }
 }
 
+function commitNotificationCount(unreadCount, active) {
+  notificationEl.innerHTML = views.notificationBellHTML(unreadCount, active);
+  notificationEl.setAttribute(
+    "aria-label",
+    unreadCount ? `Notifications, ${unreadCount} unread` : "Notifications"
+  );
+}
+
 function renderNotificationChrome(user, active, generation, rowsPromise = null) {
   notificationEl.hidden = !user;
   notificationEl.innerHTML = user ? views.notificationBellHTML(0, active) : "";
@@ -336,11 +344,7 @@ function renderNotificationChrome(user, active, generation, rowsPromise = null) 
   request.then((rows) => {
     if (generation !== renderGeneration) return;
     const unreadCount = rows.filter((row) => !row.read_at).length;
-    notificationEl.innerHTML = views.notificationBellHTML(unreadCount, active);
-    notificationEl.setAttribute(
-      "aria-label",
-      unreadCount ? `Notifications, ${unreadCount} unread` : "Notifications"
-    );
+    commitNotificationCount(unreadCount, active);
   }).catch(() => {});
   return request;
 }
@@ -371,9 +375,10 @@ async function render(generation = renderGeneration) {
   const parts = parseHash();
   const [page, arg, arg2] = parts.length ? parts : ["home"];
 
-  // Route rows are valid only for the Notifications render that committed
-  // them. Invalidate before any replacement can await or fail.
-  notificationRouteRows = null;
+  // Keep the last committed Notifications rows available while a same-route
+  // refresh is pending so a displayed unread row can still complete its
+  // read/remove/navigation sequence. Other routes must not reuse that cache.
+  if (page !== "notifications") notificationRouteRows = null;
 
   // Entering the Schedule tab fresh (bottom nav, Home, Profile…) resets it
   // to this week + today — a week offset left over from earlier browsing
@@ -651,6 +656,7 @@ document.addEventListener("click", async (e) => {
       }
       break;
     case "notification-open": {
+      if (controlBusy.has(el)) break;
       const destination = el.dataset.destination || "#/account";
       if (el.dataset.notificationRead !== "true") {
         try {
@@ -664,11 +670,24 @@ document.addEventListener("click", async (e) => {
           toast("Failed to mark notification read", true);
           break;
         }
+
+        if (parseHash()[0] === "notifications" && notificationRouteRows) {
+          ++renderGeneration;
+          notificationRouteRows = notificationRouteRows.filter(
+            (row) => row.id !== el.dataset.notificationId
+          );
+          viewEl.innerHTML = await views.viewNotifications(new Date(), notificationRouteRows);
+          commitNotificationCount(
+            notificationRouteRows.filter((row) => !row.read_at).length,
+            true
+          );
+        }
       }
 
-      // Let the single hashchange route path render and report destination
-      // failures. A successful mark-read must never be relabelled as failed
-      // because the destination itself could not load.
+      // The successful read is removed from the unread-only window before the
+      // single hashchange route path renders and reports destination failures.
+      // A successful mark-read must never be relabelled as failed because the
+      // destination itself could not load.
       location.hash = destination;
       break;
     }

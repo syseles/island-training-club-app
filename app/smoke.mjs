@@ -224,17 +224,17 @@ assert.equal(
 const cancellationQueueIntegrationSource = operationalIntegrationSource.match(
   /-- Admin cancellation atomicity\.[\s\S]*?-- Cancellation rollback test:/
 )?.[0] || "";
+assert.match(operationalIntegrationSource,
+  /cancel_midtown_session text not null/,
+  "cancellation coverage must derive its closed Midtown fixture from the shared HKT-relative table");
 assert.match(cancellationQueueIntegrationSource,
-  /v_midtown_date date := \(now\(\) at time zone 'Asia\/Hong_Kong'\)::date \+ \d+;/,
-  "cancellation coverage must derive its closed Midtown fixture from a future Hong Kong date");
+  /select cancel_session, cancel_midtown_session[\s\S]*?into v_session_id, v_midtown_session_id[\s\S]*?from operational_time_fixtures/,
+  "cancellation coverage must select the dated Midtown session from the shared HKT-relative fixture");
 assert.match(cancellationQueueIntegrationSource,
-  /v_midtown_session text;[\s\S]*?v_midtown_session := 'hyrox-midtown-' \|\| v_midtown_date::text;/,
-  "cancellation coverage must derive the Midtown session ID from its future date");
-assert.match(cancellationQueueIntegrationSource,
-  /perform pg_temp\.op_assert\(\s*exists \([\s\S]*?where id = v_midtown_session[\s\S]*?and activity_id = 'hyrox-midtown'[\s\S]*?and session_date = v_midtown_date[\s\S]*?and not is_open[\s\S]*?and cancelled_at is null[\s\S]*?\),[\s\S]*?'closed Midtown interest fixture exists with required properties'[\s\S]*?\);/,
+  /perform pg_temp\.op_assert\(\s*exists \([\s\S]*?where id = v_midtown_session_id[\s\S]*?and activity_id = 'hyrox-midtown'[\s\S]*?and session_date > \(now\(\) at time zone 'Asia\/Hong_Kong'\)::date[\s\S]*?and not is_open[\s\S]*?and cancelled_at is null[\s\S]*?\),[\s\S]*?'closed Midtown interest fixture exists with required properties'[\s\S]*?\);/,
   "cancellation coverage must explicitly prove the Midtown fixture exists, is future-derived, closed, and active");
 assert.match(cancellationQueueIntegrationSource,
-  /join_operational_queue\(v_midtown_session, 'interest'\)/,
+  /join_operational_queue\(v_midtown_session_id, 'interest'\)/,
   "cancellation coverage must join interest through the dynamic Midtown fixture variable");
 assert.doesNotMatch(cancellationQueueIntegrationSource,
   /join_operational_queue\('hyrox-midtown-\d{4}-\d{2}-\d{2}', 'interest'\)/,
@@ -270,6 +270,212 @@ assert.match(lunchMeetingRpcSixArgumentSource,
   /when 'lunch' then 'Post-Training Lunch'/);
 assert.match(lunchMeetingRpcMigrationSource,
   /select public\.set_session_venue\([\s\S]*?p_was_tbc, null, null[\s\S]*?\);/);
+const notificationRoutingMigrationSource = readFileSync(
+  resolve(__dirnameSmoke, "../supabase/migrations/20260829000007_notification_destinations.sql"),
+  "utf8"
+);
+const operationalBackendIntegrationSource = readFileSync(
+  resolve(__dirnameSmoke, "../supabase/tests/operational_backend_integration.sql"),
+  "utf8"
+);
+const normalizedNotificationRoutingMigrationSource = notificationRoutingMigrationSource.toLowerCase();
+for (const marker of [
+  "security definer",
+  "set search_path = public",
+  "before insert on public.notifications",
+  "resolve_notification_destination",
+  "resolve_historical_booking_notification_destination",
+  "operational_booking_reserved",
+  "#/pay/",
+  "count(*)",
+  "profile_id",
+  "revoke all on function public.resolve_notification_destination",
+  "revoke all on function public.resolve_historical_booking_notification_destination",
+]) {
+  if (!normalizedNotificationRoutingMigrationSource.includes(marker)) {
+    throw new Error(`notification routing migration missing ${marker}`);
+  }
+}
+if (/alter\s+table\s+public\.notifications\b[^;]*(?:enable|disable|force|no\s+force)\s+row\s+level\s+security/i.test(notificationRoutingMigrationSource)) {
+  throw new Error("notification routing migration must not alter notification RLS");
+}
+if (/grant\s+[^;]*\b(?:all(?:\s+privileges)?|insert|update|delete|truncate|references|trigger)\b[^;]*\s+on\s+(?:table\s+)?public\.notifications\b/i.test(notificationRoutingMigrationSource)) {
+  throw new Error("notification routing migration must not grant notification-table writes");
+}
+const notificationRoutingFunctionDeclarations = [
+  ...notificationRoutingMigrationSource.matchAll(/create\s+or\s+replace\s+function\s+public\.([a-z0-9_]+)/gi),
+].map((match) => match[1]).sort();
+if (JSON.stringify(notificationRoutingFunctionDeclarations) !== JSON.stringify([
+  "resolve_historical_booking_notification_destination",
+  "resolve_notification_destination",
+  "route_notification_destination",
+])) {
+  throw new Error("notification routing migration must declare only the exact, historical-booking, and trigger functions");
+}
+const notificationResolverBody = (functionName) => {
+  const escapedName = functionName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const match = notificationRoutingMigrationSource.match(new RegExp(
+    `create\\s+or\\s+replace\\s+function\\s+public\\.${escapedName}\\s*\\([\\s\\S]*?\\)\\s*returns[\\s\\S]*?\\bas\\s+\\$\\$([\\s\\S]*?)\\$\\$;`,
+    "i"
+  ));
+  if (!match) throw new Error(`notification routing migration missing ${functionName} body`);
+  return match[1];
+};
+const exactNotificationResolverBody = notificationResolverBody("resolve_notification_destination");
+if (/interval\s+'5 seconds'/i.test(exactNotificationResolverBody)
+    || !/=\s*p_created_at\b/i.test(exactNotificationResolverBody)) {
+  throw new Error("notification insert resolver must use exact event timestamps, never a fuzzy window");
+}
+const historicalBookingResolverBody = notificationResolverBody(
+  "resolve_historical_booking_notification_destination"
+);
+if (!/interval\s+'5 seconds'/i.test(historicalBookingResolverBody)
+    || !/public\.operational_bookings\b/i.test(historicalBookingResolverBody)) {
+  throw new Error("historical booking resolver must retain bounded booking-only fuzzy matching");
+}
+if (/public\.operational_sessions\b|cancelled_at\b|operational_session_cancelled(?:_no_defer)?\b/i.test(historicalBookingResolverBody)) {
+  throw new Error("historical booking resolver must not infer cancellation destinations");
+}
+console.log("ok  notification migration separates exact inserts from booking-only historical matching");
+for (const marker of [
+  "v_payment_marked_before",
+  "v_payment_marked_after",
+  "v_gym_finalized_before",
+  "v_gym_finalized_after",
+  "v_unique_cancel_session",
+  "v_cancelled_admin_before",
+  "v_cancelled_admin_after",
+  "notification_routing_backfill_snapshot",
+  "nearby-booking",
+  "historical-rsvp-unique",
+  "historical-rsvp-ambiguous",
+  "historical-cancellation",
+  "notification routing migration second reapplication is idempotent",
+]) {
+  if (!operationalBackendIntegrationSource.includes(marker)) {
+    throw new Error(`notification integration evidence missing ${marker}`);
+  }
+}
+for (const [pattern, label] of [
+  [/v_payment_marked_after\s*-\s*v_payment_marked_before\s*=\s*2\b/i, "payment-marked producer count"],
+  [/v_gym_finalized_after\s*-\s*v_gym_finalized_before\s*=\s*2\b/i, "gym-finalized producer count"],
+  [/v_cancelled_member_after\s*-\s*v_cancelled_member_before\s*=\s*1\b/i, "member cancellation producer count"],
+  [/v_cancelled_admin_after\s*-\s*v_cancelled_admin_before\s*=\s*2\b/i, "Admin cancellation producer count"],
+]) {
+  if (!pattern.test(operationalBackendIntegrationSource)) {
+    throw new Error(`notification integration missing scoped ${label}`);
+  }
+}
+if (!/v_expected_admin_recipients\s+constant\s+uuid\[\]\s*:=\s*array\[\s*'aa000000-0000-0000-0000-00000000a001'::uuid\s*,\s*'ff000000-0000-0000-0000-00000000f001'::uuid\s*\]/i.test(operationalBackendIntegrationSource)) {
+  throw new Error("notification integration missing exact Admin recipient fixture");
+}
+const exactAdminRecipientAssertions = operationalBackendIntegrationSource.match(
+  /array_agg\(profile_id\s+order\s+by\s+profile_id\)[\s\S]*?=\s*v_expected_admin_recipients/gi
+) || [];
+if (exactAdminRecipientAssertions.length !== 2) {
+  throw new Error("notification integration must assert exact recipients for both Admin producers");
+}
+if (!/perform\s+(?:public\.)?cancel_operational_session\s*\(\s*v_unique_cancel_session\b/i.test(operationalBackendIntegrationSource)) {
+  throw new Error("notification integration must exercise the real unique cancellation producer");
+}
+const notificationRoutingMigrationReapplications = [
+  ...operationalBackendIntegrationSource.matchAll(
+    /^\\ir\s+\.\.\/migrations\/20260829000007_notification_destinations\.sql\s*$/gm
+  ),
+];
+if (notificationRoutingMigrationReapplications.length !== 2) {
+  throw new Error("notification integration must reapply migration 00007 exactly twice");
+}
+for (const fixtureClass of [
+  "nearby-booking",
+  "unique-malformed",
+  "ambiguous-same-profile",
+  "foreign-only",
+  "valid-explicit",
+  "read-state",
+  "historical-rsvp-unique",
+  "historical-rsvp-ambiguous",
+  "historical-cancellation",
+]) {
+  if (!operationalBackendIntegrationSource.includes(`'${fixtureClass}'`)) {
+    throw new Error(`notification integration missing historical fixture class ${fixtureClass}`);
+  }
+}
+for (const marker of [
+  "operational_time_fixtures",
+  "Asia/Hong_Kong",
+  "v_paid_session",
+  "v_rsvp_session",
+  "v_unique_cancel_session",
+  "historical_cancel_session",
+  "v_historical_cancel_session",
+]) {
+  if (!operationalBackendIntegrationSource.includes(marker)) {
+    throw new Error(`notification integration missing time-stable fixture marker ${marker}`);
+  }
+}
+// Fixed HYROX dates are allowed only in the deterministic August fixture
+// window. Any future-guarded workflow must use the HKT-relative fixture table;
+// the lone static reservation is cancelled and therefore rejects before its
+// date guard. This allowlist forces every new fixed date to document its source.
+const explicitlyGeneratedFixedHyroxSessions = new Set([
+  "hyrox-2026-08-15",
+  "hyrox-midtown-2026-08-15",
+  "hyrox-2026-08-22",
+  "hyrox-midtown-2026-08-22",
+  "hyrox-2026-08-29",
+  "hyrox-midtown-2026-08-29",
+]);
+const fixedHyroxSessionIds = new Set(
+  operationalBackendIntegrationSource.match(/\bhyrox(?:-midtown)?-\d{4}-\d{2}-\d{2}\b/g) || []
+);
+const ungroundedFixedHyroxSessions = [...fixedHyroxSessionIds].filter(
+  (sessionId) => !explicitlyGeneratedFixedHyroxSessions.has(sessionId)
+);
+if (ungroundedFixedHyroxSessions.length) {
+  throw new Error(
+    `notification integration retains fixed HYROX sessions outside its explicit generator: ${ungroundedFixedHyroxSessions.join(", ")}`
+  );
+}
+if (!/ensure_operational_sessions\s*\(\s*date\s+'2026-08-01'\s*,\s*5\s*\)/i.test(operationalBackendIntegrationSource)) {
+  throw new Error("notification integration missing the explicit five-week August HYROX fixture generator");
+}
+const staticFutureGuardedCalls = [
+  ...operationalBackendIntegrationSource.matchAll(
+    /\b(?:reserve_operational_session|join_operational_queue|defer_operational_booking)\s*\(\s*'([^']+-\d{4}-\d{2}-\d{2})'/g
+  ),
+].map((match) => match[0]).filter((call) =>
+  !call.includes("reserve_operational_session('hyrox-2026-08-15'")
+);
+if (staticFutureGuardedCalls.length) {
+  throw new Error(`notification integration retains static future-guarded calls: ${staticFutureGuardedCalls.join(", ")}`);
+}
+for (const fixtureClass of [
+  "ambiguous-same-profile",
+  "foreign-only",
+  "historical-rsvp-ambiguous",
+  "historical-cancellation",
+]) {
+  const rowExistsOnceWithNull = new RegExp(
+    `perform\\s+pg_temp\\.op_assert\\(\\s*\\(select\\s+count\\(\\*\\)[\\s\\S]*?where\\s+f\\.fixture_class\\s*=\\s*'${fixtureClass}'[\\s\\S]*?and\\s+n\\.destination\\s+is\\s+null\\s*\\)\\s*=\\s*1\\s*,`,
+    "i"
+  );
+  if (!rowExistsOnceWithNull.test(operationalBackendIntegrationSource)) {
+    throw new Error(`notification integration must prove ${fixtureClass} exists once with null destination`);
+  }
+}
+if (/update\s+public\.notifications\s+\w+\s+set\s+destination\s*=\s*public\.resolve_notification_destination/is.test(operationalBackendIntegrationSource)) {
+  throw new Error("notification integration must execute migration backfill instead of copying its update");
+}
+const invalidSessionGenerationCall = [
+  ...operationalBackendIntegrationSource.matchAll(
+    /ensure_operational_sessions\s*\(\s*date\s+'[^']+'\s*,\s*(\d+)\s*\)/gi
+  ),
+].find((match) => Number(match[1]) > 16);
+if (invalidSessionGenerationCall) {
+  throw new Error(`notification integration exceeds the 16-week session generation bound: ${invalidSessionGenerationCall[1]}`);
+}
+console.log("ok  notification SQL evidence exercises scoped producers and migration reapplication");
 for (const column of [
   "waiver_signature_text",
   "waiver_signed_at",
@@ -402,6 +608,55 @@ for (const marker of [
   }
 }
 console.log("ok  latest Notification domain markers coexist");
+{
+  const notificationFallbacks = new Map([
+    ["operational_booking_reserved", "#/account/payments"],
+    ["operational_rsvp_confirmed", "#/schedule"],
+    ["operational_payment_approved", "#/account/payments"],
+    ["operational_session_deferred", "#/account/payments"],
+    ["operational_session_cancelled_no_defer", "#/schedule"],
+    ["operational_payment_marked", "#/admin/payments"],
+    ["operational_gym_finalized", "#/admin/payments"],
+    ["operational_session_cancelled", "#/schedule"],
+    ["operational_session_venue_updated", "#/schedule"],
+    ["admin_application_submitted", "#/admin/approvals"],
+    ["admin_application_approved", "#/admin/members"],
+    ["admin_application_declined", "#/admin/members"],
+    ["admin_role_promoted", "#/admin/members"],
+    ["admin_role_demoted", "#/admin/members"],
+    ["admin_membership_revoked", "#/admin/members"],
+    ["admin_role_changed", "#/admin/members"],
+    ["giving_campaign_published", "#/giving"],
+    ["welcome", "#/account"],
+  ]);
+  const malformedDestinations = [
+    "https://example.com/foreign",
+    "/account/payments",
+    "#account/payments",
+    "javascript:alert(1)",
+  ];
+  for (const [kind, expected] of notificationFallbacks) {
+    if (data.notificationDestination(kind) !== expected) {
+      failures++;
+      console.error(`FAIL ${kind} notification fallback should be ${expected}`);
+    }
+    if (data.notificationDestination(kind, "#/pay/booking-123") !== "#/pay/booking-123") {
+      failures++;
+      console.error(`FAIL explicit internal notification destination should win for ${kind}`);
+    }
+    for (const destination of malformedDestinations) {
+      if (data.notificationDestination(kind, destination) !== expected) {
+        failures++;
+        console.error(`FAIL malformed notification destination should not win for ${kind}: ${destination}`);
+      }
+    }
+  }
+  if (data.notificationDestination("unknown_kind") !== "#/account") {
+    failures++;
+    console.error("FAIL unknown notification kinds should fall back to #/account");
+  }
+  console.log("ok  notification destinations use explicit internal routes or stable semantic fallbacks");
+}
 {
   // Live deployments: recurring activity defaults are seed/SQL-administered,
   // so the Admin activity editor must render read-only with an honest note
@@ -1640,10 +1895,65 @@ console.log("ok  double booking rejected");
 store.markBookingPaid(r1.id, "PayMe", "REF123");
 if (!store.getBooking(r1.id).paymentMarkedAt) throw new Error("payment not marked");
 const tinaNotes = store.notificationsFor("fixture-admin");
-if (!tinaNotes.some((n) => n.kind === "payment-marked"))
+const localPaymentNotification = tinaNotes.find((n) => n.kind === "payment-marked");
+if (!localPaymentNotification)
   throw new Error("collector should be notified of a marked payment");
 console.log("ok  member marks paid -> collector notified");
+
+// Local notifications cross the same store seam as Supabase rows. Preserve
+// local copy/identity while adapting unread state, destination, and time for
+// the Inbox; marking the rendered row read must survive a localStorage reload.
+localPaymentNotification.title = "Payment marked";
+localPaymentNotification.message = localPaymentNotification.body;
 store.signIn("admin@example.test");
+const localNotificationRows = await store.listMyNotifications();
+const localInboxRow = localNotificationRows.find((row) => row.id === localPaymentNotification.id);
+if (!localInboxRow
+    || localInboxRow.kind !== localPaymentNotification.kind
+    || localInboxRow.title !== localPaymentNotification.title
+    || localInboxRow.message !== localPaymentNotification.message
+    || localInboxRow.body !== localPaymentNotification.body) {
+  throw new Error("local notification seam must preserve id, kind, title, message, and body");
+}
+if (localInboxRow.read_at !== null
+    || localInboxRow.destination !== localPaymentNotification.link
+    || localInboxRow.created_at !== new Date(localPaymentNotification.createdAt).toISOString()) {
+  throw new Error("local notification seam must normalize unread state, destination, and creation time");
+}
+const localUnreadBeforeClick = localNotificationRows.filter((row) => !row.read_at).length;
+if (localUnreadBeforeClick < 1) {
+  throw new Error("local notification count must include the unread row");
+}
+const localInboxHtml = await views.viewNotifications(new Date(), localNotificationRows);
+if (!localInboxHtml.includes(`data-notification-id="${localPaymentNotification.id}"`)
+    || !localInboxHtml.includes(`data-destination="${localPaymentNotification.link}"`)) {
+  throw new Error("local Inbox must render the unread row with its exact destination");
+}
+await store.markNotificationRead(localPaymentNotification.id);
+const persistedNotificationState = JSON.parse(localStorage.getItem("itc.prototype.v1"));
+const persistedNotificationRecord = persistedNotificationState.notifications.find(
+  (row) => row.id === localPaymentNotification.id
+);
+if (persistedNotificationRecord?.read !== true
+    || Object.hasOwn(persistedNotificationRecord || {}, "read_at")
+    || Object.hasOwn(persistedNotificationRecord || {}, "destination")
+    || Object.hasOwn(persistedNotificationRecord || {}, "created_at")) {
+  throw new Error("local mark-read must persist only the existing local notification shape");
+}
+store.load();
+const persistedLocalRows = await store.listMyNotifications();
+const persistedLocalRow = persistedLocalRows.find((row) => row.id === localPaymentNotification.id);
+if (!persistedLocalRow?.read_at) {
+  throw new Error("clicking a local notification must persist its existing read flag");
+}
+if (persistedLocalRows.filter((row) => !row.read_at).length !== localUnreadBeforeClick - 1) {
+  throw new Error("local notification count must drop by one after the clicked row persists read");
+}
+const localInboxAfterClick = await views.viewNotifications(new Date(), persistedLocalRows);
+if (localInboxAfterClick.includes(`data-notification-id="${localPaymentNotification.id}"`)) {
+  throw new Error("the clicked local notification must hide from the unread-only Inbox");
+}
+console.log("ok  local notification Inbox, count, destination, and click persistence");
 const conf = store.confirmBookingPayment(r1.id);
 store.signIn(signIn.user.email);
 if (conf.booking.status !== "confirmed") throw new Error("collector confirm should confirm");
@@ -3583,7 +3893,7 @@ if (decorated.location !== "Central Harbourfront — 7pm sharp"
 }
 const venueNotesFor = (userId, sessionId) => store.notificationsFor(userId).filter(
   (n) => n.kind === "operational_session_venue_updated"
-    && n.destination === `#/activity/${sessionId}`
+    && n.link === `#/activity/${sessionId}`
 );
 const memberNotes = venueNotesFor("fixture-member", wntSession.id);
 const otherAdminNotes = venueNotesFor("fixture-other-admin", wntSession.id);
@@ -3602,8 +3912,15 @@ if (pendingNotes.length) {
   throw new Error("pending profile must not receive venue notifications");
 }
 const memberDestination = memberNotes[0];
-if (memberDestination?.destination !== `#/activity/${wntSession.id}`) {
+if (memberDestination?.link !== `#/activity/${wntSession.id}`) {
   throw new Error("member notification must point at the dated activity route");
+}
+for (const notification of [...memberNotes, ...otherAdminNotes]) {
+  if (Object.hasOwn(notification, "read_at")
+      || Object.hasOwn(notification, "destination")
+      || Object.hasOwn(notification, "created_at")) {
+    throw new Error("local venue notifications must persist only the existing local notification shape");
+  }
 }
 if (memberDestination?.body !== `Wednesday Night Training on ${wntSession.dateISO} is at Central Harbourfront — 7pm sharp. Check the activity page for details.`) {
   throw new Error(`member venue copy must use the activity display name; got: ${memberDestination?.body}`);
