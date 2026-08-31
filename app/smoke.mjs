@@ -2077,6 +2077,11 @@ if (r1.payDeadlineAt !== data.nextPayDeadline(bftSession.dateISO, reservationNow
 const after = store.spotsLeft(bftSession);
 if (after !== before - 1) throw new Error(`reserved spot not held (${before} -> ${after})`);
 console.log(`ok  reservation holds a spot ${before} -> ${after}`);
+const unpaidHistoryHtml = await views.viewAccount("history");
+if (!unpaidHistoryHtml.includes("HK$180 to be paid") || unpaidHistoryHtml.includes("paid HK$180")) {
+  throw new Error("History must label an unpaid paid-session reservation as HK$180 to be paid");
+}
+console.log("ok  History distinguishes an unpaid paid-session reservation");
 let dup = null;
 try { store.reserveSession(signIn.user.id, bftSession); } catch (e) { dup = e; }
 if (!dup) throw new Error("double reservation should be rejected");
@@ -2087,7 +2092,11 @@ const tinaNotes = store.notificationsFor("fixture-admin");
 const localPaymentNotification = tinaNotes.find((n) => n.kind === "payment-marked");
 if (!localPaymentNotification)
   throw new Error("collector should be notified of a marked payment");
-console.log("ok  member marks paid -> collector notified");
+const markedHistoryHtml = await views.viewAccount("history");
+if (!markedHistoryHtml.includes("paid HK$180") || markedHistoryHtml.includes("HK$180 to be paid")) {
+  throw new Error("History must label a payment-marked paid-session booking as paid HK$180");
+}
+console.log("ok  member marks paid -> collector notified and History shows paid amount");
 
 // Local notifications cross the same store seam as Supabase rows. Preserve
 // local copy/identity while adapting unread state, destination, and time for
@@ -3539,6 +3548,22 @@ installLocalFixtures();
   await store.withdrawRsvp(rsvp.id);
   if (store.getBooking(rsvp.id).status !== "cancelled")
     throw new Error("withdraw should cancel the RSVP booking");
+  const repeatedRsvp = await store.rsvpSession("fixture-member", lunch.id, rsvp.createdAt + 1000);
+  await store.withdrawRsvp(repeatedRsvp.id);
+  repeatedRsvp.snapshot = { dateISO: lunch.dateISO };
+  const repeatedRsvpHistoryHtml = await views.viewAccount("history");
+  if ((repeatedRsvpHistoryHtml.match(/class="card booking-card"/g) || []).length !== 1
+      || !repeatedRsvpHistoryHtml.includes(`href="#/booking/${repeatedRsvp.id}"`)
+      || repeatedRsvpHistoryHtml.includes(`href="#/booking/${rsvp.id}"`)
+      || !repeatedRsvpHistoryHtml.includes("Cancelled")
+      || !repeatedRsvpHistoryHtml.includes("RSVP")
+      || repeatedRsvpHistoryHtml.includes("paid HK$0")) {
+    throw new Error("History must deduplicate RSVP join/withdraw records, retain cancellation, and show RSVP");
+  }
+  if (!repeatedRsvpHistoryHtml.includes("75 min")) {
+    throw new Error("History must fill a local RSVP snapshot gap from the authoritative session");
+  }
+  console.log("ok  History deduplicates repeated local RSVPs and fills snapshot gaps");
   const schedHtml = views.viewSchedule();
   if (!schedHtml.includes(">Socials<"))
     throw new Error("Schedule should offer a Socials filter chip");

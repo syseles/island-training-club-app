@@ -1570,8 +1570,23 @@ async function accountPrivacy(user) {
     </div></div>`;
 }
 
+function bookingDisplaySnapshot(b) {
+  const snapshot = b.snapshot || {};
+  const session = store.getSession(b.sessionId);
+  return {
+    ...snapshot,
+    dateISO: snapshot.dateISO ?? session?.dateISO,
+    time: snapshot.time ?? session?.time,
+    name: snapshot.name ?? session?.name,
+    location: snapshot.location ?? session?.location,
+    durationMin: snapshot.durationMin ?? session?.durationMin,
+    kind: snapshot.kind ?? session?.kind,
+    price: snapshot.price ?? session?.price,
+  };
+}
+
 function bookingCard(b) {
-  const s = b.snapshot;
+  const s = bookingDisplaySnapshot(b);
   const live = b.status === "confirmed" && !sessionStarted(s);
   const status =
     b.status === "cancelled"
@@ -1579,6 +1594,11 @@ function bookingCard(b) {
       : b.status === "attended"
         ? '<span class="badge neutral">Attended</span>'
         : '<span class="badge free">Booked</span>';
+  const amount = s.kind === "rsvp"
+    ? "RSVP"
+    : (b.paymentMarkedAt != null || ["confirmed", "attended"].includes(b.status))
+      ? `paid ${fmtMoney(s.price)}`
+      : `${fmtMoney(s.price)} to be paid`;
   return `
     <div class="card booking-card"><div class="card-body">
       <header>
@@ -1588,17 +1608,41 @@ function bookingCard(b) {
         </div>
         ${status}
       </header>
-      <p>${esc(s.location)} · ${s.durationMin} min · paid ${fmtMoney(s.price)}</p>
+      <p>${esc(s.location)} · ${s.durationMin} min · ${amount}</p>
       <div class="actions">
         <a class="btn ghost sm" href="#/booking/${b.id}">${live ? "Manage" : "Details"}</a>
       </div>
     </div></div>`;
 }
 
+function bookingHistoryTimestamp(booking) {
+  const createdAt = Number(booking.createdAt);
+  if (booking.createdAt != null && Number.isFinite(createdAt)) return createdAt;
+  const reservedAt = Number(booking.reservedAt);
+  return booking.reservedAt != null && Number.isFinite(reservedAt) ? reservedAt : 0;
+}
+
+function compareHistoryBookings(a, b) {
+  const aSnapshot = bookingDisplaySnapshot(a);
+  const bSnapshot = bookingDisplaySnapshot(b);
+  const dateOrder = (bSnapshot.dateISO || "").localeCompare(aSnapshot.dateISO || "");
+  if (dateOrder) return dateOrder;
+  const timestampOrder = bookingHistoryTimestamp(b) - bookingHistoryTimestamp(a);
+  if (timestampOrder) return timestampOrder;
+  return String(a.id || "").localeCompare(String(b.id || ""));
+}
+
 function accountHistory(user) {
-  const history = store
-    .bookingsForUser(user.id)
-    .filter((b) => !(b.status === "confirmed" && !sessionStarted(b.snapshot)));
+  const seenSessionIds = new Set();
+  const history = store.bookingsForUser(user.id)
+    .slice()
+    .sort(compareHistoryBookings)
+    .filter((booking) => {
+      const key = booking.sessionId || booking.id;
+      if (seenSessionIds.has(key)) return false;
+      seenSessionIds.add(key);
+      return !(booking.status === "confirmed" && !sessionStarted(bookingDisplaySnapshot(booking)));
+    });
   return `
     <a class="back-link" href="#/account">← Profile</a>
     <div class="kicker mt16">Profile · History</div>

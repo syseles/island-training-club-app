@@ -176,6 +176,7 @@ let operationalRsvpCountError = null;
 let operationalRsvpCountRowsOverride = null;
 const operationalRpcCalls = [];
 const operationalPayoutDirectReads = [];
+const operationalSessionQueries = [];
 const operationalSubscriptions = [];
 const operationalTableRows = {
   operational_sessions: [],
@@ -466,6 +467,7 @@ const fakeSupabase = {
     }
     if (table in operationalTableRows) {
       const rows = operationalTableRows[table];
+      const sessionFilters = { since: null, ids: null };
       const result = () => {
         const error = table === "operational_session_venue_overrides"
           ? operationalVenueOverrideReadError
@@ -478,6 +480,16 @@ const fakeSupabase = {
         if (table === "operational_bookings"
             && !["admin", "super_admin"].includes(role)) {
           visibleRows = visibleRows.filter((row) => row.profile_id === authUser.id);
+        }
+        if (table === "operational_sessions") {
+          if (sessionFilters.since) {
+            visibleRows = visibleRows.filter((row) => row.session_date >= sessionFilters.since);
+          }
+          if (sessionFilters.ids) {
+            const ids = new Set(sessionFilters.ids);
+            visibleRows = visibleRows.filter((row) => ids.has(row.id));
+          }
+          operationalSessionQueries.push({ ...sessionFilters, ids: sessionFilters.ids?.slice() || null });
         }
         if (table === "collector_payout_profiles") {
           visibleRows = ["admin", "super_admin"].includes(role)
@@ -493,11 +505,23 @@ const fakeSupabase = {
       const thenable = () => Promise.resolve(result());
       const chain = {
         order: thenable,
-        gte: () => chain,
+        gte(column, value) {
+          if (table !== "operational_sessions" || column !== "session_date") {
+            throw new Error("Only operational session date queries may use gte");
+          }
+          sessionFilters.since = value;
+          return chain;
+        },
         or: () => chain,
         eq: () => chain,
         neq: () => chain,
-        in: () => chain,
+        in(column, values) {
+          if (table !== "operational_sessions" || column !== "id") {
+            throw new Error("Only operational session ID queries may use in");
+          }
+          sessionFilters.ids = values;
+          return chain;
+        },
         is: () => chain,
         match: () => chain,
         then(resolve, reject) {
@@ -2069,6 +2093,234 @@ if (!liveHistoryHtml.includes("11:15 AM") || liveHistoryHtml.includes("undefined
   throw new Error("live booking history must render the snapshot start_time, not undefined");
 }
 console.log("ok  live booking history renders snapshot start_time without crashing");
+
+// History must hydrate omitted booking snapshot fields from the authoritative
+// operational session, and must collapse repeated RSVP join/withdraw rows.
+const liveHistoryPaidSessionRow = operationalTableRows.operational_sessions.find(
+  (row) => row.activity_id === "hyrox" && row.id !== uuidBooking.sessionId
+);
+const liveHistoryRsvpSessionRow = operationalTableRows.operational_sessions.find(
+  (row) => row.activity_id === "lunch" && row.id !== seededRsvpLunchId
+);
+if (!liveHistoryPaidSessionRow || !liveHistoryRsvpSessionRow) {
+  throw new Error("live History regressions need separate paid and RSVP sessions");
+}
+const liveHistoryGapBooking = {
+  id: "history-gap-paid",
+  profile_id: authUser.id,
+  session_id: liveHistoryPaidSessionRow.id,
+  status: "reserved",
+  reserved_at: fixedIso,
+  pay_deadline_at: fixedIso,
+  payment_marked_at: null,
+  payment_method: null,
+  payment_reference: null,
+  paid_at: null,
+  confirmed_by: null,
+  deferred_from_booking_id: null,
+  deferred_to_booking_id: null,
+  snapshot: { session_date: liveHistoryPaidSessionRow.session_date },
+  created_at: fixedIso,
+  updated_at: fixedIso,
+};
+const liveHistoryRsvpRows = [
+  {
+    id: "history-rsvp-old",
+    profile_id: authUser.id,
+    session_id: liveHistoryRsvpSessionRow.id,
+    status: "confirmed",
+    reserved_at: fixedIso,
+    pay_deadline_at: fixedIso,
+    payment_marked_at: null,
+    payment_method: null,
+    payment_reference: null,
+    paid_at: fixedIso,
+    confirmed_by: null,
+    deferred_from_booking_id: null,
+    deferred_to_booking_id: null,
+    snapshot: { session_date: liveHistoryRsvpSessionRow.session_date },
+    created_at: "2026-08-05T01:00:00.000Z",
+    updated_at: "2026-08-05T01:00:00.000Z",
+  },
+  {
+    id: "history-rsvp-new",
+    profile_id: authUser.id,
+    session_id: liveHistoryRsvpSessionRow.id,
+    status: "cancelled",
+    reserved_at: fixedIso,
+    pay_deadline_at: fixedIso,
+    payment_marked_at: null,
+    payment_method: null,
+    payment_reference: null,
+    paid_at: fixedIso,
+    confirmed_by: null,
+    deferred_from_booking_id: null,
+    deferred_to_booking_id: null,
+    snapshot: { session_date: liveHistoryRsvpSessionRow.session_date },
+    created_at: "2026-08-05T03:00:00.000Z",
+    updated_at: "2026-08-05T03:00:00.000Z",
+  },
+];
+operationalTableRows.operational_bookings.push(liveHistoryGapBooking, ...liveHistoryRsvpRows);
+await operations.refreshOperationalState();
+const liveGapHistoryHtml = await views.viewAccount("history");
+const liveGapPaidCard = liveGapHistoryHtml
+  .split('<div class="card booking-card">')
+  .find((card) => card.includes(`href="#/booking/${liveHistoryGapBooking.id}"`)) || "";
+if (!liveGapPaidCard.includes("11:15 AM")
+    || !liveGapPaidCard.includes("ITC HYROX")
+    || !liveGapPaidCard.includes("BFT Causeway Bay")
+    || !liveGapPaidCard.includes("60 min")
+    || !liveGapPaidCard.includes("HK$180 to be paid")
+    || liveGapPaidCard.includes("null min")
+    || liveGapPaidCard.includes("paid HK$180")) {
+  throw new Error("live History must hydrate paid booking display data and unpaid copy from its session");
+}
+const liveRsvpCards = liveGapHistoryHtml
+  .split('<div class="card booking-card">')
+  .filter((card) => card.includes(`href="#/booking/${liveHistoryRsvpRows[1].id}"`));
+if (liveRsvpCards.length !== 1
+    || liveGapHistoryHtml.includes(`href="#/booking/${liveHistoryRsvpRows[0].id}"`)
+    || !liveRsvpCards[0].includes("Cancelled")
+    || !liveRsvpCards[0].includes("RSVP")
+    || liveRsvpCards[0].includes("paid HK$0")) {
+  throw new Error("live History must deduplicate repeated RSVPs, retain cancellation, and never show paid HK$0");
+}
+const liveRsvpPosition = liveGapHistoryHtml.indexOf(`href="#/booking/${liveHistoryRsvpRows[1].id}"`);
+const livePaidPosition = liveGapHistoryHtml.indexOf(`href="#/booking/${liveHistoryGapBooking.id}"`);
+if (liveRsvpPosition < 0 || livePaidPosition < 0 || liveRsvpPosition > livePaidPosition) {
+  throw new Error("History must sort the newest booking first when event dates tie");
+}
+console.log("ok  live History hydrates gaps, deduplicates RSVPs, and sorts newest booking first");
+
+// A booking can outlive the operational Schedule horizon. The History read
+// must fetch its missing session by ID rather than rendering a partial row.
+const historicalSessionRows = [
+  {
+    id: "history-old-session",
+    activity_id: "hyrox",
+    session_date: "2026-07-01",
+    start_time: "10:30:00",
+    duration_minutes: 55,
+    venue: "BFT Causeway Bay",
+    capacity: 20,
+    price_hkd: 180,
+    is_open: true,
+    venue_tbc: false,
+    notice: null,
+    cancelled_at: null,
+    cancelled_by: null,
+    cancelled_source: null,
+    cancel_reason: null,
+    gym_confirmed_at: null,
+    gym_confirmed_by: null,
+    gym_note: null,
+    created_at: fixedIso,
+    updated_at: fixedIso,
+  },
+  {
+    id: "history-tie-session-a",
+    activity_id: "hyrox",
+    session_date: "2026-07-02",
+    start_time: "09:00:00",
+    duration_minutes: 60,
+    venue: "BFT Causeway Bay",
+    capacity: 20,
+    price_hkd: 180,
+    is_open: true,
+    venue_tbc: false,
+    notice: null,
+    cancelled_at: null,
+    cancelled_by: null,
+    cancelled_source: null,
+    cancel_reason: null,
+    gym_confirmed_at: null,
+    gym_confirmed_by: null,
+    gym_note: null,
+    created_at: fixedIso,
+    updated_at: fixedIso,
+  },
+  {
+    id: "history-tie-session-z",
+    activity_id: "hyrox",
+    session_date: "2026-07-02",
+    start_time: "09:30:00",
+    duration_minutes: 60,
+    venue: "BFT Causeway Bay",
+    capacity: 20,
+    price_hkd: 180,
+    is_open: true,
+    venue_tbc: false,
+    notice: null,
+    cancelled_at: null,
+    cancelled_by: null,
+    cancelled_source: null,
+    cancel_reason: null,
+    gym_confirmed_at: null,
+    gym_confirmed_by: null,
+    gym_note: null,
+  },
+].map((row) => ({ ...row, created_at: fixedIso, updated_at: fixedIso }));
+const historicalBookingBase = {
+  profile_id: authUser.id,
+  status: "reserved",
+  reserved_at: fixedIso,
+  pay_deadline_at: fixedIso,
+  payment_marked_at: null,
+  payment_method: null,
+  payment_reference: null,
+  paid_at: null,
+  confirmed_by: null,
+  deferred_from_booking_id: null,
+  deferred_to_booking_id: null,
+  snapshot: {},
+  created_at: fixedIso,
+  updated_at: fixedIso,
+};
+operationalTableRows.operational_sessions.push(...historicalSessionRows);
+operationalTableRows.operational_bookings.push(
+  { ...historicalBookingBase, id: "history-old-booking", session_id: "history-old-session", snapshot: { session_date: "2026-07-01" } },
+  { ...historicalBookingBase, id: "history-tie-z", session_id: "history-tie-session-z", snapshot: { session_date: "2026-07-02" } },
+  { ...historicalBookingBase, id: "history-tie-a", session_id: "history-tie-session-a", snapshot: { session_date: "2026-07-02" } },
+);
+await operations.refreshOperationalState();
+const historicalHistoryHtml = await views.viewAccount("history");
+const historicalCard = historicalHistoryHtml
+  .split('<div class="card booking-card">')
+  .find((card) => card.includes('href="#/booking/history-old-booking"')) || "";
+if (!historicalCard.includes("10:30 AM")
+    || !historicalCard.includes("55 min")
+    || !historicalCard.includes("ITC HYROX")
+    || !historicalCard.includes("BFT Causeway Bay")
+    || !historicalCard.includes("HK$180 to be paid")
+    || historicalCard.includes("null min")
+    || historicalCard.includes("paid HK$180")) {
+  throw new Error("History must hydrate a session older than the 7-day query by ID");
+}
+const fallbackQuery = operationalSessionQueries.find((query) =>
+  query.ids?.includes("history-old-session"));
+if (!fallbackQuery || fallbackQuery.since !== null
+    || !fallbackQuery.ids.includes("history-tie-session-a")
+    || !fallbackQuery.ids.includes("history-tie-session-z")) {
+  throw new Error("History must use a targeted operational_sessions ID lookup for missing sessions");
+}
+const tieA = historicalHistoryHtml.indexOf('href="#/booking/history-tie-a"');
+const tieZ = historicalHistoryHtml.indexOf('href="#/booking/history-tie-z"');
+if (tieA < 0 || tieZ < 0 || tieA > tieZ) {
+  throw new Error("History must use booking ID as a deterministic equal-timestamp tie-break");
+}
+console.log("ok  live History hydrates older sessions and sorts equal timestamps deterministically");
+operationalTableRows.operational_bookings = operationalTableRows.operational_bookings
+  .filter((row) => ![
+    liveHistoryGapBooking.id,
+    ...liveHistoryRsvpRows.map((item) => item.id),
+    "history-old-booking",
+    "history-tie-z",
+    "history-tie-a",
+  ].includes(row.id));
+operationalTableRows.operational_sessions = operationalTableRows.operational_sessions
+  .filter((row) => !historicalSessionRows.some((item) => item.id === row.id));
+await operations.refreshOperationalState();
 
 // --- One-off events (live) ---
 const freeEventRow = await store.createOneOffEvent({
