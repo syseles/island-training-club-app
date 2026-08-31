@@ -1615,21 +1615,33 @@ function bookingCard(b) {
     </div></div>`;
 }
 
+function bookingHistoryTimestamp(booking) {
+  const createdAt = Number(booking.createdAt);
+  if (booking.createdAt != null && Number.isFinite(createdAt)) return createdAt;
+  const reservedAt = Number(booking.reservedAt);
+  return booking.reservedAt != null && Number.isFinite(reservedAt) ? reservedAt : 0;
+}
+
+function compareHistoryBookings(a, b) {
+  const aSnapshot = bookingDisplaySnapshot(a);
+  const bSnapshot = bookingDisplaySnapshot(b);
+  const dateOrder = (bSnapshot.dateISO || "").localeCompare(aSnapshot.dateISO || "");
+  if (dateOrder) return dateOrder;
+  const timestampOrder = bookingHistoryTimestamp(b) - bookingHistoryTimestamp(a);
+  if (timestampOrder) return timestampOrder;
+  return String(a.id || "").localeCompare(String(b.id || ""));
+}
+
 function accountHistory(user) {
-  const latestBySession = new Map();
-  for (const booking of store.bookingsForUser(user.id)) {
-    const key = booking.sessionId || booking.id;
-    const previous = latestBySession.get(key);
-    if (!previous || (booking.createdAt || 0) >= (previous.createdAt || 0)) {
-      latestBySession.set(key, booking);
-    }
-  }
-  const history = [...latestBySession.values()]
-    .filter((b) => !(b.status === "confirmed" && !sessionStarted(bookingDisplaySnapshot(b))))
-    .sort((a, b) => {
-      const dateOrder = (bookingDisplaySnapshot(b).dateISO || "")
-        .localeCompare(bookingDisplaySnapshot(a).dateISO || "");
-      return dateOrder || ((b.createdAt || 0) - (a.createdAt || 0));
+  const seenSessionIds = new Set();
+  const history = store.bookingsForUser(user.id)
+    .slice()
+    .sort(compareHistoryBookings)
+    .filter((booking) => {
+      const key = booking.sessionId || booking.id;
+      if (seenSessionIds.has(key)) return false;
+      seenSessionIds.add(key);
+      return !(booking.status === "confirmed" && !sessionStarted(bookingDisplaySnapshot(booking)));
     });
   return `
     <a class="back-link" href="#/account">← Profile</a>

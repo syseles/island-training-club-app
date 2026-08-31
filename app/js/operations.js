@@ -133,6 +133,11 @@ function buildSessionRow(row, templatesById = null) {
   };
 }
 
+function parseTimestamp(value) {
+  const timestamp = typeof value === "number" ? value : Date.parse(value);
+  return Number.isFinite(timestamp) ? timestamp : null;
+}
+
 function buildBookingRow(row, sessionsById = null) {
   const snapshot = row.snapshot || {};
   const session = sessionsById?.get(row.session_id) || null;
@@ -144,13 +149,13 @@ function buildBookingRow(row, sessionsById = null) {
     userId: row.profile_id,
     sessionId: row.session_id,
     status: row.status,
-    createdAt: Date.parse(row.created_at) || Date.now(),
-    reservedAt: row.reserved_at ? Date.parse(row.reserved_at) : null,
-    payDeadlineAt: row.pay_deadline_at ? Date.parse(row.pay_deadline_at) : null,
-    paymentMarkedAt: row.payment_marked_at ? Date.parse(row.payment_marked_at) : null,
+    createdAt: parseTimestamp(row.created_at),
+    reservedAt: parseTimestamp(row.reserved_at),
+    payDeadlineAt: parseTimestamp(row.pay_deadline_at),
+    paymentMarkedAt: parseTimestamp(row.payment_marked_at),
     paidMethod: row.payment_method ? String(row.payment_method).toUpperCase() : null,
     paymentRef: row.payment_reference || null,
-    paidAt: row.paid_at ? Date.parse(row.paid_at) : null,
+    paidAt: parseTimestamp(row.paid_at),
     confirmedBy: row.confirmed_by || null,
     deferredFrom: row.deferred_from_booking_id || null,
     deferredTo: row.deferred_to_booking_id || null,
@@ -371,7 +376,29 @@ async function fetchOperationalState() {
   // templates) can lend their name, category and maps query to the session.
   const templateRows = (templates.data || []).map(buildTemplateRow);
   const templatesById = new Map(templateRows.map((t) => [t.activity_id, t]));
-  const sessionRows = (sessions.data || []).map((row) => buildSessionRow(row, templatesById));
+  const currentSessionRows = sessions.data || [];
+  const currentSessionIds = new Set(currentSessionRows.map((row) => row.id));
+  const missingSessionIds = [...new Set((bookings.data || [])
+    .map((row) => row.session_id)
+    .filter((id) => id && !currentSessionIds.has(id)))];
+  let historicalSessionRows = [];
+  if (missingSessionIds.length) {
+    const historicalSessions = await supabase
+      .from("operational_sessions")
+      .select("*")
+      .in("id", missingSessionIds);
+    if (historicalSessions.error) throw operationalProblem(historicalSessions.error);
+    historicalSessionRows = historicalSessions.data || [];
+  }
+  // Keep the Schedule horizon query narrow while adding only sessions needed
+  // to give a user's historical booking its authoritative display metadata.
+  const sessionRowsById = new Map();
+  for (const row of [...currentSessionRows, ...historicalSessionRows]) {
+    if (!sessionRowsById.has(row.id)) {
+      sessionRowsById.set(row.id, buildSessionRow(row, templatesById));
+    }
+  }
+  const sessionRows = [...sessionRowsById.values()];
   const sessionsById = new Map(sessionRows.map((session) => [session.id, session]));
   const payoutRowsByProfile = new Map();
   for (const row of assignedPayouts.rows) payoutRowsByProfile.set(row.profile_id, row);
