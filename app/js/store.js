@@ -1550,7 +1550,7 @@ export function normalizePayMeLink(raw) {
       || hasExplicitPort
       || personalPath.length !== 3
       || personalPath[0] !== ""
-      || !/^\d+$/.test(routePrefix)
+      || !/^[12]$/.test(routePrefix)
       || routePrefix.trim() !== routePrefix
       || /[\\/]/.test(routePrefix)
       || !collectorToken
