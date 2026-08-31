@@ -1863,6 +1863,15 @@ const semanticFallbackRows = [
     created_at: "2026-08-05T06:36:00.000Z",
     read_at: null,
   },
+  {
+    id: "notification-rsvp-cancelled",
+    kind: "operational_session_cancelled_no_defer",
+    title: "RSVP session cancelled",
+    body: "Session cancelled by ITC — Lunch venue unavailable.",
+    destination: "#/activity/lunch-2026-08-08",
+    created_at: "2026-08-05T06:35:30.000Z",
+    read_at: null,
+  },
 ];
 const semanticFallbackHtml = await views.viewNotifications(notificationNow, semanticFallbackRows);
 const semanticFallbackButtons = semanticFallbackHtml.match(/<button class="notification-row[\s\S]*?<\/button>/g) || [];
@@ -1871,6 +1880,7 @@ for (const [title, destination] of [
   ["You&#39;re in", "#/schedule"],
   ["Payment marked", "#/admin/payments"],
   ["Session cancelled without deferral", "#/schedule"],
+  ["RSVP session cancelled", "#/activity/lunch-2026-08-08"],
 ]) {
   const button = semanticFallbackButtons.find((row) => row.includes(`<strong>${title}</strong>`));
   assert.ok(button, `${title} must render as a notification row`);
@@ -4300,6 +4310,15 @@ assert.ok(toastStack.children.some((item) =>
 console.log("ok  failed weekly venue submit preserves form state without rerendering");
 
 operationalRpcHandler = baseOperationalRpcHandler;
+applicationRows.set(authUser.id, {
+  profile_id: authUser.id,
+  mobile: "+852 6123 4567",
+});
+const renderedPayoutFormHtml = await views.viewAdmin("payments");
+assert.match(renderedPayoutFormHtml,
+  /<form id="form-payouts"[^>]*data-fps-phone="\+852 6123 4567"/,
+  "the payout form must carry the Membership Details phone it rendered");
+applicationRows.delete(authUser.id);
 await store.updateCollectorPayouts(authUser.id, {
   paymeLink: "payme.hsbc.com.hk/1/prior-live",
   fpsPhone: "+852 6000 0000",
@@ -4330,7 +4349,10 @@ function equipPayoutForm(form) {
 
 const rejectedPayoutForm = new HTMLFormElement();
 rejectedPayoutForm.id = "";
-rejectedPayoutForm.dataset = { action: "form-payouts" };
+rejectedPayoutForm.dataset = {
+  action: "form-payouts",
+  fpsPhone: "+852 6123 4567",
+};
 rejectedPayoutForm.fields = { paymeLink: "payme.hsbc.com.hk/1/rejected-live" };
 const rejectedPayoutControls = equipPayoutForm(rejectedPayoutForm);
 const htmlBeforePayoutFailure = viewEl.innerHTML;
@@ -4353,7 +4375,7 @@ await new Promise(setImmediate);
 assert.deepEqual(payoutRpcArgs, {
   p_profile_id: authUser.id,
   p_payme_link: "https://payme.hsbc.com.hk/1/rejected-live",
-  p_fps_phone: "",
+  p_fps_phone: "+852 6123 4567",
 });
 assert.deepEqual(
   JSON.parse(mem.get("itc.prototype.v1")).paymentPayouts?.[authUser.id],
@@ -4388,9 +4410,37 @@ assert.deepEqual(toastStack.children.map((item) => item.textContent), [
 assert.equal(toastStack.children[0].getAttribute("role"), "alert");
 console.log("ok  rejected live payout preserves prior cache and restores its busy form");
 
+const invalidPayoutForm = new HTMLFormElement();
+invalidPayoutForm.id = "";
+invalidPayoutForm.dataset = {
+  action: "form-payouts",
+  fpsPhone: "+852 6123 4567",
+};
+invalidPayoutForm.fields = { paymeLink: "https://evil.example/1/not-payme" };
+const invalidPayoutControls = equipPayoutForm(invalidPayoutForm);
+const payoutRpcCallsBeforeInvalid = operationalRpcCalls
+  .filter((call) => call.name === "update_collector_payout_profile").length;
+toastStack.children.length = 0;
+await domListeners.get("submit")({ target: invalidPayoutForm, preventDefault() {} });
+assert.equal(
+  operationalRpcCalls.filter((call) => call.name === "update_collector_payout_profile").length,
+  payoutRpcCallsBeforeInvalid,
+  "an unsafe PayMe link must be rejected before the live payout RPC"
+);
+assert.deepEqual(toastStack.children.map((item) => item.textContent), [
+  "Enter your personal PayMe link from PayMe.",
+]);
+assert.equal(toastStack.children[0].getAttribute("role"), "alert");
+assert.equal(invalidPayoutControls.input.disabled, false);
+assert.equal(invalidPayoutControls.submit.disabled, false);
+console.log("ok  unsafe delegated PayMe submit fails before its live RPC");
+
 const successfulPayoutForm = new HTMLFormElement();
 successfulPayoutForm.id = "";
-successfulPayoutForm.dataset = { action: "form-payouts" };
+successfulPayoutForm.dataset = {
+  action: "form-payouts",
+  fpsPhone: "+852 6123 4567",
+};
 successfulPayoutForm.fields = { paymeLink: "payme.hsbc.com.hk/1/successful-live" };
 const successfulPayoutControls = equipPayoutForm(successfulPayoutForm);
 const successfulPayoutRpcGate = deferred();
@@ -4418,16 +4468,24 @@ assert.equal(successfulPayoutControls.input.disabled, true);
 assert.equal(successfulPayoutControls.submit.disabled, true);
 const successfulServerPayout = operationalTableRows.collector_payout_profiles
   .find((row) => row.profile_id === authUser.id);
+assert.deepEqual(payoutRpcArgs, {
+  p_profile_id: authUser.id,
+  p_payme_link: "https://payme.hsbc.com.hk/1/successful-live",
+  p_fps_phone: "+852 6123 4567",
+}, "typed PayMe and rendered FPS phone must be captured before controls disable");
 Object.assign(successfulServerPayout, {
   payme_link: "https://payme.hsbc.com.hk/1/successful-live",
-  fps_phone: "",
+  fps_phone: "+852 6123 4567",
 });
 successfulPayoutRpcGate.resolve({ data: structuredClone(successfulServerPayout), error: null });
 await successfulPayoutSubmit;
 await new Promise(setImmediate);
 assert.deepEqual(
   JSON.parse(mem.get("itc.prototype.v1")).paymentPayouts?.[authUser.id],
-  { paymeLink: "https://payme.hsbc.com.hk/1/successful-live", fpsPhone: "" },
+  {
+    paymeLink: "https://payme.hsbc.com.hk/1/successful-live",
+    fpsPhone: "+852 6123 4567",
+  },
   "successful live payout must persist its normalized value after RPC settlement"
 );
 assert.equal(successfulPayoutControls.input.disabled, false);
@@ -4439,33 +4497,71 @@ console.log("ok  successful live payout persists only after RPC settlement");
 operationalRpcHandler = baseOperationalRpcHandler;
 const applicationFailurePayoutForm = new HTMLFormElement();
 applicationFailurePayoutForm.id = "";
-applicationFailurePayoutForm.dataset = { action: "form-payouts" };
+applicationFailurePayoutForm.dataset = {
+  action: "form-payouts",
+  fpsPhone: "+852 6123 4567",
+};
 applicationFailurePayoutForm.fields = { paymeLink: "payme.hsbc.com.hk/1/application-failure" };
 const applicationFailurePayoutControls = equipPayoutForm(applicationFailurePayoutForm);
-const rpcCallsBeforeApplicationFailure = operationalRpcCalls.length;
-const htmlBeforeApplicationPayoutFailure = viewEl.innerHTML;
+const applicationFailurePayoutGate = deferred();
+const payoutRpcCallsBeforeApplicationFailure = operationalRpcCalls
+  .filter((call) => call.name === "update_collector_payout_profile").length;
+operationalRpcHandler = (name, args) => {
+  if (name === "update_collector_payout_profile") {
+    payoutRpcArgs = structuredClone(args);
+    operationalRpcCalls.push({ name, args: structuredClone(args) });
+    return applicationFailurePayoutGate.promise;
+  }
+  return baseOperationalRpcHandler(name, args);
+};
 applicationReadError = new Error("Membership details unavailable");
 toastStack.children.length = 0;
-let applicationFailureSubmitError = null;
-try {
-  await domListeners.get("submit")({ target: applicationFailurePayoutForm, preventDefault() {} });
-} catch (err) {
-  applicationFailureSubmitError = err;
-} finally {
-  applicationReadError = null;
+let applicationFailureSubmitSettled = false;
+const applicationFailureSubmit = domListeners.get("submit")({
+  target: applicationFailurePayoutForm,
+  preventDefault() {},
+}).then(() => { applicationFailureSubmitSettled = true; });
+await new Promise(setImmediate);
+assert.equal(applicationFailureSubmitSettled, false,
+  "a valid payout submit must await its RPC despite an unavailable application reread");
+assert.equal(
+  operationalRpcCalls.filter((call) => call.name === "update_collector_payout_profile").length,
+  payoutRpcCallsBeforeApplicationFailure + 1,
+  "an unavailable application reread must not block a valid payout RPC"
+);
+assert.deepEqual(payoutRpcArgs, {
+  p_profile_id: authUser.id,
+  p_payme_link: "https://payme.hsbc.com.hk/1/application-failure",
+  p_fps_phone: "+852 6123 4567",
+});
+for (const control of Object.values(applicationFailurePayoutControls)) {
+  assert.equal(control.disabled, true);
 }
-assert.equal(applicationFailureSubmitError, null, "payout form must catch application lookup failures");
-assert.equal(operationalRpcCalls.length, rpcCallsBeforeApplicationFailure);
-assert.equal(viewEl.innerHTML, htmlBeforeApplicationPayoutFailure);
+Object.assign(successfulServerPayout, {
+  payme_link: "https://payme.hsbc.com.hk/1/application-failure",
+  fps_phone: "+852 6123 4567",
+});
+applicationFailurePayoutGate.resolve({
+  data: structuredClone(successfulServerPayout),
+  error: null,
+});
+await applicationFailureSubmit;
+applicationReadError = null;
+assert.deepEqual(
+  JSON.parse(mem.get("itc.prototype.v1")).paymentPayouts?.[authUser.id],
+  {
+    paymeLink: "https://payme.hsbc.com.hk/1/application-failure",
+    fpsPhone: "+852 6123 4567",
+  },
+  "rendered FPS fallback must allow authoritative payout persistence without a second application read"
+);
 assert.equal(applicationFailurePayoutForm.fields.paymeLink, "payme.hsbc.com.hk/1/application-failure");
 assert.equal(applicationFailurePayoutControls.input.disabled, false);
 assert.equal(applicationFailurePayoutControls.submit.disabled, false);
 assert.equal(applicationFailurePayoutControls.submit.hasAttribute("aria-busy"), false);
-assert.deepEqual(toastStack.children.map((item) => item.textContent), [
-  "Membership details unavailable",
-]);
-assert.equal(toastStack.children[0].getAttribute("role"), "alert");
-console.log("ok  payout application lookup failure preserves form state with error feedback");
+assert.ok(toastStack.children.some((item) => item.textContent === "Payout details saved"));
+assert.ok(!toastStack.children.some((item) => item.textContent === "Membership details unavailable"));
+console.log("ok  rendered FPS fallback keeps valid payout save independent of application rereads");
 
 // Legacy member-management URLs canonicalize instead of rendering the removed
 // row/avatar implementation.

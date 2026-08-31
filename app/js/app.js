@@ -1407,14 +1407,13 @@ document.addEventListener("submit", async (e) => {
       await withBusyControl(control, "Saving…", async () => {
         try {
           const member = store.currentUser();
-          const application = await store.getMyApplication();
-          const profilePhone = String(application?.mobile || application?.phone || member?.phone || "").trim();
+          const renderedFpsPhone = String(form.dataset.fpsPhone || member?.phone || "").trim();
           await store.updateCollectorPayouts(member.id, {
             paymeLink: fd.get("paymeLink"),
-            fpsPhone: profilePhone,
+            fpsPhone: renderedFpsPhone,
           });
           toast("Payout details saved");
-          render();
+          await renderWithFeedback();
         } catch (err) {
           toast(err.message || "Unable to save payout details", true);
         }

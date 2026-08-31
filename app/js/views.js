@@ -2150,7 +2150,7 @@ function adminOps(viewer, memberUsers, profilePhone = "") {
           ${admins.filter((a) => a.id !== dutyUser?.id).map((a) => `<option value="${esc(a.id)}">${esc(a.preferredName || a.fullName)}</option>`).join("")}
         </select>
       </div>
-      <form id="form-payouts" class="mt16">
+      <form id="form-payouts" class="mt16" data-fps-phone="${esc(profilePhone)}">
         <h3>My payout details</h3>
         <div class="field"><label for="payme-link">PayMe link</label><input id="payme-link" name="paymeLink" value="${esc(viewerPayouts.paymeLink)}" placeholder="https://payme.hsbc.com.hk/…"></div>
         <p class="muted small mt8">FPS phone: <strong>${esc(profilePhone || "Not set")}</strong> — taken from your Membership Details.</p>

@@ -378,6 +378,9 @@ this order after `20260829000008_rsvp_integrity.sql`:
 2. `20260830000002_release_operational_reservation.sql` adds the owner/Admin
    RPC for releasing only unmarked paid reservations. It does not perform a
    client-side or fake live waitlist promotion.
+3. `20260830000003_notification_event_destinations.sql` corrects notification
+   routes for zero-price/RSVP events and preserves the Schedule fallback for
+   paid cancellation rows.
 
 `verify_operational_backend.sh` replays the ordered chain and then runs a
 bounded concurrency harness. It still requires a fresh, explicitly

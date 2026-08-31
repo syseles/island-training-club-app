@@ -1647,9 +1647,14 @@ do $$
 declare
   v_paid_booking uuid;
   v_rsvp_booking uuid;
+  v_free_booking constant uuid := '99000000-0000-0000-0000-000000000001';
   v_paid_session text;
   v_rsvp_session text;
+  v_free_session text;
   v_routing_date date;
+  v_free_reserved_at constant timestamptz := '2000-02-01 00:00:00+00';
+  v_rsvp_cancelled_at constant timestamptz := '2000-02-01 00:01:00+00';
+  v_free_cancelled_at constant timestamptz := '2000-02-01 00:02:00+00';
   v_routing_midtown_session text;
   v_deferred_booking uuid;
   v_explicit_notification uuid;
@@ -1724,6 +1729,90 @@ begin
          and destination = '#/activity/' || v_rsvp_session
     ),
     'RSVP notification has exact Activity Details destination'
+  );
+
+  -- A legacy/new operational_booking_reserved row attached to a price-zero,
+  -- non-RSVP event still opens Activity Details rather than a payment screen.
+  v_free_session := 'event-routing-free-' || v_routing_date::text;
+  insert into public.operational_activity_templates
+    (activity_id, name, venue, weekday, start_time, duration_minutes,
+     capacity, price_hkd, default_open, active, category, maps_query, requires_rsvp)
+  values
+    ('event-routing-free', 'Routing Free Social', 'Tamar Park',
+     extract(dow from v_routing_date)::smallint, '15:00', 60,
+     20, 0, true, false, 'Socials', 'Tamar Park', false);
+  insert into public.operational_sessions
+    (id, activity_id, session_date, start_time, duration_minutes, venue,
+     capacity, price_hkd, is_open)
+  values
+    (v_free_session, 'event-routing-free', v_routing_date, '15:00', 60,
+     'Tamar Park', 20, 0, true);
+  insert into public.operational_bookings
+    (id, profile_id, session_id, status, reserved_at, pay_deadline_at, snapshot)
+  values
+    (v_free_booking, 'dd000000-0000-0000-0000-00000000d001',
+     v_free_session, 'reserved', v_free_reserved_at, v_free_reserved_at,
+     jsonb_build_object('name', 'Routing Free Social', 'price_hkd', 0));
+  insert into public.notifications
+    (profile_id, kind, title, body, created_at)
+  values
+    ('dd000000-0000-0000-0000-00000000d001',
+     'operational_booking_reserved', 'Free event reminder',
+     'Open this free event.', v_free_reserved_at);
+  perform pg_temp.op_assert(
+    exists (
+      select 1 from public.notifications
+       where profile_id = 'dd000000-0000-0000-0000-00000000d001'
+         and title = 'Free event reminder'
+         and destination = '#/activity/' || v_free_session
+    ),
+    'price-zero Booking reserved notification has exact Activity Details destination'
+  );
+
+  -- Exact RSVP/free cancellations open their dated event. These fixtures use
+  -- each producer kind while leaving paid cancellation to the schedule fallback.
+  update public.operational_sessions
+     set cancelled_at = v_rsvp_cancelled_at,
+         cancelled_by = 'aa000000-0000-0000-0000-00000000a001',
+         cancelled_source = 'admin',
+         cancel_reason = 'RSVP routing cancellation'
+   where id = v_rsvp_session;
+  insert into public.notifications
+    (profile_id, kind, title, body, created_at)
+  values
+    ('ff000000-0000-0000-0000-00000000f001',
+     'operational_session_cancelled_no_defer', 'RSVP cancelled',
+     'Open the cancelled RSVP event.', v_rsvp_cancelled_at);
+  perform pg_temp.op_assert(
+    exists (
+      select 1 from public.notifications
+       where profile_id = 'ff000000-0000-0000-0000-00000000f001'
+         and title = 'RSVP cancelled'
+         and destination = '#/activity/' || v_rsvp_session
+    ),
+    'cancelled RSVP member notification has exact Activity Details destination'
+  );
+
+  update public.operational_sessions
+     set cancelled_at = v_free_cancelled_at,
+         cancelled_by = 'aa000000-0000-0000-0000-00000000a001',
+         cancelled_source = 'admin',
+         cancel_reason = 'Free routing cancellation'
+   where id = v_free_session;
+  insert into public.notifications
+    (profile_id, kind, title, body, created_at)
+  values
+    ('aa000000-0000-0000-0000-00000000a001',
+     'operational_session_cancelled', 'Free event cancelled',
+     'Open the cancelled free event.', v_free_cancelled_at);
+  perform pg_temp.op_assert(
+    exists (
+      select 1 from public.notifications
+       where profile_id = 'aa000000-0000-0000-0000-00000000a001'
+         and title = 'Free event cancelled'
+         and destination = '#/activity/' || v_free_session
+    ),
+    'cancelled free Admin notification has exact Activity Details destination'
   );
 
   -- Payment-marked Admin rows use the stable payments section; approval
@@ -1893,9 +1982,9 @@ begin
        where profile_id = 'ee000000-0000-0000-0000-00000000e001'
          and kind = 'operational_session_cancelled_no_defer'
          and body = v_cancelled_member_body
-         and destination is distinct from '#/activity/' || v_unique_cancel_session
+         and destination is not null
     ),
-    'real no-defer cancellation routes to its unique Activity Details page'
+    'paid no-defer cancellation keeps the safe Schedule fallback'
   );
   perform pg_temp.op_assert(
     not exists (
@@ -1903,9 +1992,9 @@ begin
         from public.notifications
        where kind = 'operational_session_cancelled'
          and body = v_cancelled_admin_body
-         and destination is distinct from '#/activity/' || v_unique_cancel_session
+         and destination is not null
     ),
-    'real Admin cancellation routes to its unique Activity Details page'
+    'paid Admin cancellation keeps the safe Schedule fallback'
   );
 
   -- Explicit valid destinations are authoritative even for entity kinds.
@@ -2150,6 +2239,7 @@ begin
 end $$;
 
 \ir ../migrations/20260829000007_notification_destinations.sql
+\ir ../migrations/20260830000003_notification_event_destinations.sql
 
 do $$
 begin
@@ -2249,6 +2339,7 @@ select id, profile_id, kind, title, body, destination, read_at, created_at
   from public.notifications;
 
 \ir ../migrations/20260829000007_notification_destinations.sql
+\ir ../migrations/20260830000003_notification_event_destinations.sql
 
 select pg_temp.op_assert(
   not exists (

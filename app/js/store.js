@@ -1834,6 +1834,9 @@ export function cancelSessionWeek(sessionId, reason, now = Date.now()) {
   requirePaymentAdminActor();
   const o = (state.sessionOverrides[sessionId] ||= {});
   o.cancelled = String(reason || "").trim() || "No session this week";
+  const session = getSession(sessionId);
+  const cancellationCopy = `Session cancelled by ITC — ${o.cancelled}`;
+  const cancellationLink = session?.kind === "paid" ? "#/schedule" : `#/activity/${sessionId}`;
   const venueActivityId = sessionId.replace(/-\d{4}-\d{2}-\d{2}$/, "");
   for (const b of state.bookings.filter((x) => x.sessionId === sessionId)) {
     if (b.status === "confirmed") {
@@ -1843,21 +1846,21 @@ export function cancelSessionWeek(sessionId, reason, now = Date.now()) {
       } else {
         b.status = "cancelled";
         notify(b.userId, "session-cancelled",
-          `${b.snapshot.name} · ${fmtDate(b.snapshot.dateISO)} was cancelled (${o.cancelled}) and no future slot was free — a leader will sort your credit.`,
-          "#/schedule");
+          `${cancellationCopy}. ${b.snapshot.name} · ${fmtDate(b.snapshot.dateISO)} had no future slot available — a leader will sort your credit.`,
+          cancellationLink);
       }
     } else if (b.status === "reserved") {
       b.status = "cancelled";
       notify(b.userId, "session-cancelled",
-        `${b.snapshot.name} · ${fmtDate(b.snapshot.dateISO)} was cancelled (${o.cancelled}) — your unpaid reservation was released.`,
-        "#/schedule");
+        `${cancellationCopy}. ${b.snapshot.name} · ${fmtDate(b.snapshot.dateISO)} — your unpaid reservation was released.`,
+        cancellationLink);
     }
   }
   const q = paymentQueueFor(sessionId);
   for (const entry of [...q.waitlist, ...q.interest]) {
     notify(entry.userId, "session-cancelled",
-      `ITC HYROX · ${fmtDate(sessionDateOf(sessionId))} was cancelled (${o.cancelled}) — the waitlist was dissolved.`,
-      "#/schedule");
+      `${cancellationCopy}. ITC HYROX · ${fmtDate(sessionDateOf(sessionId))} — the waitlist was dissolved.`,
+      cancellationLink);
   }
   q.waitlist = [];
   q.interest = [];

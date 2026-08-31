@@ -276,6 +276,10 @@ const notificationRoutingMigrationSource = readFileSync(
   resolve(__dirnameSmoke, "../supabase/migrations/20260829000007_notification_destinations.sql"),
   "utf8"
 );
+const notificationEventRoutingMigrationSource = readFileSync(
+  resolve(__dirnameSmoke, "../supabase/migrations/20260830000003_notification_event_destinations.sql"),
+  "utf8"
+);
 const operationalBackendIntegrationSource = readFileSync(
   resolve(__dirnameSmoke, "../supabase/tests/operational_backend_integration.sql"),
   "utf8"
@@ -339,6 +343,36 @@ if (/public\.operational_sessions\b|cancelled_at\b|operational_session_cancelled
   throw new Error("historical booking resolver must not infer cancellation destinations");
 }
 console.log("ok  notification migration separates exact inserts from booking-only historical matching");
+const normalizedNotificationEventRoutingSource = notificationEventRoutingMigrationSource.toLowerCase();
+for (const marker of [
+  "create or replace function public.resolve_notification_destination",
+  "create or replace function public.resolve_historical_booking_notification_destination",
+  "resolve_historical_notification_event_destination",
+  "set search_path = public",
+  "operational_booking_reserved",
+  "operational_rsvp_confirmed",
+  "operational_session_cancelled_no_defer",
+  "operational_session_cancelled",
+  "requires_rsvp",
+  "price_hkd",
+  "#/pay/",
+  "#/activity/",
+  "revoke all on function public.resolve_notification_destination",
+  "revoke all on function public.resolve_historical_notification_event_destination",
+]) {
+  if (!normalizedNotificationEventRoutingSource.includes(marker)) {
+    throw new Error(`forward notification event migration missing ${marker}`);
+  }
+}
+if (!/left\(n\.destination,\s*2\)\s*<>\s*'#\/'/i.test(notificationEventRoutingMigrationSource)
+    || !/b\.destination\s+is\s+not\s+null/i.test(notificationEventRoutingMigrationSource)) {
+  throw new Error("forward notification backfill must preserve valid routes and update only resolved rows");
+}
+if (/grant\s+execute\s+on\s+function\s+public\.(?:resolve_notification_destination|resolve_historical_notification_event_destination)/i.test(notificationEventRoutingMigrationSource)
+    || /alter\s+table\s+public\.notifications\b[^;]*(?:enable|disable|force|no\s+force)\s+row\s+level\s+security/i.test(notificationEventRoutingMigrationSource)) {
+  throw new Error("forward notification resolvers must stay browser-inaccessible without changing notification RLS");
+}
+console.log("ok  forward notification migration classifies event routes without broadening browser access");
 for (const marker of [
   "v_payment_marked_before",
   "v_payment_marked_after",
@@ -2591,9 +2625,32 @@ installLocalFixtures(); store.signIn("member@example.test");
     throw new Error("paid booking should auto-defer on week cancellation");
   if (store.waitlistPosition("fixture-admin", sess.id) !== null)
     throw new Error("waitlist should dissolve on week cancellation");
-  if (!store.notificationsFor("fixture-admin").some((n) => n.kind === "session-cancelled"))
-    throw new Error("waitlisted member should be notified of the cancellation");
-  console.log("ok  cancelled week: reason, auto-defer, queue dissolved");
+  const paidCancellationNote = store.notificationsFor("fixture-admin")
+    .find((n) => n.kind === "session-cancelled");
+  if (!paidCancellationNote) throw new Error("waitlisted member should be notified of the cancellation");
+  if (paidCancellationNote.link !== "#/schedule")
+    throw new Error("paid cancellation should keep the Schedule fallback");
+  if (!paidCancellationNote.body.startsWith("Session cancelled by ITC — HYROX race weekend — no session."))
+    throw new Error("paid cancellation notification should use canonical copy");
+
+  store.signIn("member@example.test");
+  const rsvp = store.upcomingSessions(21).find(
+    (s) => s.kind === "rsvp" && !data.sessionStarted(s)
+  );
+  if (!rsvp) throw new Error("cancellation route coverage needs a future RSVP session");
+  const rsvpBooking = await store.rsvpSession("fixture-member", rsvp);
+  store.signIn("admin@example.test");
+  store.cancelSessionWeek(rsvp.id, "Lunch venue unavailable");
+  const rsvpCancellationNote = store.notificationsFor("fixture-member")
+    .find((n) => n.kind === "session-cancelled" && n.body.includes("Lunch venue unavailable"));
+  if (!rsvpCancellationNote) throw new Error("RSVP member should be notified of cancellation");
+  if (rsvpCancellationNote.link !== `#/activity/${rsvp.id}`)
+    throw new Error("RSVP cancellation should open Activity Details");
+  if (!rsvpCancellationNote.body.startsWith("Session cancelled by ITC — Lunch venue unavailable."))
+    throw new Error("RSVP cancellation notification should use canonical copy");
+  if (store.getBooking(rsvpBooking.id).status !== "cancelled")
+    throw new Error("cancelled RSVP booking should be cancelled");
+  console.log("ok  cancellations preserve canonical copy and route paid vs RSVP notifications");
 }
 {
   const sess = store.upcomingSessions(14).find(
