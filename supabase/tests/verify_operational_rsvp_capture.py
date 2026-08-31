@@ -27,6 +27,9 @@ class RunContract:
     token: str
     activity_ids: frozenset[str]
     session_ids: frozenset[str]
+    auth_user_ids: frozenset[str]
+    profile_ids: frozenset[str]
+    booking_ids: frozenset[str]
 
 
 def fail(message: str) -> None:
@@ -113,10 +116,15 @@ def split_top_level(text: str) -> list[str]:
     return values
 
 
-def parse_insert(sql: str, table: str) -> list[dict[str, str]]:
-    match = re.search(rf"\binsert\s+into\s+public\.{re.escape(table)}\s*", sql, re.IGNORECASE)
+def parse_insert(sql: str, table: str, *, schema: str = "public") -> list[dict[str, str]]:
+    qualified_table = f"{schema}.{table}"
+    match = re.search(
+        rf"\binsert\s+into\s+{re.escape(qualified_table)}\s*",
+        sql,
+        re.IGNORECASE,
+    )
     if not match:
-        raise ContractError(f"setup SQL is missing insert into public.{table}")
+        raise ContractError(f"SQL is missing insert into {qualified_table}")
     index = match.end()
     while index < len(sql) and sql[index].isspace():
         index += 1
@@ -141,7 +149,7 @@ def parse_insert(sql: str, table: str) -> list[dict[str, str]]:
             )
         rows.append(dict(zip(columns, values)))
     if not rows:
-        raise ContractError(f"public.{table} insert has no rows")
+        raise ContractError(f"{qualified_table} insert has no rows")
     return rows
 
 
@@ -150,6 +158,16 @@ def sql_literal(value: str, label: str) -> str:
     if not match:
         raise ContractError(f"{label} must be a SQL string literal, got {value!r}")
     return match.group(1).replace("''", "'")
+
+
+def sql_uuid(value: str, label: str) -> str:
+    literal = sql_literal(value, label).lower()
+    if not re.fullmatch(
+        r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}",
+        literal,
+    ):
+        raise ContractError(f"{label} must be a valid UUID, got {literal!r}")
+    return literal
 
 
 def sql_date(value: str, label: str) -> date:
@@ -178,6 +196,21 @@ def sql_boolean(value: str, label: str) -> bool:
     return normalized == "true"
 
 
+def parse_profile_update_ids(sql: str) -> list[str]:
+    match = re.search(
+        r"update\s+public\.profiles\s+set\s+role\s*=\s*'member'\s+"
+        r"where\s+id\s+in\s*\((.*?)\)\s*;",
+        sql,
+        re.IGNORECASE | re.DOTALL,
+    )
+    if not match:
+        raise ContractError("setup SQL is missing the member profile update")
+    return [
+        sql_uuid(value, "profile id")
+        for value in split_top_level(match.group(1))
+    ]
+
+
 def parse_in_literals(sql: str, table: str, column: str) -> list[str]:
     match = re.search(
         rf"delete\s+from\s+{re.escape(table)}\s+where\s+{re.escape(column)}\s+in\s*\((.*?)\)\s*;",
@@ -193,6 +226,25 @@ def find_single_call(calls: list[CapturedCall], marker: str, label: str) -> Capt
     matches = [call for call in calls if marker in strip_sql_comments(call.sql).lower()]
     if len(matches) != 1:
         raise ContractError(f"expected one {label} call, captured {len(matches)}")
+    return matches[0]
+
+
+def parse_paid_for_share_session(calls: list[CapturedCall]) -> str:
+    matches = []
+    pattern = re.compile(
+        r"\bselect\s+id\s+from\s+public\.operational_sessions\s+"
+        r"where\s+id\s*=\s*('(?:''|[^'])*')\s+for\s+share\s*;",
+        re.IGNORECASE,
+    )
+    for call in calls:
+        matches.extend(
+            sql_literal(match.group(1), "paid FOR SHARE session")
+            for match in pattern.finditer(strip_sql_comments(call.sql))
+        )
+    if len(matches) != 1:
+        raise ContractError(
+            f"expected one captured paid operational-session FOR SHARE call, got {len(matches)}"
+        )
     return matches[0]
 
 
@@ -233,10 +285,22 @@ def validate_run(capture_dir: Path) -> RunContract:
     cleanup_sql = strip_sql_comments(cleanup.sql)
     templates = parse_insert(setup_sql, "operational_activity_templates")
     sessions = parse_insert(setup_sql, "operational_sessions")
+    auth_users = parse_insert(setup_sql, "users", schema="auth")
     if len(templates) != 2:
         raise ContractError(f"setup must insert exactly two templates, got {len(templates)}")
     if len(sessions) != 3:
         raise ContractError(f"setup must insert exactly three sessions, got {len(sessions)}")
+    if len(auth_users) != 3:
+        raise ContractError(f"setup must insert exactly three auth users, got {len(auth_users)}")
+    auth_user_ids = {
+        sql_uuid(row["id"], "auth user id")
+        for row in auth_users
+    }
+    if len(auth_user_ids) != 3:
+        raise ContractError("setup auth user UUIDs must be distinct")
+    profile_ids = parse_profile_update_ids(setup_sql)
+    if set(profile_ids) != auth_user_ids or len(profile_ids) != 3:
+        raise ContractError("profile setup must update every exact auth user UUID once")
 
     template_by_kind: dict[str, dict[str, str]] = {}
     tokens = set()
@@ -281,6 +345,7 @@ def validate_run(capture_dir: Path) -> RunContract:
     rsvp_activity = f"event-concurrency-rsvp-{token}"
     paid_sessions = 0
     rsvp_sessions = 0
+    paid_session_id = None
     for row in sessions:
         session_id = sql_literal(row["id"], "session id")
         activity_id = sql_literal(row["activity_id"], "session activity_id")
@@ -296,6 +361,7 @@ def validate_run(capture_dir: Path) -> RunContract:
         price = sql_integer(row["price_hkd"], "session price")
         if activity_id == paid_activity:
             paid_sessions += 1
+            paid_session_id = session_id
             if capacity != 20 or price != 180:
                 raise ContractError("paid session must be capacity 20 / price 180")
         elif activity_id == rsvp_activity:
@@ -304,10 +370,16 @@ def validate_run(capture_dir: Path) -> RunContract:
                 raise ContractError("RSVP session must be uncapped / price 0")
         session_ids.add(session_id)
         session_dates.append(session_date)
-    if paid_sessions != 1 or rsvp_sessions != 2:
+    if paid_sessions != 1 or rsvp_sessions != 2 or paid_session_id is None:
         raise ContractError("setup must contain one paid session and two RSVP sessions")
     if len(session_ids) != 3:
         raise ContractError("all setup session IDs must be distinct")
+    paid_for_share_session = parse_paid_for_share_session(calls)
+    if paid_for_share_session != paid_session_id:
+        raise ContractError(
+            "captured paid FOR SHARE session must equal the exact setup paid session: "
+            f"expected {paid_session_id}, got {paid_for_share_session}"
+        )
 
     ordered_dates = sorted(session_dates)
     expected_first_date = query_hkt_date + timedelta(days=date_offset)
@@ -329,12 +401,15 @@ def validate_run(capture_dir: Path) -> RunContract:
     cleanup_activities = parse_in_literals(
         cleanup_sql, "public.operational_activity_templates", "activity_id"
     )
+    cleanup_users = parse_in_literals(cleanup_sql, "auth.users", "id")
     if set(cleanup_sessions) != session_ids or len(cleanup_sessions) != 3:
         raise ContractError("booking cleanup must use every exact setup session ID once")
     if set(cleanup_session_rows) != session_ids or len(cleanup_session_rows) != 3:
         raise ContractError("session cleanup must use every exact setup session ID once")
     if set(cleanup_activities) != activity_ids or len(cleanup_activities) != 2:
         raise ContractError("template cleanup must use both exact setup activity IDs once")
+    if set(cleanup_users) != auth_user_ids or len(cleanup_users) != 3:
+        raise ContractError("auth cleanup must use every exact setup user UUID once")
 
     cleanup_steps = [
         "delete from public.operational_bookings",
@@ -348,8 +423,21 @@ def validate_run(capture_dir: Path) -> RunContract:
         raise ContractError("cleanup must delete bookings before sessions, templates, and users")
 
     referenced_session_ids = set()
+    booking_ids = set()
+    booking_profile_ids = set()
+    connection_profile_ids = set()
+    paid_booking_id = None
+    paid_booking_profile_id = None
     for call in calls:
         executable_sql = strip_sql_comments(call.sql)
+        connection_profile_ids.update(
+            sql_uuid(match.group(1), "authenticated connection profile id")
+            for match in re.finditer(
+                r"set_config\(\s*'request\.jwt\.claim\.sub'\s*,\s*('(?:''|[^'])*')",
+                executable_sql,
+                re.IGNORECASE,
+            )
+        )
         for pattern in (
             r"\bsession_id\s*=\s*('(?:''|[^'])*')",
             r"\bfrom\s+public\.operational_sessions\s+where\s+id\s*=\s*('(?:''|[^'])*')",
@@ -364,10 +452,28 @@ def validate_run(capture_dir: Path) -> RunContract:
             re.IGNORECASE,
         ):
             booking_rows = parse_insert(executable_sql, "operational_bookings")
-            referenced_session_ids.update(
-                sql_literal(row["session_id"], "booking session_id")
-                for row in booking_rows
-            )
+            for row in booking_rows:
+                booking_id = sql_uuid(row["id"], "booking id")
+                profile_id = sql_uuid(row["profile_id"], "booking profile_id")
+                session_id = sql_literal(row["session_id"], "booking session_id")
+                booking_ids.add(booking_id)
+                booking_profile_ids.add(profile_id)
+                referenced_session_ids.add(session_id)
+                if session_id == paid_session_id:
+                    if paid_booking_id not in {None, booking_id}:
+                        raise ContractError("paid setup uses more than one booking UUID")
+                    paid_booking_id = booking_id
+                    paid_booking_profile_id = profile_id
+    if len(booking_ids) != 3:
+        raise ContractError(f"harness must use exactly three distinct booking UUIDs, got {len(booking_ids)}")
+    if booking_profile_ids != auth_user_ids:
+        raise ContractError("booking profile UUIDs must use every exact setup auth/profile UUID")
+    if paid_booking_id is None or paid_booking_profile_id is None:
+        raise ContractError("captured SQL is missing the paid fixture booking")
+    if connection_profile_ids != {paid_booking_profile_id}:
+        raise ContractError(
+            "authenticated paid connection must use the exact paid booking profile UUID"
+        )
     unexpected_session_references = referenced_session_ids - session_ids
     if unexpected_session_references:
         raise ContractError(
@@ -393,7 +499,14 @@ def validate_run(capture_dir: Path) -> RunContract:
     if not allowed_ids.issubset(observed_ids):
         raise ContractError("not every setup activity/session ID reached captured psql SQL")
 
-    return RunContract(token, frozenset(activity_ids), frozenset(session_ids))
+    return RunContract(
+        token,
+        frozenset(activity_ids),
+        frozenset(session_ids),
+        frozenset(auth_user_ids),
+        frozenset(profile_ids),
+        frozenset(booking_ids),
+    )
 
 
 def main(arguments: list[str]) -> None:
@@ -408,12 +521,19 @@ def main(arguments: list[str]) -> None:
             raise ContractError("separate harness invocations must use distinct activity IDs")
         if first.session_ids & second.session_ids:
             raise ContractError("separate harness invocations must use distinct session IDs")
+        if first.auth_user_ids & second.auth_user_ids:
+            raise ContractError("separate harness invocations must use distinct auth user UUIDs")
+        if first.profile_ids & second.profile_ids:
+            raise ContractError("separate harness invocations must use distinct profile UUIDs")
+        if first.booking_ids & second.booking_ids:
+            raise ContractError("separate harness invocations must use distinct booking UUIDs")
     except (ContractError, KeyError) as error:
         fail(str(error))
     print(
         "PASS: two real harness captures use distinct run IDs "
         f"({first.token} != {second.token}), exact activity-date sessions, "
-        "valid fixture semantics, and matching child-first cleanup"
+        "valid fixture semantics, per-run auth/profile/booking UUIDs, "
+        "and matching child-first cleanup"
     )
 
 

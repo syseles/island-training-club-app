@@ -73,3 +73,36 @@ Therefore the new migrations, SQL integration additions, and concurrency harness
 - The pre-existing Admin cancellation (`session → booking`) versus payment (`booking → session`) lock-order inversion identified in `/tmp/debug-rsvp-lock.out` is outside this RSVP-trigger correction and remains a backend follow-up.
 - Assigned payout refresh is guaranteed on Payment route entry and tab visibility restore, not continuously while a Payment page remains foregrounded.
 - This remains a pre-production prototype with mocked payment reconciliation; no production-readiness claim is made.
+
+## Final approval follow-up
+
+Date: 2026-08-30
+
+Review source: `final-approval-review2.md` (captured from `/tmp/integration-final-approval-review2.out`).
+
+The follow-up changes only smoke/test infrastructure, this evidence, and the implementation plan. Production migrations are untouched; migrations `20260829000005` through `20260829000008` remain immutable.
+
+### RED evidence
+
+- `/tmp/final-approval-red-la-smoke.out`: `TZ=America/Los_Angeles node app/smoke.mjs` exited 1 at the generic Social selector because fixtures were anchored to `todayLocal()` while selection follows HKT.
+- After that selector was corrected, the LA run exposed the two review-noted signing-date assertions still expecting host-local today; both failed against the existing HKT application contract before their expectations were corrected.
+- `/tmp/final-approval-red-paid-lock.out`: the adversarial mutation changed the paid holder’s `FOR SHARE` literal to a valid setup RSVP session. The old validator accepted it and the safety runner failed with `expected exit 1, got 0`.
+- `/tmp/final-approval-red-fixed-uuids.out`: after cross-run UUID validation was added, two real harness captures failed because their fixed auth user UUIDs overlapped.
+
+### Fixes and behavioral proof
+
+- Generic Social rolling-window fixtures parse `data.todayHktISO()` into a calendar date before applying day offsets. An explicit day-zero assertion binds fixture construction to the HKT ISO date. The adjacent signing-date assertions now also match the existing HKT contract, allowing the LA run to reach completion without production changes.
+- `verify_operational_rsvp_capture.py` parses exactly one real captured `SELECT id FROM public.operational_sessions ... FOR SHARE` statement and requires its literal to equal the paid session derived from setup. The valid-RSVP substitution is rejected with the exact expected/actual session IDs.
+- The concurrency harness hashes its UTC timestamp/PID/random run seed into a 32-hex token. It derives three version-4/variant-compatible member/profile UUIDs and three booking UUIDs from that token and carries the existing variables through auth/profile setup, authenticated payment, booking mutations, and child-first cleanup.
+- The capture validator parses auth inserts, profile updates, authenticated connection identity, booking inserts, and auth cleanup. It requires valid/distinct run-level UUID relationships and disjoint auth/profile/booking UUID sets across two captures.
+- A `cross-run-uuid-collision` mutation rewrites one complete capture to the other run’s six individually valid UUIDs while preserving all intra-run references. Cross-run validation rejects it. Existing duplicate-ID, foreign-session, static-date, inverted-semantics, and parent-first-cleanup adversaries remain enforced.
+- Bounded lock/statement/deadlock timeouts, background-child termination/waiting, bookings-before-sessions-before-templates-before-users cleanup, and restoration of the original body exit remain unchanged.
+
+### Verification evidence
+
+- Six smoke runs passed: local/live under default, `Asia/Hong_Kong`, and `America/Los_Angeles`; each local run produced 217 `ok` lines across 223 lines and ended `All smoke tests passed.`, and each live run produced 41 `ok` checks.
+- `app/test-html.mjs` passed.
+- Syntax passed for 13 tracked JS/MJS files, 7 tracked shell files, and `verify_operational_rsvp_capture.py`.
+- Admin Notifications, Giving, and Operational safety scripts passed. Operational safety executed the actual concurrency harness twice through fake `psql`, rejected all seven rendered-SQL mutations including valid-RSVP lock substitution and cross-run UUID collision, and preserved body exit 7 over cleanup exit 99.
+- PostgreSQL replay remains unavailable: no `psql`, no acknowledged disposable database URL, and no available Docker daemon. Actual migration/runtime/concurrency execution is still required before deployment.
+- Nothing was pushed and `testing` was not fast-forwarded.

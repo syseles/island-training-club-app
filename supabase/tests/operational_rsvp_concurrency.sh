@@ -50,22 +50,27 @@ if [[ -z "$paid_date" || -z "$rsvp_date_a" || -z "$rsvp_date_b" ]]; then
   exit 3
 fi
 
-member_a="91000000-0000-0000-0000-000000000001"
-member_b="91000000-0000-0000-0000-000000000002"
-member_c="91000000-0000-0000-0000-000000000003"
-paid_booking="92000000-0000-0000-0000-000000000001"
-rsvp_booking_a="92000000-0000-0000-0000-000000000002"
-rsvp_booking_b="92000000-0000-0000-0000-000000000003"
 raw_run_token="$(date -u +%Y%m%d%H%M%S)-$$-${RANDOM}-${RANDOM}"
-run_token="$(
-  printf '%s' "$raw_run_token" \
-    | LC_ALL=C tr '[:upper:]' '[:lower:]' \
-    | LC_ALL=C tr -cd 'a-z0-9'
-)"
-if [[ -z "$run_token" || ! "$run_token" =~ ^[a-z0-9]+$ ]]; then
-  echo "ERROR: could not derive a SQL-safe concurrency run token." >&2
+if command -v sha256sum >/dev/null 2>&1; then
+  run_hash="$(printf '%s' "$raw_run_token" | sha256sum | awk '{print $1}')"
+elif command -v shasum >/dev/null 2>&1; then
+  run_hash="$(printf '%s' "$raw_run_token" | shasum -a 256 | awk '{print $1}')"
+else
+  echo "ERROR: sha256sum or shasum is required to derive per-run fixture UUIDs." >&2
   exit 3
 fi
+run_token="${run_hash:0:32}"
+if [[ ! "$run_token" =~ ^[0-9a-f]{32}$ ]]; then
+  echo "ERROR: could not derive a SQL-safe hexadecimal concurrency run token." >&2
+  exit 3
+fi
+uuid_prefix="${run_token:0:8}-${run_token:8:4}-4${run_token:13:3}-a${run_token:17:3}-${run_token:20:10}"
+member_a="${uuid_prefix}01"
+member_b="${uuid_prefix}02"
+member_c="${uuid_prefix}03"
+paid_booking="${uuid_prefix}04"
+rsvp_booking_a="${uuid_prefix}05"
+rsvp_booking_b="${uuid_prefix}06"
 paid_activity="event-concurrency-paid-${run_token}"
 rsvp_activity="event-concurrency-rsvp-${run_token}"
 paid_session="${paid_activity}-${paid_date}"

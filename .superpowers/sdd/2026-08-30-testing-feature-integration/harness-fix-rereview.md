@@ -35,3 +35,13 @@ No Critical or Important findings remain in this bounded fix. No push or fast-fo
 ## Verification boundary
 
 Source, safety, syntax, smoke, scope, ancestry, and immutable-migration checks pass. Actual PostgreSQL migration replay and concurrency execution remain unavailable without `psql` and an explicitly acknowledged disposable database. This re-review makes no production or live-database claim.
+
+## Subsequent final approval review follow-up
+
+A later review, preserved as `final-approval-review2.md`, found two additional Important test-gate gaps and one collision-isolation concern that this earlier bounded re-review did not catch:
+
+- the capture validator accepted a paid `FOR SHARE` lock redirected to the run’s valid RSVP session;
+- the local LA smoke used host-local fixture/assertion dates against HKT application behavior;
+- auth/profile/booking UUIDs overlapped across harness invocations.
+
+The follow-up implementation now parses and compares the exact paid lock literal, derives all six fixture UUIDs from each hashed run token, validates auth/profile/connection/booking/cleanup relationships and cross-run disjointness, rejects valid-RSVP and cross-run-collision mutations, and anchors the affected smoke expectations/fixtures to HKT. This is implementation evidence pending independent final approval, not a replacement retrospective verdict. PostgreSQL runtime remains unavailable.

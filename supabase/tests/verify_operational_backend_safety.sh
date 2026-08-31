@@ -167,7 +167,7 @@ run_case "separate real harness invocations render distinct valid fixture SQL" 0
 
 make_mutation() {
   local mutation="$1" destination="$2"
-  python3 - "$capture_one" "$destination" "$mutation" <<'PY'
+  python3 - "$capture_one" "$destination" "$mutation" "$capture_two" <<'PY'
 import re
 import shutil
 import sys
@@ -176,6 +176,7 @@ from pathlib import Path
 source = Path(sys.argv[1])
 destination = Path(sys.argv[2])
 mutation = sys.argv[3]
+other_capture = Path(sys.argv[4])
 shutil.copytree(source, destination)
 paths = sorted(destination.glob("call.*"))
 texts = {path: path.read_text() for path in paths}
@@ -200,21 +201,30 @@ def replace_across(old, new, minimum=1):
 
 if mutation == "duplicate-ids":
     replace_across(rsvp_activity, paid_activity, 2)
-elif mutation == "invalid-session-id":
+elif mutation in {"invalid-session-id", "wrong-paid-lock-target"}:
     child_path = next(
         (path for path, text in texts.items() if "for share;" in text.lower()),
         None,
     )
     if child_path is None:
-        raise SystemExit("invalid-session mutation could not find the FOR SHARE child SQL")
+        raise SystemExit(f"{mutation} mutation could not find the FOR SHARE child SQL")
     child_sql = texts[child_path]
-    match = re.search(
+    paid_match = re.search(
         rf"{re.escape(paid_activity)}-\d{{4}}-\d{{2}}-\d{{2}}",
         child_sql,
     )
-    if not match:
-        raise SystemExit("invalid-session mutation could not find the child session ID")
-    texts[child_path] = child_sql.replace(match.group(0), "invalid-paid-session", 1)
+    if not paid_match:
+        raise SystemExit(f"{mutation} mutation could not find the paid child session ID")
+    replacement = "invalid-paid-session"
+    if mutation == "wrong-paid-lock-target":
+        rsvp_match = re.search(
+            rf"{re.escape(rsvp_activity)}-\d{{4}}-\d{{2}}-\d{{2}}",
+            joined,
+        )
+        if not rsvp_match:
+            raise SystemExit("wrong-paid-lock-target mutation could not find a valid RSVP session")
+        replacement = rsvp_match.group(0)
+    texts[child_path] = child_sql.replace(paid_match.group(0), replacement, 1)
 elif mutation == "static-dates":
     captured_dates = sorted(set(re.findall(
         rf"(?:{re.escape(paid_activity)}|{re.escape(rsvp_activity)})-(\d{{4}}-\d{{2}}-\d{{2}})",
@@ -244,6 +254,28 @@ elif mutation == "inverted-semantics":
     ]
     for old, new, minimum in replacements:
         replace_across(old, new, minimum)
+elif mutation == "cross-run-uuid-collision":
+    uuid_pattern = re.compile(
+        r"\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b",
+        re.IGNORECASE,
+    )
+    source_uuids = sorted(set(uuid_pattern.findall(joined)))
+    other_joined = "\n".join(
+        path.read_text() for path in sorted(other_capture.glob("call.*"))
+    )
+    other_uuids = sorted(set(uuid_pattern.findall(other_joined)))
+    if len(source_uuids) != 6 or len(other_uuids) != 6:
+        raise SystemExit(
+            "cross-run collision mutation requires six fixture UUIDs in each capture"
+        )
+    if set(source_uuids) & set(other_uuids):
+        raise SystemExit("cross-run collision mutation requires initially distinct UUID sets")
+    replacements = dict(zip(source_uuids, other_uuids))
+    for path, text in list(texts.items()):
+        texts[path] = uuid_pattern.sub(
+            lambda match: replacements.get(match.group(0), match.group(0)),
+            text,
+        )
 elif mutation == "parent-first-cleanup":
     cleanup_path = next(
         (
@@ -279,7 +311,7 @@ for path, text in texts.items():
 PY
 }
 
-for mutation in duplicate-ids invalid-session-id static-dates inverted-semantics parent-first-cleanup; do
+for mutation in duplicate-ids invalid-session-id wrong-paid-lock-target static-dates inverted-semantics cross-run-uuid-collision parent-first-cleanup; do
   mutation_dir="$fake_dir/mutation-$mutation"
   make_mutation "$mutation" "$mutation_dir"
   run_case "rendered SQL mutation is rejected: $mutation" 1 \

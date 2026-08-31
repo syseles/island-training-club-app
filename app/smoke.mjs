@@ -1121,13 +1121,13 @@ if (!/name="indemnity"[^>]*disabled[^>]*data-doc-checkbox/.test(applyLocalHtml))
   failures++;
   console.error("FAIL local indemnity checkbox should stay disabled until the modal is read");
 }
-if (!applyLocalHtml.includes(`value="${data.isoDate(data.todayLocal())}"`)) {
+if (!applyLocalHtml.includes(`value="${data.todayHktISO()}"`)) {
   failures++;
-  console.error("FAIL local signing date should default to today");
+  console.error("FAIL local signing date should default to HKT today");
 }
-if (!applyLocalHtml.includes(`max="${data.isoDate(data.todayLocal())}"`)) {
+if (!applyLocalHtml.includes(`max="${data.todayHktISO()}"`)) {
   failures++;
-  console.error("FAIL local signing date should be capped at today");
+  console.error("FAIL local signing date should be capped at HKT today");
 }
 console.log("ok  local-mode apply form collects emergencyRelationship, signature, and signing date");
 for (const marker of [
@@ -3067,8 +3067,11 @@ store.resetLocalData();
 installLocalFixtures();
 store.signIn("admin@example.test");
 {
-  const today = data.todayLocal();
+  const todayHktISO = data.todayHktISO();
+  const today = data.parseISO(todayHktISO);
   const datePlus = (days) => data.isoDate(data.addDays(today, days));
+  assert.equal(datePlus(0), todayHktISO,
+    "generic Social fixtures must use the HKT calendar date, not the host-local date");
   await store.createOneOffEvent({
     name: "Already Started Social",
     dateISO: datePlus(0),
