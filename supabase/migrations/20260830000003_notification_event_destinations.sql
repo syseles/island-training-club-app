@@ -5,9 +5,8 @@
 -- sessions shared the operational booking table. Classify the event from the
 -- authoritative session/template rows before choosing a destination:
 -- paid bookings use Payment/Booking Details, while free and RSVP events use
--- the dated Activity Details page. Paid cancellation rows retain the safe
--- Schedule fallback because their session entity is not exposed to every
--- notification recipient.
+-- the dated Activity Details page. Cancellation notifications use the
+-- uniquely linked cancelled session, including paid sessions.
 
 create or replace function public.resolve_notification_destination(
   p_profile_id uuid,
@@ -125,10 +124,8 @@ begin
         select distinct s.id
           from public.operational_sessions s
           join public.operational_bookings b on b.session_id = s.id
-          left join public.operational_activity_templates t on t.activity_id = s.activity_id
          where b.profile_id = p_profile_id
            and s.cancelled_at = p_created_at
-           and (s.price_hkd = 0 or coalesce(t.requires_rsvp, false))
       ) candidates;
 
     if v_candidate_count = 1 then
@@ -136,10 +133,8 @@ begin
         into v_session_id
         from public.operational_sessions s
         join public.operational_bookings b on b.session_id = s.id
-        left join public.operational_activity_templates t on t.activity_id = s.activity_id
        where b.profile_id = p_profile_id
-         and s.cancelled_at = p_created_at
-         and (s.price_hkd = 0 or coalesce(t.requires_rsvp, false));
+         and s.cancelled_at = p_created_at;
       return '#/activity/' || v_session_id;
     end if;
     return null;
@@ -149,17 +144,13 @@ begin
     select count(*)
       into v_candidate_count
       from public.operational_sessions s
-      left join public.operational_activity_templates t on t.activity_id = s.activity_id
-     where s.cancelled_at = p_created_at
-       and (s.price_hkd = 0 or coalesce(t.requires_rsvp, false));
+     where s.cancelled_at = p_created_at;
 
     if v_candidate_count = 1 then
       select s.id
         into v_session_id
         from public.operational_sessions s
-        left join public.operational_activity_templates t on t.activity_id = s.activity_id
-       where s.cancelled_at = p_created_at
-         and (s.price_hkd = 0 or coalesce(t.requires_rsvp, false));
+       where s.cancelled_at = p_created_at;
       return '#/activity/' || v_session_id;
     end if;
     return null;
@@ -303,8 +294,9 @@ begin
 end;
 $$;
 
--- Historical event rows do not have an entity ID. Resolve only a uniquely
--- matched, zero-price/RSVP session inside the bounded transaction window.
+-- Historical cancellation rows have no authoritative session/entity
+-- linkage. This deliberately remains a no-op: exact timestamps are not a
+-- safe substitute for the originating session, so clients use #/schedule.
 create or replace function public.resolve_historical_notification_event_destination(
   p_profile_id uuid,
   p_kind text,
@@ -316,62 +308,28 @@ stable
 security definer
 set search_path = public
 as $$
-declare
-  v_candidate_count bigint;
-  v_session_id text;
-  v_requires_rsvp boolean;
 begin
-  if p_kind = 'operational_session_cancelled_no_defer' then
-    select count(*)
-      into v_candidate_count
-      from (
-        select distinct s.id
-          from public.operational_sessions s
-          join public.operational_bookings b on b.session_id = s.id
-          left join public.operational_activity_templates t on t.activity_id = s.activity_id
-         where b.profile_id = p_profile_id
-           and s.cancelled_at between p_created_at - interval '5 seconds'
-                                  and p_created_at + interval '5 seconds'
-           and (s.price_hkd = 0 or coalesce(t.requires_rsvp, false))
-      ) candidates;
-
-    if v_candidate_count = 1 then
-      select distinct s.id
-        into v_session_id
-        from public.operational_sessions s
-        join public.operational_bookings b on b.session_id = s.id
-        left join public.operational_activity_templates t on t.activity_id = s.activity_id
-       where b.profile_id = p_profile_id
-         and s.cancelled_at between p_created_at - interval '5 seconds'
-                                and p_created_at + interval '5 seconds'
-         and (s.price_hkd = 0 or coalesce(t.requires_rsvp, false));
-      return '#/activity/' || v_session_id;
-    end if;
-    return null;
-  end if;
-
-  if p_kind = 'operational_session_cancelled' then
-    select count(*)
-      into v_candidate_count
-      from public.operational_sessions s
-      left join public.operational_activity_templates t on t.activity_id = s.activity_id
-     where s.cancelled_at between p_created_at - interval '5 seconds'
-                              and p_created_at + interval '5 seconds'
-       and (s.price_hkd = 0 or coalesce(t.requires_rsvp, false));
-
-    if v_candidate_count = 1 then
-      select s.id
-        into v_session_id
-        from public.operational_sessions s
-        left join public.operational_activity_templates t on t.activity_id = s.activity_id
-       where s.cancelled_at between p_created_at - interval '5 seconds'
-                                and p_created_at + interval '5 seconds'
-         and (s.price_hkd = 0 or coalesce(t.requires_rsvp, false));
-      return '#/activity/' || v_session_id;
-    end if;
-  end if;
-
   return null;
+end;
+$$;
+
+create or replace function public.route_notification_destination()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  if left(new.destination, 2) = '#/' then
+    return new;
+  end if;
+
+  new.destination := public.resolve_notification_destination(
+    new.profile_id,
+    new.kind,
+    new.created_at
+  );
+  return new;
 end;
 $$;
 

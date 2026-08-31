@@ -152,6 +152,29 @@ begin
   end if;
   if exists (
     select 1
+      from pg_proc p
+     where p.oid in (
+       'public.resolve_notification_destination(uuid,text,timestamptz)'::regprocedure,
+       'public.resolve_historical_booking_notification_destination(uuid,text,timestamptz)'::regprocedure,
+       'public.resolve_historical_notification_event_destination(uuid,text,timestamptz)'::regprocedure,
+       'public.route_notification_destination()'::regprocedure
+     )
+       and (not p.prosecdef or not coalesce(p.proconfig @> array['search_path=public']::text[], false))
+  ) then
+    raise notice 'FAIL: notification routing functions must be SECURITY DEFINER with search_path=public'; failures := failures + 1;
+  end if;
+  if has_function_privilege('anon', 'public.resolve_notification_destination(uuid,text,timestamptz)', 'execute')
+      or has_function_privilege('authenticated', 'public.resolve_notification_destination(uuid,text,timestamptz)', 'execute')
+      or has_function_privilege('anon', 'public.resolve_historical_booking_notification_destination(uuid,text,timestamptz)', 'execute')
+      or has_function_privilege('authenticated', 'public.resolve_historical_booking_notification_destination(uuid,text,timestamptz)', 'execute')
+      or has_function_privilege('anon', 'public.resolve_historical_notification_event_destination(uuid,text,timestamptz)', 'execute')
+      or has_function_privilege('authenticated', 'public.resolve_historical_notification_event_destination(uuid,text,timestamptz)', 'execute')
+      or has_function_privilege('anon', 'public.route_notification_destination()', 'execute')
+      or has_function_privilege('authenticated', 'public.route_notification_destination()', 'execute') then
+    raise notice 'FAIL: browser roles can execute notification routing functions'; failures := failures + 1;
+  end if;
+  if exists (
+    select 1
       from pg_trigger t
       join pg_class c on c.oid = t.tgrelid
       join pg_namespace n on n.oid = c.relnamespace
@@ -1769,8 +1792,8 @@ begin
     'price-zero Booking reserved notification has exact Activity Details destination'
   );
 
-  -- Exact RSVP/free cancellations open their dated event. These fixtures use
-  -- each producer kind while leaving paid cancellation to the schedule fallback.
+  -- Exact RSVP/free cancellations open their dated event, and the same
+  -- authoritative session linkage also applies to paid cancellations.
   update public.operational_sessions
      set cancelled_at = v_rsvp_cancelled_at,
          cancelled_by = 'aa000000-0000-0000-0000-00000000a001',
@@ -1976,15 +1999,13 @@ begin
     'real cancellation produces exactly two Admin notifications'
   );
   perform pg_temp.op_assert(
-    not exists (
-      select 1
-        from public.notifications
-       where profile_id = 'ee000000-0000-0000-0000-00000000e001'
-         and kind = 'operational_session_cancelled_no_defer'
-         and body = v_cancelled_member_body
-         and destination is not null
-    ),
-    'paid no-defer cancellation keeps the safe Schedule fallback'
+    (select destination
+       from public.notifications
+      where profile_id = 'ee000000-0000-0000-0000-00000000e001'
+        and kind = 'operational_session_cancelled_no_defer'
+        and body = v_cancelled_member_body)
+      = '#/activity/' || v_unique_cancel_session,
+    'paid no-defer cancellation routes to its exact Activity Details page'
   );
   perform pg_temp.op_assert(
     not exists (
@@ -1992,9 +2013,9 @@ begin
         from public.notifications
        where kind = 'operational_session_cancelled'
          and body = v_cancelled_admin_body
-         and destination is not null
+         and destination is distinct from '#/activity/' || v_unique_cancel_session
     ),
-    'paid Admin cancellation keeps the safe Schedule fallback'
+    'paid Admin cancellation routes to its exact Activity Details page'
   );
 
   -- Explicit valid destinations are authoritative even for entity kinds.

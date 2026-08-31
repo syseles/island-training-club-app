@@ -60,3 +60,17 @@ Passed:
 - `git diff --check`
 
 The three destructive database verifiers were invoked and refused safely before execution. Disposable PostgreSQL execution remains unavailable: `ITC_OPERATIONS_TEST_DATABASE_URL` is unset, `psql` is not installed, and the local Docker daemon is not running. The integration SQL was audited statically but must still run against the required fresh disposable Supabase-compatible database before deployment.
+
+### Independent review fixes — 2026-08-31
+
+- Corrected undeployed migration `20260830000003_notification_event_destinations.sql`: exact `operational_session_cancelled_no_defer` and `operational_session_cancelled` rows now route uniquely linked sessions to `#/activity/<session-id>` for paid, free, and RSVP sessions; historical cancellation backfill is deliberately unresolved rather than inferred by a ±5-second session match. Resolver and trigger functions retain `SECURITY DEFINER`, `search_path = public`, and browser execution revocations.
+- Local cancellation notifications now use the known cancelled Activity Details route for paid and RSVP flows. `viewActivity` renders the exact paid follow-up only for paid sessions and `Stay tuned for the next available social.` for free/RSVP cancellations.
+- Added local and live rendered assertions for all cancellation-copy variants, paid exact routing, SQL resolver/source contracts, and actual SQL ACL/search-path properties. Existing PayMe/FPS rendered phone-save behavior and tests were not changed.
+
+### Independent review TDD and verification
+
+- RED: the new exact-cancellation source assertion failed on the existing paid/RSVP filter in `00003`.
+- GREEN: local and live fake-Supabase cancellation/rendering suites passed after the minimal resolver, local route, and copy changes.
+- Six smoke variants passed: local/live under UTC, `Asia/Hong_Kong`, and `America/Los_Angeles`.
+- Admin Notifications, Giving, and Operational source-only safety suites passed; JS/MJS, shell, and Python syntax checks, source/protected-file/Shop/PayMe scans, and `git diff --check` passed.
+- PostgreSQL integration replay remains unavailable because no `psql`/database URL is configured; no live deployment claim is made.

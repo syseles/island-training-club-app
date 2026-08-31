@@ -318,9 +318,9 @@ if (JSON.stringify(notificationRoutingFunctionDeclarations) !== JSON.stringify([
 ])) {
   throw new Error("notification routing migration must declare only the exact, historical-booking, and trigger functions");
 }
-const notificationResolverBody = (functionName) => {
+const notificationResolverBody = (functionName, source = notificationRoutingMigrationSource) => {
   const escapedName = functionName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const match = notificationRoutingMigrationSource.match(new RegExp(
+  const match = source.match(new RegExp(
     `create\\s+or\\s+replace\\s+function\\s+public\\.${escapedName}\\s*\\([\\s\\S]*?\\)\\s*returns[\\s\\S]*?\\bas\\s+\\$\\$([\\s\\S]*?)\\$\\$;`,
     "i"
   ));
@@ -343,6 +343,39 @@ if (/public\.operational_sessions\b|cancelled_at\b|operational_session_cancelled
   throw new Error("historical booking resolver must not infer cancellation destinations");
 }
 console.log("ok  notification migration separates exact inserts from booking-only historical matching");
+const eventExactResolverBody = notificationResolverBody(
+  "resolve_notification_destination", notificationEventRoutingMigrationSource
+);
+for (const kind of ["operational_session_cancelled_no_defer", "operational_session_cancelled"]) {
+  const branch = eventExactResolverBody.match(new RegExp(
+    `if\\s+p_kind\\s*=\\s*'${kind}'[\\s\\S]*?\\n\\s*end\\s+if;`, "i"
+  ))?.[0] || "";
+  assert.match(branch, /s\.cancelled_at\s*=\s*p_created_at/i,
+    `${kind} must use authoritative exact cancellation linkage`);
+  assert.doesNotMatch(branch, /price_hkd\s*=\s*0|requires_rsvp/i,
+    `${kind} must not exclude paid cancellations`);
+  assert.match(branch, /return\s+'#\/activity\/'\s*\|\|\s*v_session_id/i,
+    `${kind} must route a unique cancellation to Activity Details`);
+}
+const historicalEventResolverBody = notificationResolverBody(
+  "resolve_historical_notification_event_destination", notificationEventRoutingMigrationSource
+);
+assert.doesNotMatch(historicalEventResolverBody, /interval\s+'5 seconds'|operational_sessions|cancelled_at/i,
+  "historical cancellation resolver must not fuzzy-match session rows");
+for (const functionName of [
+  "resolve_notification_destination",
+  "resolve_historical_booking_notification_destination",
+  "resolve_historical_notification_event_destination",
+  "route_notification_destination",
+]) {
+  assert.match(notificationEventRoutingMigrationSource, new RegExp(
+    `create\\s+or\\s+replace\\s+function\\s+public\\.${functionName}[\\s\\S]*?security\\s+definer[\\s\\S]*?set\\s+search_path\\s*=\\s*public`, "i"
+  ), `${functionName} must be SECURITY DEFINER with a fixed public search_path`);
+  assert.match(notificationEventRoutingMigrationSource, new RegExp(
+    `revoke\\s+all\\s+on\\s+function\\s+public\\.${functionName}`, "i"
+  ), `${functionName} must revoke browser execution`);
+}
+console.log("ok  event notification resolver keeps paid cancellation routes authoritative and historical rows unresolved");
 const normalizedNotificationEventRoutingSource = notificationEventRoutingMigrationSource.toLowerCase();
 for (const marker of [
   "create or replace function public.resolve_notification_destination",
@@ -2628,10 +2661,14 @@ installLocalFixtures(); store.signIn("member@example.test");
   const paidCancellationNote = store.notificationsFor("fixture-admin")
     .find((n) => n.kind === "session-cancelled");
   if (!paidCancellationNote) throw new Error("waitlisted member should be notified of the cancellation");
-  if (paidCancellationNote.link !== "#/schedule")
-    throw new Error("paid cancellation should keep the Schedule fallback");
+  if (paidCancellationNote.link !== `#/activity/${sess.id}`)
+    throw new Error("paid cancellation should open the cancelled Activity Details page");
   if (!paidCancellationNote.body.startsWith("Session cancelled by ITC — HYROX race weekend — no session."))
     throw new Error("paid cancellation notification should use canonical copy");
+  const paidCancellationHtml = views.viewActivity(sess.id);
+  if (!paidCancellationHtml.includes("Paid bookings were moved to the next available session — check your account.")
+      || paidCancellationHtml.includes("Stay tuned for the next available social."))
+    throw new Error("paid cancellation Activity Details must render only the paid follow-up copy");
 
   store.signIn("member@example.test");
   const rsvp = store.upcomingSessions(21).find(
@@ -2650,6 +2687,12 @@ installLocalFixtures(); store.signIn("member@example.test");
     throw new Error("RSVP cancellation notification should use canonical copy");
   if (store.getBooking(rsvpBooking.id).status !== "cancelled")
     throw new Error("cancelled RSVP booking should be cancelled");
+  if (rsvpCancellationNote.link !== `#/activity/${rsvp.id}`)
+    throw new Error("RSVP cancellation notification should open Activity Details");
+  const rsvpCancellationHtml = views.viewActivity(rsvp.id);
+  if (!rsvpCancellationHtml.includes("Stay tuned for the next available social.")
+      || rsvpCancellationHtml.includes("Paid bookings were moved to the next available session — check your account."))
+    throw new Error("RSVP cancellation Activity Details must render the exact social follow-up copy");
   console.log("ok  cancellations preserve canonical copy and route paid vs RSVP notifications");
 }
 {
@@ -3306,6 +3349,15 @@ store.signIn("admin@example.test");
   const freeEventHtml = views.viewActivity(freeEvent.id);
   if (!freeEventHtml.includes("Free · No booking needed"))
     throw new Error("free one-off should render the free banner");
+  const freeCancelledEvent = await store.createOneOffEvent({
+    name: "Cancelled Community Social", dateISO: "2026-09-07", time: "15:00",
+    durationMin: 90, location: "Tamar Park", category: "Socials",
+  });
+  store.cancelSessionWeek(freeCancelledEvent.id, "Weather warning");
+  const freeCancellationHtml = views.viewActivity(freeCancelledEvent.id);
+  if (!freeCancellationHtml.includes("Stay tuned for the next available social.")
+      || freeCancellationHtml.includes("Paid bookings were moved to the next available session — check your account."))
+    throw new Error("free cancellation Activity Details must render the exact social follow-up copy");
   const adminActivitiesHtml = await views.viewAdmin("activities");
   if (!adminActivitiesHtml.includes("One-off Events")
       || !adminActivitiesHtml.includes("form-one-off-event")

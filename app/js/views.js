@@ -480,10 +480,13 @@ export function viewActivity(sessionId) {
     ? venuePresentationHTML(venuePresentation)
     : "";
   if (s.cancelled) {
+    const cancellationFollowup = s.kind === "paid"
+      ? "Paid bookings were moved to the next available session — check your account."
+      : "Stay tuned for the next available social.";
     actionBlock = `
       <div class="banner warn mt16">
         <span class="kicker">Cancelled</span>
-        <p>${esc(sessionCancellationCopy(s))}. Paid bookings were moved to the next available session — check your account.</p>
+        <p>${esc(sessionCancellationCopy(s))}. ${cancellationFollowup}</p>
       </div>`;
   } else if (past) {
     actionBlock = `<div class="banner mt16"><p>This session has already happened. See you at the next one.</p></div>`;

@@ -4950,7 +4950,58 @@ const activityHtml = views.viewActivity("hyrox-2026-08-15");
 if (!activityHtml.includes("Session cancelled by ITC — HYROX race weekend")) {
   throw new Error("Activity view must render the canonical cancellation copy");
 }
-console.log("ok  live cancellation copy renders 'Session cancelled by ITC — <reason>' everywhere");
+if (!activityHtml.includes("Paid bookings were moved to the next available session — check your account.")
+    || activityHtml.includes("Stay tuned for the next available social.")) {
+  throw new Error("live paid cancellation Activity Details must render only the paid follow-up copy");
+}
+const liveCancelledRsvpRow = {
+  ...structuredClone(operationalTableRows.operational_sessions.find((row) => row.id === lunchSession.id)),
+  id: "lunch-cancelled-render",
+  cancelled_at: fixedIso,
+  cancelled_by: "approved-admin",
+  cancelled_source: "admin",
+  cancel_reason: "Lunch venue unavailable",
+};
+const liveCancelledFreeTemplate = {
+  activity_id: "event-live-free-render",
+  name: "Cancelled Community Social",
+  venue: "Tamar Park",
+  weekday: 0,
+  start_time: "15:00:00",
+  duration_minutes: 90,
+  capacity: 20,
+  price_hkd: 0,
+  default_open: true,
+  active: false,
+  category: "Socials",
+  maps_query: "Tamar Park",
+  requires_rsvp: false,
+};
+const liveCancelledFreeRow = {
+  ...structuredClone(liveCancelledRsvpRow),
+  id: "event-live-free-render-2026-08-30",
+  activity_id: liveCancelledFreeTemplate.activity_id,
+  session_date: "2026-08-30",
+  start_time: "15:00:00",
+  venue: "Tamar Park",
+  capacity: 20,
+  price_hkd: 0,
+};
+operationalTableRows.operational_activity_templates.push(liveCancelledFreeTemplate);
+operationalTableRows.operational_sessions.push(liveCancelledRsvpRow, liveCancelledFreeRow);
+await operations.refreshOperationalState();
+const liveRsvpCancellationHtml = views.viewActivity(liveCancelledRsvpRow.id);
+const liveFreeCancellationHtml = views.viewActivity(liveCancelledFreeRow.id);
+for (const [label, html] of [
+  ["RSVP", liveRsvpCancellationHtml],
+  ["free", liveFreeCancellationHtml],
+]) {
+  if (!html.includes("Stay tuned for the next available social.")
+      || html.includes("Paid bookings were moved to the next available session — check your account.")) {
+    throw new Error(`live ${label} cancellation Activity Details must render the exact social follow-up copy`);
+  }
+}
+console.log("ok  live cancellation copy renders exact paid and social follow-up variants");
 
 // Location-map surface: a non-cancelled paid HYROX exposes Get directions
 // without the inline map host.

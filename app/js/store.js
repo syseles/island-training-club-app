@@ -1836,7 +1836,7 @@ export function cancelSessionWeek(sessionId, reason, now = Date.now()) {
   o.cancelled = String(reason || "").trim() || "No session this week";
   const session = getSession(sessionId);
   const cancellationCopy = `Session cancelled by ITC — ${o.cancelled}`;
-  const cancellationLink = session?.kind === "paid" ? "#/schedule" : `#/activity/${sessionId}`;
+  const cancellationLink = `#/activity/${sessionId}`;
   const venueActivityId = sessionId.replace(/-\d{4}-\d{2}-\d{2}$/, "");
   for (const b of state.bookings.filter((x) => x.sessionId === sessionId)) {
     if (b.status === "confirmed") {
