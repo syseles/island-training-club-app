@@ -1530,10 +1530,14 @@ export function normalizePayMeLink(raw) {
   } catch {
     throw new Error("Enter your personal PayMe link.");
   }
+  const authority = value.slice(value.indexOf("//") + 2).split(/[\/?#]/, 1)[0];
+  const hasExplicitPort = authority.split("@").pop().includes(":");
   const pathname = url.pathname.replace(/\/+$/, "");
   const personalPath = pathname.split("/");
+  let routePrefix = "";
   let collectorToken = "";
   try {
+    routePrefix = decodeURIComponent(personalPath[1] || "");
     collectorToken = decodeURIComponent(personalPath[2] || "");
   } catch {
     throw new Error("Enter your personal PayMe link from PayMe.");
@@ -1543,9 +1547,12 @@ export function normalizePayMeLink(raw) {
       || url.username
       || url.password
       || url.port
+      || hasExplicitPort
       || personalPath.length !== 3
       || personalPath[0] !== ""
-      || personalPath[1] !== "1"
+      || !/^[12]$/.test(routePrefix)
+      || routePrefix.trim() !== routePrefix
+      || /[\\/]/.test(routePrefix)
       || !collectorToken
       || collectorToken.trim() !== collectorToken
       || /[\\/]/.test(collectorToken)) {
