@@ -133,10 +133,12 @@ function buildSessionRow(row, templatesById = null) {
   };
 }
 
-function buildBookingRow(row) {
-  const dateISO = row.snapshot?.session_date
-    ? String(row.snapshot.session_date).slice(0, 10)
-    : null;
+function buildBookingRow(row, sessionsById = null) {
+  const snapshot = row.snapshot || {};
+  const session = sessionsById?.get(row.session_id) || null;
+  const rawDateISO = snapshot.session_date || snapshot.dateISO || session?.dateISO || null;
+  const dateISO = rawDateISO ? String(rawDateISO).slice(0, 10) : null;
+  const snapshotTime = snapshot.start_time || snapshot.time || session?.time || null;
   return {
     id: row.id,
     userId: row.profile_id,
@@ -153,17 +155,16 @@ function buildBookingRow(row) {
     deferredFrom: row.deferred_from_booking_id || null,
     deferredTo: row.deferred_to_booking_id || null,
     snapshot: {
-      ...row.snapshot,
-      price: row.snapshot?.price_hkd ?? row.snapshot?.price ?? null,
-      location: row.snapshot?.venue ?? row.snapshot?.location ?? null,
-      name: row.snapshot?.name || (row.snapshot?.activity_id === "hyrox-midtown" ? "ITC HYROX" : "ITC HYROX"),
+      ...snapshot,
+      price: snapshot.price_hkd ?? snapshot.price ?? session?.price ?? null,
+      location: snapshot.venue || snapshot.location || session?.location || null,
+      name: snapshot.name || session?.name
+        || (snapshot.activity_id === "hyrox-midtown" ? "ITC HYROX" : "ITC HYROX"),
       // DB snapshots store start_time ("HH:MM:SS"); the UI expects time
-      // ("HH:MM"). Map it or fmtTime crashes on undefined.
-      time: row.snapshot?.start_time
-        ? String(row.snapshot.start_time).slice(0, 5)
-        : row.snapshot?.time ?? null,
-      durationMin: row.snapshot?.duration_min ?? row.snapshot?.durationMin ?? null,
-      kind: row.snapshot?.kind ?? "paid",
+      // ("HH:MM"). Map it or use the authoritative session.
+      time: snapshotTime ? String(snapshotTime).slice(0, 5) : null,
+      durationMin: snapshot.duration_min ?? snapshot.durationMin ?? session?.durationMin ?? null,
+      kind: snapshot.kind ?? session?.kind ?? "paid",
       dateISO,
     },
     dateISO,
@@ -370,14 +371,16 @@ async function fetchOperationalState() {
   // templates) can lend their name, category and maps query to the session.
   const templateRows = (templates.data || []).map(buildTemplateRow);
   const templatesById = new Map(templateRows.map((t) => [t.activity_id, t]));
+  const sessionRows = (sessions.data || []).map((row) => buildSessionRow(row, templatesById));
+  const sessionsById = new Map(sessionRows.map((session) => [session.id, session]));
   const payoutRowsByProfile = new Map();
   for (const row of assignedPayouts.rows) payoutRowsByProfile.set(row.profile_id, row);
   // Normal-RLS rows win on duplicates while assigned rows fill the cold-member gap.
   for (const row of payouts.data || []) payoutRowsByProfile.set(row.profile_id, row);
   return {
-    sessions: (sessions.data || []).map((row) => buildSessionRow(row, templatesById)),
+    sessions: sessionRows,
     templates: templateRows,
-    bookings: (bookings.data || []).map(buildBookingRow),
+    bookings: (bookings.data || []).map((row) => buildBookingRow(row, sessionsById)),
     queues: (queues.data || []).map(buildQueueRow),
     receipts: (receipts.data || []).map(buildReceiptRow),
     assignments: (assignments.data || []).map(buildAssignmentRow),

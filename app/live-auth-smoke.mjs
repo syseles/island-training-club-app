@@ -2070,6 +2070,108 @@ if (!liveHistoryHtml.includes("11:15 AM") || liveHistoryHtml.includes("undefined
 }
 console.log("ok  live booking history renders snapshot start_time without crashing");
 
+// History must hydrate omitted booking snapshot fields from the authoritative
+// operational session, and must collapse repeated RSVP join/withdraw rows.
+const liveHistoryPaidSessionRow = operationalTableRows.operational_sessions.find(
+  (row) => row.activity_id === "hyrox" && row.id !== uuidBooking.sessionId
+);
+const liveHistoryRsvpSessionRow = operationalTableRows.operational_sessions.find(
+  (row) => row.activity_id === "lunch" && row.id !== seededRsvpLunchId
+);
+if (!liveHistoryPaidSessionRow || !liveHistoryRsvpSessionRow) {
+  throw new Error("live History regressions need separate paid and RSVP sessions");
+}
+const liveHistoryGapBooking = {
+  id: "history-gap-paid",
+  profile_id: authUser.id,
+  session_id: liveHistoryPaidSessionRow.id,
+  status: "reserved",
+  reserved_at: fixedIso,
+  pay_deadline_at: fixedIso,
+  payment_marked_at: null,
+  payment_method: null,
+  payment_reference: null,
+  paid_at: null,
+  confirmed_by: null,
+  deferred_from_booking_id: null,
+  deferred_to_booking_id: null,
+  snapshot: { session_date: liveHistoryPaidSessionRow.session_date },
+  created_at: fixedIso,
+  updated_at: fixedIso,
+};
+const liveHistoryRsvpRows = [
+  {
+    id: "history-rsvp-old",
+    profile_id: authUser.id,
+    session_id: liveHistoryRsvpSessionRow.id,
+    status: "confirmed",
+    reserved_at: fixedIso,
+    pay_deadline_at: fixedIso,
+    payment_marked_at: null,
+    payment_method: null,
+    payment_reference: null,
+    paid_at: fixedIso,
+    confirmed_by: null,
+    deferred_from_booking_id: null,
+    deferred_to_booking_id: null,
+    snapshot: { session_date: liveHistoryRsvpSessionRow.session_date },
+    created_at: "2026-08-05T01:00:00.000Z",
+    updated_at: "2026-08-05T01:00:00.000Z",
+  },
+  {
+    id: "history-rsvp-new",
+    profile_id: authUser.id,
+    session_id: liveHistoryRsvpSessionRow.id,
+    status: "cancelled",
+    reserved_at: fixedIso,
+    pay_deadline_at: fixedIso,
+    payment_marked_at: null,
+    payment_method: null,
+    payment_reference: null,
+    paid_at: fixedIso,
+    confirmed_by: null,
+    deferred_from_booking_id: null,
+    deferred_to_booking_id: null,
+    snapshot: { session_date: liveHistoryRsvpSessionRow.session_date },
+    created_at: "2026-08-05T03:00:00.000Z",
+    updated_at: "2026-08-05T03:00:00.000Z",
+  },
+];
+operationalTableRows.operational_bookings.push(liveHistoryGapBooking, ...liveHistoryRsvpRows);
+await operations.refreshOperationalState();
+const liveGapHistoryHtml = await views.viewAccount("history");
+const liveGapPaidCard = liveGapHistoryHtml
+  .split('<div class="card booking-card">')
+  .find((card) => card.includes(`href="#/booking/${liveHistoryGapBooking.id}"`)) || "";
+if (!liveGapPaidCard.includes("11:15 AM")
+    || !liveGapPaidCard.includes("ITC HYROX")
+    || !liveGapPaidCard.includes("BFT Causeway Bay")
+    || !liveGapPaidCard.includes("60 min")
+    || !liveGapPaidCard.includes("HK$180 to be paid")
+    || liveGapPaidCard.includes("null min")
+    || liveGapPaidCard.includes("paid HK$180")) {
+  throw new Error("live History must hydrate paid booking display data and unpaid copy from its session");
+}
+const liveRsvpCards = liveGapHistoryHtml
+  .split('<div class="card booking-card">')
+  .filter((card) => card.includes(`href="#/booking/${liveHistoryRsvpRows[1].id}"`));
+if (liveRsvpCards.length !== 1
+    || liveGapHistoryHtml.includes(`href="#/booking/${liveHistoryRsvpRows[0].id}"`)
+    || !liveRsvpCards[0].includes("Cancelled")
+    || !liveRsvpCards[0].includes("RSVP")
+    || liveRsvpCards[0].includes("paid HK$0")) {
+  throw new Error("live History must deduplicate repeated RSVPs, retain cancellation, and never show paid HK$0");
+}
+const liveRsvpPosition = liveGapHistoryHtml.indexOf(`href="#/booking/${liveHistoryRsvpRows[1].id}"`);
+const livePaidPosition = liveGapHistoryHtml.indexOf(`href="#/booking/${liveHistoryGapBooking.id}"`);
+if (liveRsvpPosition < 0 || livePaidPosition < 0 || liveRsvpPosition > livePaidPosition) {
+  throw new Error("History must sort the newest booking first when event dates tie");
+}
+console.log("ok  live History hydrates gaps, deduplicates RSVPs, and sorts newest booking first");
+operationalTableRows.operational_bookings = operationalTableRows.operational_bookings
+  .filter((row) => ![liveHistoryGapBooking.id, ...liveHistoryRsvpRows.map((item) => item.id)].includes(row.id));
+await operations.refreshOperationalState();
+
 // --- One-off events (live) ---
 const freeEventRow = await store.createOneOffEvent({
   name: "Charity Gala Workout", dateISO: "2026-09-12", time: "09:00",
