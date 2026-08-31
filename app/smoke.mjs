@@ -2752,6 +2752,10 @@ assert.equal(
   store.normalizePayMeLink("payme.hsbc.com.hk/1/collector-code"),
   "https://payme.hsbc.com.hk/1/collector-code"
 );
+assert.equal(
+  store.normalizePayMeLink("payme.hsbc/collector-code"),
+  "https://payme.hsbc/collector-code"
+);
 assert.equal(store.normalizePayMeLink(""), "");
 assert.equal(
   store.normalizePayMeLink("https://payme.hsbc.com.hk/2/collector-code/"),
@@ -2762,6 +2766,13 @@ assert.equal(
   "https://payme.hsbc.com.hk/1/collector-code?next=/#step/"
 );
 for (const invalid of [
+  "https://payme.hsbc/",
+  "https://payme.hsbc/collector-code/extra",
+  "http://payme.hsbc/collector-code",
+  "https://user:pass@payme.hsbc/collector-code",
+  "https://payme.hsbc:443/collector-code",
+  "https://payme.hsbc/%2F",
+  "https://payme.hsbc/%5C",
   "https://payme.hsbc.com.hk/",
   "https://payme.hsbc.com.hk/1",
   "https://payme.hsbc.com.hk/home",
