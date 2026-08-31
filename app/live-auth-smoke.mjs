@@ -4441,7 +4441,7 @@ successfulPayoutForm.dataset = {
   action: "form-payouts",
   fpsPhone: "+852 6123 4567",
 };
-successfulPayoutForm.fields = { paymeLink: "payme.hsbc.com.hk/1/successful-live" };
+successfulPayoutForm.fields = { paymeLink: "payme.hsbc.com.hk/2/successful-live" };
 const successfulPayoutControls = equipPayoutForm(successfulPayoutForm);
 const successfulPayoutRpcGate = deferred();
 operationalRpcHandler = (name, args) => {
@@ -4470,11 +4470,11 @@ const successfulServerPayout = operationalTableRows.collector_payout_profiles
   .find((row) => row.profile_id === authUser.id);
 assert.deepEqual(payoutRpcArgs, {
   p_profile_id: authUser.id,
-  p_payme_link: "https://payme.hsbc.com.hk/1/successful-live",
+  p_payme_link: "https://payme.hsbc.com.hk/2/successful-live",
   p_fps_phone: "+852 6123 4567",
 }, "typed PayMe and rendered FPS phone must be captured before controls disable");
 Object.assign(successfulServerPayout, {
-  payme_link: "https://payme.hsbc.com.hk/1/successful-live",
+  payme_link: "https://payme.hsbc.com.hk/2/successful-live",
   fps_phone: "+852 6123 4567",
 });
 successfulPayoutRpcGate.resolve({ data: structuredClone(successfulServerPayout), error: null });
@@ -4483,7 +4483,7 @@ await new Promise(setImmediate);
 assert.deepEqual(
   JSON.parse(mem.get("itc.prototype.v1")).paymentPayouts?.[authUser.id],
   {
-    paymeLink: "https://payme.hsbc.com.hk/1/successful-live",
+    paymeLink: "https://payme.hsbc.com.hk/2/successful-live",
     fpsPhone: "+852 6123 4567",
   },
   "successful live payout must persist its normalized value after RPC settlement"
