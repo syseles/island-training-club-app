@@ -1542,20 +1542,25 @@ export function normalizePayMeLink(raw) {
   } catch {
     throw new Error("Enter your personal PayMe link from PayMe.");
   }
+  const hostname = url.hostname.toLowerCase();
+  const validToken = (token) => !!token
+    && token.trim() === token
+    && !/[\\/]/.test(token);
+  const isCurrentPayMeLink = hostname === "payme.hsbc"
+    && personalPath.length === 2
+    && personalPath[0] === ""
+    && validToken(routePrefix);
+  const isLegacyPayMeLink = hostname === "payme.hsbc.com.hk"
+    && personalPath.length === 3
+    && personalPath[0] === ""
+    && /^[12]$/.test(routePrefix)
+    && validToken(collectorToken);
   if (url.protocol !== "https:"
-      || url.hostname.toLowerCase() !== "payme.hsbc.com.hk"
       || url.username
       || url.password
       || url.port
       || hasExplicitPort
-      || personalPath.length !== 3
-      || personalPath[0] !== ""
-      || !/^[12]$/.test(routePrefix)
-      || routePrefix.trim() !== routePrefix
-      || /[\\/]/.test(routePrefix)
-      || !collectorToken
-      || collectorToken.trim() !== collectorToken
-      || /[\\/]/.test(collectorToken)) {
+      || (!isCurrentPayMeLink && !isLegacyPayMeLink)) {
     throw new Error("Enter your personal PayMe link from PayMe.");
   }
   url.pathname = pathname;
