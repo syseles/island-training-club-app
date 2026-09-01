@@ -374,11 +374,23 @@ update public.profiles set full_name = 'Declined Test', role = 'declined'
   where id = 'ab000000-0000-0000-0000-00000000d001';
 
 -- Assigned payout reads add only the collector rows needed by approved members.
+-- Membership Details is authoritative for FPS, including collectors who have
+-- not created an optional PayMe payout profile.
+insert into public.applications
+  (profile_id, mobile, is_minor, photo_consent, privacy_accepted_at)
+values
+  ('aa000000-0000-0000-0000-00000000a001', '+852 6333 3003', false, false, now()),
+  ('dd000000-0000-0000-0000-00000000d001', '+852 6555 5005', false, false, now()),
+  ('ff000000-0000-0000-0000-00000000f001', '+852 6444 4004', false, false, now());
+
 insert into public.collector_assignments
   (week_start, collector_profile_id, assigned_by)
 values
   (date '2026-08-03',
    'aa000000-0000-0000-0000-00000000a001',
+   'ff000000-0000-0000-0000-00000000f001'),
+  (date '2026-08-10',
+   'dd000000-0000-0000-0000-00000000d001',
    'ff000000-0000-0000-0000-00000000f001');
 
 insert into public.collector_payout_profiles
@@ -395,6 +407,7 @@ do $$
 declare
   v_direct_count integer;
   v_assigned_count integer;
+  v_no_payout_count integer;
   v_unassigned_count integer;
 begin
   perform set_config('request.jwt.claim.sub', 'bb000000-0000-0000-0000-00000000b001', true);
@@ -415,10 +428,34 @@ begin
     from public.get_assigned_collector_payout_profiles()
    where profile_id = 'aa000000-0000-0000-0000-00000000a001'
      and payme_link = 'https://payme.hsbc.com.hk/1/assigned-admin'
-     and fps_phone = '+852 6111 1001';
+     and fps_phone = '+852 6333 3003';
   perform pg_temp.op_assert(
     v_assigned_count = 1,
-    'approved member reads the assigned collector payout row'
+    'approved member reads assigned PayMe with FPS from applications.mobile'
+  );
+
+  reset role;
+  update public.applications
+     set mobile = '+852 6333 3999'
+   where profile_id = 'aa000000-0000-0000-0000-00000000a001';
+  set local role authenticated;
+  select count(*) into v_assigned_count
+    from public.get_assigned_collector_payout_profiles()
+   where profile_id = 'aa000000-0000-0000-0000-00000000a001'
+     and fps_phone = '+852 6333 3999';
+  perform pg_temp.op_assert(
+    v_assigned_count = 1,
+    'changing applications.mobile updates assigned FPS without a payout save'
+  );
+
+  select count(*) into v_no_payout_count
+    from public.get_assigned_collector_payout_profiles()
+   where profile_id = 'dd000000-0000-0000-0000-00000000d001'
+     and payme_link is null
+     and fps_phone = '+852 6555 5005';
+  perform pg_temp.op_assert(
+    v_no_payout_count = 1,
+    'assigned FPS remains available without a collector payout profile'
   );
 
   select count(*) into v_unassigned_count

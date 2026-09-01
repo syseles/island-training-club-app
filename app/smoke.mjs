@@ -119,6 +119,30 @@ for (const marker of [
 }
 console.log("ok  assigned collector payout RPC migration keeps least-privilege controls");
 
+const applicationMobilePayoutMigrationSource = readFileSync(
+  resolve(__dirnameSmoke, "../supabase/migrations/20260901000001_assigned_collector_application_mobile.sql"),
+  "utf8"
+);
+const applicationMobilePayoutFunction = applicationMobilePayoutMigrationSource.match(
+  /create or replace function public\.get_assigned_collector_payout_profiles\(\)[\s\S]*?\n\$\$;/i
+)?.[0] || "";
+assert.match(applicationMobilePayoutFunction,
+  /left join public\.applications as application[\s\S]*?on application\.profile_id = assignment\.collector_profile_id/i,
+  "assigned collector payout reads must preserve PayMe if Membership Details are temporarily unavailable");
+assert.match(applicationMobilePayoutFunction,
+  /left join public\.collector_payout_profiles as payout/i,
+  "an assigned collector's FPS number must not require a saved payout profile");
+assert.match(applicationMobilePayoutFunction,
+  /application\.mobile\s+as fps_phone/i,
+  "assigned collector FPS must come directly from applications.mobile");
+assert.doesNotMatch(applicationMobilePayoutFunction,
+  /payout\.fps_phone/i,
+  "assigned collector payout reads must not trust the duplicated payout phone");
+assert.match(applicationMobilePayoutFunction,
+  /current_user_role\(\)[\s\S]*?'member'[\s\S]*?'admin'[\s\S]*?'super_admin'/i,
+  "application mobile payout reads must remain approved-member-only");
+console.log("ok  assigned collector FPS reads directly from applications.mobile");
+
 const lunchMeetingRpcMigrationSource = readFileSync(
   resolve(__dirnameSmoke, "../supabase/migrations/20260829000006_lunch_venue_meeting_point_rpc.sql"),
   "utf8"
