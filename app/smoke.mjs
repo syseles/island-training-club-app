@@ -119,6 +119,55 @@ for (const marker of [
 }
 console.log("ok  assigned collector payout RPC migration keeps least-privilege controls");
 
+const applicationMobilePayoutMigrationSource = readFileSync(
+  resolve(__dirnameSmoke, "../supabase/migrations/20260901000001_assigned_collector_application_mobile.sql"),
+  "utf8"
+);
+const applicationMobilePayoutFunction = applicationMobilePayoutMigrationSource.match(
+  /create or replace function public\.get_assigned_collector_payout_profiles\(\)[\s\S]*?\n\$\$;/i
+)?.[0] || "";
+assert.match(applicationMobilePayoutFunction,
+  /left join public\.applications as application[\s\S]*?on application\.profile_id = assignment\.collector_profile_id/i,
+  "assigned collector payout reads must preserve PayMe if Membership Details are temporarily unavailable");
+assert.match(applicationMobilePayoutFunction,
+  /left join public\.collector_payout_profiles as payout/i,
+  "an assigned collector's FPS number must not require a saved payout profile");
+assert.match(applicationMobilePayoutFunction,
+  /application\.mobile\s+as fps_phone/i,
+  "assigned collector FPS must come directly from applications.mobile");
+assert.doesNotMatch(applicationMobilePayoutFunction,
+  /payout\.fps_phone/i,
+  "assigned collector payout reads must not trust the duplicated payout phone");
+assert.match(applicationMobilePayoutFunction,
+  /current_user_role\(\)[\s\S]*?'member'[\s\S]*?'admin'[\s\S]*?'super_admin'/i,
+  "application mobile payout reads must remain approved-member-only");
+console.log("ok  assigned collector FPS reads directly from applications.mobile");
+
+const collectorIdentityMigrationSource = readFileSync(
+  resolve(__dirnameSmoke, "../supabase/migrations/20260901000002_assigned_collector_display_identity.sql"),
+  "utf8"
+);
+const collectorIdentityFunction = collectorIdentityMigrationSource.match(
+  /create function public\.get_assigned_collector_payout_profiles\(\)[\s\S]*?\n\$\$;/i
+)?.[0] || "";
+assert.match(collectorIdentityMigrationSource,
+  /drop function public\.get_assigned_collector_payout_profiles\(\)/i,
+  "the forward identity migration must explicitly replace the RPC return type");
+for (const field of ["full_name text", "preferred_name text"]) {
+  assert.match(collectorIdentityFunction, new RegExp(field, "i"),
+    `assigned collector identity RPC missing ${field}`);
+}
+assert.match(collectorIdentityFunction,
+  /from public\.collector_assignments as assignment[\s\S]*?left join public\.profiles as profile[\s\S]*?left join public\.applications as application/i,
+  "assigned collector identity must remain rooted in collector assignments");
+assert.doesNotMatch(collectorIdentityFunction,
+  /email|emergency_|guardian_|donor_/i,
+  "assigned collector identity RPC must not expose unrelated member details");
+assert.match(collectorIdentityFunction,
+  /current_user_role\(\)[\s\S]*?'member'[\s\S]*?'admin'[\s\S]*?'super_admin'/i,
+  "assigned collector display identity must remain approved-member-only");
+console.log("ok  assigned collector RPC exposes only narrow display identity");
+
 const lunchMeetingRpcMigrationSource = readFileSync(
   resolve(__dirnameSmoke, "../supabase/migrations/20260829000006_lunch_venue_meeting_point_rpc.sql"),
   "utf8"

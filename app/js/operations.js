@@ -220,6 +220,8 @@ function buildPayoutRow(row) {
     profileId: row.profile_id,
     paymeLink: row.payme_link || null,
     fpsPhone: row.fps_phone || null,
+    ...(row.full_name ? { fullName: row.full_name } : {}),
+    ...(row.preferred_name ? { preferredName: row.preferred_name } : {}),
   };
 }
 
@@ -401,9 +403,10 @@ async function fetchOperationalState() {
   const sessionRows = [...sessionRowsById.values()];
   const sessionsById = new Map(sessionRows.map((session) => [session.id, session]));
   const payoutRowsByProfile = new Map();
-  for (const row of assignedPayouts.rows) payoutRowsByProfile.set(row.profile_id, row);
-  // Normal-RLS rows win on duplicates while assigned rows fill the cold-member gap.
   for (const row of payouts.data || []) payoutRowsByProfile.set(row.profile_id, row);
+  // The narrow assigned-collector RPC supplies authoritative applications.mobile;
+  // it wins over any duplicated, stale payout-table phone on the same profile.
+  for (const row of assignedPayouts.rows) payoutRowsByProfile.set(row.profile_id, row);
   return {
     sessions: sessionRows,
     templates: templateRows,

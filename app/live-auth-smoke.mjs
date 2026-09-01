@@ -762,13 +762,23 @@ operationalRpcHandler = (name, args) => {
     if (!["member", "admin", "super_admin"].includes(role)) {
       return Promise.resolve({ data: null, error: { message: "Approved membership required." } });
     }
-    const assignedIds = new Set(
+    const assignedIds = [...new Set(
       operationalTableRows.collector_assignments.map((row) => row.collector_profile_id)
-    );
-    const seen = new Set();
-    const assignedPayouts = operationalTableRows.collector_payout_profiles
-      .filter((row) => assignedIds.has(row.profile_id) && !seen.has(row.profile_id) && seen.add(row.profile_id))
-      .map((row) => structuredClone(row));
+    )];
+    const assignedPayouts = assignedIds.map((profileId) => {
+      const application = applicationRows.get(profileId);
+      const payout = operationalTableRows.collector_payout_profiles
+        .find((row) => row.profile_id === profileId);
+      const memberProfile = [...approvedProfiles, ...pendingProfiles, ...declinedProfiles]
+        .find((item) => item.id === profileId);
+      return {
+        profile_id: profileId,
+        payme_link: payout?.payme_link || null,
+        fps_phone: application?.mobile || null,
+        full_name: application?.profiles?.full_name || memberProfile?.full_name || null,
+        preferred_name: application?.preferred_name || null,
+      };
+    });
     return Promise.resolve({ data: assignedPayouts, error: null });
   }
   if (name === "get_operational_rsvp_counts") {
@@ -1104,11 +1114,31 @@ const directPayoutFixture = {
   payme_link: "https://payme.hsbc.com.hk/1/direct-member",
   fps_phone: "+852 6111 1111",
 };
-operationalTableRows.collector_assignments.push({
-  week_start: "2026-08-08",
-  collector_profile_id: assignedPayoutFixture.profile_id,
-  assigned_at: fixedIso,
+applicationRows.set(assignedPayoutFixture.profile_id, {
+  profile_id: assignedPayoutFixture.profile_id,
+  mobile: assignedPayoutFixture.fps_phone,
+  preferred_name: "Jerry",
+  profiles: { full_name: "Jerry Chan" },
 });
+applicationRows.set(directPayoutFixture.profile_id, {
+  profile_id: directPayoutFixture.profile_id,
+  mobile: "+852 6222 2222",
+});
+const assignedCollectorSession = store.upcomingSessions(21)
+  .find((session) => session.kind === "paid" && !session.cancelled);
+assert.ok(assignedCollectorSession, "assigned collector identity coverage needs a paid session");
+operationalTableRows.collector_assignments.push(
+  {
+    week_start: assignedCollectorSession.dateISO,
+    collector_profile_id: assignedPayoutFixture.profile_id,
+    assigned_at: fixedIso,
+  },
+  {
+    week_start: "2026-08-15",
+    collector_profile_id: directPayoutFixture.profile_id,
+    assigned_at: fixedIso,
+  },
+);
 operationalTableRows.collector_payout_profiles.push(assignedPayoutFixture, directPayoutFixture);
 Object.assign(authUser, { id: "approved-member", email: "micah.member@example.com" });
 Object.assign(profile, {
@@ -1125,18 +1155,27 @@ assert.deepEqual(operations.livePayoutFor("assigned-enrichment-collector"), {
   profileId: "assigned-enrichment-collector",
   paymeLink: "https://payme.hsbc.com.hk/1/assigned-enrichment",
   fpsPhone: "+852 6888 8888",
-}, "successful RPC enrichment must preserve an assigned collector outside direct member RLS");
+  fullName: "Jerry Chan",
+  preferredName: "Jerry",
+}, "assigned payout hydration must carry the narrow collector display identity");
+const assignedCollector = store.collectorFor(assignedCollectorSession.id);
+assert.equal(assignedCollector?.preferredName, "Jerry",
+  "member payment identity must resolve the assigned collector name without the Admin directory");
 assert.deepEqual(operations.livePayoutFor("approved-member"), {
   profileId: "approved-member",
   paymeLink: "https://payme.hsbc.com.hk/1/direct-member",
-  fpsPhone: "+852 6111 1111",
-}, "successful enrichment must preserve direct RLS-visible payout rows");
+  fpsPhone: "+852 6222 2222",
+  fullName: "Micah Member",
+}, "applications.mobile must override a stale direct RLS payout phone for an assigned collector");
 Object.assign(authUser, originalAuthIdentity);
 Object.assign(profile, originalProfileIdentity);
 operationalTableRows.collector_assignments = operationalTableRows.collector_assignments
-  .filter((row) => row.collector_profile_id !== assignedPayoutFixture.profile_id);
+  .filter((row) => ![assignedPayoutFixture.profile_id, directPayoutFixture.profile_id]
+    .includes(row.collector_profile_id));
 operationalTableRows.collector_payout_profiles = operationalTableRows.collector_payout_profiles
   .filter((row) => ![assignedPayoutFixture.profile_id, directPayoutFixture.profile_id].includes(row.profile_id));
+applicationRows.delete(assignedPayoutFixture.profile_id);
+applicationRows.delete(directPayoutFixture.profile_id);
 await store.hydrateLiveOperations({ force: true });
 console.log("ok  payout RPC degradation preserves sessions and successful enrichment recovers");
 
@@ -1161,6 +1200,10 @@ console.log("ok  payout RPC degradation preserves sessions and successful enrich
     assigned_at: fixedIso,
   });
   operationalTableRows.collector_payout_profiles.push(combinedAssignedPayout);
+  applicationRows.set(combinedAssignedId, {
+    profile_id: combinedAssignedId,
+    mobile: combinedAssignedPayout.fps_phone,
+  });
 
   const combinedOriginalAuthIdentity = structuredClone(authUser);
   const combinedOriginalProfileIdentity = structuredClone(profile);
@@ -1249,6 +1292,7 @@ console.log("ok  payout RPC degradation preserves sessions and successful enrich
       .filter((row) => row.collector_profile_id !== combinedAssignedId);
     operationalTableRows.collector_payout_profiles = operationalTableRows.collector_payout_profiles
       .filter((row) => row.profile_id !== combinedAssignedId);
+    applicationRows.delete(combinedAssignedId);
     await store.hydrateLiveOperations({ force: true });
   }
 }
@@ -2658,7 +2702,7 @@ assert.equal(operations.livePayoutFor("unassigned-super"), null,
 store.currentUser().fullName = 'Micah & "Member" <Runner>';
 store.getBooking(memberPayBooking.id).snapshot.location = 'BFT & "Bay" <Deck>';
 const memberPayHtml = views.viewPay(memberPayBooking.id);
-for (const marker of ["On-duty collector", "https://payme.hsbc.com.hk/1/live-admin", "+852 6123 4567", 'data-action="copy-fps"']) {
+for (const marker of ["Riley", "https://payme.hsbc.com.hk/1/live-admin", "+852 6123 4567", 'data-action="copy-fps"']) {
   if (typeof memberPayHtml !== "string" || !memberPayHtml.includes(marker)) {
     throw new Error(`Member payout route after auth transition missing ${marker}`);
   }
@@ -3037,6 +3081,7 @@ const missingPrivacy = await views.viewAccount("privacy");
 if (missingPrivacy?.redirect || !missingPrivacy.includes("Application details unavailable")) {
   throw new Error("Live privacy should show an unavailable card when no application exists");
 }
+applicationRows.set("live-user-1", structuredClone(originalApplicationForApply));
 
 const domListeners = new Map();
 const windowListeners = new Map();
