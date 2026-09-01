@@ -377,11 +377,11 @@ update public.profiles set full_name = 'Declined Test', role = 'declined'
 -- Membership Details is authoritative for FPS, including collectors who have
 -- not created an optional PayMe payout profile.
 insert into public.applications
-  (profile_id, mobile, is_minor, photo_consent, privacy_accepted_at)
+  (profile_id, mobile, preferred_name, is_minor, photo_consent, privacy_accepted_at)
 values
-  ('aa000000-0000-0000-0000-00000000a001', '+852 6333 3003', false, false, now()),
-  ('dd000000-0000-0000-0000-00000000d001', '+852 6555 5005', false, false, now()),
-  ('ff000000-0000-0000-0000-00000000f001', '+852 6444 4004', false, false, now());
+  ('aa000000-0000-0000-0000-00000000a001', '+852 6333 3003', 'Jerry', false, false, now()),
+  ('dd000000-0000-0000-0000-00000000d001', '+852 6555 5005', 'Other', false, false, now()),
+  ('ff000000-0000-0000-0000-00000000f001', '+852 6444 4004', 'Super', false, false, now());
 
 insert into public.collector_assignments
   (week_start, collector_profile_id, assigned_by)
@@ -428,7 +428,9 @@ begin
     from public.get_assigned_collector_payout_profiles()
    where profile_id = 'aa000000-0000-0000-0000-00000000a001'
      and payme_link = 'https://payme.hsbc.com.hk/1/assigned-admin'
-     and fps_phone = '+852 6333 3003';
+     and fps_phone = '+852 6333 3003'
+     and full_name = 'Admin Test'
+     and preferred_name = 'Jerry';
   perform pg_temp.op_assert(
     v_assigned_count = 1,
     'approved member reads assigned PayMe with FPS from applications.mobile'
@@ -452,7 +454,9 @@ begin
     from public.get_assigned_collector_payout_profiles()
    where profile_id = 'dd000000-0000-0000-0000-00000000d001'
      and payme_link is null
-     and fps_phone = '+852 6555 5005';
+     and fps_phone = '+852 6555 5005'
+     and full_name = 'Other Test'
+     and preferred_name = 'Other';
   perform pg_temp.op_assert(
     v_no_payout_count = 1,
     'assigned FPS remains available without a collector payout profile'

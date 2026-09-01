@@ -220,6 +220,8 @@ function buildPayoutRow(row) {
     profileId: row.profile_id,
     paymeLink: row.payme_link || null,
     fpsPhone: row.fps_phone || null,
+    ...(row.full_name ? { fullName: row.full_name } : {}),
+    ...(row.preferred_name ? { preferredName: row.preferred_name } : {}),
   };
 }
 

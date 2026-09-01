@@ -769,10 +769,14 @@ operationalRpcHandler = (name, args) => {
       const application = applicationRows.get(profileId);
       const payout = operationalTableRows.collector_payout_profiles
         .find((row) => row.profile_id === profileId);
+      const memberProfile = [...approvedProfiles, ...pendingProfiles, ...declinedProfiles]
+        .find((item) => item.id === profileId);
       return {
         profile_id: profileId,
         payme_link: payout?.payme_link || null,
         fps_phone: application?.mobile || null,
+        full_name: application?.profiles?.full_name || memberProfile?.full_name || null,
+        preferred_name: application?.preferred_name || null,
       };
     });
     return Promise.resolve({ data: assignedPayouts, error: null });
@@ -1113,14 +1117,19 @@ const directPayoutFixture = {
 applicationRows.set(assignedPayoutFixture.profile_id, {
   profile_id: assignedPayoutFixture.profile_id,
   mobile: assignedPayoutFixture.fps_phone,
+  preferred_name: "Jerry",
+  profiles: { full_name: "Jerry Chan" },
 });
 applicationRows.set(directPayoutFixture.profile_id, {
   profile_id: directPayoutFixture.profile_id,
   mobile: "+852 6222 2222",
 });
+const assignedCollectorSession = store.upcomingSessions(21)
+  .find((session) => session.kind === "paid" && !session.cancelled);
+assert.ok(assignedCollectorSession, "assigned collector identity coverage needs a paid session");
 operationalTableRows.collector_assignments.push(
   {
-    week_start: "2026-08-08",
+    week_start: assignedCollectorSession.dateISO,
     collector_profile_id: assignedPayoutFixture.profile_id,
     assigned_at: fixedIso,
   },
@@ -1146,11 +1155,17 @@ assert.deepEqual(operations.livePayoutFor("assigned-enrichment-collector"), {
   profileId: "assigned-enrichment-collector",
   paymeLink: "https://payme.hsbc.com.hk/1/assigned-enrichment",
   fpsPhone: "+852 6888 8888",
-}, "successful RPC enrichment must preserve an assigned collector outside direct member RLS");
+  fullName: "Jerry Chan",
+  preferredName: "Jerry",
+}, "assigned payout hydration must carry the narrow collector display identity");
+const assignedCollector = store.collectorFor(assignedCollectorSession.id);
+assert.equal(assignedCollector?.preferredName, "Jerry",
+  "member payment identity must resolve the assigned collector name without the Admin directory");
 assert.deepEqual(operations.livePayoutFor("approved-member"), {
   profileId: "approved-member",
   paymeLink: "https://payme.hsbc.com.hk/1/direct-member",
   fpsPhone: "+852 6222 2222",
+  fullName: "Micah Member",
 }, "applications.mobile must override a stale direct RLS payout phone for an assigned collector");
 Object.assign(authUser, originalAuthIdentity);
 Object.assign(profile, originalProfileIdentity);
@@ -2687,7 +2702,7 @@ assert.equal(operations.livePayoutFor("unassigned-super"), null,
 store.currentUser().fullName = 'Micah & "Member" <Runner>';
 store.getBooking(memberPayBooking.id).snapshot.location = 'BFT & "Bay" <Deck>';
 const memberPayHtml = views.viewPay(memberPayBooking.id);
-for (const marker of ["On-duty collector", "https://payme.hsbc.com.hk/1/live-admin", "+852 6123 4567", 'data-action="copy-fps"']) {
+for (const marker of ["Riley", "https://payme.hsbc.com.hk/1/live-admin", "+852 6123 4567", 'data-action="copy-fps"']) {
   if (typeof memberPayHtml !== "string" || !memberPayHtml.includes(marker)) {
     throw new Error(`Member payout route after auth transition missing ${marker}`);
   }
