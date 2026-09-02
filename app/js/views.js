@@ -2009,23 +2009,27 @@ export function viewBooking(bookingId) {
       <button class="btn ghost" type="button" data-action="ics-booking" data-booking="${b.id}">Add to calendar</button>
       ${mine ? `<button class="btn ghost" type="button" data-action="rsvp-withdraw" data-booking="${b.id}">Can’t make it</button>` : ""}`;
   } else if (b.status === "confirmed" && !sessionStarted(s)) {
+    const movedFrom = mine && b.deferredFrom ? store.getBooking(b.deferredFrom) : null;
     head = `
       <div class="confirm-mark">${ICONS.check}</div>
-      <h1 class="display sm center mt16">You’re booked in.</h1>
-      <p class="subcopy center mt8">Booking ref <span class="mono">${esc(b.id.toUpperCase())}</span></p>`;
+      <h1 class="display sm center mt16">${movedFrom ? "Booking moved." : "You’re booked in."}</h1>
+      <p class="subcopy center mt8">${movedFrom
+        ? "Your payment has carried over."
+        : `Booking ref <span class="mono">${esc(b.id.toUpperCase())}</span>`}</p>`;
     const targets = mine ? store.deferTargetsFor(b) : [];
     actions = `
+      ${movedFrom ? `<div class="card mt16"><div class="card-body"><strong>Previous spot released</strong><p class="muted small mt8">${esc(fmtDate(movedFrom.snapshot.dateISO))} · ${fmtTime(movedFrom.snapshot.time)}</p></div></div>` : ""}
       <button class="btn ghost" type="button" data-action="ics-booking" data-booking="${b.id}">Add to calendar</button>
       ${receipt ? `<a class="btn ghost" href="#/receipt/${receipt.id}">View receipt · ${esc(receipt.number)}</a>` : ""}`;
     if (targets.length) {
       actions += `
       <div class="card mt16"><div class="card-body">
         <h3>Can’t make it? Defer — no refunds</h3>
-        <p class="muted small">Move your paid spot to a future session with availability. Payment carries over.</p>
+        <p class="muted small">Move your paid spot to a future ${esc(s.name)} session with availability. Payment carries over.</p>
         ${targets.map((t) => `
           <div class="member-row">
             <div class="who"><strong>${esc(fmtDate(t.dateISO))} · ${fmtTime(t.time)}</strong><span>${esc(t.location)} · ${store.spotsLeft(t)} spots left</span></div>
-            <button class="btn ghost sm" type="button" data-action="defer-to" data-booking="${b.id}" data-session="${t.id}">Move here</button>
+            <button class="btn ghost sm" type="button" data-action="defer-to" data-booking="${b.id}" data-session="${t.id}">Defer to this session</button>
           </div>`).join("")}
       </div></div>`;
     }

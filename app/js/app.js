@@ -833,10 +833,10 @@ document.addEventListener("click", async (e) => {
       break;
 
     case "defer-to":
-      if (confirm("Move this booking to the selected session?")) {
+      if (confirm("Defer to this session? Your current spot will be released and your payment will carry over.")) {
         try {
           const moved = await store.deferBooking(el.dataset.booking, el.dataset.session);
-          toast("Booking moved — payment carried over");
+          toast("Booking moved — previous spot released and payment carried over");
           location.hash = `#/booking/${moved.id}`;
           render();
         } catch (err) { toast(err.message || "Unable to move booking", true); }

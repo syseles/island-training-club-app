@@ -4368,12 +4368,24 @@ assert.equal(rejectedReleaseControl.hasAttribute("aria-busy"), false);
 console.log("ok  delegated release persists authoritatively and restores failure state");
 
 operationalRpcHandler = delegatedBaseOperationalRpcHandler;
-const routedDeferTarget = store.deferTargetsFor(routedDeferBooking)[0];
-if (!routedDeferTarget) throw new Error("Payment routing regression needs a defer target");
+const routedDeferTargets = store.deferTargetsFor(routedDeferBooking);
+const routedDeferSource = store.getSession(routedDeferBooking.sessionId);
+if (!routedDeferTargets.length) throw new Error("Payment routing regression needs a defer target");
+assert.equal(routedDeferTargets.every((session) =>
+  session.activityId === routedDeferSource.activityId), true,
+"live defer choices must match the confirmed booking activity");
+const routedDeferTarget = routedDeferTargets[0];
 const deferControl = makeElement();
 deferControl.dataset = { action: "defer-to", booking: routedDeferBooking.id, session: routedDeferTarget.id };
 deferControl.closest = () => deferControl;
+releaseConfirmation = null;
+toastStack.children.length = 0;
 await click({ target: deferControl, preventDefault() {} });
+assert.equal(releaseConfirmation,
+  "Defer to this session? Your current spot will be released and your payment will carry over.");
+assert.deepEqual(toastStack.children.map((item) => item.textContent), [
+  "Booking moved — previous spot released and payment carried over",
+]);
 const routedMovedBooking = store.bookingsForUser(authUser.id).find((booking) =>
   booking.deferredFrom === routedDeferBooking.id
 );
