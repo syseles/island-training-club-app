@@ -1408,6 +1408,13 @@ for (const banned of ["spots left", "Book & pay", "capacity", "Confirm booking",
   }
 }
 console.log("ok  free activity has no booking/capacity language");
+const wntSession = store.upcomingSessions(14).find((session) => session.activityId === "wnt");
+const wntHtml = views.viewActivity(wntSession.id);
+if (!wntHtml.includes("Everyone is welcome — just show up.")
+    || wntHtml.includes("look for the lime ITC flag")) {
+  failures++;
+  console.error("FAIL WNT free-event subtext should match the other free events");
+} else console.log("ok  WNT free-event subtext matches the other free events");
 
 // paid activity must show price + free/paid badges everywhere
 const freeDetailHtml = views.viewActivity(free.id);
