@@ -309,8 +309,8 @@ begin
       and price_hkd = 180
       and default_open
       and active
-      and venue = '10/F, 633 King''s Road, Quarry Bay, Hong Kong'
-      and maps_query = '10/F, 633 King''s Road, Quarry Bay, Hong Kong'
+      and venue = '10/F, Island ECC, Quarry Bay'
+      and maps_query = 'Island ECC, Quarry Bay, Hong Kong'
   ) then
     raise notice 'FAIL: IA-37 Quarry Bay HYROX activity template seed missing';
     failures := failures + 1;

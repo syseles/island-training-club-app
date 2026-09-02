@@ -32,7 +32,7 @@ const STORAGE_KEY = "itc.prototype.v1";
 const APPLY_DEVICE_KEY = "itc.device.id";
 const APPLY_DRAFT_KEY = "itc.apply.draft.v1";
 const APPLY_DRAFT_VERSION = 1;
-const STATE_VERSION = 17;
+const STATE_VERSION = 18;
 
 // Live-mode (Supabase) session cache. Avoids hammering the DB on every
 // page load. The TTL is short so role flips and welcome notifications
@@ -137,6 +137,24 @@ function migrate() {
 
   const v = state.version || 0;
   if (v >= STATE_VERSION) return;
+  if (v < 18) {
+    // v18: Quarry Bay's member-facing venue uses the recognizable Island ECC
+    // name while directions use an unambiguous Hong Kong maps query. Only
+    // exact prior values are replaced so later Admin edits remain intact.
+    const quarryBay = state.activities.find((activity) => activity.id === "hyrox-quarry-bay");
+    if (quarryBay?.location === "10/F, 633 King's Road, Quarry Bay, Hong Kong") {
+      quarryBay.location = "10/F, Island ECC, Quarry Bay";
+    }
+    if (quarryBay?.mapsQuery === "10/F, 633 King's Road, Quarry Bay, Hong Kong") {
+      quarryBay.mapsQuery = "Island ECC, Quarry Bay, Hong Kong";
+    }
+    for (const booking of state.bookings) {
+      if (booking.sessionId?.startsWith("hyrox-quarry-bay-")
+          && booking.snapshot?.location === "10/F, 633 King's Road, Quarry Bay, Hong Kong") {
+        booking.snapshot.location = "10/F, Island ECC, Quarry Bay";
+      }
+    }
+  }
   if (v < 17) {
     // v17: the BFT activity gets an explicit canonical id and Quarry Bay
     // joins as a third recurring HYROX session. Rewrite every device-local

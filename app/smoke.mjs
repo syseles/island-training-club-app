@@ -83,8 +83,8 @@ assert.deepEqual(quarryBaySeed && {
   weekday: 6,
   time: "11:00",
   durationMin: 60,
-  location: "10/F, 633 King's Road, Quarry Bay, Hong Kong",
-  mapsQuery: "10/F, 633 King's Road, Quarry Bay, Hong Kong",
+  location: "10/F, Island ECC, Quarry Bay",
+  mapsQuery: "Island ECC, Quarry Bay, Hong Kong",
   price: 180,
   capacity: 12,
 }, "IA-37 Quarry Bay HYROX must match the approved recurring-session details");
@@ -94,13 +94,21 @@ const legacyBftActivity = { ...bftSeed, id: "hyrox" };
 localStorage.setItem("itc.prototype.v1", JSON.stringify({
   version: 16,
   sessionUserId: null,
-  activities: [legacyBftActivity],
+  activities: [legacyBftActivity, {
+    ...quarryBaySeed,
+    location: "10/F, 633 King's Road, Quarry Bay, Hong Kong",
+    mapsQuery: "10/F, 633 King's Road, Quarry Bay, Hong Kong",
+  }],
   users: [],
   bookings: [{
     id: "legacy-bft-booking", userId: "legacy-member",
     sessionId: "hyrox-2099-01-03", status: "confirmed",
     deferredTo: "hyrox-2099-01-10",
     snapshot: { name: "ITC HYROX", dateISO: "2099-01-03", time: "11:15", location: "BFT Causeway Bay", price: 180 },
+  }, {
+    id: "legacy-quarry-booking", userId: "legacy-member",
+    sessionId: "hyrox-quarry-bay-2099-01-03", status: "confirmed",
+    snapshot: { name: "ITC HYROX", dateISO: "2099-01-03", time: "11:00", location: "10/F, 633 King's Road, Quarry Bay, Hong Kong", price: 180 },
   }],
   receipts: [{ id: "legacy-receipt", bookingId: "legacy-bft-booking", sessionId: "hyrox-2099-01-03" }],
   receiptCounter: 50,
@@ -111,7 +119,7 @@ localStorage.setItem("itc.prototype.v1", JSON.stringify({
   duty: {},
 }));
 const renamedState = store.load();
-assert.equal(renamedState.version, 17, "legacy state must advance through the HYROX identifier migration");
+assert.equal(renamedState.version, 18, "legacy state must advance through the HYROX identifier and venue migrations");
 assert.ok(renamedState.activities.some((activity) => activity.id === "hyrox-bft"));
 assert.ok(renamedState.activities.some((activity) => activity.id === "hyrox-quarry-bay"));
 assert.equal(renamedState.activities.some((activity) => activity.id === "hyrox"), false);
@@ -121,6 +129,16 @@ assert.equal(renamedState.receipts[0].sessionId, "hyrox-bft-2099-01-03");
 assert.ok(renamedState.queues["hyrox-bft-2099-01-03"]);
 assert.ok(renamedState.sessionOverrides["hyrox-bft-2099-01-03"]);
 assert.equal(renamedState.notifications[0].link, "#/activity/hyrox-bft-2099-01-03");
+const migratedQuarryBay = renamedState.activities.find((activity) =>
+  activity.id === "hyrox-quarry-bay"
+);
+assert.equal(migratedQuarryBay.location, "10/F, Island ECC, Quarry Bay");
+assert.equal(migratedQuarryBay.mapsQuery, "Island ECC, Quarry Bay, Hong Kong");
+assert.equal(
+  renamedState.bookings.find((booking) => booking.id === "legacy-quarry-booking")?.snapshot.location,
+  "10/F, Island ECC, Quarry Bay",
+  "existing Quarry Bay booking snapshots must show the corrected venue"
+);
 store.resetLocalData();
 const { existsSync, readFileSync } = await import("node:fs");
 const { resolve, dirname } = await import("node:path");
@@ -142,6 +160,7 @@ for (const relativePath of [
   "../supabase/migrations/20260805000007_admin_application_decisions.sql",
   "../supabase/migrations/20260827000001_hyrox_indemnity_fields.sql",
   "../supabase/migrations/20260902000001_hyrox_bft_quarry_bay.sql",
+  "../supabase/migrations/20260902000002_quarry_bay_island_ecc.sql",
 ]) {
   const absolutePath = resolve(__dirnameSmoke, relativePath);
   if (!existsSync(absolutePath)) {
@@ -166,6 +185,19 @@ const hyroxActivityMigrationSource = readFileSync(
   resolve(__dirnameSmoke, "../supabase/migrations/20260902000001_hyrox_bft_quarry_bay.sql"),
   "utf8"
 );
+const quarryBayVenueMigrationSource = readFileSync(
+  resolve(__dirnameSmoke, "../supabase/migrations/20260902000002_quarry_bay_island_ecc.sql"),
+  "utf8"
+);
+for (const marker of [
+  "10/F, Island ECC, Quarry Bay",
+  "Island ECC, Quarry Bay, Hong Kong",
+  "activity_id = 'hyrox-quarry-bay'",
+  "session_date >= (now() at time zone 'Asia/Hong_Kong')::date",
+]) {
+  assert.ok(quarryBayVenueMigrationSource.includes(marker),
+    `Quarry Bay venue migration must include ${marker}`);
+}
 assert.equal((hyroxActivityMigrationSource.match(
   /drop constraint operational_activity_templates_activity_id_check/g
 ) || []).length, 2,
@@ -2564,8 +2596,8 @@ store.resetLocalData();
   localStorage.setItem("itc.prototype.v1", JSON.stringify(locationV13));
   store.load();
   const migratedV13 = JSON.parse(localStorage.getItem("itc.prototype.v1"));
-  if (migratedV13.version !== 17) {
-    throw new Error("v17 migration must persist version 17");
+  if (migratedV13.version !== 18) {
+    throw new Error("v18 migration must persist version 18");
   }
   const repairedWater = store.activities().find((activity) => activity.id === "water");
   if (repairedWater.location !== "TBC" || repairedWater.mapsQuery !== ""
@@ -3908,10 +3940,10 @@ console.log("ok  reset");
     failures++;
     console.error("FAIL v10 migration must clear session tied to a removed demo user");
   } else console.log("ok  v10 migration clears removed session");
-  if (migrated.version !== 17) {
+  if (migrated.version !== 18) {
     failures++;
     console.error(`FAIL integrated migration must advance version to 16, got ${migrated.version}`);
-  } else console.log("ok  integrated migration advances genuine v9 state to v17");
+  } else console.log("ok  integrated migration advances genuine v9 state to v18");
 }
 
 {
@@ -3930,7 +3962,7 @@ console.log("ok  reset");
   store.load();
   const v14 = JSON.parse(mem.get("itc.prototype.v1"));
   const migratedUser = v14.users.find((user) => user.id === "real-v13-member");
-  if (v14.version !== 17 || !migratedUser) throw new Error("v17 migration lost the genuine member");
+  if (v14.version !== 18 || !migratedUser) throw new Error("v18 migration lost the genuine member");
   for (const field of ["indemnitySignature", "indemnitySignedAt", "indemnityFormVersion", "emergencyRelationship"]) {
     if (!(field in migratedUser) || migratedUser[field] !== null) {
       throw new Error(`v14 migration should initialize ${field} to null`);
@@ -4413,11 +4445,11 @@ for (const fixture of sourceSnapshots) {
     && !Array.isArray(migrated.paymentPayouts);
   const suppliedPayoutsPreserved = fixture.version !== 12
     || migrated.paymentPayouts["real-admin"]?.fpsPhone === "+852 6000 0000";
-  if (migrated.version !== 17 || suppliedIds.some((id) => !serialized.includes(id))
+  if (migrated.version !== 18 || suppliedIds.some((id) => !serialized.includes(id))
       || !payoutMapValid || !suppliedPayoutsPreserved) {
     failures++;
     console.error(`FAIL genuine v${fixture.version} fixture must reach v16 intact`);
-  } else console.log(`ok  genuine v${fixture.version} fixture reaches v17 intact`);
+  } else console.log(`ok  genuine v${fixture.version} fixture reaches v18 intact`);
 }
 
 for (const invalidCounter of [null, -1, 1.5, "broken"]) {

@@ -105,8 +105,8 @@ export const SEED_ACTIVITIES = [
     weekday: 6, // Saturday
     time: "11:00",
     durationMin: 60,
-    location: "10/F, 633 King's Road, Quarry Bay, Hong Kong",
-    mapsQuery: "10/F, 633 King's Road, Quarry Bay, Hong Kong",
+    location: "10/F, Island ECC, Quarry Bay",
+    mapsQuery: "Island ECC, Quarry Bay, Hong Kong",
     photo: PH + "hyrox.webp",
     blurb:
       "Weekly hybrid race training: ski, sled, burpees and running intervals. Every session is purchased separately at one fixed price.",

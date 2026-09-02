@@ -183,7 +183,7 @@ const operationalTableRows = {
   operational_activity_templates: [
     { activity_id: "hyrox-bft", name: "ITC HYROX", venue: "BFT Causeway Bay", weekday: 6, start_time: "11:15:00", duration_minutes: 60, capacity: 20, price_hkd: 180, default_open: true, active: true, category: "HYROX", maps_query: null, requires_rsvp: false },
     { activity_id: "hyrox-midtown", name: "ITC HYROX", venue: "Midtown 28", weekday: 6, start_time: "11:00:00", duration_minutes: 60, capacity: 12, price_hkd: 180, default_open: false, active: true, category: "HYROX", maps_query: null, requires_rsvp: false },
-    { activity_id: "hyrox-quarry-bay", name: "ITC HYROX", venue: "10/F, 633 King's Road, Quarry Bay, Hong Kong", weekday: 6, start_time: "11:00:00", duration_minutes: 60, capacity: 12, price_hkd: 180, default_open: true, active: true, category: "HYROX", maps_query: "10/F, 633 King's Road, Quarry Bay, Hong Kong", requires_rsvp: false },
+    { activity_id: "hyrox-quarry-bay", name: "ITC HYROX", venue: "10/F, Island ECC, Quarry Bay", weekday: 6, start_time: "11:00:00", duration_minutes: 60, capacity: 12, price_hkd: 180, default_open: true, active: true, category: "HYROX", maps_query: "Island ECC, Quarry Bay, Hong Kong", requires_rsvp: false },
     { activity_id: "lunch", name: "Post-Training Lunch", venue: "TBC", weekday: 6, start_time: "12:45:00", duration_minutes: 75, capacity: null, price_hkd: 0, default_open: true, active: true, category: "Socials", maps_query: null, requires_rsvp: true },
   ],
   operational_bookings: [],
@@ -606,7 +606,7 @@ for (let week = 0; normalWeeklyFixtureDates.length < 4; week += 1) {
     session_date: iso,
     start_time: "11:00:00",
     duration_minutes: 60,
-    venue: "10/F, 633 King's Road, Quarry Bay, Hong Kong",
+    venue: "10/F, Island ECC, Quarry Bay",
     capacity: 12,
     price_hkd: 180,
     is_open: true,
@@ -1432,8 +1432,8 @@ assert.deepEqual({
 }, {
   time: "11:00",
   durationMin: 60,
-  location: "10/F, 633 King's Road, Quarry Bay, Hong Kong",
-  mapsQuery: "10/F, 633 King's Road, Quarry Bay, Hong Kong",
+  location: "10/F, Island ECC, Quarry Bay",
+  mapsQuery: "Island ECC, Quarry Bay, Hong Kong",
   price: 180,
   capacity: 12,
   isOpen: true,

@@ -120,9 +120,9 @@ select activity_id, venue, capacity, price_hkd
 ```
 
 Expected: `hyrox-bft` (BFT Causeway Bay, 20, 180), `hyrox-midtown`
-(Midtown28 Fitness, 12, 180), and `hyrox-quarry-bay` (10/F, 633 King's
-Road, Quarry Bay, Hong Kong; Saturday 11:00; 60 minutes; capacity 12;
-HK$180; open by default).
+(Midtown28 Fitness, 12, 180), and `hyrox-quarry-bay` (10/F, Island ECC,
+Quarry Bay; Saturday 11:00; 60 minutes; capacity 12; HK$180; open by
+default; directions query `Island ECC, Quarry Bay, Hong Kong`).
 
 Confirm the rejected registrations, gym confirmation, and cancellation
 gates are enforced:
