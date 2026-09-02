@@ -10,8 +10,8 @@ executing the Admin two-browser acceptance test before merging to
 From this branch onward, the Supabase project owns the full HYROX
 operational workflow:
 
-- `operational_activity_templates` — `hyrox` (BFT) and `hyrox-midtown`
-  recurring definitions.
+- `operational_activity_templates` — `hyrox-bft`, `hyrox-midtown`, and
+  `hyrox-quarry-bay` recurring definitions.
 - `operational_sessions` — one row per venue per scheduled Saturday.
 - `operational_bookings` — reservation, confirmation, payment approval,
   cancellation, and deferral records.
@@ -44,6 +44,9 @@ push` from a trusted workstation):
 3. `20260808000003_operational_admin_rpcs.sql` — admin RPCs.
 4. `20260808000004_operational_realtime_seed.sql` — Realtime publication
    and the 15 August 2026 seed.
+5. Apply every later migration in filename order, including
+   `20260902000001_hyrox_bft_quarry_bay.sql`, which safely renames BFT’s
+   canonical identifier and adds Quarry Bay.
 
 Apply each migration on its own. Resolve any error before moving to the
 next migration. The verified `feature/shared-operations` branch uses
@@ -102,7 +105,7 @@ required reason:
 ```sql
 select id, cancelled_source, cancelled_by, cancel_reason
   from public.operational_sessions
- where id in ('hyrox-2026-08-15', 'hyrox-midtown-2026-08-15');
+ where id in ('hyrox-bft-2026-08-15', 'hyrox-midtown-2026-08-15');
 ```
 
 Expected: both rows have `cancel_reason = 'HYROX race weekend'`,
@@ -116,15 +119,17 @@ select activity_id, venue, capacity, price_hkd
  order by activity_id;
 ```
 
-Expected: `hyrox` (BFT Causeway Bay, 20, 180) and `hyrox-midtown`
-(Midtown28 Fitness, 12, 180).
+Expected: `hyrox-bft` (BFT Causeway Bay, 20, 180), `hyrox-midtown`
+(Midtown28 Fitness, 12, 180), and `hyrox-quarry-bay` (10/F, Island ECC,
+Quarry Bay; Saturday 11:00; 60 minutes; capacity 12; HK$180; open by
+default; directions query `Island ECC, Quarry Bay, Hong Kong`).
 
 Confirm the rejected registrations, gym confirmation, and cancellation
 gates are enforced:
 
 ```sql
 -- Anonymous reservation must be rejected.
-select reserve_operational_session('hyrox-2026-08-22');
+select reserve_operational_session('hyrox-bft-2026-08-22');
 -- Error: "Authentication required."
 ```
 
@@ -174,7 +179,7 @@ two separate browsers signed in as different administrators.
 2. Navigate to **Schedule**. Both browsers show the 15 August 2026 row
    labelled `Session cancelled by ITC — HYROX race weekend`. The Midtown
    variant shows the same cancellation.
-3. Navigate to **Activity** for `hyrox-2026-08-15`. Both admins see the
+3. Navigate to **Activity** for `hyrox-bft-2026-08-15`. Both admins see the
    canonical cancellation banner; no `Reserve`, `Mark paid`,
    `Confirm received`, or `Mark confirmed with gym` controls appear.
 4. As **Admin A**, open the next active HYROX session (e.g. the

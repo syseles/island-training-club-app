@@ -181,8 +181,9 @@ const operationalSubscriptions = [];
 const operationalTableRows = {
   operational_sessions: [],
   operational_activity_templates: [
-    { activity_id: "hyrox", name: "ITC HYROX", venue: "BFT Causeway Bay", weekday: 6, start_time: "11:15:00", duration_minutes: 60, capacity: 20, price_hkd: 180, default_open: true, active: true, category: "HYROX", maps_query: null, requires_rsvp: false },
+    { activity_id: "hyrox-bft", name: "ITC HYROX", venue: "BFT Causeway Bay", weekday: 6, start_time: "11:15:00", duration_minutes: 60, capacity: 20, price_hkd: 180, default_open: true, active: true, category: "HYROX", maps_query: null, requires_rsvp: false },
     { activity_id: "hyrox-midtown", name: "ITC HYROX", venue: "Midtown 28", weekday: 6, start_time: "11:00:00", duration_minutes: 60, capacity: 12, price_hkd: 180, default_open: false, active: true, category: "HYROX", maps_query: null, requires_rsvp: false },
+    { activity_id: "hyrox-quarry-bay", name: "ITC HYROX", venue: "10/F, Island ECC, Quarry Bay", weekday: 6, start_time: "11:00:00", duration_minutes: 60, capacity: 12, price_hkd: 180, default_open: true, active: true, category: "HYROX", maps_query: "Island ECC, Quarry Bay, Hong Kong", requires_rsvp: false },
     { activity_id: "lunch", name: "Post-Training Lunch", venue: "TBC", weekday: 6, start_time: "12:45:00", duration_minutes: 75, capacity: null, price_hkd: 0, default_open: true, active: true, category: "Socials", maps_query: null, requires_rsvp: true },
   ],
   operational_bookings: [],
@@ -566,7 +567,7 @@ globalThis.window = {
 const today = new Date();
 const fixedHktTodayIso = "2026-08-05";
 const aug15Iso = "2026-08-15";
-const seededCancelled = new Set(["hyrox-2026-08-15", "hyrox-midtown-2026-08-15"]);
+const seededCancelled = new Set(["hyrox-bft-2026-08-15", "hyrox-midtown-2026-08-15"]);
 const normalWeeklyFixtureDates = [];
 const firstNormalSaturday = new RealDate(`${fixedHktTodayIso}T00:00:00.000Z`);
 const daysUntilNextSaturday = ((6 - firstNormalSaturday.getUTCDay() + 7) % 7) || 7;
@@ -578,13 +579,35 @@ for (let week = 0; normalWeeklyFixtureDates.length < 4; week += 1) {
   if (iso === aug15Iso) continue;
   normalWeeklyFixtureDates.push(iso);
   operationalTableRows.operational_sessions.push({
-    id: `hyrox-${iso}`,
-    activity_id: "hyrox",
+    id: `hyrox-bft-${iso}`,
+    activity_id: "hyrox-bft",
     session_date: iso,
     start_time: "11:15:00",
     duration_minutes: 60,
     venue: "BFT Causeway Bay",
     capacity: 20,
+    price_hkd: 180,
+    is_open: true,
+    venue_tbc: false,
+    notice: null,
+    cancelled_at: null,
+    cancelled_by: null,
+    cancelled_source: null,
+    cancel_reason: null,
+    gym_confirmed_at: null,
+    gym_confirmed_by: null,
+    gym_note: null,
+    created_at: today.toISOString(),
+    updated_at: today.toISOString(),
+  });
+  operationalTableRows.operational_sessions.push({
+    id: `hyrox-quarry-bay-${iso}`,
+    activity_id: "hyrox-quarry-bay",
+    session_date: iso,
+    start_time: "11:00:00",
+    duration_minutes: 60,
+    venue: "10/F, Island ECC, Quarry Bay",
+    capacity: 12,
     price_hkd: 180,
     is_open: true,
     venue_tbc: false,
@@ -647,8 +670,8 @@ for (let week = 0; normalWeeklyFixtureDates.length < 4; week += 1) {
 
 // Seed the 15 August 2026 cancelled sessions with system provenance.
 operationalTableRows.operational_sessions.push({
-  id: "hyrox-2026-08-15",
-  activity_id: "hyrox",
+  id: "hyrox-bft-2026-08-15",
+  activity_id: "hyrox-bft",
   session_date: aug15Iso,
   start_time: "11:15:00",
   duration_minutes: 60,
@@ -1304,7 +1327,7 @@ const horizonDay15Iso = "2026-08-19";
 const temporaryHorizonRows = [
   {
     id: "hyrox-horizon-day-14",
-    activity_id: "hyrox",
+    activity_id: "hyrox-bft",
     session_date: horizonDay14Iso,
     start_time: "11:15:00",
     duration_minutes: 60,
@@ -1326,7 +1349,7 @@ const temporaryHorizonRows = [
   },
   {
     id: "hyrox-horizon-day-15",
-    activity_id: "hyrox",
+    activity_id: "hyrox-bft",
     session_date: horizonDay15Iso,
     start_time: "11:15:00",
     duration_minutes: 60,
@@ -1391,9 +1414,30 @@ const hydratedWntPoint = store.getSession("wnt-2026-08-26");
 assert.equal(hydratedWntPoint.meetingLat, 22.2825);
 assert.equal(hydratedWntPoint.meetingLng, 114.1659);
 const hydratedBft = store.upcomingSessions(21)
-  .find((session) => session.activityId === "hyrox");
+  .find((session) => session.activityId === "hyrox-bft");
 const hydratedMidtown = store.upcomingSessions(21)
   .find((session) => session.activityId === "hyrox-midtown");
+const hydratedQuarryBay = store.upcomingSessions(21)
+  .find((session) => session.activityId === "hyrox-quarry-bay");
+assert.ok(hydratedBft, "live BFT HYROX must use the canonical hyrox-bft id");
+assert.ok(hydratedQuarryBay, "live operations must hydrate the Quarry Bay HYROX session");
+assert.deepEqual({
+  time: hydratedQuarryBay.time,
+  durationMin: hydratedQuarryBay.durationMin,
+  location: hydratedQuarryBay.location,
+  mapsQuery: hydratedQuarryBay.mapsQuery,
+  price: hydratedQuarryBay.price,
+  capacity: hydratedQuarryBay.capacity,
+  isOpen: hydratedQuarryBay.isOpen,
+}, {
+  time: "11:00",
+  durationMin: 60,
+  location: "10/F, Island ECC, Quarry Bay",
+  mapsQuery: "Island ECC, Quarry Bay, Hong Kong",
+  price: 180,
+  capacity: 12,
+  isOpen: true,
+});
 assert.equal(hydratedBft.photo, "../assets/itc/hyrox.webp");
 assert.equal(hydratedMidtown.photo, "../assets/itc/hyrox.webp");
 assert.equal(hydratedMidtown.location, "Midtown28 Fitness");
@@ -2141,7 +2185,7 @@ console.log("ok  live booking history renders snapshot start_time without crashi
 // History must hydrate omitted booking snapshot fields from the authoritative
 // operational session, and must collapse repeated RSVP join/withdraw rows.
 const liveHistoryPaidSessionRow = operationalTableRows.operational_sessions.find(
-  (row) => row.activity_id === "hyrox" && row.id !== uuidBooking.sessionId
+  (row) => row.activity_id === "hyrox-bft" && row.id !== uuidBooking.sessionId
 );
 const liveHistoryRsvpSessionRow = operationalTableRows.operational_sessions.find(
   (row) => row.activity_id === "lunch" && row.id !== seededRsvpLunchId
@@ -2242,7 +2286,7 @@ console.log("ok  live History hydrates gaps, deduplicates RSVPs, and sorts newes
 const historicalSessionRows = [
   {
     id: "history-old-session",
-    activity_id: "hyrox",
+    activity_id: "hyrox-bft",
     session_date: "2026-07-01",
     start_time: "10:30:00",
     duration_minutes: 55,
@@ -2264,7 +2308,7 @@ const historicalSessionRows = [
   },
   {
     id: "history-tie-session-a",
-    activity_id: "hyrox",
+    activity_id: "hyrox-bft",
     session_date: "2026-07-02",
     start_time: "09:00:00",
     duration_minutes: 60,
@@ -2286,7 +2330,7 @@ const historicalSessionRows = [
   },
   {
     id: "history-tie-session-z",
-    activity_id: "hyrox",
+    activity_id: "hyrox-bft",
     session_date: "2026-07-02",
     start_time: "09:30:00",
     duration_minutes: 60,
@@ -2574,7 +2618,7 @@ if (saturdayTimes.join(",") !== sortedTimes.join(",")) {
   throw new Error(`same-day sessions must order by start time; got ${saturdayTimes.join(",")}`);
 }
 if (saturdaySessions.findIndex((s) => s.kind === "rsvp")
-    < saturdaySessions.findIndex((s) => s.activityId === "hyrox")) {
+    < saturdaySessions.findIndex((s) => s.activityId === "hyrox-bft")) {
   throw new Error("the post-training lunch must follow the morning HYROX sessions");
 }
 await store.setWeekVenue(lunchSession.id, { location: "Cafe Deco, Central", mapsQuery: "Cafe Deco, Central" });
@@ -3872,6 +3916,9 @@ operationalRpcHandler = (name, args) => {
 };
 location.hash = `#/checkout/${routingSessions[0].id}`;
 toastStack.children.length = 0;
+const reserveRpcCallCountBefore = operationalRpcCalls.filter((call) =>
+  call.name === "reserve_operational_session"
+    && call.args.p_session_id === routingSessions[0].id).length;
 let reserveSettled = false;
 const reserveSubmit = domListeners.get("submit")({ target: reserveForm, preventDefault() {} })
   .then(() => { reserveSettled = true; });
@@ -3881,7 +3928,7 @@ assert.deepEqual(reserveRpcArgs, { p_session_id: routingSessions[0].id });
 assert.equal(reserveSettled, false, "reserve form must remain pending with the live RPC");
 assert.equal(
   operationalRpcCalls.filter((call) => call.name === "reserve_operational_session"
-    && call.args.p_session_id === routingSessions[0].id).length,
+    && call.args.p_session_id === routingSessions[0].id).length - reserveRpcCallCountBefore,
   1,
   "duplicate reserve submit must issue one RPC"
 );
@@ -5218,7 +5265,7 @@ console.log("ok  live Giving database and profile APIs coexist with Payment/Auth
 
 // Cancellation copy must read exactly 'Session cancelled by ITC — <reason>'
 // across schedule, activity, and admin ops surfaces.
-const seededCancellation = await store.getSession("hyrox-2026-08-15");
+const seededCancellation = await store.getSession("hyrox-bft-2026-08-15");
 if (!seededCancellation || !seededCancellation.cancelled) {
   throw new Error("15 August 2026 session should be server-cancelled on hydration");
 }
@@ -5243,7 +5290,7 @@ scheduleHtml += views.viewSchedule();
 if (!scheduleHtml.includes("Session cancelled by ITC — HYROX race weekend")) {
   throw new Error("Schedule must render the canonical cancellation copy");
 }
-const activityHtml = views.viewActivity("hyrox-2026-08-15");
+const activityHtml = views.viewActivity("hyrox-bft-2026-08-15");
 if (!activityHtml.includes("Session cancelled by ITC — HYROX race weekend")) {
   throw new Error("Activity view must render the canonical cancellation copy");
 }
@@ -5303,8 +5350,8 @@ console.log("ok  live cancellation copy renders exact paid and social follow-up 
 // Location-map surface: a non-cancelled paid HYROX exposes Get directions
 // without the inline map host.
 const liveNonCancelledHyrox = store.upcomingSessions(21)
-  .filter((s) => s.activityId === "hyrox" && !data.sessionStarted(s))
-  .find((s) => s.id !== "hyrox-2026-08-15");
+  .filter((s) => s.activityId === "hyrox-bft" && !data.sessionStarted(s))
+  .find((s) => s.id !== "hyrox-bft-2026-08-15");
 if (!liveNonCancelledHyrox) throw new Error("live smoke needs an upcoming non-cancelled hyrox session");
 const liveHyroxDetail = views.viewActivity(liveNonCancelledHyrox.id);
 if (!liveHyroxDetail.includes("Get directions") || liveHyroxDetail.includes('id="activity-map"')) {

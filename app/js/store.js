@@ -32,7 +32,7 @@ const STORAGE_KEY = "itc.prototype.v1";
 const APPLY_DEVICE_KEY = "itc.device.id";
 const APPLY_DRAFT_KEY = "itc.apply.draft.v1";
 const APPLY_DRAFT_VERSION = 1;
-const STATE_VERSION = 16;
+const STATE_VERSION = 18;
 
 // Live-mode (Supabase) session cache. Avoids hammering the DB on every
 // page load. The TTL is short so role flips and welcome notifications
@@ -137,6 +137,68 @@ function migrate() {
 
   const v = state.version || 0;
   if (v >= STATE_VERSION) return;
+  if (v < 18) {
+    // v18: Quarry Bay's member-facing venue uses the recognizable Island ECC
+    // name while directions use an unambiguous Hong Kong maps query. Only
+    // exact prior values are replaced so later Admin edits remain intact.
+    const quarryBay = state.activities.find((activity) => activity.id === "hyrox-quarry-bay");
+    if (quarryBay?.location === "10/F, 633 King's Road, Quarry Bay, Hong Kong") {
+      quarryBay.location = "10/F, Island ECC, Quarry Bay";
+    }
+    if (quarryBay?.mapsQuery === "10/F, 633 King's Road, Quarry Bay, Hong Kong") {
+      quarryBay.mapsQuery = "Island ECC, Quarry Bay, Hong Kong";
+    }
+    for (const booking of state.bookings) {
+      if (booking.sessionId?.startsWith("hyrox-quarry-bay-")
+          && booking.snapshot?.location === "10/F, 633 King's Road, Quarry Bay, Hong Kong") {
+        booking.snapshot.location = "10/F, Island ECC, Quarry Bay";
+      }
+    }
+  }
+  if (v < 17) {
+    // v17: the BFT activity gets an explicit canonical id and Quarry Bay
+    // joins as a third recurring HYROX session. Rewrite every device-local
+    // session reference so existing bookings and operational state survive.
+    const renameBftSessionId = (value) =>
+      typeof value === "string" && /^hyrox-\d{4}-\d{2}-\d{2}$/.test(value)
+        ? value.replace(/^hyrox-/, "hyrox-bft-")
+        : value;
+    const legacyBft = state.activities.find((activity) => activity.id === "hyrox");
+    const canonicalBft = state.activities.find((activity) => activity.id === "hyrox-bft");
+    if (legacyBft && !canonicalBft) legacyBft.id = "hyrox-bft";
+    else if (legacyBft) state.activities = state.activities.filter((activity) => activity !== legacyBft);
+    for (const id of ["hyrox-bft", "hyrox-quarry-bay"]) {
+      if (!state.activities.some((activity) => activity.id === id)) {
+        const seed = SEED_ACTIVITIES.find((activity) => activity.id === id);
+        if (seed) state.activities.push(structuredClone(seed));
+      }
+    }
+    for (const booking of state.bookings) {
+      booking.sessionId = renameBftSessionId(booking.sessionId);
+      booking.deferredTo = renameBftSessionId(booking.deferredTo);
+    }
+    for (const receipt of state.receipts) {
+      receipt.sessionId = renameBftSessionId(receipt.sessionId);
+    }
+    for (const collection of [state.queues, state.sessionOverrides]) {
+      for (const [legacyId, value] of Object.entries(collection)) {
+        const canonicalId = renameBftSessionId(legacyId);
+        if (canonicalId === legacyId) continue;
+        if (!(canonicalId in collection)) collection[canonicalId] = value;
+        delete collection[legacyId];
+      }
+    }
+    for (const notification of state.notifications) {
+      for (const field of ["link", "destination"]) {
+        if (typeof notification[field] === "string") {
+          notification[field] = notification[field].replace(
+            /([/#])hyrox-(\d{4}-\d{2}-\d{2})(?=$|[/?#])/g,
+            "$1hyrox-bft-$2"
+          );
+        }
+      }
+    }
+  }
   if (v < 16) {
     // v16: the recurring post-training lunch (RSVP kind, Meals category)
     // joins the seed activities. Existing states get it appended without
@@ -157,7 +219,7 @@ function migrate() {
     // v2: Sunday Trail Run removed; HYROX moved to Sat 11:15 at Causeway Bay
     // BFT (HK$180) and a second Saturday session added at Midtown 28 (11:00).
     state.activities = state.activities.filter(
-      (a) => a.id !== "trail" && a.id !== "hyrox" && a.id !== "hyrox-midtown"
+      (a) => !["trail", "hyrox", "hyrox-bft", "hyrox-midtown", "hyrox-quarry-bay"].includes(a.id)
     );
     state.activities.push(
       ...SEED_ACTIVITIES.filter((a) => a.category === "HYROX").map((a) =>
@@ -181,7 +243,7 @@ function migrate() {
     // (activity location + any booking snapshots carrying the old string).
     // Only exact old-string matches are rewritten so admin edits made
     // since are preserved.
-    const hyrox = state.activities.find((a) => a.id === "hyrox");
+    const hyrox = state.activities.find((a) => a.id === "hyrox-bft" || a.id === "hyrox");
     if (hyrox && hyrox.location === "Causeway Bay BFT") {
       hyrox.location = "BFT Causeway Bay";
     }
@@ -244,7 +306,7 @@ function migrate() {
     // overrides, waitlist/interest queues, duty roster, notifications.
     // (Collection normalization above initializes the structures.)
     for (const a of state.activities) {
-      if (a.id === "hyrox" && a.capacity === 18) a.capacity = 20;
+      if ((a.id === "hyrox-bft" || a.id === "hyrox") && a.capacity === 18) a.capacity = 20;
       if (a.id === "hyrox-midtown" && a.capacity === 18) a.capacity = 12;
     }
   }
@@ -1054,8 +1116,8 @@ export function markBookingPaid(bookingId, method, ref, now = Date.now()) {
   return b;
 }
 
-// Collector confirms the money arrived. Payment = commitment: any other
-// venue hold the member had for the same Saturday is released.
+// Collector confirms the money arrived. Payment = commitment: every other
+// HYROX venue hold the member had for the same Saturday is released.
 export function confirmBookingPayment(bookingId, now = Date.now()) {
   if (isLive()) {
     return liveOps.liveApproveBookingPayment(bookingId);
@@ -1080,30 +1142,33 @@ export function confirmBookingPayment(bookingId, now = Date.now()) {
     line: `${b.snapshot.name} — ${fmtDate(b.snapshot.dateISO)} ${fmtTime(b.snapshot.time)}`,
   };
   state.receipts.push(receipt);
-  // Payment = commitment. Release the member's holds and queue spots at the
-  // OTHER venue for the same Saturday; freed spots cascade immediately.
-  const otherVenueId = isMidtown(b.sessionId)
-    ? `hyrox-${b.snapshot.dateISO}`
-    : `hyrox-midtown-${b.snapshot.dateISO}`;
-  const other = state.bookings.find(
-    (x) => x.userId === b.userId && x.sessionId === otherVenueId && x.status === "reserved"
-  );
-  if (other) {
-    other.status = "cancelled";
-    notify(b.userId, "hold-released",
-      `You're booked for ${b.snapshot.location} — your unpaid ${other.snapshot.location} spot was released to the waitlist.`,
-      `#/booking/${b.id}`);
-    cascadeSession(other.sessionId, now);
-  }
-  const q = paymentQueueFor(otherVenueId);
-  const wasQueued =
-    q.waitlist.some((e) => e.userId === b.userId) || q.interest.some((e) => e.userId === b.userId);
-  q.waitlist = q.waitlist.filter((e) => e.userId !== b.userId);
-  q.interest = q.interest.filter((e) => e.userId !== b.userId);
-  if (wasQueued && !other) {
-    notify(b.userId, "hold-released",
-      `You're booked for ${b.snapshot.location} — your spot in the other venue queue was released.`,
-      `#/booking/${b.id}`);
+  // Payment = commitment. Release the member's holds and queue spots at all
+  // other HYROX venues for the same Saturday; freed spots cascade immediately.
+  const siblingSessionIds = state.activities
+    .filter((activity) => activity.category === "HYROX")
+    .map((activity) => `${activity.id}-${b.snapshot.dateISO}`)
+    .filter((sessionId) => sessionId !== b.sessionId);
+  for (const siblingSessionId of siblingSessionIds) {
+    const other = state.bookings.find(
+      (x) => x.userId === b.userId && x.sessionId === siblingSessionId && x.status === "reserved"
+    );
+    if (other) {
+      other.status = "cancelled";
+      notify(b.userId, "hold-released",
+        `You're booked for ${b.snapshot.location} — your unpaid ${other.snapshot.location} spot was released to the waitlist.`,
+        `#/booking/${b.id}`);
+      cascadeSession(other.sessionId, now);
+    }
+    const q = paymentQueueFor(siblingSessionId);
+    const wasQueued =
+      q.waitlist.some((e) => e.userId === b.userId) || q.interest.some((e) => e.userId === b.userId);
+    q.waitlist = q.waitlist.filter((e) => e.userId !== b.userId);
+    q.interest = q.interest.filter((e) => e.userId !== b.userId);
+    if (wasQueued && !other) {
+      notify(b.userId, "hold-released",
+        `You're booked for ${b.snapshot.location} — your spot in another HYROX venue queue was released.`,
+        `#/booking/${b.id}`);
+    }
   }
   notify(b.userId, "payment-confirmed",
     `Payment confirmed — you're booked for ${b.snapshot.name} · ${fmtDate(b.snapshot.dateISO)}.`,
