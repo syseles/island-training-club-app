@@ -76,16 +76,6 @@ update public.notifications
    set destination = replace(destination, '#/activity/hyrox-', '#/activity/hyrox-bft-')
  where destination like '#/activity/hyrox-%';
 
--- Tighten the template id contract now that no canonical row uses `hyrox`.
-alter table public.operational_activity_templates
-  drop constraint operational_activity_templates_activity_id_check;
-alter table public.operational_activity_templates
-  add constraint operational_activity_templates_activity_id_check
-  check (
-    activity_id in ('hyrox-bft', 'hyrox-midtown', 'hyrox-quarry-bay', 'lunch')
-    or activity_id like 'event-%'
-  );
-
 insert into public.operational_activity_templates
   (activity_id, name, venue, weekday, start_time, duration_minutes,
    capacity, price_hkd, default_open, active, category, maps_query, requires_rsvp)
@@ -120,6 +110,18 @@ set constraints operational_sessions_activity_id_fkey,
   operational_queue_entries_session_id_fkey,
   operational_receipts_session_id_fkey,
   operational_rsvp_counts_session_id_fkey immediate;
+
+-- Tighten the template id contract only after the deferred foreign-key
+-- trigger events have settled. PostgreSQL rejects ALTER TABLE while those
+-- trigger events are pending (SQLSTATE 55006).
+alter table public.operational_activity_templates
+  drop constraint operational_activity_templates_activity_id_check;
+alter table public.operational_activity_templates
+  add constraint operational_activity_templates_activity_id_check
+  check (
+    activity_id in ('hyrox-bft', 'hyrox-midtown', 'hyrox-quarry-bay', 'lunch')
+    or activity_id like 'event-%'
+  );
 
 alter table public.operational_sessions
   alter constraint operational_sessions_activity_id_fkey not deferrable;

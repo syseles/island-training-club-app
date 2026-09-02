@@ -170,6 +170,14 @@ assert.equal((hyroxActivityMigrationSource.match(
   /drop constraint operational_activity_templates_activity_id_check/g
 ) || []).length, 2,
 "HYROX activity migration must allow the legacy id during rename, then tighten the constraint");
+const settleHyroxConstraintsAt = hyroxActivityMigrationSource.indexOf(
+  "operational_rsvp_counts_session_id_fkey immediate;"
+);
+const tightenHyroxTemplateAt = hyroxActivityMigrationSource.indexOf(
+  "-- Tighten the template id contract"
+);
+assert.ok(settleHyroxConstraintsAt >= 0 && settleHyroxConstraintsAt < tightenHyroxTemplateAt,
+  "deferred rename constraints must settle before altering the template table again");
 for (const marker of [
   "'hyrox-bft'",
   "'hyrox-quarry-bay'",
