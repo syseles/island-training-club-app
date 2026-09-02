@@ -430,7 +430,7 @@ export function viewActivity(sessionId) {
     actionBlock = `
       <div class="free-banner">
         ${ICONS.pin}
-        <div><strong>Free · No booking needed.</strong><br><span class="muted small">Everyone is welcome — just show up${s.id.startsWith("wnt") ? " and look for the lime ITC flag" : ""}.</span></div>
+        <div><strong>Free · No booking needed.</strong><br><span class="muted small">Everyone is welcome — just show up.</span></div>
       </div>
       <div class="btn-row ${s.mapsQuery ? "two" : ""}">
         <button class="btn" type="button" data-action="ics" data-session="${s.id}">Add to calendar</button>
