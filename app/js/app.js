@@ -821,24 +821,22 @@ document.addEventListener("click", async (e) => {
 
     case "release-reservation":
       if (controlBusy.has(el)) break;
-      if (confirm(isLive()
-        ? "Release this reservation?"
-        : "Release this reservation? Your spot may go to the waitlist.")) {
+      if (confirm("Cancel this unpaid booking? Your spot will be released.")) {
         try {
-          await withBusyControl(el, "Releasing…", async () => {
+          await withBusyControl(el, "Cancelling…", async () => {
             const released = await store.releaseReservation(el.dataset.booking);
-            toast(released ? "Reservation released" : "Nothing to release", !released);
+            toast(released ? "Booking cancelled" : "Booking cannot be cancelled", !released);
             await renderWithFeedback();
           });
-        } catch (err) { toast(err.message || "Unable to release reservation", true); }
+        } catch (err) { toast(err.message || "Unable to cancel booking", true); }
       }
       break;
 
     case "defer-to":
-      if (confirm("Move this booking to the selected session?")) {
+      if (confirm("Defer to this session? Your current spot will be released and your payment will carry over.")) {
         try {
           const moved = await store.deferBooking(el.dataset.booking, el.dataset.session);
-          toast("Booking moved — payment carried over");
+          toast("Booking moved — previous spot released and payment carried over");
           location.hash = `#/booking/${moved.id}`;
           render();
         } catch (err) { toast(err.message || "Unable to move booking", true); }

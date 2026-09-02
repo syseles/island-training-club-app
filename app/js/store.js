@@ -1696,9 +1696,12 @@ export function updateCollectorPayouts(userId, { paymeLink, fpsPhone }) {
 
 export function deferTargetsFor(booking) {
   const from = parseISO(booking.snapshot.dateISO);
+  const sourceActivityId = getSession(booking.sessionId)?.activityId;
+  if (!sourceActivityId) return [];
   if (isLive()) {
     const sources = liveOps.listLiveSessions();
     return sources
+      .filter((s) => s.activityId === sourceActivityId)
       .filter((s) => s.dateISO > booking.snapshot.dateISO && !s.cancelled)
       .filter((s) => !sessionStarted(s))
       .filter((s) => !(isMidtown(s) && !midtownOpenFor(s)))
@@ -1709,7 +1712,7 @@ export function deferTargetsFor(booking) {
     .map((s) => getSession(s.id))
     .filter(
       (s) =>
-        s && s.kind === "paid" && s.id !== booking.sessionId &&
+        s && s.activityId === sourceActivityId && s.kind === "paid" && s.id !== booking.sessionId &&
         !s.cancelled && !sessionStarted(s) &&
         (!isMidtown(s) || midtownOpenFor(s)) &&
         spotsLeft(s) > 0
@@ -1729,6 +1732,8 @@ export function deferBooking(bookingId, targetSessionId, now = Date.now()) {
   const target = getSession(targetSessionId);
   if (!target || target.kind !== "paid" || target.cancelled || sessionStarted(target))
     throw new Error("That session is not available");
+  if (!src || target.activityId !== src.activityId)
+    throw new Error("Target must be a session of the same activity");
   if (isMidtown(target) && !midtownOpenFor(target)) throw new Error("Session is not open");
   if (spotsLeft(target) <= 0) throw new Error("Session is full");
 

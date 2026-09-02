@@ -2812,9 +2812,26 @@ installLocalFixtures(); store.signIn("member@example.test");
   store.signIn("admin@example.test");
   store.confirmBookingPayment(b.id);
   store.signIn("member@example.test");
-  const targets = store.deferTargetsFor(store.getBooking(b.id));
+  const confirmedBooking = store.getBooking(b.id);
+  const targets = store.deferTargetsFor(confirmedBooking);
   if (!targets.length) throw new Error("expected future defer targets");
   if (targets.some((t) => t.id === sess.id)) throw new Error("own session is not a defer target");
+  if (targets.some((t) => t.activityId !== sess.activityId))
+    throw new Error("defer targets must be future sessions of the same activity");
+  const wrongTypeTarget = store.upcomingSessions(35).find((session) =>
+    session.activityId === "hyrox-midtown" && session.dateISO > sess.dateISO
+  );
+  if (!wrongTypeTarget) throw new Error("expected a different-activity paid target fixture");
+  store.signIn("admin@example.test");
+  store.setMidtownOpen(wrongTypeTarget.id, true);
+  store.signIn("member@example.test");
+  assert.throws(() => store.deferBooking(b.id, wrongTypeTarget.id), /same activity/,
+    "the local write seam must reject a direct cross-activity deferral");
+  if (store.getBooking(b.id).status !== "confirmed")
+    throw new Error("rejected cross-activity deferral must preserve the confirmed booking");
+  const confirmedView = views.viewBooking(b.id);
+  if (!confirmedView.includes("Defer to this session") || confirmedView.includes(">Move here</button>"))
+    throw new Error("confirmed paid bookings should present explicit same-session-type defer actions");
   const moved = store.deferBooking(b.id, targets[0].id);
   if (moved.status !== "confirmed") throw new Error("paid deferral should stay confirmed");
   if (store.getBooking(b.id).status !== "deferred") throw new Error("original should read deferred");
@@ -2822,7 +2839,13 @@ installLocalFixtures(); store.signIn("member@example.test");
     throw new Error("receipt should follow the deferred booking");
   if (!store.notificationsFor("fixture-admin").some((n) => n.kind === "defer"))
     throw new Error("collector should be notified of the deferral");
-  console.log("ok  paid deferral moves booking + receipt, notifies collector");
+  const movedView = views.viewBooking(moved.id);
+  if (!movedView.includes("Booking moved.")
+      || !movedView.includes("Previous spot released")
+      || !movedView.includes("payment has carried over")) {
+    throw new Error("deferred booking should confirm the released old spot and carried payment");
+  }
+  console.log("ok  paid deferral moves booking + receipt, releases the old spot, and notifies collector");
 }
 {
   const sess = store.upcomingSessions(14).find(
@@ -3290,7 +3313,16 @@ store.signIn("member@example.test");
   if (pay.includes("amount ready")) {
     throw new Error("PayMe instructions must not claim the amount is prefilled");
   }
+  const unpaidManage = views.viewBooking(b.id);
+  assert.match(unpaidManage,
+    new RegExp(`data-action="release-reservation"[^>]*data-booking="${b.id}"[^>]*>Cancel booking</button>`),
+    "an unpaid booking owner must see the explicit Cancel booking action");
+  assert.doesNotMatch(unpaidManage, /Release spot/,
+    "member-facing unpaid cancellation must not use ambiguous release wording");
   store.signIn("admin@example.test");
+  const adminViewingMemberReservation = views.viewBooking(b.id);
+  assert.doesNotMatch(adminViewingMemberReservation, /data-action="release-reservation"|href="#\/pay\//,
+    "a non-owner Admin must not receive member payment or cancellation controls");
   store.updateCollectorPayouts("fixture-admin", { paymeLink: "" });
   store.signIn("member@example.test");
   const fpsOnlyPay = views.viewPay(b.id);
@@ -3321,6 +3353,8 @@ store.signIn("member@example.test");
   const awaiting = views.viewBooking(b.id);
   if (!awaiting.includes("being confirmed"))
     throw new Error("booking should show awaiting confirmation");
+  assert.doesNotMatch(awaiting, /data-action="release-reservation"|Cancel booking/,
+    "payment-marked bookings must not expose unpaid cancellation");
   console.log("ok  booking shows awaiting-confirmation state");
   store.signIn("admin@example.test");
   store.confirmBookingPayment(b.id);
