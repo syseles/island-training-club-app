@@ -821,16 +821,14 @@ document.addEventListener("click", async (e) => {
 
     case "release-reservation":
       if (controlBusy.has(el)) break;
-      if (confirm(isLive()
-        ? "Release this reservation?"
-        : "Release this reservation? Your spot may go to the waitlist.")) {
+      if (confirm("Cancel this unpaid booking? Your spot will be released.")) {
         try {
-          await withBusyControl(el, "Releasing…", async () => {
+          await withBusyControl(el, "Cancelling…", async () => {
             const released = await store.releaseReservation(el.dataset.booking);
-            toast(released ? "Reservation released" : "Nothing to release", !released);
+            toast(released ? "Booking cancelled" : "Booking cannot be cancelled", !released);
             await renderWithFeedback();
           });
-        } catch (err) { toast(err.message || "Unable to release reservation", true); }
+        } catch (err) { toast(err.message || "Unable to cancel booking", true); }
       }
       break;
 

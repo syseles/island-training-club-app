@@ -1991,9 +1991,9 @@ export function viewBooking(bookingId) {
     head = `
       <h1 class="display sm mt16">Spot held.</h1>
       <p class="subcopy mt8">Pay ${fmtMoney(s.price)} by <strong>${fmtDeadline(b.payDeadlineAt)}</strong> or the spot goes to the waitlist.</p>`;
-    actions = `
+    actions = mine ? `
       <a class="btn" href="#/pay/${b.id}">Pay ${fmtMoney(s.price)}</a>
-      <button class="btn ghost" type="button" data-action="release-reservation" data-booking="${b.id}">Release spot</button>`;
+      <button class="btn ghost" type="button" data-action="release-reservation" data-booking="${b.id}">Cancel booking</button>` : "";
   } else if (b.status === "reserved" && b.paymentMarkedAt) {
     const collector = store.collectorFor(b.sessionId);
     const cname = collector ? esc(collector.preferredName || collector.fullName) : "the collector";

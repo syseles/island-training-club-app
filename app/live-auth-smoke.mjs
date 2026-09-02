@@ -4283,11 +4283,15 @@ assert.equal(rejectedMidtownControl.hasAttribute("aria-busy"), false);
 assert.equal(escapedRejections.length, 0);
 console.log("ok  adjacent live queue, duty, confirmation, Midtown, session, and cancellation controls await RPCs");
 
-// Release is authoritative in live mode: the cache and backend stay reserved
-// while pending, success survives forced hydration, and rejection remains
-// reserved without fake JavaScript waitlist promotion.
+// Unpaid booking cancellation is authoritative in live mode: the cache and
+// backend stay reserved while pending, success survives forced hydration, and
+// rejection remains reserved without fake JavaScript waitlist promotion.
 operationalRpcHandler = delegatedBaseOperationalRpcHandler;
-window.confirm = () => true;
+let releaseConfirmation = null;
+window.confirm = (message) => {
+  releaseConfirmation = message;
+  return true;
+};
 globalThis.confirm = window.confirm;
 const releaseGate = deferred();
 let releaseRpcArgs = null;
@@ -4299,7 +4303,7 @@ operationalRpcHandler = (name, args) => {
   }
   return delegatedBaseOperationalRpcHandler(name, args);
 };
-const releaseControl = operationControl("BUTTON", "", "Release spot");
+const releaseControl = operationControl("BUTTON", "", "Cancel booking");
 releaseControl.dataset = { action: "release-reservation", booking: routedReleaseBooking.id };
 releaseControl.closest = () => releaseControl;
 toastStack.children.length = 0;
@@ -4309,6 +4313,7 @@ const releaseClick = click({ target: releaseControl, preventDefault() {} })
 const duplicateReleaseClick = click({ target: releaseControl, preventDefault() {} });
 await new Promise(setImmediate);
 assert.deepEqual(releaseRpcArgs, { p_booking_id: routedReleaseBooking.id });
+assert.equal(releaseConfirmation, "Cancel this unpaid booking? Your spot will be released.");
 assert.equal(releaseSettled, false);
 assert.equal(operationalRpcCalls.filter((call) => call.name === "release_operational_reservation"
   && call.args.p_booking_id === routedReleaseBooking.id).length, 1);
@@ -4317,6 +4322,7 @@ assert.equal(operationalTableRows.operational_bookings
   .find((row) => row.id === routedReleaseBooking.id)?.status, "reserved");
 assert.equal(releaseControl.disabled, true);
 assert.equal(releaseControl.getAttribute("aria-busy"), "true");
+assert.equal(releaseControl.textContent, "Cancelling…");
 assert.equal(toastStack.children.length, 0);
 const releaseServerRow = operationalTableRows.operational_bookings
   .find((row) => row.id === routedReleaseBooking.id);
@@ -4327,9 +4333,10 @@ assert.equal(store.getBooking(routedReleaseBooking.id).status, "cancelled");
 await operations.refreshOperationalState();
 assert.equal(store.getBooking(routedReleaseBooking.id).status, "cancelled",
   "released live reservation must remain cancelled after forced hydration");
-assert.deepEqual(toastStack.children.map((item) => item.textContent), ["Reservation released"]);
+assert.deepEqual(toastStack.children.map((item) => item.textContent), ["Booking cancelled"]);
 assert.equal(releaseControl.disabled, false);
 assert.equal(releaseControl.hasAttribute("aria-busy"), false);
+assert.equal(releaseControl.textContent, "Cancel booking");
 
 operationalRpcHandler = delegatedBaseOperationalRpcHandler;
 const rejectedReleaseBooking = await store.reserveSession(authUser.id, routingSessions[1], Date.now());
@@ -4341,7 +4348,7 @@ operationalRpcHandler = (name, args) => {
   }
   return delegatedBaseOperationalRpcHandler(name, args);
 };
-const rejectedReleaseControl = operationControl("BUTTON", "", "Release spot");
+const rejectedReleaseControl = operationControl("BUTTON", "", "Cancel booking");
 rejectedReleaseControl.dataset = { action: "release-reservation", booking: rejectedReleaseBooking.id };
 rejectedReleaseControl.closest = () => rejectedReleaseControl;
 toastStack.children.length = 0;

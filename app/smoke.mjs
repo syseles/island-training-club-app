@@ -3163,7 +3163,16 @@ store.signIn("member@example.test");
   if (pay.includes("amount ready")) {
     throw new Error("PayMe instructions must not claim the amount is prefilled");
   }
+  const unpaidManage = views.viewBooking(b.id);
+  assert.match(unpaidManage,
+    new RegExp(`data-action="release-reservation"[^>]*data-booking="${b.id}"[^>]*>Cancel booking</button>`),
+    "an unpaid booking owner must see the explicit Cancel booking action");
+  assert.doesNotMatch(unpaidManage, /Release spot/,
+    "member-facing unpaid cancellation must not use ambiguous release wording");
   store.signIn("admin@example.test");
+  const adminViewingMemberReservation = views.viewBooking(b.id);
+  assert.doesNotMatch(adminViewingMemberReservation, /data-action="release-reservation"|href="#\/pay\//,
+    "a non-owner Admin must not receive member payment or cancellation controls");
   store.updateCollectorPayouts("fixture-admin", { paymeLink: "" });
   store.signIn("member@example.test");
   const fpsOnlyPay = views.viewPay(b.id);
@@ -3194,6 +3203,8 @@ store.signIn("member@example.test");
   const awaiting = views.viewBooking(b.id);
   if (!awaiting.includes("being confirmed"))
     throw new Error("booking should show awaiting confirmation");
+  assert.doesNotMatch(awaiting, /data-action="release-reservation"|Cancel booking/,
+    "payment-marked bookings must not expose unpaid cancellation");
   console.log("ok  booking shows awaiting-confirmation state");
   store.signIn("admin@example.test");
   store.confirmBookingPayment(b.id);
