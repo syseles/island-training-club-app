@@ -80,7 +80,7 @@ export const SEED_ACTIVITIES = [
     published: true,
   },
   {
-    id: "hyrox",
+    id: "hyrox-bft",
     name: "ITC HYROX",
     kind: "paid",
     category: "HYROX",
@@ -95,6 +95,24 @@ export const SEED_ACTIVITIES = [
     memberNote: "Gym entry fee is included in the session price.",
     price: 180, // HKD
     capacity: 20,
+    published: true,
+  },
+  {
+    id: "hyrox-quarry-bay",
+    name: "ITC HYROX",
+    kind: "paid",
+    category: "HYROX",
+    weekday: 6, // Saturday
+    time: "11:00",
+    durationMin: 60,
+    location: "10/F, 633 King's Road, Quarry Bay, Hong Kong",
+    mapsQuery: "10/F, 633 King's Road, Quarry Bay, Hong Kong",
+    photo: PH + "hyrox.webp",
+    blurb:
+      "Weekly hybrid race training: ski, sled, burpees and running intervals. Every session is purchased separately at one fixed price.",
+    memberNote: "Gym entry fee is included in the session price.",
+    price: 180, // HKD
+    capacity: 12,
     published: true,
   },
   {

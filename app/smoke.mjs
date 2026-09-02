@@ -64,6 +64,64 @@ function assertPrimaryNav(user, expected, label) {
 }
 
 store.load();
+const bftSeed = data.SEED_ACTIVITIES.find((activity) => activity.id === "hyrox-bft");
+const quarryBaySeed = data.SEED_ACTIVITIES.find((activity) => activity.id === "hyrox-quarry-bay");
+assert.ok(bftSeed, "BFT HYROX must use the canonical hyrox-bft activity id");
+assert.equal(data.SEED_ACTIVITIES.some((activity) => activity.id === "hyrox"), false,
+  "the ambiguous legacy hyrox activity id must not remain canonical");
+assert.deepEqual(quarryBaySeed && {
+  name: quarryBaySeed.name,
+  weekday: quarryBaySeed.weekday,
+  time: quarryBaySeed.time,
+  durationMin: quarryBaySeed.durationMin,
+  location: quarryBaySeed.location,
+  mapsQuery: quarryBaySeed.mapsQuery,
+  price: quarryBaySeed.price,
+  capacity: quarryBaySeed.capacity,
+}, {
+  name: "ITC HYROX",
+  weekday: 6,
+  time: "11:00",
+  durationMin: 60,
+  location: "10/F, 633 King's Road, Quarry Bay, Hong Kong",
+  mapsQuery: "10/F, 633 King's Road, Quarry Bay, Hong Kong",
+  price: 180,
+  capacity: 12,
+}, "IA-37 Quarry Bay HYROX must match the approved recurring-session details");
+assert.equal(data.fmtMoney(180), "HK$180",
+  "consumer-facing Hong Kong prices should use the standard HK$ symbol");
+const legacyBftActivity = { ...bftSeed, id: "hyrox" };
+localStorage.setItem("itc.prototype.v1", JSON.stringify({
+  version: 16,
+  sessionUserId: null,
+  activities: [legacyBftActivity],
+  users: [],
+  bookings: [{
+    id: "legacy-bft-booking", userId: "legacy-member",
+    sessionId: "hyrox-2099-01-03", status: "confirmed",
+    deferredTo: "hyrox-2099-01-10",
+    snapshot: { name: "ITC HYROX", dateISO: "2099-01-03", time: "11:15", location: "BFT Causeway Bay", price: 180 },
+  }],
+  receipts: [{ id: "legacy-receipt", bookingId: "legacy-bft-booking", sessionId: "hyrox-2099-01-03" }],
+  receiptCounter: 50,
+  paymentPayouts: {}, campaigns: [], donations: [], prayers: [], oneOffEvents: [],
+  sessionOverrides: { "hyrox-2099-01-03": { cancelled: "Legacy fixture" } },
+  queues: { "hyrox-2099-01-03": { waitlist: [], interest: [] } },
+  notifications: [{ id: "legacy-note", link: "#/activity/hyrox-2099-01-03" }],
+  duty: {},
+}));
+const renamedState = store.load();
+assert.equal(renamedState.version, 17, "legacy state must advance through the HYROX identifier migration");
+assert.ok(renamedState.activities.some((activity) => activity.id === "hyrox-bft"));
+assert.ok(renamedState.activities.some((activity) => activity.id === "hyrox-quarry-bay"));
+assert.equal(renamedState.activities.some((activity) => activity.id === "hyrox"), false);
+assert.equal(renamedState.bookings[0].sessionId, "hyrox-bft-2099-01-03");
+assert.equal(renamedState.bookings[0].deferredTo, "hyrox-bft-2099-01-10");
+assert.equal(renamedState.receipts[0].sessionId, "hyrox-bft-2099-01-03");
+assert.ok(renamedState.queues["hyrox-bft-2099-01-03"]);
+assert.ok(renamedState.sessionOverrides["hyrox-bft-2099-01-03"]);
+assert.equal(renamedState.notifications[0].link, "#/activity/hyrox-bft-2099-01-03");
+store.resetLocalData();
 const { existsSync, readFileSync } = await import("node:fs");
 const { resolve, dirname } = await import("node:path");
 const { fileURLToPath } = await import("node:url");
@@ -83,6 +141,7 @@ for (const relativePath of [
   "../supabase/migrations/20260804000000_profiles.sql",
   "../supabase/migrations/20260805000007_admin_application_decisions.sql",
   "../supabase/migrations/20260827000001_hyrox_indemnity_fields.sql",
+  "../supabase/migrations/20260902000001_hyrox_bft_quarry_bay.sql",
 ]) {
   const absolutePath = resolve(__dirnameSmoke, relativePath);
   if (!existsSync(absolutePath)) {
@@ -103,6 +162,28 @@ const assignedPayoutMigrationSource = readFileSync(
   resolve(__dirnameSmoke, "../supabase/migrations/20260829000005_assigned_collector_payout_rpc.sql"),
   "utf8"
 );
+const hyroxActivityMigrationSource = readFileSync(
+  resolve(__dirnameSmoke, "../supabase/migrations/20260902000001_hyrox_bft_quarry_bay.sql"),
+  "utf8"
+);
+assert.equal((hyroxActivityMigrationSource.match(
+  /drop constraint operational_activity_templates_activity_id_check/g
+) || []).length, 2,
+"HYROX activity migration must allow the legacy id during rename, then tighten the constraint");
+for (const marker of [
+  "'hyrox-bft'",
+  "'hyrox-quarry-bay'",
+  "10/F, 633 King''s Road, Quarry Bay, Hong Kong",
+  "'11:00'",
+  "60",
+  "12",
+  "180",
+  "default_open",
+  "replace(id, 'hyrox-', 'hyrox-bft-')",
+]) {
+  assert.ok(hyroxActivityMigrationSource.includes(marker),
+    `HYROX activity migration must include ${marker}`);
+}
 for (const marker of [
   "security definer",
   "set search_path = public",
@@ -537,15 +618,15 @@ for (const marker of [
 // the lone static reservation is cancelled and therefore rejects before its
 // date guard. This allowlist forces every new fixed date to document its source.
 const explicitlyGeneratedFixedHyroxSessions = new Set([
-  "hyrox-2026-08-15",
+  "hyrox-bft-2026-08-15",
   "hyrox-midtown-2026-08-15",
-  "hyrox-2026-08-22",
+  "hyrox-bft-2026-08-22",
   "hyrox-midtown-2026-08-22",
-  "hyrox-2026-08-29",
+  "hyrox-bft-2026-08-29",
   "hyrox-midtown-2026-08-29",
 ]);
 const fixedHyroxSessionIds = new Set(
-  operationalBackendIntegrationSource.match(/\bhyrox(?:-midtown)?-\d{4}-\d{2}-\d{2}\b/g) || []
+  operationalBackendIntegrationSource.match(/\bhyrox-(?:bft|midtown)-\d{4}-\d{2}-\d{2}\b/g) || []
 );
 const ungroundedFixedHyroxSessions = [...fixedHyroxSessionIds].filter(
   (sessionId) => !explicitlyGeneratedFixedHyroxSessions.has(sessionId)
@@ -563,7 +644,7 @@ const staticFutureGuardedCalls = [
     /\b(?:reserve_operational_session|join_operational_queue|defer_operational_booking)\s*\(\s*'([^']+-\d{4}-\d{2}-\d{2})'/g
   ),
 ].map((match) => match[0]).filter((call) =>
-  !call.includes("reserve_operational_session('hyrox-2026-08-15'")
+  !call.includes("reserve_operational_session('hyrox-bft-2026-08-15'")
 );
 if (staticFutureGuardedCalls.length) {
   throw new Error(`notification integration retains static future-guarded calls: ${staticFutureGuardedCalls.join(", ")}`);
@@ -1304,7 +1385,7 @@ if (!paidHtml.includes('badge paid">HK$180</span>') || paidHtml.includes("per se
   failures++;
   console.error("FAIL unbooked paid activity badge should read only its price");
 } else console.log("ok  unbooked paid activity badge reads only its price");
-const unpaidBadgeSession = allUpcoming.find((s) => s.kind === "paid" && s.activityId === "hyrox" && !data.sessionStarted(s));
+const unpaidBadgeSession = allUpcoming.find((s) => s.kind === "paid" && s.activityId === "hyrox-bft" && !data.sessionStarted(s));
 installLocalFixtures();
 store.signIn("member@example.test");
 if (!unpaidBadgeSession) {
@@ -1343,7 +1424,7 @@ if (!unpaidBadgeSession) {
   }
 }
 store.signOut();
-const paidDirectionsSession = allUpcoming.find((s) => s.kind === "paid" && s.activityId === "hyrox" && !data.sessionStarted(s));
+const paidDirectionsSession = allUpcoming.find((s) => s.kind === "paid" && s.activityId === "hyrox-bft" && !data.sessionStarted(s));
 const paidDirectionsHtml = paidDirectionsSession ? views.viewActivity(paidDirectionsSession.id) : "";
 if (!paidDirectionsHtml.includes("Get directions")) {
   failures++;
@@ -1598,7 +1679,7 @@ if (!pendingCommunity.includes("You’re welcome here.")) {
 // Use BFT (not Midtown) for the pending-user check — closed Midtown shows the
 // generic "Members only" gate, while a bookable BFT shows the "Booking locked"
 // message specifically for pending applicants.
-const bftPaid = allUpcoming.find((s) => s.activityId === "hyrox" && !data.sessionStarted(s));
+const bftPaid = allUpcoming.find((s) => s.activityId === "hyrox-bft" && !data.sessionStarted(s));
 const pendHtml = views.viewActivity(bftPaid.id);
 if (!pendHtml.includes("Booking locked")) {
   failures++;
@@ -2114,7 +2195,7 @@ console.log("ok  styles.css contains all modal-related class definitions");
 
 // --- HYROX payment system: reserve -> mark -> collector confirm (Task 2) ---
 const bftSession = allUpcoming.find(
-  (s) => s.activityId === "hyrox" && !data.sessionStarted(s)
+  (s) => s.activityId === "hyrox-bft" && !data.sessionStarted(s)
 );
 if (!bftSession) throw new Error("expected an upcoming BFT session");
 const before = store.spotsLeft(bftSession);
@@ -2405,7 +2486,7 @@ store.resetLocalData();
   console.log("ok  deadline checkpoints (Thu 18:00 / Fri 14:00 / 2h window)");
 }
 {
-  const bft = store.activities().find((a) => a.id === "hyrox");
+  const bft = store.activities().find((a) => a.id === "hyrox-bft");
   const mid = store.activities().find((a) => a.id === "hyrox-midtown");
   if (bft.capacity !== 20 || mid.capacity !== 12)
     throw new Error("HYROX capacities should be BFT 20 / Midtown 12");
@@ -2429,13 +2510,13 @@ store.resetLocalData();
   const snap = JSON.parse(raw);
   snap.version = 8;
   delete snap.sessionOverrides; delete snap.queues; delete snap.duty; delete snap.notifications;
-  const bft = snap.activities.find((a) => a.id === "hyrox");
+  const bft = snap.activities.find((a) => a.id === "hyrox-bft");
   const mid = snap.activities.find((a) => a.id === "hyrox-midtown");
   bft.capacity = 18; mid.capacity = 18;
   for (const u of snap.users) { delete u.paymeLink; delete u.fpsPhone; }
   localStorage.setItem("itc.prototype.v1", JSON.stringify(snap));
   store.load();
-  const bft2 = store.activities().find((a) => a.id === "hyrox");
+  const bft2 = store.activities().find((a) => a.id === "hyrox-bft");
   const mid2 = store.activities().find((a) => a.id === "hyrox-midtown");
   if (bft2.capacity !== 20 || mid2.capacity !== 12) throw new Error("v9 migration must fix capacities");
   console.log("ok  v9 migration: capacities fixed");
@@ -2475,8 +2556,8 @@ store.resetLocalData();
   localStorage.setItem("itc.prototype.v1", JSON.stringify(locationV13));
   store.load();
   const migratedV13 = JSON.parse(localStorage.getItem("itc.prototype.v1"));
-  if (migratedV13.version !== 16) {
-    throw new Error("v16 migration must persist version 16");
+  if (migratedV13.version !== 17) {
+    throw new Error("v17 migration must persist version 17");
   }
   const repairedWater = store.activities().find((activity) => activity.id === "water");
   if (repairedWater.location !== "TBC" || repairedWater.mapsQuery !== ""
@@ -2540,14 +2621,14 @@ store.resetLocalData();
 installLocalFixtures(); store.signIn("member@example.test");
 {
   const sess = store.upcomingSessions(14).find(
-    (s) => s.activityId === "hyrox" && !data.sessionStarted(s) &&
+    (s) => s.activityId === "hyrox-bft" && !data.sessionStarted(s) &&
       !store.userBookingFor(store.currentUser().id, s.id)
   );
   // Fill the session with confirmed bookings so only the reservation holds a spot.
   // We register a fleet of fixture-member-* users and pay for them.
   const fill = store.reserveSession(store.currentUser().id, sess);
   const st = JSON.parse(localStorage.getItem("itc.prototype.v1"));
-  const act = st.activities.find((a) => a.id === "hyrox");
+  const act = st.activities.find((a) => a.id === "hyrox-bft");
   const fleet = [];
   for (let i = 0; i < act.capacity - 1; i++) {
     const id = `cascade-fixture-${i}`;
@@ -2597,7 +2678,7 @@ store.resetLocalData();
 installLocalFixtures();
 {
   const sess = store.upcomingSessions(14).find(
-    (s) => s.activityId === "hyrox" && !data.sessionStarted(s) &&
+    (s) => s.activityId === "hyrox-bft" && !data.sessionStarted(s) &&
       !store.userBookingFor("fixture-member", s.id) && !store.userReservationFor("fixture-member", s.id)
   );
   const p1 = store.joinWaitlist("fixture-member", sess.id);
@@ -2612,11 +2693,14 @@ installLocalFixtures();
   // both-queues tie-break: reserved at BFT + reserved at Midtown (opened) +
   // waitlisted at BFT's sibling... paying for one releases the rest
   const sat = store.upcomingSessions(14).find(
-    (s) => s.activityId === "hyrox" && !data.sessionStarted(s) &&
+    (s) => s.activityId === "hyrox-bft" && !data.sessionStarted(s) &&
       !store.userBookingFor("fixture-member", s.id)
   );
   const mid = store.upcomingSessions(14).find(
     (s) => s.activityId === "hyrox-midtown" && s.dateISO === sat.dateISO
+  );
+  const quarry = store.upcomingSessions(14).find(
+    (s) => s.activityId === "hyrox-quarry-bay" && s.dateISO === sat.dateISO
   );
   const st = JSON.parse(localStorage.getItem("itc.prototype.v1"));
   st.sessionOverrides[mid.id] = { midtownOpen: true };
@@ -2624,19 +2708,22 @@ installLocalFixtures();
   store.load();
   const bBft = store.reserveSession("fixture-member", sat);
   const bMid = store.reserveSession("fixture-member", mid);
+  const bQuarry = store.reserveSession("fixture-member", quarry);
   store.markBookingPaid(bBft.id, "FPS", "");
   store.confirmBookingPayment(bBft.id);
   if (store.getBooking(bMid.id).status !== "cancelled")
     throw new Error("paying for BFT should release the Midtown reservation");
+  if (store.getBooking(bQuarry.id).status !== "cancelled")
+    throw new Error("paying for BFT should release the Quarry Bay reservation");
   const promotedMid = store.notificationsFor("fixture-member");
   if (!promotedMid.some((n) => n.kind === "hold-released"))
     throw new Error("member should be told the other hold was released");
-  console.log("ok  paying for one venue releases the other venue's hold");
+  console.log("ok  paying for one HYROX venue releases every other venue hold");
 }
 // queue join guards existing bookings
 {
   const sess = store.upcomingSessions(21).find(
-    (s) => s.activityId === "hyrox" && !data.sessionStarted(s) &&
+    (s) => s.activityId === "hyrox-bft" && !data.sessionStarted(s) &&
       !store.userBookingFor("fixture-member", s.id) && !store.userReservationFor("fixture-member", s.id)
   );
   const b = store.reserveSession("fixture-member", sess);
@@ -2677,7 +2764,7 @@ store.resetLocalData();
 installLocalFixtures(); store.signIn("member@example.test");
 {
   const sess = store.upcomingSessions(14).find(
-    (s) => s.activityId === "hyrox" && !data.sessionStarted(s) &&
+    (s) => s.activityId === "hyrox-bft" && !data.sessionStarted(s) &&
       !store.userBookingFor("fixture-member", s.id) && !store.userReservationFor("fixture-member", s.id)
   );
   const b = store.reserveSession("fixture-member", sess);
@@ -2699,7 +2786,7 @@ installLocalFixtures(); store.signIn("member@example.test");
 }
 {
   const sess = store.upcomingSessions(14).find(
-    (s) => s.activityId === "hyrox" && !data.sessionStarted(s) &&
+    (s) => s.activityId === "hyrox-bft" && !data.sessionStarted(s) &&
       !store.userBookingFor("fixture-member", s.id) && !store.userReservationFor("fixture-member", s.id)
   );
   const b = store.reserveSession("fixture-member", sess);
@@ -2755,7 +2842,7 @@ installLocalFixtures(); store.signIn("member@example.test");
 }
 {
   const sess = store.upcomingSessions(14).find(
-    (s) => s.activityId === "hyrox" && !data.sessionStarted(s)
+    (s) => s.activityId === "hyrox-bft" && !data.sessionStarted(s)
   );
   store.setSessionTime(sess.id, "10:00");
   store.setVenueTBC(sess.id, true);
@@ -2865,7 +2952,7 @@ installLocalFixtures();
 }
 {
   const sess = store.upcomingSessions(14).find(
-    (s) => s.activityId === "hyrox" && !data.sessionStarted(s)
+    (s) => s.activityId === "hyrox-bft" && !data.sessionStarted(s)
   );
   // No duty set yet → collectorFor falls back to the first approved admin.
   if (store.collectorFor(sess.id)?.id !== "fixture-admin")
@@ -2938,7 +3025,7 @@ store.resetLocalData();
 installLocalFixtures();
 {
   const sess = store.upcomingSessions(14).find(
-    (s) => s.activityId === "hyrox" && !data.sessionStarted(s)
+    (s) => s.activityId === "hyrox-bft" && !data.sessionStarted(s)
   );
   store.setSessionNotice(sess.id, "Weather watch — check WhatsApp");
   views.scheduleState.weekOffset = Math.round(
@@ -2990,7 +3077,7 @@ store.updateCollectorPayouts("fixture-admin", {
 store.signIn("member@example.test");
 {
   const sess = store.upcomingSessions(14).find(
-    (s) => s.activityId === "hyrox" && !data.sessionStarted(s)
+    (s) => s.activityId === "hyrox-bft" && !data.sessionStarted(s)
   );
   const co = views.viewCheckout(sess.id);
   if (typeof co !== "string" || co.includes("Card number") || !co.includes('id="form-reserve"'))
@@ -3212,7 +3299,7 @@ installLocalFixtures();
 store.signIn("member@example.test");
 {
   const sess = store.upcomingSessions(14).find(
-    (s) => s.activityId === "hyrox" && !data.sessionStarted(s)
+    (s) => s.activityId === "hyrox-bft" && !data.sessionStarted(s)
   );
   const b = store.reserveSession("fixture-member", sess);
   store.markBookingPaid(b.id, "FPS", "9921");
@@ -3786,7 +3873,7 @@ console.log("ok  reset");
   } else console.log("ok  v10 migration keeps genuine bookings");
   // Demo entries are removed in both current object and legacy string shapes;
   // genuine entries and their original shape survive.
-  const q = migrated.queues?.["hyrox-2026-09-05"];
+  const q = migrated.queues?.["hyrox-bft-2026-09-05"];
   if (q?.waitlist.some((entry) => entry.userId === "u-member") || q?.interest.includes("u-member")) {
     failures++;
     console.error("FAIL v13 migration must remove current and legacy demo queue entries");
@@ -3813,10 +3900,10 @@ console.log("ok  reset");
     failures++;
     console.error("FAIL v10 migration must clear session tied to a removed demo user");
   } else console.log("ok  v10 migration clears removed session");
-  if (migrated.version !== 16) {
+  if (migrated.version !== 17) {
     failures++;
     console.error(`FAIL integrated migration must advance version to 16, got ${migrated.version}`);
-  } else console.log("ok  integrated migration advances genuine v9 state to v16");
+  } else console.log("ok  integrated migration advances genuine v9 state to v17");
 }
 
 {
@@ -3835,7 +3922,7 @@ console.log("ok  reset");
   store.load();
   const v14 = JSON.parse(mem.get("itc.prototype.v1"));
   const migratedUser = v14.users.find((user) => user.id === "real-v13-member");
-  if (v14.version !== 16 || !migratedUser) throw new Error("v16 migration lost the genuine member");
+  if (v14.version !== 17 || !migratedUser) throw new Error("v17 migration lost the genuine member");
   for (const field of ["indemnitySignature", "indemnitySignedAt", "indemnityFormVersion", "emergencyRelationship"]) {
     if (!(field in migratedUser) || migratedUser[field] !== null) {
       throw new Error(`v14 migration should initialize ${field} to null`);
@@ -3881,7 +3968,7 @@ function installLocalFixtures({ withMemberBooking = false } = {}) {
   ];
   if (withMemberBooking) {
     const upcoming = store.upcomingSessions(14);
-    const fixtureMemberSession = upcoming.find((s) => s.activityId === "hyrox" && !data.sessionStarted(s));
+    const fixtureMemberSession = upcoming.find((s) => s.activityId === "hyrox-bft" && !data.sessionStarted(s));
     if (fixtureMemberSession) {
       clean.bookings = [
         ...(clean.bookings || []),
@@ -4318,11 +4405,11 @@ for (const fixture of sourceSnapshots) {
     && !Array.isArray(migrated.paymentPayouts);
   const suppliedPayoutsPreserved = fixture.version !== 12
     || migrated.paymentPayouts["real-admin"]?.fpsPhone === "+852 6000 0000";
-  if (migrated.version !== 16 || suppliedIds.some((id) => !serialized.includes(id))
+  if (migrated.version !== 17 || suppliedIds.some((id) => !serialized.includes(id))
       || !payoutMapValid || !suppliedPayoutsPreserved) {
     failures++;
     console.error(`FAIL genuine v${fixture.version} fixture must reach v16 intact`);
-  } else console.log(`ok  genuine v${fixture.version} fixture reaches v16 intact`);
+  } else console.log(`ok  genuine v${fixture.version} fixture reaches v17 intact`);
 }
 
 for (const invalidCounter of [null, -1, 1.5, "broken"]) {
@@ -4669,7 +4756,7 @@ const tbcDetail = views.viewActivity(noMapsSession.id);
 if (tbcDetail.includes('id="activity-map"')) {
   throw new Error("free events without mapsQuery must not render the inline map");
 }
-const hyroxDetailSample = store.upcomingSessions(21).find((s) => s.activityId === "hyrox" && !data.sessionStarted(s));
+const hyroxDetailSample = store.upcomingSessions(21).find((s) => s.activityId === "hyrox-bft" && !data.sessionStarted(s));
 const hyroxDetail = views.viewActivity(hyroxDetailSample.id);
 if (!hyroxDetail.includes("Get directions") || hyroxDetail.includes('id="activity-map"')) {
   throw new Error("paid HYROX sessions must expose Get directions without the inline map");
@@ -4794,7 +4881,7 @@ try {
 }
 // HYROX session id is rejected with the exact spec message.
 const hyroxSample = store.upcomingSessions(21).find(
-  (s) => s.activityId === "hyrox" && !data.sessionStarted(s)
+  (s) => s.activityId === "hyrox-bft" && !data.sessionStarted(s)
 );
 if (!hyroxSample) throw new Error("expected an upcoming hyrox session for the guard test");
 try {

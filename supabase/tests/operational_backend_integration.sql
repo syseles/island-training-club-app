@@ -280,9 +280,14 @@ begin
   end if;
   if not exists (
     select 1 from public.operational_activity_templates
-    where activity_id = 'hyrox' and capacity = 20 and price_hkd = 180 and venue = 'BFT Causeway Bay'
+    where activity_id = 'hyrox-bft' and capacity = 20 and price_hkd = 180 and venue = 'BFT Causeway Bay'
   ) then
-    raise notice 'FAIL: hyrox activity template seed missing'; failures := failures + 1;
+    raise notice 'FAIL: hyrox-bft activity template seed missing'; failures := failures + 1;
+  end if;
+  if exists (
+    select 1 from public.operational_activity_templates where activity_id = 'hyrox'
+  ) then
+    raise notice 'FAIL: ambiguous legacy hyrox activity template remains'; failures := failures + 1;
   end if;
   if not exists (
     select 1 from public.operational_activity_templates
@@ -292,6 +297,22 @@ begin
       and venue = 'Midtown28 Fitness'
   ) then
     raise notice 'FAIL: corrected hyrox-midtown activity template seed missing';
+    failures := failures + 1;
+  end if;
+  if not exists (
+    select 1 from public.operational_activity_templates
+    where activity_id = 'hyrox-quarry-bay'
+      and weekday = 6
+      and start_time = '11:00'::time
+      and duration_minutes = 60
+      and capacity = 12
+      and price_hkd = 180
+      and default_open
+      and active
+      and venue = '10/F, 633 King''s Road, Quarry Bay, Hong Kong'
+      and maps_query = '10/F, 633 King''s Road, Quarry Bay, Hong Kong'
+  ) then
+    raise notice 'FAIL: IA-37 Quarry Bay HYROX activity template seed missing';
     failures := failures + 1;
   end if;
   perform 1 from pg_class c join pg_namespace n on n.oid = c.relnamespace
@@ -617,20 +638,20 @@ with hkt_clock as (
 )
 insert into operational_time_fixtures
 select base_date,
-       'hyrox-' || base_date::text,
+       'hyrox-bft-' || base_date::text,
        'hyrox-midtown-' || base_date::text,
-       'hyrox-' || (base_date + 7)::text,
-       'hyrox-' || (base_date + 14)::text,
-       'hyrox-' || (base_date + 21)::text,
+       'hyrox-bft-' || (base_date + 7)::text,
+       'hyrox-bft-' || (base_date + 14)::text,
+       'hyrox-bft-' || (base_date + 21)::text,
        'hyrox-midtown-' || (base_date + 21)::text,
-       'hyrox-' || (base_date + 28)::text,
+       'hyrox-bft-' || (base_date + 28)::text,
        base_date + 42,
-       'hyrox-' || (base_date + 42)::text,
+       'hyrox-bft-' || (base_date + 42)::text,
        'hyrox-midtown-' || (base_date + 42)::text,
        'lunch-' || (base_date + 42)::text,
-       'hyrox-' || (base_date + 105)::text,
+       'hyrox-bft-' || (base_date + 105)::text,
        base_date + 126,
-       'hyrox-' || (base_date + 126)::text,
+       'hyrox-bft-' || (base_date + 126)::text,
        'hyrox-midtown-' || (base_date + 49)::text
   from fixture_date;
 
@@ -645,7 +666,7 @@ update public.operational_sessions
        cancelled_by = null,
        cancelled_source = 'system',
        cancel_reason = 'HYROX race weekend'
- where id in ('hyrox-2026-08-15', 'hyrox-midtown-2026-08-15');
+ where id in ('hyrox-bft-2026-08-15', 'hyrox-midtown-2026-08-15');
 
 -- RSVP integrity: exact public counts, requires_rsvp enforcement, Hong Kong
 -- start boundaries, and preservation of paid/uncapped reservation behavior.
@@ -679,7 +700,7 @@ declare
   v_visible_count   integer;
 begin
   v_count_session := 'lunch-' || v_count_date::text;
-  v_paid_session := 'hyrox-' || v_paid_date::text;
+  v_paid_session := 'hyrox-bft-' || v_paid_date::text;
   v_paid_same_day_session := 'event-paid-integrity-' || v_hk_today::text;
   v_paid_next_day_session := 'event-paid-integrity-' || (v_hk_today + 1)::text;
   v_free_session := 'event-free-integrity-' || v_free_date::text;
@@ -715,7 +736,7 @@ begin
   values
     (v_count_session, 'lunch', v_count_date, time '12:45', 75,
      'TBC', null, 0, true),
-    (v_paid_session, 'hyrox', v_paid_date, time '11:15', 60,
+    (v_paid_session, 'hyrox-bft', v_paid_date, time '11:15', 60,
      'BFT Causeway Bay', 20, 180, true),
     (v_paid_same_day_session, 'event-paid-integrity', v_hk_today,
      time '23:59:59.999999', 60, 'BFT Causeway Bay', 20, 180, true),
@@ -1193,7 +1214,7 @@ begin
   -- This historical seed is deliberately static: cancellation is checked
   -- before the paid HKT date guard, and this scenario verifies that priority.
   begin
-    perform reserve_operational_session('hyrox-2026-08-15');
+    perform reserve_operational_session('hyrox-bft-2026-08-15');
     raise exception 'cancelled should not reserve';
   exception when others then
     if sqlerrm not like '%Session is cancelled%' then raise; end if;
@@ -1612,7 +1633,7 @@ begin
   perform set_config('request.jwt.claim.sub', 'aa000000-0000-0000-0000-00000000a001', true);
   set local role authenticated;
   begin
-    perform finalize_operational_gym('hyrox-2026-08-15', 'Reader note');
+    perform finalize_operational_gym('hyrox-bft-2026-08-15', 'Reader note');
     raise exception 'cancelled session must reject gym finalization';
   exception when others then
     if sqlerrm not like '%Session is cancelled%' then raise; end if;
@@ -1626,7 +1647,7 @@ begin
   perform set_config('request.jwt.claim.sub', 'bb000000-0000-0000-0000-00000000b001', true);
   set local role authenticated;
   begin
-    perform finalize_operational_gym('hyrox-2026-08-29', 'unauthorized');
+    perform finalize_operational_gym('hyrox-bft-2026-08-29', 'unauthorized');
     raise exception 'members must not finalize';
   exception when others then
     if sqlerrm not like '%Administrator access required%' then raise; end if;
@@ -1639,9 +1660,9 @@ do $$
 begin
   perform set_config('request.jwt.claim.sub', 'aa000000-0000-0000-0000-00000000a001', true);
   set local role authenticated;
-  perform finalize_operational_gym('hyrox-2026-08-29', 'All clear');
+  perform finalize_operational_gym('hyrox-bft-2026-08-29', 'All clear');
   perform pg_temp.op_assert(
-    (select gym_confirmed_at from public.operational_sessions where id = 'hyrox-2026-08-29') is not null,
+    (select gym_confirmed_at from public.operational_sessions where id = 'hyrox-bft-2026-08-29') is not null,
     'gym confirmation timestamp recorded'
   );
   reset role;
@@ -2180,7 +2201,7 @@ begin
   values
     ('11000000-0000-0000-0000-000000000001',
      'bb000000-0000-0000-0000-00000000b001',
-     'hyrox-2026-08-22', 'expired', v_nearby_at + interval '4 seconds',
+     'hyrox-bft-2026-08-22', 'expired', v_nearby_at + interval '4 seconds',
      v_nearby_at + interval '1 day', '{}'::jsonb),
     ('11000000-0000-0000-0000-000000000002',
      'bb000000-0000-0000-0000-00000000b001',
@@ -2188,7 +2209,7 @@ begin
      v_malformed_at + interval '1 day', '{}'::jsonb),
     ('22000000-0000-0000-0000-000000000001',
      'bb000000-0000-0000-0000-00000000b001',
-     'hyrox-2026-08-22', 'expired', v_ambiguous_at,
+     'hyrox-bft-2026-08-22', 'expired', v_ambiguous_at,
      v_ambiguous_at + interval '1 day', '{}'::jsonb),
     ('22000000-0000-0000-0000-000000000002',
      'bb000000-0000-0000-0000-00000000b001',
@@ -2196,15 +2217,15 @@ begin
      v_ambiguous_at + interval '1 day', '{}'::jsonb),
     ('33000000-0000-0000-0000-000000000001',
      'dd000000-0000-0000-0000-00000000d001',
-     'hyrox-2026-08-22', 'expired', v_foreign_at,
+     'hyrox-bft-2026-08-22', 'expired', v_foreign_at,
      v_foreign_at + interval '1 day', '{}'::jsonb),
     ('55000000-0000-0000-0000-000000000001',
      'bb000000-0000-0000-0000-00000000b001',
-     'hyrox-2026-08-22', 'expired', v_explicit_at,
+     'hyrox-bft-2026-08-22', 'expired', v_explicit_at,
      v_explicit_at + interval '1 day', '{}'::jsonb),
     ('66000000-0000-0000-0000-000000000001',
      'bb000000-0000-0000-0000-00000000b001',
-     'hyrox-2026-08-22', 'expired', v_read_state_at,
+     'hyrox-bft-2026-08-22', 'expired', v_read_state_at,
      v_read_state_at + interval '1 day', '{}'::jsonb),
     ('77000000-0000-0000-0000-000000000001',
      'bb000000-0000-0000-0000-00000000b001',
@@ -2911,7 +2932,7 @@ begin
   perform set_config('request.jwt.claim.sub', 'aa000000-0000-0000-0000-00000000a001', true);
   set local role authenticated;
   begin
-    perform public.set_session_venue('hyrox-2026-08-22', 'x', 'y', true);
+    perform public.set_session_venue('hyrox-bft-2026-08-22', 'x', 'y', true);
     raise exception 'hyrox should be rejected';
   exception when others then
     if sqlerrm not like '%Activity venue is fixed.%' then
@@ -3005,7 +3026,7 @@ declare
 begin
   select cancel_reason, cancelled_source
     into v_hyrox_reason, v_hyrox_source
-    from public.operational_sessions where id = 'hyrox-2026-08-15';
+    from public.operational_sessions where id = 'hyrox-bft-2026-08-15';
   perform pg_temp.op_assert(v_hyrox_reason = 'HYROX race weekend', 'hyrox 15 August cancel reason');
   perform pg_temp.op_assert(v_hyrox_source = 'system', 'hyrox 15 August source label');
 

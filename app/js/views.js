@@ -2176,7 +2176,7 @@ function pendingPayments(memberUsers) {
 function adminOps(viewer, memberUsers, profilePhone = "") {
   const upcoming = store.upcomingSessions(21).filter((s) => s.category === "HYROX" && !sessionStarted(s));
   const thisWeekSat = upcoming[0]?.dateISO;
-  const dutyUser = thisWeekSat ? store.collectorFor(`hyrox-${thisWeekSat}`) : null;
+  const dutyUser = thisWeekSat ? store.collectorFor(`hyrox-bft-${thisWeekSat}`) : null;
   const admins = (memberUsers || []).filter(
     (u) => isAdminRole(u.role) && u.status === "approved"
   );
