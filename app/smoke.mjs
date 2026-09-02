@@ -3,7 +3,42 @@
 
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import { readFileSync as readAssetFileSync } from "node:fs";
 import { assertFpsCopyBindings } from "./test-html.mjs";
+
+const webpDimensions = (path) => {
+  const bytes = readAssetFileSync(new URL(path, import.meta.url));
+  assert.equal(bytes.subarray(0, 4).toString(), "RIFF", `${path} must be a RIFF file`);
+  assert.equal(bytes.subarray(8, 12).toString(), "WEBP", `${path} must be a WebP file`);
+  let offset = 12;
+  while (offset + 8 <= bytes.length) {
+    const type = bytes.subarray(offset, offset + 4).toString();
+    const size = bytes.readUInt32LE(offset + 4);
+    const dataOffset = offset + 8;
+    if (type === "VP8 ") {
+      assert.equal(bytes.subarray(dataOffset + 3, dataOffset + 6).toString("hex"), "9d012a");
+      return {
+        width: bytes.readUInt16LE(dataOffset + 6) & 0x3fff,
+        height: bytes.readUInt16LE(dataOffset + 8) & 0x3fff,
+      };
+    }
+    if (type === "VP8X") {
+      return {
+        width: bytes.readUIntLE(dataOffset + 4, 3) + 1,
+        height: bytes.readUIntLE(dataOffset + 7, 3) + 1,
+      };
+    }
+    offset = dataOffset + size + (size % 2);
+  }
+  assert.fail(`${path} has no supported WebP dimensions chunk`);
+};
+
+for (const photo of ["../assets/itc/running.webp", "../assets/itc/water.webp", "../assets/itc/hyrox.webp"]) {
+  const dimensions = webpDimensions(photo);
+  assert.ok(dimensions.width >= 1200 && dimensions.height >= 675,
+    `${photo} must be a high-resolution activity image`);
+}
+console.log("ok  recurring activity photos are high-resolution WebP assets");
 
 // --- localStorage shim ---
 const mem = new Map();
