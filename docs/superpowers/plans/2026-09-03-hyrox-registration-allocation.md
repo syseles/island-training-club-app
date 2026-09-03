@@ -19,13 +19,17 @@
 - Supabase owns live cycles, bookings, queues, receipts and notifications; a live error must never fall back to local state.
 - The pooled workflow contains BFT Causeway Bay (`hyrox-bft`, 11:15, capacity 20) and Midtown28 Fitness (`hyrox-midtown`, 11:00, capacity 12) only.
 - Quarry Bay remains independently booked and cannot overlap a pooled registration for the same Saturday.
+- A scheduled cycle is visible but locked until Monday 18:00 `Asia/Hong_Kong`; later Saturdays remain locked until their own Monday opening.
 - The first 32 active registrations may pay; registration #33 onward joins a weekly waitlist and must not receive payment controls.
 - Venue preference is `bft`, `midtown` or `either`; it does not reserve venue capacity.
 - Direct registration and weekly-waitlist join both require preference plus explicit BFT fallback acknowledgement; promotion preserves both values.
-- Pooled payment marking has one deadline: Thursday 18:00 `Asia/Hong_Kong`.
-- Before Thursday 18:00, an unpaid cancellation promotes the oldest weekly-waitlist entry with the same Thursday deadline.
-- At Thursday 18:00, unmarked pooled reservations expire without promotion and remaining weekly-waitlist entries dissolve.
-- Collector-confirmed counts `0–20` derive `bft_only`; `21–32` derive `both`. The collector cannot override the derived result.
+- The acknowledgement is exactly `I understand that my booking will be at BFT at 11:15 if only BFT opens.`
+- Standard payment is due Thursday 18:00. Original holders receive final grace to Thursday 19:00; members promoted at 19:00 receive until Thursday 20:00.
+- Before Thursday 18:00, an unpaid cancellation promotes the oldest weekly-waitlist entry with the standard Thursday deadline and original-holder grace.
+- At Thursday 18:00, registration and waitlist joins close; unmarked holders remain booked and receive the final-grace warning.
+- At Thursday 19:00, still-unmarked original holders move to the back of the non-payable waitlist and the oldest pre-existing waitlist entries receive one promotion round.
+- At Thursday 20:00, unmarked promoted bookings expire without further promotion and all remaining weekly-waitlist entries dissolve.
+- After pending claims are reconciled, collector-confirmed counts `0–20` automatically derive `bft_only`; `21–32` automatically derive `both`. The collector cannot override the result.
 - BFT and Midtown allocations never exceed 20 and 12 respectively.
 - Venue changes close Friday 21:00 `Asia/Hong_Kong`; a switch-queued member retains the current guaranteed venue.
 - Pooled paid members receive no member refund, cancellation, deferral or peer-transfer action.
@@ -74,7 +78,11 @@
   - `HYROX_POOL_CAPACITY`, `HYROX_BFT_CAPACITY`, `HYROX_MIDTOWN_CAPACITY`
   - `HYROX_BFT_ACTIVITY_ID`, `HYROX_MIDTOWN_ACTIVITY_ID`
   - `hyroxCycleId(dateISO): string`
+  - `hyroxRegistrationOpensAt(dateISO): number`
+  - `hyroxPaymentReminderAt(dateISO): number`
   - `hyroxPaymentDeadline(dateISO): number`
+  - `hyroxHolderGraceDeadline(dateISO): number`
+  - `hyroxPromotedPaymentDeadline(dateISO): number`
   - `hyroxChoiceDeadline(dateISO): number`
   - `allocateHyroxVenues(bookings, options): Array<{ bookingId, sessionId, source }>`
 
@@ -86,13 +94,29 @@ Add this import beside the current `data.js`/`store.js` imports in `app/smoke.mj
 const hyroxCycle = await import("./js/hyrox-cycle.js");
 ```
 
-Replace the legacy multi-checkpoint deadline block so only the pooled Thursday payment and Friday venue-choice deadlines remain in the smoke contract. Keep unrelated legacy migration assertions, then add:
+Replace the legacy deadline block with the approved Monday opening, Thursday reminder/payment/grace/promotion and Friday venue-choice checkpoints. Keep unrelated legacy migration assertions, then add:
 
 ```js
 assert.equal(hyroxCycle.hyroxCycleId("2026-09-05"), "hyrox-pool-2026-09-05");
 assert.equal(
+  hyroxCycle.hyroxRegistrationOpensAt("2026-09-05"),
+  Date.parse("2026-08-31T18:00:00+08:00")
+);
+assert.equal(
+  hyroxCycle.hyroxPaymentReminderAt("2026-09-05"),
+  Date.parse("2026-09-03T17:00:00+08:00")
+);
+assert.equal(
   hyroxCycle.hyroxPaymentDeadline("2026-09-05"),
   Date.parse("2026-09-03T18:00:00+08:00")
+);
+assert.equal(
+  hyroxCycle.hyroxHolderGraceDeadline("2026-09-05"),
+  Date.parse("2026-09-03T19:00:00+08:00")
+);
+assert.equal(
+  hyroxCycle.hyroxPromotedPaymentDeadline("2026-09-05"),
+  Date.parse("2026-09-03T20:00:00+08:00")
 );
 assert.equal(
   hyroxCycle.hyroxChoiceDeadline("2026-09-05"),
@@ -143,8 +167,24 @@ export function hyroxCycleId(dateISO) {
   return `hyrox-pool-${dateISO}`;
 }
 
+export function hyroxRegistrationOpensAt(dateISO) {
+  return Date.parse(`${shiftISO(dateISO, -5)}T18:00:00+08:00`);
+}
+
+export function hyroxPaymentReminderAt(dateISO) {
+  return Date.parse(`${shiftISO(dateISO, -2)}T17:00:00+08:00`);
+}
+
 export function hyroxPaymentDeadline(dateISO) {
   return Date.parse(`${shiftISO(dateISO, -2)}T18:00:00+08:00`);
+}
+
+export function hyroxHolderGraceDeadline(dateISO) {
+  return Date.parse(`${shiftISO(dateISO, -2)}T19:00:00+08:00`);
+}
+
+export function hyroxPromotedPaymentDeadline(dateISO) {
+  return Date.parse(`${shiftISO(dateISO, -2)}T20:00:00+08:00`);
 }
 
 export function hyroxChoiceDeadline(dateISO) {
@@ -285,28 +325,40 @@ create table public.operational_hyrox_cycles (
   venue_plan text not null default 'pending'
     check (venue_plan in ('pending','bft_only','both')),
   registration_capacity integer not null default 32 check (registration_capacity = 32),
+  registration_opens_at timestamptz not null,
   payment_deadline_at timestamptz not null,
+  holder_grace_deadline_at timestamptz not null,
+  promoted_payment_deadline_at timestamptz not null,
   venue_choice_deadline_at timestamptz not null,
+  capacity_warning_sent_at timestamptz,
+  payment_reminder_sent_at timestamptz,
+  holder_grace_started_at timestamptz,
+  waitlist_promoted_at timestamptz,
+  reconciliation_started_at timestamptz,
   opened_at timestamptz,
-  opened_by uuid references public.profiles(id),
   plan_confirmed_at timestamptz,
   plan_confirmed_by uuid references public.profiles(id),
+  plan_confirmed_source text
+    check (plan_confirmed_source in ('automatic_sweep','payment_reconciliation','admin_retry')),
   allocation_closed_at timestamptz,
   cancelled_at timestamptz,
   cancelled_by uuid references public.profiles(id),
   cancel_reason text,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
-  check ((opened_at is null) = (opened_by is null)),
-  check ((plan_confirmed_at is null) = (plan_confirmed_by is null)),
-  check ((venue_plan = 'pending' and plan_confirmed_at is null)
-      or (venue_plan <> 'pending' and plan_confirmed_at is not null)),
+  check ((venue_plan = 'pending' and plan_confirmed_at is null
+          and plan_confirmed_by is null and plan_confirmed_source is null)
+      or (venue_plan <> 'pending' and plan_confirmed_at is not null
+          and plan_confirmed_source is not null)),
   check (registration_state <> 'closed' or venue_plan <> 'pending'),
   check (allocation_closed_at is null or registration_state in ('closed','cancelled')),
   check ((cancelled_at is null and cancelled_by is null and cancel_reason is null)
       or (cancelled_at is not null and cancelled_by is not null
           and cancel_reason is not null and length(btrim(cancel_reason)) > 0)),
-  check (venue_choice_deadline_at > payment_deadline_at)
+  check (registration_opens_at < payment_deadline_at),
+  check (holder_grace_deadline_at = payment_deadline_at + interval '1 hour'),
+  check (promoted_payment_deadline_at = holder_grace_deadline_at + interval '1 hour'),
+  check (venue_choice_deadline_at > promoted_payment_deadline_at)
 );
 
 create table public.operational_hyrox_queue_entries (
@@ -340,6 +392,7 @@ alter table public.operational_bookings
   add column hyrox_cycle_id text references public.operational_hyrox_cycles(id),
   add column venue_preference text check (venue_preference in ('bft','midtown','either')),
   add column fallback_acknowledged_at timestamptz,
+  add column promoted_from_waitlist_at timestamptz,
   add column allocation_state text check (allocation_state in ('provisional','final')),
   add column allocation_source text check (allocation_source in ('preference','member','automatic','admin')),
   add column allocated_at timestamptz,
@@ -444,7 +497,7 @@ git commit -m "feat(hyrox): add pooled registration schema"
 
 ---
 
-### Task 3: Add member reservation, weekly-waitlist and Thursday payment guards
+### Task 3: Add scheduled member registration, weekly waitlist and booking-specific payment guards
 
 **Files:**
 - Create: `supabase/migrations/20260903000002_hyrox_cycle_member_rpcs.sql`
@@ -464,15 +517,15 @@ git commit -m "feat(hyrox): add pooled registration schema"
 Add transactional SQL scenarios that:
 
 1. create a future BFT/Midtown pair and `hyrox-pool-<date>` cycle;
-2. reject reserve before `open_hyrox_cycle` exists;
-3. insert/open the cycle directly as fixture setup;
+2. reject reserve before `registration_opens_at` and expose the cycle as locked;
+3. advance to Monday 18:00 HKT and verify the first reserve call opens the due cycle under the same lock;
 4. reject `fallback_acknowledged = false`;
 5. reserve with each preference;
 6. fill 32 active registrations and reject the 33rd reservation;
 7. reject a weekly-waitlist join without fallback acknowledgement, then place
    the 33rd member on `weekly_waitlist` with preference and acknowledgement but
    without a booking;
-8. reject direct BFT/Midtown reservation and legacy Midtown interest/waitlist joins for that open cycle; and
+8. reject direct BFT/Midtown reservation and legacy Midtown interest/waitlist joins from the moment that cycle is scheduled; and
 9. reject a pooled reservation when the member already holds active Quarry Bay.
 
 Use dynamic dates derived from `current_date` and existing approved fixture users; do not add a hard-coded date to the suite.
@@ -489,14 +542,14 @@ Expected: FAIL with `function reserve_hyrox_cycle(text,text,boolean) does not ex
 
 - [ ] **Step 3: Implement `reserve_hyrox_cycle`**
 
-The function must lock the cycle first, validate approved membership, `registration_state = 'open'`, `now() < payment_deadline_at`, exact preference, true fallback acknowledgement, clean child sessions and no active Quarry booking. Count active cycle bookings under the lock and insert only below 32:
+The function must lock the cycle first, transition a due scheduled cycle to `open`, validate approved membership, `now() >= registration_opens_at`, `now() < payment_deadline_at`, exact preference, true fallback acknowledgement, clean child sessions and no active Quarry booking. Count active cycle bookings under the lock and insert only below 32:
 
 ```sql
 insert into public.operational_bookings (
   profile_id, session_id, hyrox_cycle_id, status, reserved_at,
   pay_deadline_at, venue_preference, fallback_acknowledged_at, snapshot
 ) values (
-  v_uid, null, v_cycle.id, 'reserved', now(), v_cycle.payment_deadline_at,
+  v_uid, null, v_cycle.id, 'reserved', now(), v_cycle.holder_grace_deadline_at,
   p_preference, now(),
   jsonb_build_object(
     'name', 'ITC HYROX',
@@ -514,20 +567,20 @@ insert into public.operational_bookings (
 ) returning * into v_booking;
 ```
 
-Insert a transactional reservation notification containing the Thursday deadline.
+Insert a transactional reservation notification stating the standard Thursday 6 PM deadline. When the 32nd active booking is inserted, stamp `capacity_warning_sent_at` once and notify every unmarked holder that an unpaid place can move to the waitlist.
 
 - [ ] **Step 4: Implement weekly queue join/leave**
 
-`join_hyrox_cycle_waitlist` accepts `(p_cycle_id, p_preference, p_fallback_acknowledged)`, locks the cycle, requires an open/pre-deadline cycle with 32 active registrations, validates the exact preference and true acknowledgement, rejects any active cycle booking/queue for the member and inserts `kind = 'weekly_waitlist'` with `venue_preference` and `fallback_acknowledged_at`. `leave_hyrox_cycle_queue` enforces owner/Admin authorization and transitions only active entries to `left` with `resolved_at = now()`.
+`join_hyrox_cycle_waitlist` accepts `(p_cycle_id, p_preference, p_fallback_acknowledged)`, locks the cycle, opens an eligible due draft, requires the Monday-to-Thursday registration window and 32 active registrations, validates the exact preference and true acknowledgement, rejects any active cycle booking/queue for the member and inserts `kind = 'weekly_waitlist'` with `venue_preference` and `fallback_acknowledged_at`. `leave_hyrox_cycle_queue` enforces owner/Admin authorization and transitions only active entries to `left` with `resolved_at = now()`.
 
 - [ ] **Step 5: Replace direct-session and payment/release functions safely**
 
 In this forward migration, `create or replace` the existing functions:
 
-- `reserve_operational_session`: when the target is BFT/Midtown and an open cycle references it, raise `Use the weekly HYROX registration.`; for Quarry Bay, reject if the member owns an active same-date pooled booking.
-- `join_operational_queue`: reject legacy Midtown interest/waitlist joins whenever an open or later cycle references that child session; keep Quarry Bay and legacy dates unchanged.
-- `mark_operational_payment`: for a pooled booking, lock its cycle and reject at or after `payment_deadline_at`; resolve collector notification from `cycle.session_date` rather than nullable `session_id`.
-- `release_operational_reservation`: for a pooled booking released before Thursday 18:00, cancel it and promote exactly the oldest active weekly-waitlist entry into a new reservation with the same cycle deadline, the queue entry’s stored preference and its recorded fallback acknowledgement; after the deadline, do not promote.
+- `reserve_operational_session`: when the target is BFT/Midtown and any scheduled non-cancelled cycle references it, raise `Use the weekly HYROX registration.`; for Quarry Bay, reject if the member owns an active same-date pooled booking.
+- `join_operational_queue`: reject legacy Midtown interest/waitlist joins whenever any scheduled non-cancelled cycle references that child session; keep Quarry Bay and unscheduled legacy dates unchanged.
+- `mark_operational_payment`: for a pooled booking, lock its cycle and reject at or after that booking’s `pay_deadline_at`; original holders therefore close at Thursday 7 PM and the one Thursday 7 PM promotion cohort closes at Thursday 8 PM. Resolve collector notification from `cycle.session_date` rather than nullable `session_id`.
+- `release_operational_reservation`: for a pooled booking released before Thursday 18:00, cancel it and promote exactly the oldest active weekly-waitlist entry into a new original-cohort reservation with `pay_deadline_at = holder_grace_deadline_at`, the queue entry’s stored preference and its recorded fallback acknowledgement. From Thursday 18:00 onward, do not promote until the single lifecycle sweep at Thursday 19:00.
 
 Use queue ordering `joined_at, id` and perform booking cancellation, promotion and notifications in one transaction.
 
@@ -552,7 +605,7 @@ git commit -m "feat(hyrox): add pooled member registration RPCs"
 
 ---
 
-### Task 4: Add collector reconciliation, one-deadline sweep and threshold allocation
+### Task 4: Add automatic lifecycle checkpoints, collector reconciliation and threshold allocation
 
 **Files:**
 - Create: `supabase/migrations/20260903000003_hyrox_cycle_reconciliation.sql`
@@ -562,22 +615,26 @@ git commit -m "feat(hyrox): add pooled member registration RPCs"
 **Interfaces:**
 - Consumes: pooled bookings and queue entries from Task 3.
 - Produces:
-  - `open_hyrox_cycle(text)`
+  - `schedule_hyrox_cycle(text)`
+  - `sweep_hyrox_cycle_deadlines(timestamptz default now())`
   - `reject_hyrox_cycle_payment(uuid,text)`
   - pooled branch in `approve_operational_payment(uuid)`
-  - `sweep_hyrox_cycle_deadlines(timestamptz)`
   - `finalize_hyrox_venue_plan(text)`
 
 - [ ] **Step 1: Add failing reconciliation scenarios**
 
 Add SQL assertions for:
 
-- open creates a cycle only for matching future BFT/Midtown sessions and rejects active legacy child bookings/queues;
-- deadline is Thursday 18:00 HKT and choice closes Friday 21:00 HKT;
-- sweep expires unmarked reservations and dissolves, rather than promotes, remaining weekly waitlist entries;
-- pre-deadline `payment_marked_at` survives the sweep;
-- pending payment claims block plan finalization;
-- rejected claims record actor/time/reason, reopen payment before the deadline and expire at/after the deadline;
+- scheduling creates a cycle only for matching future BFT/Midtown sessions and rejects active legacy child bookings/queues;
+- opening is Monday 18:00 HKT; reminders/transitions occur Thursday 17:00, 18:00, 19:00 and 20:00; venue choice closes Friday 21:00;
+- the Monday sweep opens once and notifies approved members, while a repeated sweep creates no duplicate notifications;
+- the Thursday 17:00 sweep reminds unmarked holders once;
+- the Thursday 18:00 sweep keeps unmarked originals booked, starts grace, notifies them and sends collector totals;
+- the Thursday 19:00 sweep demotes still-unmarked originals to the back of the non-payable waitlist and promotes only the oldest pre-existing entries with a 20:00 hard deadline;
+- the Thursday 20:00 sweep expires unmarked promoted bookings without another promotion, dissolves remaining weekly entries and sends updated collector totals;
+- payment claims marked before each booking’s hard deadline survive every sweep;
+- pending payment claims block plan finalization, resolving the last claim after Thursday 20:00 automatically finalizes, and a 20:00 sweep with no pending claims finalizes immediately;
+- rejected claims record actor/time/reason, reopen payment before that booking’s hard deadline and expire at/after it;
 - 20 confirmed payments derive `bft_only` with 20 final BFT allocations;
 - 21 confirmed payments derive `both` with 20/1 allocation for 21 BFT-preferring members; and
 - receipt issuance succeeds while `session_id` is null and later links to the allocated child session.
@@ -590,46 +647,93 @@ Run:
 ITC_ALLOW_DATABASE_RESET=1 bash supabase/tests/verify_operational_backend.sh
 ```
 
-Expected: FAIL with `function open_hyrox_cycle(text) does not exist`.
+Expected: FAIL with `function schedule_hyrox_cycle(text) does not exist`.
 
-- [ ] **Step 3: Implement cycle opening and exact deadlines**
+- [ ] **Step 3: Implement cycle scheduling and exact checkpoints**
 
-`open_hyrox_cycle` accepts `hyrox-pool-YYYY-MM-DD`, derives/locks `hyrox-bft-<date>` and `hyrox-midtown-<date>`, validates capacities/price and no active legacy child inventory, then upserts/opens the cycle. Compute deadlines with PostgreSQL timezone conversion:
+`schedule_hyrox_cycle` accepts `hyrox-pool-YYYY-MM-DD`, derives/locks `hyrox-bft-<date>` and `hyrox-midtown-<date>`, validates capacities/price and no active legacy child inventory, then inserts a draft scheduled cycle. Compute checkpoints with PostgreSQL timezone conversion:
 
 ```sql
+v_registration_opens := ((v_date - 5)::date + time '18:00') at time zone 'Asia/Hong_Kong';
 v_payment_deadline := ((v_date - 2)::date + time '18:00') at time zone 'Asia/Hong_Kong';
+v_holder_grace_deadline := ((v_date - 2)::date + time '19:00') at time zone 'Asia/Hong_Kong';
+v_promoted_payment_deadline := ((v_date - 2)::date + time '20:00') at time zone 'Asia/Hong_Kong';
 v_choice_deadline := ((v_date - 1)::date + time '21:00') at time zone 'Asia/Hong_Kong';
 ```
 
-Record `opened_at`, `opened_by`; keep `venue_plan = 'pending'`.
+Keep `venue_plan = 'pending'`. `sweep_hyrox_cycle_deadlines` changes a due draft to open, stamps `opened_at` once and inserts one registration-opened notification per approved member.
 
-- [ ] **Step 4: Implement approval, rejection and deadline sweep**
+- [ ] **Step 4: Implement approval, rejection and idempotent lifecycle sweep**
 
-For pooled approval, lock cycle then booking, require a pre-deadline claim, set `status = 'confirmed'`, `paid_at = now()`, create one cycle-linked receipt with null session, and notify the member. Do not release sibling BFT/Midtown holds because pooled opening already rejects them.
+For pooled approval, lock cycle then booking, require a claim marked before `booking.pay_deadline_at`, set `status = 'confirmed'`, `paid_at = now()`, create one cycle-linked receipt with null session, and notify the member. Do not release sibling BFT/Midtown holds because cycle scheduling already rejects them.
 
-`reject_hyrox_cycle_payment` records `payment_rejected_at`, `payment_rejected_by` and a required reason. Before the deadline it clears `payment_marked_at`, `payment_method` and `payment_reference` so the reserved member can submit again; at/after the deadline it sets status `expired`. In both cases it creates a member notification containing the reason.
+`reject_hyrox_cycle_payment` records `payment_rejected_at`, `payment_rejected_by` and a required reason. Before `booking.pay_deadline_at` it clears `payment_marked_at`, `payment_method` and `payment_reference` so the reserved member can submit again; at/after that deadline it sets status `expired`. In both cases it creates a member notification containing the reason.
 
-`sweep_hyrox_cycle_deadlines(p_now)` must, per eligible cycle:
+`sweep_hyrox_cycle_deadlines(p_now)` locks each cycle and uses null checkpoint timestamps as idempotency guards. At Thursday 19:00 it counts still-unmarked originals into `v_freed_count`; demoted entries receive `joined_at = p_now`, so the promotion query can select only entries that were already waiting:
 
 ```sql
 update public.operational_bookings
    set status = 'expired', updated_at = p_now
  where hyrox_cycle_id = v_cycle.id
    and status = 'reserved'
-   and payment_marked_at is null;
+   and payment_marked_at is null
+   and promoted_from_waitlist_at is null;
 
-update public.operational_hyrox_queue_entries
-   set status = 'dissolved', resolved_at = p_now
- where cycle_id = v_cycle.id
-   and kind = 'weekly_waitlist'
-   and status = 'active';
+for v_booking in
+  select * from public.operational_bookings
+   where hyrox_cycle_id = v_cycle.id
+     and status = 'expired'
+     and payment_marked_at is null
+     and promoted_from_waitlist_at is null
+     and updated_at = p_now
+   order by reserved_at, id
+loop
+  insert into public.operational_hyrox_queue_entries
+    (cycle_id, profile_id, kind, venue_preference,
+     fallback_acknowledged_at, status, joined_at)
+  values
+    (v_cycle.id, v_booking.profile_id, 'weekly_waitlist',
+     v_booking.venue_preference, v_booking.fallback_acknowledged_at,
+     'active', p_now);
+end loop;
+
+for v_queue in
+  select * from public.operational_hyrox_queue_entries
+   where cycle_id = v_cycle.id
+     and kind = 'weekly_waitlist'
+     and status = 'active'
+     and joined_at < p_now
+   order by joined_at, id
+   limit v_freed_count
+   for update skip locked
+loop
+  insert into public.operational_bookings
+    (profile_id, session_id, hyrox_cycle_id, status, reserved_at,
+     pay_deadline_at, venue_preference, fallback_acknowledged_at,
+     promoted_from_waitlist_at, snapshot)
+  values
+    (v_queue.profile_id, null, v_cycle.id, 'reserved', p_now,
+     v_cycle.promoted_payment_deadline_at, v_queue.venue_preference,
+     v_queue.fallback_acknowledged_at, p_now, v_weekly_snapshot);
+  update public.operational_hyrox_queue_entries
+     set status = 'promoted', resolved_at = p_now
+   where id = v_queue.id;
+end loop;
+
+update public.operational_bookings
+   set status = 'expired', updated_at = p_now
+ where hyrox_cycle_id = v_cycle.id
+   and status = 'reserved'
+   and payment_marked_at is null
+   and promoted_from_waitlist_at is not null
+   and p_now >= v_cycle.promoted_payment_deadline_at;
 ```
 
-Set `registration_state = 'reconciling'` and emit notifications in the same transaction.
+At Thursday 20:00 dissolve every remaining active weekly entry, set `registration_state = 'reconciling'` and emit the payment-closure/member/collector notifications in the same transaction. Checkpoint timestamps prevent duplicate notifications on repeated calls.
 
 - [ ] **Step 5: Implement derived plan and deterministic allocation**
 
-`finalize_hyrox_venue_plan` requires Admin/Super Admin, locks cycle and child sessions, calls/duplicates deadline transition if needed, rejects unresolved claims, counts `status = 'confirmed'`, derives plan and loops confirmed bookings ordered by `paid_at, id`.
+A private locked finalization helper requires non-null `reconciliation_started_at`, returns while claims remain unresolved, counts `status = 'confirmed'`, derives the plan automatically and loops confirmed bookings ordered by `paid_at, id`. The Thursday 20:00 sweep invokes it with source `automatic_sweep` when no claims are pending; pooled approval/rejection invokes it with source `payment_reconciliation` after resolving the last claim. `finalize_hyrox_venue_plan` exposes the same idempotent helper to Admin/Super Admin with source `admin_retry` for recovery only and accepts no venue-plan argument. Only actor-triggered sources populate `plan_confirmed_by`.
 
 For `bft_only`, assign every confirmed booking to BFT with `allocation_state = 'final'`. For `both`, track BFT/Midtown counts, honor the preferred venue while capacity remains, send `either` to BFT first, then overflow to the alternate venue, and write:
 
@@ -828,7 +932,7 @@ git commit -m "feat(hyrox): add venue switching and cycle lifecycle"
   - `listLiveHyroxCycles()`
   - `getLiveHyroxCycle(id)`
   - `liveHyroxQueuesForCycle(id)`
-  - live booking fields `cycleId`, `venuePreference`, `allocationState`, `allocationSource`, `allocationSnapshot`
+  - live booking fields `cycleId`, `venuePreference`, `promotedFromWaitlistAt`, `allocationState`, `allocationSource`, `allocationSnapshot`
   - live RPC wrappers named after every member/Admin function in Tasks 3–5.
 
 - [ ] **Step 1: Extend fake Supabase and write failing hydration assertions**
@@ -864,10 +968,18 @@ function buildHyroxCycleRow(row) {
     capacity: row.registration_capacity,
     paymentDeadlineAt: parseTimestamp(row.payment_deadline_at),
     venueChoiceDeadlineAt: parseTimestamp(row.venue_choice_deadline_at),
+    registrationOpensAt: parseTimestamp(row.registration_opens_at),
+    holderGraceDeadlineAt: parseTimestamp(row.holder_grace_deadline_at),
+    promotedPaymentDeadlineAt: parseTimestamp(row.promoted_payment_deadline_at),
+    capacityWarningSentAt: parseTimestamp(row.capacity_warning_sent_at),
+    paymentReminderSentAt: parseTimestamp(row.payment_reminder_sent_at),
+    holderGraceStartedAt: parseTimestamp(row.holder_grace_started_at),
+    waitlistPromotedAt: parseTimestamp(row.waitlist_promoted_at),
+    reconciliationStartedAt: parseTimestamp(row.reconciliation_started_at),
     openedAt: parseTimestamp(row.opened_at),
-    openedBy: row.opened_by,
     planConfirmedAt: parseTimestamp(row.plan_confirmed_at),
     planConfirmedBy: row.plan_confirmed_by,
+    planConfirmedSource: row.plan_confirmed_source || null,
     allocationClosedAt: parseTimestamp(row.allocation_closed_at),
     cancelledAt: parseTimestamp(row.cancelled_at),
     cancelReason: row.cancel_reason || null,
@@ -890,7 +1002,7 @@ function buildHyroxQueueRow(row) {
 }
 ```
 
-Extend `buildBookingRow` and `buildReceiptRow` with `cycleId`, `venuePreference`, `fallbackAcknowledgedAt`, `allocationState`, `allocationSource`, `allocatedAt`, `allocationSnapshot`, `paymentRejectedAt`, `paymentRejectedBy` and `paymentRejectionReason`; tolerate null `session_id`.
+Extend `buildBookingRow` and `buildReceiptRow` with `cycleId`, `venuePreference`, `fallbackAcknowledgedAt`, `promotedFromWaitlistAt`, `allocationState`, `allocationSource`, `allocatedAt`, `allocationSnapshot`, `paymentRejectedAt`, `paymentRejectedBy` and `paymentRejectionReason`; tolerate null `session_id`.
 
 - [ ] **Step 4: Add live selectors, errors and RPC wrappers**
 
@@ -918,11 +1030,11 @@ export const liveSelectHyroxVenue = (bookingId, sessionId) =>
   });
 ```
 
-Add wrappers for open, weekly waitlist join/leave, reject payment, switch join/leave, close allocation and cycle cancellation. Map every exact domain error from the spec in `operationalProblem`.
+Add wrappers for cycle scheduling/sweeping, weekly waitlist join/leave, reject payment, switch join/leave, close allocation and cycle cancellation. Map every exact domain error from the spec in `operationalProblem`.
 
-- [ ] **Step 5: Subscribe/refetch both tables**
+- [ ] **Step 5: Advance lifecycle on synchronization and subscribe/refetch both tables**
 
-Add `postgres_changes` subscriptions for `operational_hyrox_cycles` and `operational_hyrox_queue_entries`; use the existing coalesced `scheduleRealtimeRefresh()` rather than view-owned subscriptions.
+Before authenticated initial hydration and focus refetch, call `sweep_hyrox_cycle_deadlines` with the server default timestamp, then fetch authoritative rows. The reserve RPC independently opens a due scheduled cycle, so availability never depends on a client sweep. Add `postgres_changes` subscriptions for `operational_hyrox_cycles` and `operational_hyrox_queue_entries`; use the existing coalesced `scheduleRealtimeRefresh()` rather than view-owned subscriptions. Surface a sweep failure through the live error path and never fall back to local state.
 
 - [ ] **Step 6: Run both JavaScript suites**
 
@@ -955,24 +1067,33 @@ git commit -m "feat(hyrox): hydrate live pooled operations"
 - Consumes: Task 1 pure helpers and Task 6 live adapters.
 - Produces public store functions:
   - `hyroxCycles()` / `getHyroxCycle(id)` / `hyroxCycleForDate(dateISO)`
-  - `openHyroxCycle(dateISO)`
+  - `scheduleHyroxCycle(dateISO)`
   - `reserveHyroxCycle(userId, cycleId, preference, fallbackAcknowledged, now)`
-  - `joinHyroxCycleWaitlist(userId, cycleId, preference, fallbackAcknowledged)`
+  - `joinHyroxCycleWaitlist(userId, cycleId, preference, fallbackAcknowledged, now)`
   - `leaveHyroxCycleQueue(userId, entryId)`
   - `hyroxCycleQueues(cycleId)` / `hyroxCycleQueuePosition(userId, cycleId, kind, targetSessionId)`
   - `sweepHyroxCycleDeadlines(now)`
 
 - [ ] **Step 1: Write failing v19 migration and local registration tests**
 
-Add tests that persist a genuine v18 state without cycle keys, load it, and assert version 19 plus empty object/array collections without losing bookings. Then open a future cycle and assert:
+Add tests that persist a genuine v18 state without cycle keys, load it, and assert version 19 plus empty object/array collections without losing bookings. Then schedule a future cycle, verify it is locked before Monday 6 PM and assert every checkpoint:
 
 ```js
-const cycle = store.openHyroxCycle("2099-01-03");
+const cycle = store.scheduleHyroxCycle("2099-01-03");
 assert.equal(cycle.id, "hyrox-pool-2099-01-03");
+assert.equal(cycle.registrationState, "draft");
+assert.equal(cycle.registrationOpensAt, Date.parse("2098-12-29T18:00:00+08:00"));
 assert.equal(cycle.paymentDeadlineAt, Date.parse("2099-01-01T18:00:00+08:00"));
+assert.equal(cycle.holderGraceDeadlineAt, Date.parse("2099-01-01T19:00:00+08:00"));
+assert.equal(cycle.promotedPaymentDeadlineAt, Date.parse("2099-01-01T20:00:00+08:00"));
+assert.throws(() => store.reserveHyroxCycle(
+  "fixture-member", cycle.id, "midtown", true,
+  Date.parse("2098-12-29T17:59:59+08:00")
+), /opens Monday at 6 PM/);
+store.sweepHyroxCycleDeadlines(Date.parse("2098-12-29T18:00:00+08:00"));
 const pooled = store.reserveHyroxCycle(
   "fixture-member", cycle.id, "midtown", true,
-  Date.parse("2098-12-28T09:00:00+08:00")
+  Date.parse("2098-12-29T18:00:01+08:00")
 );
 assert.equal(pooled.sessionId, null);
 assert.equal(pooled.cycleId, cycle.id);
@@ -985,7 +1106,7 @@ Fill 32 with approved fixtures; assert the next reservation throws full. Assert 
 - [ ] **Step 2: Run smoke and verify failure**
 
 Run: `node app/smoke.mjs`
-Expected: FAIL because `openHyroxCycle` is not exported.
+Expected: FAIL because `scheduleHyroxCycle` is not exported.
 
 - [ ] **Step 3: Bump and migrate state**
 
@@ -998,17 +1119,17 @@ if (v < 19) {
 }
 ```
 
-- [ ] **Step 4: Implement selectors/open/reserve/queue actions**
+- [ ] **Step 4: Implement selectors/scheduling/reserve/queue actions**
 
-Use pure helpers for IDs/deadlines. A local cycle shape must match `buildHyroxCycleRow`. `openHyroxCycle` requires an Admin actor, resolves matching BFT/Midtown sessions, rejects legacy active child bookings/queues and writes `registrationState: "open"`.
+Use pure helpers for IDs/checkpoints. A local cycle shape must match `buildHyroxCycleRow`. `scheduleHyroxCycle` requires an Admin actor, resolves matching BFT/Midtown sessions, rejects legacy active child bookings/queues and writes a draft cycle that is immediately visible as locked.
 
-`reserveHyroxCycle` validates approved owner, open/deadline, preference, fallback, no same-date Quarry booking and active count below 32. Store snapshot venues and null `sessionId` exactly as the live shape.
+`reserveHyroxCycle` opens a due draft idempotently, then validates approved owner, Monday opening, Thursday 6 PM registration close, preference, fallback, no same-date Quarry booking and active count below 32. Store `payDeadlineAt: cycle.holderGraceDeadlineAt`, candidate venues and null `sessionId` exactly as the live shape.
 
-`joinHyroxCycleWaitlist` performs the same preference/fallback validation. Queue entries use `{ id, cycleId, userId, kind, targetSessionId, venuePreference, fallbackAcknowledgedAt, status, joinedAt, resolvedAt }`; switch entries keep preference/acknowledgement null.
+`joinHyroxCycleWaitlist` performs the same preference/fallback/opening validation and closes at Thursday 6 PM. Queue entries use `{ id, cycleId, userId, kind, targetSessionId, venuePreference, fallbackAcknowledgedAt, status, joinedAt, resolvedAt }`; switch entries keep preference/acknowledgement null.
 
-- [ ] **Step 5: Implement Thursday sweep with no late promotion**
+- [ ] **Step 5: Implement automatic opening and Thursday checkpoint sweep**
 
-Before the deadline, unpaid cancellation promotes the oldest weekly entry. At/after the deadline, `sweepHyroxCycleDeadlines` expires only unmarked reservations, dissolves all active weekly entries, changes cycle to `reconciling` and sends notifications. Do not call the legacy `nextPayDeadline` helper for pooled bookings.
+Before Thursday 6 PM, unpaid cancellation promotes the oldest weekly entry with holder grace to 7 PM. `sweepHyroxCycleDeadlines` opens due Monday cycles, sends one Thursday 5 PM reminder, starts holder grace and sends collector/member notices at 6 PM, demotes still-unmarked originals and promotes only the pre-existing oldest waitlist cohort at 7 PM, then expires unmarked promoted bookings without further promotion and dissolves remaining weekly entries at 8 PM. Persist each checkpoint timestamp before sending notifications so repeated calls are idempotent. Do not call the legacy `nextPayDeadline` helper for pooled bookings.
 
 - [ ] **Step 6: Add live branches and verify no fallback**
 
@@ -1084,7 +1205,7 @@ Expected: FAIL because `finalizeHyroxVenuePlan` is not exported.
 
 - [ ] **Step 3: Extend payment approval and rejection**
 
-`confirmBookingPayment` branches on `booking.cycleId`: create a cycle-linked receipt without assuming a session, do not release child sibling holds, and keep `status = 'confirmed'`. `rejectHyroxCyclePayment` requires Admin, a reserved/marked pooled booking and nonblank reason; after deadline set expired and notify.
+`confirmBookingPayment` branches on `booking.cycleId`: create a cycle-linked receipt without assuming a session, do not release child sibling holds, and keep `status = 'confirmed'`. `rejectHyroxCyclePayment` requires Admin, a reserved/marked pooled booking and nonblank reason; before `booking.payDeadlineAt` reopen payment, otherwise expire and notify.
 
 - [ ] **Step 4: Implement plan finalization and receipt linking**
 
@@ -1139,7 +1260,7 @@ git commit -m "feat(hyrox): add pooled allocation lifecycle"
 
 - [ ] **Step 1: Write failing combined-card and registration-copy tests**
 
-Open a local cycle and render Schedule. Assert exactly one `href="#/hyrox/<cycle-id>"`, no direct BFT/Midtown booking CTAs for that date, and one separate Quarry Bay row. Render as visitor, pending and approved member; assert all see both venue names/times and only approved sees reserve.
+Schedule a local cycle and render Schedule before Monday 6 PM. Assert exactly one `href="#/hyrox/<cycle-id>"`, `Opens Monday at 6 PM`, no reserve/direct BFT/Midtown CTA for that date, and one separate Quarry Bay row. Advance the lifecycle sweep to Monday 6 PM; render as visitor, pending and approved member and assert all see both venue names/times while only approved sees reserve.
 
 Assert registration includes:
 
@@ -1147,9 +1268,11 @@ Assert registration includes:
 for (const marker of [
   "Your preference helps us plan. It does not reserve a particular gym.",
   'value="bft"', 'value="midtown"', 'value="either"',
-  "If 20 or fewer members pay", "If more than 20 members pay",
+  "If 20 or fewer people have paid, we’ll only book BFT CwB",
+  "If more than 20 people have paid, we’ll book both gyms",
   "Thursday 6 PM", "Friday 9 PM",
   'name="fallbackAcknowledged"',
+  "I understand that my booking will be at BFT at 11:15 if only BFT opens.",
   "Reserve &amp; continue to pay",
 ]) assert.match(registrationHtml, new RegExp(marker));
 ```
@@ -1161,11 +1284,11 @@ Expected: FAIL because `viewHyroxCycle` is not exported.
 
 - [ ] **Step 3: Group pooled Schedule rows without hiding Quarry Bay**
 
-In `viewSchedule`, when an open/reconciling/closed/cancelled cycle exists for the selected date, remove only its BFT/Midtown child rows and insert one cycle presentation item. Do not group draft cycles or Quarry Bay. Render status badges from the member’s cycle booking/queue state; a cancelled cycle shows one canonical cancellation card rather than two child rows.
+In `viewSchedule`, when a scheduled draft/open/reconciling/closed/cancelled cycle exists for the selected date, remove only its BFT/Midtown child rows and insert one cycle presentation item. A draft item is visibly locked while `now < registrationOpensAt`; at/after Monday 6 PM its effective presentation is open even if an anonymous client has not invoked the authenticated sweep, and the reserve RPC performs the authoritative transition. Never group Quarry Bay. Render status badges from the member’s cycle booking/queue state; a cancelled cycle shows one canonical cancellation card rather than two child rows.
 
 - [ ] **Step 4: Add detail and registration views**
 
-`viewHyroxCycle` always displays date, price, BFT/Midtown names, times, capacities, threshold and deadlines. Use existing membership gates. When full, the weekly-waitlist form repeats the three preference controls and required BFT fallback acknowledgement, while showing exact no-payment copy and join/leave actions.
+`viewHyroxCycle` always displays date, price, BFT/Midtown names, times, capacities, Monday opening, payment/grace and venue-choice deadlines. Use existing membership gates. Before opening it shows the locked state. When full before Thursday 6 PM, the weekly-waitlist form repeats the three preference controls and required BFT fallback acknowledgement, while showing exact no-payment copy and join/leave actions.
 
 `viewHyroxRegistration` renders a semantic radio group, required fallback checkbox and `form-hyrox-reserve`. Keep controls at least 44px high and use existing `.card`, `.kicker`, `.badge`, `.btn`, `.muted` classes plus focused additions.
 
@@ -1222,10 +1345,12 @@ git commit -m "feat(hyrox): add pooled registration experience"
 
 - [ ] **Step 1: Write failing state-specific rendering tests**
 
-Assert these six exact state headings/copy fragments:
+Assert these eight exact state headings/copy fragments:
 
 ```text
 Pay HK$180 by Thursday 6 PM
+Final payment grace — pay now by Thursday 7 PM
+You’ve been promoted — pay by Thursday 8 PM
 Payment being confirmed
 Your weekly HYROX place is confirmed
 Both gyms confirmed
@@ -1246,13 +1371,15 @@ Expected: FAIL on the first pooled booking-state copy assertion.
 
 - [ ] **Step 3: Make `viewPay` null-session safe**
 
-Use `booking.cycleId` to resolve collector duty by cycle date. Build payment note as `ITC HYROX · <date> · <member>` and show both possible venues in explanatory copy, not as assigned location. Keep Thursday deadline and existing PayMe/FPS controls.
+Use `booking.cycleId` to resolve collector duty by cycle date. Build payment note as `ITC HYROX · <date> · <member>` and show both possible venues in explanatory copy, not as assigned location. Before Thursday 6 PM show the standard deadline; for an unmarked original between 6–7 PM show final-grace copy; for `promotedFromWaitlistAt` show the Thursday 8 PM hard deadline. Keep existing PayMe/FPS controls.
 
 - [ ] **Step 4: Render allocation states in `viewBooking`**
 
 Branch pooled bookings before legacy confirmed-booking deferral rendering:
 
-- reserved/unmarked: payment CTA and unpaid cancel;
+- reserved/unmarked before Thursday 6 PM: standard payment CTA and unpaid cancel;
+- original reserved/unmarked Thursday 6–7 PM: final-grace warning and payment CTA;
+- promoted reserved/unmarked Thursday 7–8 PM: promotion notice and payment CTA;
 - reserved/marked: collector confirmation state, no cancel;
 - confirmed/unallocated: guaranteed weekly place, venue decision pending;
 - BFT-only final: BFT detail/directions/calendar;
@@ -1296,7 +1423,7 @@ git commit -m "feat(hyrox): add member venue allocation states"
 
 **Interfaces:**
 - Consumes: Admin cycle actions and cycle/member selectors from Tasks 7–8.
-- Produces Admin controls `hyrox-cycle-open`, `hyrox-payment-reject`, `hyrox-plan-finalize`, `hyrox-allocation-close`, `form-cancel-hyrox-cycle`.
+- Produces Admin controls `hyrox-cycle-schedule`, `hyrox-payment-reject`, `hyrox-plan-retry`, `hyrox-allocation-close`, `form-cancel-hyrox-cycle`.
 
 - [ ] **Step 1: Write failing Admin dashboard assertions**
 
@@ -1307,10 +1434,10 @@ Saturday HYROX · Payment reconciliation
 22 confirmed paid
 3 payment claims to review
 7 unpaid
-Review 3 pending payment claims before confirming the venue plan.
+Review 3 pending payment claims before the venue plan can be confirmed automatically.
 ```
 
-Assert Finalize is disabled before Thursday, while claims remain pending, and after plan confirmation. Assert old Midtown manual toggle/interest controls are absent for the pooled date. Assert gym finalization is unavailable before Friday 9 PM.
+Assert the cycle is locked before Monday 6 PM and opens automatically afterward. Assert no collector choice between one or two gyms is rendered; after Thursday 8 PM the card prompts only for unresolved payment claims, and resolving the last claim reveals the automatic plan. Render **Retry automatic venue plan** only for a failed/stalled reconciliation state. Assert old Midtown manual toggle/interest controls are absent for the pooled date and gym finalization is unavailable before Friday 9 PM.
 
 - [ ] **Step 2: Run smoke and verify failure**
 
@@ -1319,13 +1446,13 @@ Expected: FAIL because the pooled Admin cycle card is absent.
 
 - [ ] **Step 3: Render weekly cycle and payment reconciliation cards**
 
-Under Payments, render one card per open/reconciling/closed cycle with opening metadata, active/confirmed/pending/unpaid/waitlist totals, derived threshold preview and allocation counts. Keep existing collector duty/payout controls unchanged.
+Under Payments, render one card per scheduled/open/reconciling/closed cycle with the Monday opening time, lifecycle checkpoint, active/confirmed/pending/unpaid/waitlist totals, derived threshold preview and allocation counts. At Thursday 6 PM show the grace summary and at Thursday 8 PM show the final reconciliation summary. Keep existing collector duty/payout controls unchanged.
 
 Add Confirm and Reject actions per payment claim. Reject requires a nonblank reason via an inline form, not `prompt()`.
 
 - [ ] **Step 4: Render plan/allocation and gym controls**
 
-Show **Finalize venue plan** only at/after Thursday 18:00 with zero unresolved claims. After finalization show BFT/Midtown assigned counts and switch queues. Show **Close venue allocation** at/after Friday 21:00 when still open.
+After the Thursday 20:00 checkpoint, show unresolved payment-review actions or the automatically derived venue plan—never a collector choice between gym outcomes. A narrowly scoped **Retry automatic venue plan** action may call the idempotent recovery RPC only when reconciliation has no pending claims but the plan remains pending. After finalization show BFT/Midtown assigned counts and switch queues. Show **Close venue allocation** at/after Friday 21:00 when still open.
 
 Under Activities, remove per-child Midtown toggle and cancellation for pooled dates; render one cycle cancellation form. Under Payments, enable per-venue WhatsApp/copy/finalize only after allocation closure and only for venues enabled by the plan.
 
@@ -1334,9 +1461,9 @@ Under Activities, remove per-child Midtown toggle and cancellation for pooled da
 Map controls to exact store functions, guard duplicate clicks/forms and use these success messages:
 
 ```text
-HYROX registration opened
+HYROX cycle scheduled — registration opens Monday at 6 PM
 Payment claim rejected — member notified
-Venue plan confirmed — members notified
+Automatic venue plan retried — members notified
 Venue allocations finalized
 HYROX cycle cancelled — members notified
 ```
@@ -1380,9 +1507,9 @@ git commit -m "feat(hyrox): add pooled collector operations"
 
 Add tests proving:
 
-- a BFT/Midtown date without an open cycle keeps separate legacy cards/actions;
-- a draft cycle is inert;
-- opening rejects any active legacy child booking or queue;
+- a BFT/Midtown date without a scheduled cycle keeps separate legacy cards/actions;
+- a scheduled draft cycle uses one combined locked card and opens only at Monday 6 PM HKT;
+- scheduling rejects any active legacy child booking or queue;
 - historical BFT/Midtown/Quarry bookings and receipts remain readable after v19;
 - Quarry Bay remains separately bookable and overlapping pooled reservation is rejected both ways;
 - free/RSVP paths and existing notification destinations are unchanged; and
@@ -1410,11 +1537,11 @@ Document migrations in exact order:
 20260903000004_hyrox_cycle_allocation.sql
 ```
 
-Add read-only SQL checks for tables, RLS, RPC execute privileges and Realtime publication. Add the activation rule: choose a clean future Saturday, deploy code and migrations, perform two-browser acceptance, then open that cycle. State that after the first pooled reservation, rollback must remain pooled-booking compatible.
+Add read-only SQL checks for tables, RLS, RPC execute privileges and Realtime publication. Add the activation rule: choose a clean future Saturday, deploy code and migrations, perform two-browser acceptance, then schedule that cycle before its Monday 6 PM HKT automatic opening. State that after the first pooled reservation, rollback must remain pooled-booking compatible.
 
 - [ ] **Step 4: Update README ownership and product summary**
 
-Change prototype state to v19, describe one BFT/Midtown weekly pool with Quarry Bay separate, and state the single Thursday payment deadline plus Friday venue-choice deadline. Do not describe PayMe/FPS as real payment processing.
+Change prototype state to v19, describe one BFT/Midtown weekly pool with Quarry Bay separate, and state Monday 6 PM opening, Thursday 6 PM standard payment, Thursday 7 PM holder grace, Thursday 8 PM promoted-member close and Friday 9 PM venue-choice close. Do not describe PayMe/FPS as real payment processing.
 
 - [ ] **Step 5: Run the complete verification matrix**
 
@@ -1436,22 +1563,22 @@ With the disposable database environment configured:
 ITC_ALLOW_DATABASE_RESET=1 bash supabase/tests/verify_operational_backend.sh
 ```
 
-Expected: every command PASS; HKT deadlines are identical under all host timezones; no SQL test exceeds 20/12 or permits post-Thursday pooled payment.
+Expected: every command PASS; HKT checkpoints are identical under all host timezones; no SQL test exceeds 20/12, accepts an original-holder payment at/after Thursday 7 PM or accepts a promoted-member payment at/after Thursday 8 PM.
 
 - [ ] **Step 6: Perform manual two-browser acceptance**
 
 Use one Admin and multiple approved member profiles against the same disposable/staging Supabase project:
 
-1. open a clean future cycle;
-2. verify combined Schedule card and separate Quarry Bay;
-3. reserve/pay/confirm and inspect pending venue state;
-4. verify member #33 sees weekly waitlist with no payment action;
-5. verify exactly 20 derives BFT-only;
-6. verify 21 derives both and produces deterministic provisional allocations;
-7. fill BFT, join its switch queue and confirm the Midtown assignment remains guaranteed;
-8. match an opposite swap and observe Realtime in the second browser;
-9. close Friday allocation and finalize gym lists; and
-10. focus a background tab and verify authoritative refetch.
+1. schedule a clean future cycle and verify it remains locked before Monday 6 PM;
+2. cross Monday 6 PM and verify automatic opening plus member notifications;
+3. verify combined Schedule card and separate Quarry Bay;
+4. reserve/pay/confirm and inspect pending venue state;
+5. verify member #33 sees weekly waitlist with no payment action;
+6. exercise Thursday 5 PM reminder, 6 PM grace warning, 7 PM demotion/promotion and 8 PM closure;
+7. verify exactly 20 derives BFT-only and 21 derives both automatically;
+8. fill BFT, join its switch queue and confirm the Midtown assignment remains guaranteed;
+9. match an opposite swap and observe Realtime in the second browser;
+10. close Friday allocation, finalize gym lists and verify focus refetch.
 
 - [ ] **Step 7: Commit documentation and final compatibility tests**
 
