@@ -108,8 +108,12 @@ timezone.
 
 - The first 32 active registrations receive an unpaid held place.
 - Further members may join the ordered weekly waitlist.
+- Joining the weekly waitlist records the same venue preference and BFT
+  fallback acknowledgement as a direct reservation, but exposes no payment
+  action.
 - If an unpaid member cancels before Thursday 6 PM, the oldest weekly-waitlist
-  member is promoted and inherits the same Thursday 6 PM payment deadline.
+  member is promoted with their recorded preference and inherits the same
+  Thursday 6 PM payment deadline.
 - Reservation records venue preference and the fallback acknowledgement.
 - A reserved member sees the on-duty collector’s PayMe/FPS instructions and may
   mark payment.
@@ -188,8 +192,11 @@ HYROX place.
 - Starts after 32 active pooled registrations before the deadline.
 - Member does not see payment actions and must not pay.
 - Position is ordered by server `joined_at`, then queue-entry UUID.
-- A promotion before Thursday 6 PM creates a reservation retaining that same
-  visible payment deadline.
+- Joining records `bft`, `midtown` or `either` preference plus explicit BFT
+  fallback acknowledgement so an automatic promotion never creates an
+  unacknowledged paid reservation.
+- A promotion before Thursday 6 PM creates a reservation with those recorded
+  choices and retains the same visible payment deadline.
 - Leaving removes the queue entry without affecting other records.
 
 Member copy:
@@ -268,12 +275,14 @@ Member-facing states are:
 
 1. **Payment due** — amount and exact Thursday deadline.
 2. **Payment reported** — collector is checking; place remains held.
-3. **Payment confirmed, venue pending** — weekly place confirmed; venue plan is
+3. **Payment claim rejected before deadline** — reason shown, claim audit kept,
+   and payment controls reopen for another attempt before Thursday 6 PM.
+4. **Payment confirmed, venue pending** — weekly place confirmed; venue plan is
    announced after reconciliation.
-4. **BFT assigned** — BFT-only plan, fixed venue and calendar details.
-5. **Both gyms confirmed** — provisional venue plus capacity-aware change
+5. **BFT assigned** — BFT-only plan, fixed venue and calendar details.
+6. **Both gyms confirmed** — provisional venue plus capacity-aware change
    controls until Friday 9 PM.
-6. **Venue final** — final venue/time, directions and calendar action.
+7. **Venue final** — final venue/time, directions and calendar action.
 
 Payment instructions and references identify the weekly event, not an
 unconfirmed venue. Example:
@@ -424,7 +433,9 @@ used by more than one cycle.
 | `allocation_state` | text nullable | provisional/final |
 | `allocation_source` | text nullable | preference/member/automatic/admin |
 | `allocated_at` | timestamptz nullable | paired with assigned session |
-| `allocation_snapshot` | jsonb nullable | immutable assigned venue/time history |
+| `allocation_snapshot` | jsonb nullable | append-only array of assigned venue/time history |
+| `payment_rejected_at` / `payment_rejected_by` | timestamp/UUID nullable | paired rejection audit |
+| `payment_rejection_reason` | text nullable | required when rejection audit exists |
 
 `session_id` becomes nullable only for an unallocated pooled booking. A pooled
 booking receives the BFT or Midtown child `session_id` when allocated. Existing
@@ -454,6 +465,8 @@ original payment snapshot.
 | `profile_id` | UUID FK profiles | required |
 | `kind` | text check | weekly_waitlist/venue_switch |
 | `target_session_id` | text nullable FK sessions | required only for venue_switch |
+| `venue_preference` | text nullable | required only for weekly_waitlist |
+| `fallback_acknowledged_at` | timestamptz nullable | required only for weekly_waitlist |
 | `status` | text check | active/promoted/matched/left/dissolved |
 | `joined_at` | timestamptz | authoritative order |
 | `resolved_at` | timestamptz nullable | terminal timestamp |
@@ -467,7 +480,7 @@ other child session.
 ### Member RPCs
 
 - `reserve_hyrox_cycle(cycle_id, preference, fallback_acknowledged)`
-- `join_hyrox_cycle_waitlist(cycle_id)`
+- `join_hyrox_cycle_waitlist(cycle_id, preference, fallback_acknowledged)`
 - `leave_hyrox_cycle_queue(entry_id)`
 - `select_hyrox_cycle_venue(booking_id, target_session_id)`
 - `join_hyrox_venue_switch_queue(booking_id, target_session_id)`
@@ -487,10 +500,11 @@ extended to understand pooled deadlines.
 
 Existing `approve_operational_payment` is extended to approve pooled bookings
 and generate cycle-linked receipts. `reject_hyrox_cycle_payment` is deliberately
-scoped to pooled bookings and expires a rejected claim once the main deadline
-has passed. Existing gym finalization remains on child sessions but rejects
-unopened Midtown and rejects finalization before the Friday 9 PM allocation
-close.
+scoped to pooled bookings: it records actor/time/reason; before the main deadline
+it clears the active claim so the member may try again, while at or after the
+deadline it expires the booking. Existing gym finalization remains on child
+sessions but rejects unopened Midtown and rejects finalization before the
+Friday 9 PM allocation close.
 
 ### Locking and concurrency
 
@@ -613,7 +627,8 @@ Cover:
 - authorization and RLS boundaries;
 - 32 concurrent reservations plus ordered #33 waitlist placement;
 - waitlisted members cannot mark payment;
-- fallback acknowledgement required;
+- fallback acknowledgement required for direct reservation and weekly-waitlist
+  join, and preserved by promotion;
 - prevention of overlapping Quarry Bay and pooled registrations;
 - pending claims block plan finalization;
 - confirmed counts 20 → BFT-only and 21 → both;
