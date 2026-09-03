@@ -108,6 +108,8 @@ timezone.
 
 - The first 32 active registrations receive an unpaid held place.
 - Further members may join the ordered weekly waitlist.
+- If an unpaid member cancels before Thursday 6 PM, the oldest weekly-waitlist
+  member is promoted and inherits the same Thursday 6 PM payment deadline.
 - Reservation records venue preference and the fallback acknowledgement.
 - A reserved member sees the on-duty collector’s PayMe/FPS instructions and may
   mark payment.
@@ -120,7 +122,9 @@ timezone.
 
 - Initial payment marking closes at 6 PM.
 - The cycle enters payment reconciliation.
-- Unmarked unpaid registrations expire.
+- Unmarked unpaid registrations expire without post-deadline promotion.
+- Every remaining weekly-waitlist entry dissolves and its member is notified
+  that no place opened for that week.
 - Payment claims submitted before the deadline remain held until reviewed.
 - The collector must approve or reject every pending claim before finalizing the
   plan.
@@ -130,22 +134,6 @@ timezone.
 - The server derives the plan; the collector cannot manually choose a result
   inconsistent with the confirmed count.
 - Finalizing the plan is idempotent and cannot be reversed through the normal UI.
-
-### After plan confirmation: late weekly-waitlist promotion
-
-- Unpaid expiries may leave room in the confirmed plan.
-- The ordered weekly waitlist promotes only up to the plan capacity:
-  - BFT-only plan: maximum 20 total active/confirmed registrations.
-  - Both-venue plan: maximum 32 total active/confirmed registrations.
-- Promoted members receive an explicit Friday 2 PM payment deadline.
-- A late payment may fill the confirmed plan but cannot change BFT-only into a
-  two-venue plan.
-- When the collector confirms a promoted member’s payment, a BFT-only cycle
-  allocates BFT as final; a two-venue cycle applies the same preference and
-  capacity algorithm and creates a provisional allocation.
-- No automatic promotions occur after Friday 2 PM. At that checkpoint, every
-  unpromoted weekly-waitlist entry dissolves and its member is notified that no
-  place opened for that week.
 
 ### Venue allocation
 
@@ -184,8 +172,7 @@ leave both venue counts within capacity.
 - Unmatched venue-switch entries dissolve; members keep their current assigned
   venues and receive a notification.
 - The collector’s final BFT and Midtown gym lists become available.
-- Gym-finalization guidance changes from “after Friday 2 PM” to “after Friday
-  9 PM”.
+- Gym finalization becomes available only after Friday 9 PM allocation closure.
 - If collector reconciliation is exceptionally completed after Friday 9 PM,
   the server still derives the plan and allocates deterministically, but marks
   allocations final immediately and does not open venue changes or switch
@@ -201,7 +188,8 @@ HYROX place.
 - Starts after 32 active pooled registrations before the deadline.
 - Member does not see payment actions and must not pay.
 - Position is ordered by server `joined_at`, then queue-entry UUID.
-- Promotion creates a reservation with a visible payment deadline.
+- A promotion before Thursday 6 PM creates a reservation retaining that same
+  visible payment deadline.
 - Leaving removes the queue entry without affecting other records.
 
 Member copy:
@@ -416,7 +404,6 @@ receipts tied to the same booking identity.
 | `venue_plan` | text check | pending/bft_only/both |
 | `registration_capacity` | integer | fixed 32 initially |
 | `payment_deadline_at` | timestamptz | Thursday 18:00 HKT |
-| `late_payment_deadline_at` | timestamptz | Friday 14:00 HKT |
 | `venue_choice_deadline_at` | timestamptz | Friday 21:00 HKT |
 | `opened_at` / `opened_by` | timestamp/UUID | paired |
 | `plan_confirmed_at` / `plan_confirmed_by` | timestamp/UUID | paired |
@@ -630,12 +617,13 @@ Cover:
 - prevention of overlapping Quarry Bay and pooled registrations;
 - pending claims block plan finalization;
 - confirmed counts 20 → BFT-only and 21 → both;
-- plan cannot be manually overridden or changed by late payment;
+- payment marking is rejected after Thursday 6 PM and the derived plan cannot
+  be manually overridden;
 - deterministic provisional allocation;
 - BFT 20 and Midtown 12 enforcement under concurrent moves;
 - switch queue ordering and atomic opposite-direction swap;
-- Friday 2 PM promotion closure, dissolution of remaining weekly waitlist
-  entries and Friday 9 PM venue closure;
+- Thursday 6 PM unpaid expiry without promotion, remaining weekly-waitlist
+  dissolution and Friday 9 PM venue closure;
 - late plan finalization produces immediate final allocations without opening
   venue changes;
 - receipt generation before allocation and final session linking afterward;
