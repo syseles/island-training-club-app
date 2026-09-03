@@ -16,6 +16,7 @@ globalThis.localStorage = {
 const store = await import("./js/store.js");
 const views = await import("./js/views.js");
 const data = await import("./js/data.js");
+const hyroxCycle = await import("./js/hyrox-cycle.js");
 
 const hktRolloverInstant = Date.parse("2026-08-05T16:30:00.000Z");
 assert.equal(data.todayHktISO(hktRolloverInstant), "2026-08-06",
@@ -2512,25 +2513,73 @@ store.resetLocalData();
   } else console.log("ok  v7 migration clears unrecognizable donor ID");
 }
 
-// --- HYROX payment system: deadline helpers (Task 1) ---
+// --- pooled HYROX registration: HKT checkpoints + allocation rules ---
 {
-  const sat = "2026-08-08"; // a Saturday
-  const main = new Date(data.mainDeadlineFor(sat));
-  const fin = new Date(data.finalCheckpointFor(sat));
-  if (main.getDay() !== 4 || main.getHours() !== 18 || main.getMinutes() !== 0)
-    throw new Error("main deadline should be Thursday 18:00");
-  if (fin.getDay() !== 5 || fin.getHours() !== 14 || fin.getMinutes() !== 0)
-    throw new Error("final checkpoint should be Friday 14:00");
-  const before = data.parseISO(sat).getTime() - 7 * 24 * 3600 * 1000; // a week early
-  if (data.nextPayDeadline(sat, before) !== data.mainDeadlineFor(sat))
-    throw new Error("before Thursday: deadline should be the main checkpoint");
-  const between = data.mainDeadlineFor(sat) + 3600 * 1000; // Thursday evening
-  if (data.nextPayDeadline(sat, between) !== data.finalCheckpointFor(sat))
-    throw new Error("after Thursday: deadline should be the Friday checkpoint");
-  const late = data.finalCheckpointFor(sat) + 3600 * 1000; // Friday afternoon
-  if (data.nextPayDeadline(sat, late) !== late + data.LAST_MINUTE_WINDOW_MS)
-    throw new Error("after Friday checkpoint: deadline should be now + 2h");
-  console.log("ok  deadline checkpoints (Thu 18:00 / Fri 14:00 / 2h window)");
+  const saturday = "2026-09-05";
+  assert.equal(hyroxCycle.hyroxCycleId(saturday), "hyrox-pool-2026-09-05");
+  assert.throws(
+    () => hyroxCycle.hyroxCycleId("2026-09-04"),
+    /Saturday/,
+  );
+  assert.throws(
+    () => hyroxCycle.hyroxPaymentDeadline("2026-02-30"),
+    /Invalid HYROX cycle date/,
+  );
+  assert.equal(
+    hyroxCycle.hyroxRegistrationOpensAt(saturday),
+    Date.parse("2026-08-31T18:00:00+08:00"),
+  );
+  assert.equal(
+    hyroxCycle.hyroxPaymentReminderAt(saturday),
+    Date.parse("2026-09-03T17:00:00+08:00"),
+  );
+  assert.equal(
+    hyroxCycle.hyroxPaymentDeadline(saturday),
+    Date.parse("2026-09-03T18:00:00+08:00"),
+  );
+  assert.equal(
+    hyroxCycle.hyroxHolderGraceDeadline(saturday),
+    Date.parse("2026-09-03T19:00:00+08:00"),
+  );
+  assert.equal(
+    hyroxCycle.hyroxPromotedPaymentDeadline(saturday),
+    Date.parse("2026-09-03T20:00:00+08:00"),
+  );
+  assert.equal(
+    hyroxCycle.hyroxChoiceDeadline(saturday),
+    Date.parse("2026-09-04T21:00:00+08:00"),
+  );
+
+  const allocations = hyroxCycle.allocateHyroxVenues([
+    { id: "paid-midtown", paidAt: 1, venuePreference: "midtown" },
+    { id: "paid-bft", paidAt: 2, venuePreference: "bft" },
+    { id: "paid-either", paidAt: 3, venuePreference: "either" },
+  ], {
+    bftSessionId: "hyrox-bft-2026-09-05",
+    midtownSessionId: "hyrox-midtown-2026-09-05",
+  });
+  assert.deepEqual(allocations.map(({ bookingId, sessionId }) => [bookingId, sessionId]), [
+    ["paid-midtown", "hyrox-midtown-2026-09-05"],
+    ["paid-bft", "hyrox-bft-2026-09-05"],
+    ["paid-either", "hyrox-bft-2026-09-05"],
+  ]);
+
+  const bftDemand = Array.from({ length: 21 }, (_, index) => ({
+    id: `booking-${String(index + 1).padStart(2, "0")}`,
+    paidAt: 100,
+    venuePreference: "bft",
+  })).reverse();
+  const bftDemandAllocation = hyroxCycle.allocateHyroxVenues(bftDemand, {
+    bftSessionId: "hyrox-bft-2026-09-05",
+    midtownSessionId: "hyrox-midtown-2026-09-05",
+  });
+  assert.deepEqual(
+    bftDemandAllocation.map((row) => row.bookingId),
+    Array.from({ length: 21 }, (_, index) => `booking-${String(index + 1).padStart(2, "0")}`),
+  );
+  assert.equal(bftDemandAllocation.filter((row) => row.sessionId.includes("hyrox-bft")).length, 20);
+  assert.equal(bftDemandAllocation.at(-1).sessionId, "hyrox-midtown-2026-09-05");
+  console.log("ok  pooled HYROX checkpoints and deterministic venue allocation");
 }
 {
   const bft = store.activities().find((a) => a.id === "hyrox-bft");

@@ -86,7 +86,7 @@
   - `hyroxChoiceDeadline(dateISO): number`
   - `allocateHyroxVenues(bookings, options): Array<{ bookingId, sessionId, source }>`
 
-- [ ] **Step 1: Write failing pure-domain smoke assertions**
+- [x] **Step 1: Write failing pure-domain smoke assertions**
 
 Add this import beside the current `data.js`/`store.js` imports in `app/smoke.mjs`:
 
@@ -138,12 +138,12 @@ assert.deepEqual(allocations.map(({ bookingId, sessionId }) => [bookingId, sessi
 console.log("ok  pooled HYROX deadlines and deterministic venue allocation");
 ```
 
-- [ ] **Step 2: Run the smoke test and verify the missing module failure**
+- [x] **Step 2: Run the smoke test and verify the missing module failure**
 
 Run: `node app/smoke.mjs`
 Expected: FAIL with `Cannot find module .../app/js/hyrox-cycle.js`.
 
-- [ ] **Step 3: Create the pure helper module**
+- [x] **Step 3: Create the pure helper module**
 
 Create `app/js/hyrox-cycle.js` with these exports and validation:
 
@@ -221,7 +221,7 @@ export function allocateHyroxVenues(bookings, {
 }
 ```
 
-- [ ] **Step 4: Add overflow and stable-order assertions**
+- [x] **Step 4: Add overflow and stable-order assertions**
 
 Create 21 BFT-preferring rows, assert the first 20 receive BFT, the 21st receives Midtown, and reversing equal-`paidAt` input still allocates in booking-ID order.
 
@@ -239,12 +239,12 @@ assert.equal(bftDemandAllocation.filter((row) => row.sessionId.includes("hyrox-b
 assert.equal(bftDemandAllocation.at(-1).sessionId, "hyrox-midtown-2026-09-05");
 ```
 
-- [ ] **Step 5: Run local smoke**
+- [x] **Step 5: Run local smoke**
 
 Run: `node app/smoke.mjs`
 Expected: PASS including `pooled HYROX deadlines and deterministic venue allocation`.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add app/js/hyrox-cycle.js app/smoke.mjs
