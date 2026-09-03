@@ -359,6 +359,103 @@ begin
   ) then
     raise notice 'FAIL: venue meeting-point columns missing'; failures := failures + 1;
   end if;
+  if to_regclass('public.operational_hyrox_cycles') is null then
+    raise notice 'FAIL: operational_hyrox_cycles missing'; failures := failures + 1;
+  else
+    if not exists (
+      select 1 from pg_class c join pg_namespace n on n.oid = c.relnamespace
+       where n.nspname = 'public'
+         and c.relname = 'operational_hyrox_cycles'
+         and c.relrowsecurity
+    ) then
+      raise notice 'FAIL: operational_hyrox_cycles RLS not enabled'; failures := failures + 1;
+    end if;
+    if not has_table_privilege('anon', 'public.operational_hyrox_cycles', 'select')
+        or not has_table_privilege('authenticated', 'public.operational_hyrox_cycles', 'select') then
+      raise notice 'FAIL: browser roles cannot read HYROX cycles'; failures := failures + 1;
+    end if;
+    if has_table_privilege('anon', 'public.operational_hyrox_cycles', 'insert,update,delete')
+        or has_table_privilege('authenticated', 'public.operational_hyrox_cycles', 'insert,update,delete') then
+      raise notice 'FAIL: browser roles can write HYROX cycles'; failures := failures + 1;
+    end if;
+    if not exists (
+      select 1 from information_schema.columns
+       where table_schema = 'public'
+         and table_name = 'operational_hyrox_cycles'
+         and column_name = 'registration_opens_at'
+    ) or not exists (
+      select 1 from information_schema.columns
+       where table_schema = 'public'
+         and table_name = 'operational_hyrox_cycles'
+         and column_name = 'holder_grace_deadline_at'
+    ) or not exists (
+      select 1 from information_schema.columns
+       where table_schema = 'public'
+         and table_name = 'operational_hyrox_cycles'
+         and column_name = 'promoted_payment_deadline_at'
+    ) then
+      raise notice 'FAIL: HYROX lifecycle checkpoint columns missing'; failures := failures + 1;
+    end if;
+  end if;
+  if to_regclass('public.operational_hyrox_queue_entries') is null then
+    raise notice 'FAIL: operational_hyrox_queue_entries missing'; failures := failures + 1;
+  else
+    if not exists (
+      select 1 from pg_class c join pg_namespace n on n.oid = c.relnamespace
+       where n.nspname = 'public'
+         and c.relname = 'operational_hyrox_queue_entries'
+         and c.relrowsecurity
+    ) then
+      raise notice 'FAIL: operational_hyrox_queue_entries RLS not enabled'; failures := failures + 1;
+    end if;
+    if has_table_privilege('anon', 'public.operational_hyrox_queue_entries', 'select')
+        or not has_table_privilege('authenticated', 'public.operational_hyrox_queue_entries', 'select') then
+      raise notice 'FAIL: HYROX cycle queue read privileges are incorrect'; failures := failures + 1;
+    end if;
+    if has_table_privilege('anon', 'public.operational_hyrox_queue_entries', 'insert,update,delete')
+        or has_table_privilege('authenticated', 'public.operational_hyrox_queue_entries', 'insert,update,delete') then
+      raise notice 'FAIL: browser roles can write HYROX cycle queues'; failures := failures + 1;
+    end if;
+  end if;
+  if not exists (
+    select 1 from information_schema.columns
+     where table_schema = 'public'
+       and table_name = 'operational_bookings'
+       and column_name = 'hyrox_cycle_id'
+  ) then
+    raise notice 'FAIL: operational_bookings.hyrox_cycle_id missing'; failures := failures + 1;
+  end if;
+  if not exists (
+    select 1 from information_schema.columns
+     where table_schema = 'public'
+       and table_name = 'operational_bookings'
+       and column_name = 'promoted_from_waitlist_at'
+  ) then
+    raise notice 'FAIL: operational_bookings.promoted_from_waitlist_at missing'; failures := failures + 1;
+  end if;
+  if not exists (
+    select 1 from information_schema.columns
+     where table_schema = 'public'
+       and table_name = 'operational_bookings'
+       and column_name = 'session_id'
+       and is_nullable = 'YES'
+  ) then
+    raise notice 'FAIL: pooled operational bookings cannot be unallocated'; failures := failures + 1;
+  end if;
+  if not exists (
+    select 1 from information_schema.columns
+     where table_schema = 'public'
+       and table_name = 'operational_receipts'
+       and column_name = 'hyrox_cycle_id'
+  ) or not exists (
+    select 1 from information_schema.columns
+     where table_schema = 'public'
+       and table_name = 'operational_receipts'
+       and column_name = 'session_id'
+       and is_nullable = 'YES'
+  ) then
+    raise notice 'FAIL: pooled operational receipt scope missing'; failures := failures + 1;
+  end if;
   if failures > 0 then raise exception 'schema failures: %', failures; end if;
   raise notice 'OK: operational schema foundations';
 end $$;

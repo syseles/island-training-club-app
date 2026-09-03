@@ -264,7 +264,7 @@ git commit -m "feat(hyrox): add pooled cycle domain rules"
 - Consumes: existing `operational_sessions`, `operational_bookings`, `operational_receipts`, `profiles` and `touch_updated_at()`.
 - Produces: `operational_hyrox_cycles`, `operational_hyrox_queue_entries`, nullable pooled booking/receipt session links and additive cycle/allocation columns.
 
-- [ ] **Step 1: Add failing schema assertions**
+- [x] **Step 1: Add failing schema assertions**
 
 In `operational_backend_integration.sql`, extend Schema foundations with assertions for both new tables, RLS, browser read-only grants, the booking columns and nullable pooled session links:
 
@@ -310,7 +310,7 @@ ITC_ALLOW_DATABASE_RESET=1 bash supabase/tests/verify_operational_backend.sh
 
 Expected: FAIL with `operational_hyrox_cycles exists`.
 
-- [ ] **Step 3: Create cycle and queue tables**
+- [x] **Step 3: Create cycle and queue tables**
 
 Create the migration with the exact IDs/states and HKT deadlines from the spec:
 
@@ -382,7 +382,7 @@ create table public.operational_hyrox_queue_entries (
 );
 ```
 
-- [ ] **Step 4: Add booking and receipt fields plus integrity indexes**
+- [x] **Step 4: Add booking and receipt fields plus integrity indexes**
 
 Use additive alters and preserve all existing rows:
 
@@ -450,7 +450,7 @@ alter table public.operational_bookings
   );
 ```
 
-- [ ] **Step 5: Add updated-at trigger, RLS, policies and grants**
+- [x] **Step 5: Add updated-at trigger, RLS, policies and grants**
 
 Use existing role helpers and deny direct writes:
 
@@ -487,7 +487,7 @@ ITC_ALLOW_DATABASE_RESET=1 bash supabase/tests/verify_operational_backend.sh
 
 Expected: both PASS; schema assertions verify RLS and no browser writes.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add supabase/migrations/20260903000001_hyrox_cycle_schema.sql \
