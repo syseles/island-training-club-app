@@ -12,6 +12,29 @@ globalThis.localStorage = {
 const store = await import("./js/store.js");
 const views = await import("./js/views.js");
 const data = await import("./js/data.js");
+const { buildIndemnityCsv } = await import("./js/exports.js");
+
+const indemnityExportCsv = buildIndemnityCsv([{
+  fullName: 'O\"Connor, Ada',
+  email: "ada@example.test",
+  status: "approved",
+  role: "member",
+  phone: "+852 5555 5555",
+  emergencyName: "Grace O\"Connor",
+  emergencyRelationship: "Parent",
+  emergencyPhone: "+852 6666 6666",
+  indemnityStatus: "Accepted",
+  indemnitySignature: 'Ada O\"Connor',
+  indemnitySignedAt: "2026-08-01",
+  indemnityFormVersion: "v1",
+  indemnityAcceptedAt: "2026-08-01T12:00:00.000Z",
+}]);
+if (indemnityExportCsv.charCodeAt(0) !== 0xFEFF
+    || !indemnityExportCsv.includes("Name,Email,Status,Role,Phone,Emergency name,Emergency relationship,Emergency phone,Indemnity status,Signature,Signed date,Form version,Accepted at")
+    || !indemnityExportCsv.includes('O""Connor, Ada')
+    || !indemnityExportCsv.includes('Grace O""Connor')) {
+  throw new Error("indemnity export must be Excel-compatible CSV with escaped values");
+}
 
 let failures = 0;
 async function check(label, fn) {
@@ -150,6 +173,9 @@ for (const marker of [
   "Giving &amp; Fundraising",
   "ITC Anniversary",
   "Payments / Ops",
+  "download-indemnity-list",
+  "listIndemnityRecords",
+  "buildIndemnityCsv",
 ]) {
   if (!combinedRuntimeSource.includes(marker)) {
     throw new Error(`testing integration missing ${marker}`);
@@ -777,6 +803,24 @@ for (const tab of ["approvals", "members", "activities", "giving", "payments"]) 
   }
 }
 console.log("ok  every Admin route exposes exactly one active tab");
+const adminMembersHtml = await views.viewAdmin("members");
+if (!adminMembersHtml.includes('data-action="download-indemnity-list"')) {
+  throw new Error("Admin Members must expose the indemnity list download");
+}
+const indemnityRecords = await store.listIndemnityRecords();
+if (!indemnityRecords.some((record) => record.fullName === "Test Admin")
+    || !indemnityRecords.some((record) => record.fullName === "Test Member")) {
+  throw new Error("indemnity export must include all local profiles");
+}
+store.signIn("member@example.test");
+try {
+  await store.listIndemnityRecords();
+  throw new Error("non-admin should not download indemnity records");
+} catch (err) {
+  if (!/Approved Admin access required/.test(err.message)) throw err;
+}
+store.signIn("admin@example.test");
+console.log("ok  Admin Members exposes a gated all-profile indemnity export");
 
 // --- Admin Giving (local mode) ---
 // Empty local state still surfaces an actionable Create campaign link.

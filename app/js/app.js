@@ -3,7 +3,8 @@
 // ==========================================================================
 
 import * as store from "./store.js";
-import { buildICS, findSession, todayLocal, mondayOf, addDays, isoDate, donorIdProblem } from "./data.js";
+import { buildICS, todayLocal, mondayOf, addDays, isoDate, donorIdProblem } from "./data.js";
+import { buildIndemnityCsv } from "./exports.js";
 import * as views from "./views.js";
 import { isLive, supabase } from "./config.js";
 import * as components from "./components.js";
@@ -431,6 +432,20 @@ function downloadICS(session) {
   toast("Calendar file downloaded");
 }
 
+async function downloadIndemnityList(control) {
+  await withBusyControl(control, "Preparing…", async () => {
+    const records = await store.listIndemnityRecords();
+    const blob = new Blob([buildIndemnityCsv(records)], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `itc-indemnity-list-${isoDate(todayLocal())}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+    toast(`${records.length} indemnity records downloaded`);
+  });
+}
+
 // --- Click delegation -----------------------------------------------------------------
 
 document.addEventListener("click", async (e) => {
@@ -449,6 +464,16 @@ document.addEventListener("click", async (e) => {
       viewEl.querySelector(
         `[data-action="notification-filter"][data-notification-filter="${kind}"]`
       )?.focus();
+      break;
+    }
+    case "download-indemnity-list": {
+      const viewer = store.currentUser();
+      if (!viewer || !["admin", "superadmin", "super_admin"].includes(viewer.role)) break;
+      try {
+        await downloadIndemnityList(el);
+      } catch (err) {
+        toast(err.message || "Unable to download indemnity list", true);
+      }
       break;
     }
     case "admin-member-filter": {

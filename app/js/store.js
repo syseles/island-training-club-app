@@ -1905,6 +1905,66 @@ export async function listProfiles() {
   return data || [];
 }
 
+function indemnityExportRecord({ profile, application = null, local = false }) {
+  const role = profile.role === "super_admin" ? "superadmin" : profile.role;
+  const acceptedAt = local ? profile.indemnityAcceptedAt || null : application?.waiver_accepted_at || null;
+  const signature = local ? profile.indemnitySignature || "" : application?.waiver_signature_text || "";
+  const signedAt = local ? profile.indemnitySignedAt || "" : application?.waiver_signed_at || "";
+  const formVersion = local ? profile.indemnityFormVersion || "" : application?.waiver_form_version || "";
+  const emergencyName = local ? profile.emergencyName || "" : application?.emergency_name || "";
+  const emergencyRelationship = local
+    ? profile.emergencyRelationship || ""
+    : application?.emergency_relationship || "";
+  const emergencyPhone = local ? profile.emergencyPhone || "" : application?.emergency_phone || "";
+  const normalized = {
+    indemnityAcceptedAt: acceptedAt,
+    indemnitySignature: signature,
+    indemnitySignedAt: signedAt,
+    indemnityFormVersion: formVersion,
+    emergencyName,
+    emergencyRelationship,
+    emergencyPhone,
+  };
+  return {
+    id: profile.id,
+    fullName: local ? profile.fullName || "" : profile.full_name || profile.email || "ITC Member",
+    email: profile.email || "",
+    status: profile.status || (role === "pending" || role === "declined" ? role : "approved"),
+    role,
+    phone: local ? profile.phone || "" : application?.mobile || "",
+    emergencyName,
+    emergencyRelationship,
+    emergencyPhone,
+    indemnityStatus: !acceptedAt
+      ? "Not accepted"
+      : isIndemnityCurrent(normalized)
+        ? "Accepted"
+        : "Review required",
+    indemnitySignature: signature,
+    indemnitySignedAt: signedAt,
+    indemnityFormVersion: formVersion,
+    indemnityAcceptedAt: acceptedAt,
+  };
+}
+
+export async function listIndemnityRecords() {
+  requirePaymentAdminActor();
+  if (!isLive() || !supabase) {
+    return state.users.map((user) => indemnityExportRecord({ profile: user, local: true }));
+  }
+  const [{ data: profiles, error: profileError }, { data: applications, error: applicationError }] = await Promise.all([
+    supabase.from("profiles").select("*").order("created_at", { ascending: true }),
+    supabase.from("applications").select("*").order("submitted_at", { ascending: true }),
+  ]);
+  if (profileError) throw profileError;
+  if (applicationError) throw applicationError;
+  const applicationByProfile = new Map((applications || []).map((application) => [application.profile_id, application]));
+  return (profiles || []).map((profile) => indemnityExportRecord({
+    profile,
+    application: applicationByProfile.get(profile.id) || null,
+  }));
+}
+
 export async function listRoleChanges() {
   if (!isLive() || !supabase) return [];
   const { data, error } = await supabase
