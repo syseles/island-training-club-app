@@ -2366,6 +2366,21 @@ store.signIn("admin@example.test");
     price: 0,
     capacity: 20,
   });
+  const cancelledSocial = await store.createOneOffEvent({
+    name: "Cancelled Community Social",
+    dateISO: datePlus(1),
+    time: "07:30",
+    durationMin: 90,
+    location: "Central",
+    mapsQuery: "Central, Hong Kong",
+    category: "Socials",
+    price: 0,
+    capacity: 20,
+  });
+  store.cancelSessionWeek(cancelledSocial.id, "Venue unavailable");
+  if (!store.getSession(cancelledSocial.id)?.cancelled) {
+    throw new Error("cancelled Social fixture should remain marked cancelled");
+  }
   const earliestSocial = await store.createOneOffEvent({
     name: "Community Breakfast",
     dateISO: datePlus(1),
