@@ -33,7 +33,7 @@ if ! command -v "$psql_bin" >/dev/null 2>&1; then
   exit 2
 fi
 
-psql_cmd=("$psql_bin" "${ITC_OPERATIONS_TEST_DATABASE_URL}" -X -v ON_ERROR_STOP=1)
+psql_cmd=("$psql_bin" "${ITC_OPERATIONS_TEST_DATABASE_URL}" -X -P pager=off -v ON_ERROR_STOP=1)
 
 # Destructive migration verification is admitted only for an acknowledged,
 # unused Supabase database. Check both baseline compatibility and freshness.
@@ -112,7 +112,7 @@ fi
 
 for migration in "$repo_root"/supabase/migrations/*.sql; do
   echo "Applying $(basename "$migration")"
-  "${psql_cmd[@]}" -f "$migration" >/dev/null
+  "${psql_cmd[@]}" --single-transaction -f "$migration" >/dev/null
 done
 
 # Disposable-database grants: the in-tree migrations do not grant on the

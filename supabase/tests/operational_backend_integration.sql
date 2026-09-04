@@ -93,7 +93,7 @@ begin
   ) then
     raise notice 'FAIL: operational_rsvp_counts RLS not enabled'; failures := failures + 1;
   elsif (
-    select array_agg(column_name order by ordinal_position)
+    select array_agg(column_name::text order by ordinal_position)
       from information_schema.columns
      where table_schema = 'public' and table_name = 'operational_rsvp_counts'
   ) <> array['session_id', 'going_count', 'updated_at']::text[] then
@@ -882,7 +882,7 @@ begin
   perform pg_temp.op_assert(v_going_count = 2,
     'RSVP aggregate counts only two confirmed lunch bookings');
   perform pg_temp.op_assert(
-    (select p.proallargnames = array['session_id', 'going_count']::text[]
+    (select p.proargnames = array['session_id', 'going_count']::text[]
        from pg_proc p
       where p.oid = 'public.get_operational_rsvp_counts()'::regprocedure),
     'RSVP aggregate exposes no identity output columns'
@@ -1704,23 +1704,36 @@ end $$;
 do $$
 declare
   v_pending uuid;
-  v_target_id text;
-  v_window_last_session text;
+  v_status text;
+  v_date date := (now() at time zone 'Asia/Hong_Kong')::date + 500;
+  v_activity_id constant text := 'event-cancel-no-target';
+  v_session_id text := v_activity_id || '-' || v_date::text;
 begin
-  select window_last_session into v_window_last_session
-    from operational_time_fixtures;
+  insert into public.operational_activity_templates
+    (activity_id, name, venue, weekday, start_time, duration_minutes,
+     capacity, price_hkd, default_open, active, category, maps_query, requires_rsvp)
+  values
+    (v_activity_id, 'Cancellation Isolation', 'Test Venue',
+     extract(dow from v_date)::integer, time '11:00', 60,
+     1, 180, true, false, 'HYROX', null, false);
+  insert into public.operational_sessions
+    (id, activity_id, session_date, start_time, duration_minutes,
+     venue, capacity, price_hkd, is_open)
+  values
+    (v_session_id, v_activity_id, v_date, time '11:00', 60,
+     'Test Venue', 1, 180, true);
 
-  -- Member reserves; Admin cancels; no later HYROX target exists.
+  -- Member reserves; Admin cancels; this activity has no later target.
   perform set_config('request.jwt.claim.sub', 'bb000000-0000-0000-0000-00000000b001', true);
   set local role authenticated;
-  select id into v_pending from reserve_operational_session(v_window_last_session);
+  select id into v_pending from reserve_operational_session(v_session_id);
   perform mark_operational_payment(v_pending, 'payme', 'REF-200');
   perform set_config('request.jwt.claim.sub', 'aa000000-0000-0000-0000-00000000a001', true);
   perform approve_operational_payment(v_pending);
-  -- Cancel without future targets: confirmed booking becomes cancelled.
-  perform cancel_operational_session(v_window_last_session, 'Venue flooded');
-  select status into v_target_id from public.operational_bookings where id = v_pending;
-  perform pg_temp.op_assert(v_target_id = 'cancelled', 'confirmed booking cancelled when no deferral target');
+  perform cancel_operational_session(v_session_id, 'Venue flooded');
+  select status into v_status from public.operational_bookings where id = v_pending;
+  perform pg_temp.op_assert(v_status = 'cancelled',
+    'confirmed booking cancelled when no deferral target');
   reset role;
 end $$;
 
@@ -1843,6 +1856,7 @@ declare
   v_unique_cancel_booking uuid;
   v_unique_cancel_date date;
   v_unique_cancel_session text;
+  v_unique_cancel_activity constant text := 'event-notification-cancel';
   v_rsvp_body text;
   v_payment_marked_body text;
   v_gym_finalized_body text;
@@ -1854,8 +1868,10 @@ declare
   ];
   v_payment_marked_before integer;
   v_payment_marked_after integer;
+  v_payment_marked_existing_ids uuid[];
   v_gym_finalized_before integer;
   v_gym_finalized_after integer;
+  v_gym_finalized_existing_ids uuid[];
   v_cancelled_member_before integer;
   v_cancelled_member_after integer;
   v_cancelled_admin_before integer;
@@ -1866,7 +1882,23 @@ begin
     into v_routing_date, v_paid_session, v_routing_midtown_session,
          v_rsvp_session, v_unique_cancel_date, v_unique_cancel_session
     from operational_time_fixtures;
-  perform ensure_operational_sessions(v_unique_cancel_date, 1);
+
+  -- Use a one-session activity so cancellation cannot find a generated HYROX
+  -- deferral target that the same member already holds.
+  v_unique_cancel_session := v_unique_cancel_activity || '-' || v_unique_cancel_date::text;
+  insert into public.operational_activity_templates
+    (activity_id, name, venue, weekday, start_time, duration_minutes,
+     capacity, price_hkd, default_open, active, category, maps_query, requires_rsvp)
+  values
+    (v_unique_cancel_activity, 'Notification Cancellation Isolation', 'Test Venue',
+     extract(dow from v_unique_cancel_date)::integer, time '11:00', 60,
+     1, 180, true, false, 'HYROX', null, false);
+  insert into public.operational_sessions
+    (id, activity_id, session_date, start_time, duration_minutes,
+     venue, capacity, price_hkd, is_open)
+  values
+    (v_unique_cancel_session, v_unique_cancel_activity, v_unique_cancel_date,
+     time '11:00', 60, 'Test Venue', 1, 180, true);
 
   v_rsvp_body := 'You''re on the list for Post-Training Lunch on ' || v_routing_date::text
     || '. Everyone pays their own bill — see you there.';
@@ -1876,7 +1908,12 @@ begin
     || ' was cancelled with no deferral target available.';
   v_cancelled_admin_body := 'Session ' || v_unique_cancel_session || ' was cancelled by ITC.';
 
-  -- A newly reserved paid booking points to its exact payment page.
+  -- A newly reserved paid booking points to its exact payment page. The test
+  -- suite runs in one transaction, so move prior fixtures off transaction-
+  -- stable now() before exercising the timestamp-linked route resolver.
+  update public.operational_bookings
+     set reserved_at = reserved_at - interval '1 minute'
+   where reserved_at = now();
   perform set_config('request.jwt.claim.sub', 'ee000000-0000-0000-0000-00000000e001', true);
   set local role authenticated;
   select id into v_paid_booking
@@ -1997,10 +2034,12 @@ begin
     'cancelled free Admin notification has exact Activity Details destination'
   );
 
-  -- Payment-marked Admin rows use the stable payments section; approval
-  -- points back to the member's exact booking. Before/after counts and the
-  -- exact action body keep the route assertion scoped to this producer call.
-  select count(*) into v_payment_marked_before
+  -- Payment-marked Admin fallback rows use the stable payments section;
+  -- approval points back to the member's exact booking. Isolate this fallback
+  -- from the suite's standing collector assignments, then restore them below.
+  delete from public.collector_assignments;
+  select count(*), coalesce(array_agg(id), array[]::uuid[])
+    into v_payment_marked_before, v_payment_marked_existing_ids
     from public.notifications
    where kind = 'operational_payment_marked'
      and body = v_payment_marked_body;
@@ -2020,7 +2059,8 @@ begin
     (select array_agg(profile_id order by profile_id)
        from public.notifications
       where kind = 'operational_payment_marked'
-        and body = v_payment_marked_body)
+        and body = v_payment_marked_body
+        and not (id = any(v_payment_marked_existing_ids)))
       = v_expected_admin_recipients,
     'payment marking reaches exactly the Admin and Super Admin recipients'
   );
@@ -2030,10 +2070,20 @@ begin
         from public.notifications
        where kind = 'operational_payment_marked'
          and body = v_payment_marked_body
+         and not (id = any(v_payment_marked_existing_ids))
          and destination is distinct from '#/admin/payments'
     ),
     'payment-marked Admin notifications use the payments destination'
   );
+  insert into public.collector_assignments
+    (week_start, collector_profile_id, assigned_by)
+  values
+    (date '2026-08-03',
+     'aa000000-0000-0000-0000-00000000a001',
+     'ff000000-0000-0000-0000-00000000f001'),
+    (date '2026-08-10',
+     'dd000000-0000-0000-0000-00000000d001',
+     'ff000000-0000-0000-0000-00000000f001');
 
   perform set_config('request.jwt.claim.sub', 'aa000000-0000-0000-0000-00000000a001', true);
   set local role authenticated;
@@ -2072,7 +2122,8 @@ begin
 
   -- Gym-finalized Admin rows use the same stable payments section. Scope
   -- both production and route checks to this session's exact action body.
-  select count(*) into v_gym_finalized_before
+  select count(*), coalesce(array_agg(id), array[]::uuid[])
+    into v_gym_finalized_before, v_gym_finalized_existing_ids
     from public.notifications
    where kind = 'operational_gym_finalized'
      and body = v_gym_finalized_body;
@@ -2092,7 +2143,8 @@ begin
     (select array_agg(profile_id order by profile_id)
        from public.notifications
       where kind = 'operational_gym_finalized'
-        and body = v_gym_finalized_body)
+        and body = v_gym_finalized_body
+        and not (id = any(v_gym_finalized_existing_ids)))
       = v_expected_admin_recipients,
     'gym finalization reaches exactly the Admin and Super Admin recipients'
   );
@@ -2102,14 +2154,15 @@ begin
         from public.notifications
        where kind = 'operational_gym_finalized'
          and body = v_gym_finalized_body
+         and not (id = any(v_gym_finalized_existing_ids))
          and destination is distinct from '#/admin/payments'
     ),
     'gym-finalized Admin notifications use the payments destination'
   );
 
   -- Exercise cancellation through the real producer with exactly one session
-  -- at the resolver timestamp. The final generated HYROX date has no deferral
-  -- target, so the same call produces one member and two Admin cancellation
+  -- at the resolver timestamp. The isolated activity has no deferral target,
+  -- so the same call produces one member and two Admin cancellation
   -- rows. Older cancellation fixtures are shifted off the exact timestamp
   -- rather than serving as synthetic route evidence.
   perform set_config('request.jwt.claim.sub', 'ee000000-0000-0000-0000-00000000e001', true);
@@ -2597,6 +2650,9 @@ begin
     'Central Harbourfront, Hong Kong',
     true
   );
+  -- Cross-recipient assertions must run as the test owner because notification
+  -- RLS intentionally exposes only the authenticated user's own rows.
+  reset role;
 
   perform pg_temp.op_assert(
     (select location from public.operational_session_venue_overrides where session_id = v_session)
@@ -2615,25 +2671,28 @@ begin
   perform pg_temp.op_assert(
     (select count(*) from public.notifications
        where kind = 'operational_session_venue_updated'
+         and destination = '#/activity/' || v_session
          and profile_id in (v_member_a, v_member_b, v_member_c)) = 3,
     'first confirmation notifies approved members once'
   );
   perform pg_temp.op_assert(
     (select count(*) from public.notifications
        where kind = 'operational_session_venue_updated'
+         and destination = '#/activity/' || v_session
          and profile_id = v_super) = 1,
     'other admins receive audit notification'
   );
   perform pg_temp.op_assert(
     not exists (select 1 from public.notifications
        where kind = 'operational_session_venue_updated'
+         and destination = '#/activity/' || v_session
          and profile_id in (v_admin, v_pending)),
     'actor and pending profiles are excluded'
   );
   perform pg_temp.op_assert(
     (select count(*) from public.notifications
        where kind = 'operational_session_venue_updated'
-         and destination = '#/activity/' || v_session) >= 4,
+         and destination = '#/activity/' || v_session) = 4,
     'every notification carries the dated activity destination'
   );
   perform pg_temp.op_assert(
@@ -3066,12 +3125,14 @@ update public.operational_sessions
  where id in ('hyrox-midtown-2026-08-22', 'hyrox-midtown-2026-08-29');
 
 insert into public.operational_bookings
-  (profile_id, session_id, status, pay_deadline_at, snapshot)
+  (id, profile_id, session_id, status, pay_deadline_at, snapshot)
 values
-  ('bb000000-0000-0000-0000-00000000b001',
+  ('12000000-0000-0000-0000-000000000001',
+   'bb000000-0000-0000-0000-00000000b001',
    'hyrox-midtown-2026-08-22', 'reserved', now() + interval '1 day',
    '{"name":"hyrox-midtown","venue":"Midtown 28","price_hkd":180}'::jsonb),
-  ('dd000000-0000-0000-0000-00000000d001',
+  ('12000000-0000-0000-0000-000000000002',
+   'dd000000-0000-0000-0000-00000000d001',
    'hyrox-midtown-2026-08-29', 'reserved', now() + interval '1 day',
    '{"name":"hyrox-midtown","venue":"Custom Midtown Venue","price_hkd":180}'::jsonb);
 
@@ -3095,15 +3156,13 @@ select pg_temp.op_assert(
 select pg_temp.op_assert(
   (select snapshot ->> 'venue' = 'Midtown28 Fitness'
      from public.operational_bookings
-    where profile_id = 'bb000000-0000-0000-0000-00000000b001'
-      and session_id = 'hyrox-midtown-2026-08-22'),
+    where id = '12000000-0000-0000-0000-000000000001'),
   'migration must correct an exact old Midtown booking snapshot'
 );
 select pg_temp.op_assert(
   (select snapshot ->> 'venue' = 'Custom Midtown Venue'
      from public.operational_bookings
-    where profile_id = 'dd000000-0000-0000-0000-00000000d001'
-      and session_id = 'hyrox-midtown-2026-08-29'),
+    where id = '12000000-0000-0000-0000-000000000002'),
   'migration must preserve a custom Midtown booking snapshot'
 );
 
