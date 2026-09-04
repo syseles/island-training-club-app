@@ -1170,11 +1170,14 @@ const hyroxRpcCases = [
 for (const [exportName, rpcName, args, expectedArgs] of hyroxRpcCases) {
   assert.equal(typeof operations[exportName], "function", `${exportName} must be exported`);
   await operations[exportName](...args);
-  assert.deepEqual(
-    operationalRpcCalls.filter((call) => call.name === rpcName).at(-1)?.args,
-    expectedArgs,
-    `${exportName} must send the approved ${rpcName} payload`,
-  );
+  const actualArgs = operationalRpcCalls.filter((call) => call.name === rpcName).at(-1)?.args;
+  if (rpcName === "sweep_hyrox_cycle_deadlines") {
+    assert.deepEqual(Object.keys(actualArgs || {}), ["p_now"]);
+    assert.match(actualArgs.p_now, /^\d{4}-\d{2}-\d{2}T/);
+  } else {
+    assert.deepEqual(actualArgs, expectedArgs,
+      `${exportName} must send the approved ${rpcName} payload`);
+  }
 }
 const successfulHyroxRpcHandler = operationalRpcHandler;
 operationalRpcHandler = (name, args) => {

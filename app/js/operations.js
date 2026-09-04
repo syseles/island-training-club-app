@@ -798,9 +798,10 @@ export function liveReceiptById(id) {
   return liveCache.receipts.find((r) => r.id === id) || null;
 }
 
-export async function liveSweepHyroxDeadlines({ refresh = true } = {}) {
+export async function liveSweepHyroxDeadlines({ refresh = true, now = Date.now() } = {}) {
   try {
-    return await runOperationalRpc("sweep_hyrox_cycle_deadlines", {}, { skipRefresh: !refresh });
+    const pNow = now instanceof Date ? now.toISOString() : new Date(now).toISOString();
+    return await runOperationalRpc("sweep_hyrox_cycle_deadlines", { p_now: pNow }, { skipRefresh: !refresh });
   } catch (error) {
     liveCache.error = operationalProblem(error);
     notifyListeners();

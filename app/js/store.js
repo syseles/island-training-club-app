@@ -1528,7 +1528,7 @@ export function hyroxCycleQueuePosition(userId, cycleId, kind = "weekly_waitlist
 }
 
 export function sweepHyroxCycleDeadlines(now = Date.now()) {
-  if (isLive()) return liveOps.liveSweepHyroxDeadlines();
+  if (isLive()) return liveOps.liveSweepHyroxDeadlines({ now });
   let dirty = false;
   for (const cycle of Object.values(state.hyroxCycles || {})) {
     if (cycle.registrationState === "cancelled") continue;
