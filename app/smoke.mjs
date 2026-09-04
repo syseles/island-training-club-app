@@ -119,10 +119,13 @@ if (headerLogoBytes.toString("ascii", 12, 16) !== "IHDR"
     || headerLogoBytes.readUInt32BE(20) !== 1357) {
   throw new Error("header logo must use the complete compact ITC mark crop");
 }
-if (!appIndexSource.includes('<link rel="icon" href="../assets/itc/logo.webp">')) {
-  throw new Error("favicon should remain on the existing icon asset");
+const manifestSource = readFileSync(resolve(__dirnameSmoke, "manifest.webmanifest"), "utf8");
+if (!appIndexSource.includes('<link rel="icon" href="../assets/itc/logo-header.png">')
+    || !manifestSource.includes('"src": "../assets/itc/logo-header.png"')
+    || !manifestSource.includes('"type": "image/png"')) {
+  throw new Error("webpage and installed-app icons must use the new ITC logo asset");
 }
-console.log("ok  compact ITC header logo is wired without changing the favicon");
+console.log("ok  webpage and installed-app icons use the new ITC logo");
 if (/## Vercel env vars|Vercel project settings[^\n]*Environment Variables/i.test(liveAuthRunbookSource)) {
   throw new Error("runbook must not claim Vercel env vars inject into static HTML");
 }

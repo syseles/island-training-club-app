@@ -10,9 +10,9 @@
   "theme_color": "#030504",
   "icons": [
     {
-      "src": "../assets/itc/logo.webp",
-      "sizes": "512x512",
-      "type": "image/webp",
+      "src": "../assets/itc/logo-header.png",
+      "sizes": "1929x1357",
+      "type": "image/png",
       "purpose": "any"
     }
   ]
