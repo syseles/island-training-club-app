@@ -10,8 +10,8 @@
   "theme_color": "#030504",
   "icons": [
     {
-      "src": "../assets/itc/logo-header.png",
-      "sizes": "1929x1357",
+      "src": "../assets/itc/logo-favicon.png",
+      "sizes": "512x275",
       "type": "image/png",
       "purpose": "any"
     }
