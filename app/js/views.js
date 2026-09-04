@@ -301,12 +301,17 @@ export function viewHome() {
     emptyMsg = "No open sessions this week — check back soon.";
     weekHeading = "My Week";
   } else {
+    const bookings = store.bookingsForUser(user.id);
+    const pooledBookings = bookings
+      .filter((booking) => booking.cycleId && booking.status === "confirmed")
+      .filter((booking) => !booking.sessionId || !sessionStarted(store.getSession(booking.sessionId)));
+    const pooledSessionIds = new Set(pooledBookings.map((booking) => booking.sessionId).filter(Boolean));
     const bookedIds = new Set(
-      store.bookingsForUser(user.id)
-        .filter((booking) => booking.status === "confirmed" && !sessionStarted(booking.snapshot))
+      bookings
+        .filter((booking) => booking.status === "confirmed" && !booking.cycleId && !sessionStarted(booking.snapshot))
         .map((booking) => booking.sessionId)
     );
-    rows = upcoming.filter((session) => bookedIds.has(session.id));
+    rows = [...upcoming.filter((session) => bookedIds.has(session.id) && !pooledSessionIds.has(session.id)), ...pooledBookings];
     emptyMsg = `Nothing booked this week yet. <a href="#/schedule" style="color:var(--accent)">Find a session →</a>`;
     weekHeading = "My Week";
   }
@@ -345,7 +350,8 @@ export function viewHome() {
     </div>
     <div class="session-list">
       ${rows.length
-        ? rows.map((s, i) => sessionRow(s, { highlight: i === 0 })).join("")
+        ? rows.map((item, i) => item.cycleId ? pooledBookingRow(item, { highlight: i === 0 })
+          : sessionRow(item, { highlight: i === 0 })).join("")
         : `<div class="empty">${emptyMsg}</div>`}
     </div>
     <div class="section-head"><h2>The Club</h2><a href="#/community">More →</a></div>
@@ -1604,10 +1610,13 @@ function accountDonor(user, application) {
 
 function accountPayments(user) {
   const receipts = store.receiptsForUser(user.id);
+  const pooledBookings = store.bookingsForUser(user.id)
+    .filter((booking) => booking.cycleId && ["reserved", "confirmed"].includes(booking.status));
   return `
     <a class="back-link" href="#/account">← Profile</a>
     <div class="kicker mt16">Profile · Payments &amp; Receipts</div>
     <h1 class="display sm">Payments &amp; Receipts.</h1>
+    ${pooledBookings.length ? `<div class="session-list">${pooledBookings.map((booking) => pooledBookingRow(booking)).join("")}</div>` : ""}
     ${
       receipts.length
         ? `<div class="session-list">${receipts
@@ -1667,22 +1676,33 @@ async function accountPrivacy(user) {
 
 function bookingDisplaySnapshot(b) {
   const snapshot = b.snapshot || {};
-  const session = store.getSession(b.sessionId);
+  const session = b.sessionId ? store.getSession(b.sessionId) : null;
+  const cycle = b.cycleId ? store.getHyroxCycle(b.cycleId) : null;
   return {
     ...snapshot,
-    dateISO: snapshot.dateISO ?? session?.dateISO,
+    dateISO: snapshot.dateISO ?? session?.dateISO ?? cycle?.dateISO,
     time: snapshot.time ?? session?.time,
-    name: snapshot.name ?? session?.name,
-    location: snapshot.location ?? session?.location,
+    name: snapshot.name ?? session?.name ?? "ITC HYROX",
+    location: snapshot.location ?? session?.location ?? (cycle ? "Venue pending" : undefined),
     durationMin: snapshot.durationMin ?? session?.durationMin,
-    kind: snapshot.kind ?? session?.kind,
-    price: snapshot.price ?? session?.price,
+    kind: snapshot.kind ?? session?.kind ?? (cycle ? "paid" : undefined),
+    price: snapshot.price ?? session?.price ?? snapshot.priceHkd,
   };
+}
+
+function pooledBookingRow(b, { highlight = false } = {}) {
+  const s = bookingDisplaySnapshot(b);
+  const venue = b.sessionId ? s.location : "Venue pending";
+  return `<a class="session-row hyrox-queue-state${highlight ? " next" : ""}" href="#/booking/${esc(b.id)}">
+    <time>${esc(fmtDate(s.dateISO))}</time><div><h3>ITC HYROX</h3><p>${esc(venue)} · ${b.status === "confirmed" ? "Confirmed" : "Payment due"}</p></div>
+    <div class="row-end"><span class="badge ${b.sessionId ? "free" : "neutral"}">${b.sessionId ? "Booked" : "Venue pending"}</span></div>
+  </a>`;
 }
 
 function bookingCard(b) {
   const s = bookingDisplaySnapshot(b);
-  const live = b.status === "confirmed" && !sessionStarted(s);
+  const assigned = b.sessionId ? store.getSession(b.sessionId) : null;
+  const live = b.status === "confirmed" && (!assigned || !sessionStarted(assigned));
   const status =
     b.status === "cancelled"
       ? '<span class="badge danger">Cancelled</span>'
@@ -1698,12 +1718,12 @@ function bookingCard(b) {
     <div class="card booking-card"><div class="card-body">
       <header>
         <div>
-          <div class="kicker dim" style="margin-top:0">${esc(fmtDate(s.dateISO))} · ${fmtTime(s.time)}</div>
+          <div class="kicker dim" style="margin-top:0">${esc(fmtDate(s.dateISO))}${s.time ? ` · ${fmtTime(s.time)}` : ""}</div>
           <h3 class="mt8">${esc(s.name)}</h3>
         </div>
         ${status}
       </header>
-      <p>${esc(s.location)} · ${s.durationMin} min · ${amount}</p>
+      <p>${esc(s.location || "Venue pending")}${s.durationMin ? ` · ${s.durationMin} min` : ""} · ${amount}</p>
       <div class="actions">
         <a class="btn ghost sm" href="#/booking/${b.id}">${live ? "Manage" : "Details"}</a>
       </div>
@@ -1733,9 +1753,10 @@ function accountHistory(user) {
     .slice()
     .sort(compareHistoryBookings)
     .filter((booking) => {
-      const key = booking.sessionId || booking.id;
+      const key = booking.cycleId || booking.sessionId || booking.id;
       if (seenSessionIds.has(key)) return false;
       seenSessionIds.add(key);
+      if (booking.cycleId) return true;
       return !(booking.status === "confirmed" && !sessionStarted(bookingDisplaySnapshot(booking)));
     });
   return `
@@ -1997,19 +2018,29 @@ export function viewPay(bookingId) {
   if (b.status !== "reserved" || b.paymentMarkedAt)
     return { redirect: `#/booking/${b.id}` };
   const s = b.snapshot;
-  const collector = store.collectorFor(b.sessionId);
+  const cycle = b.cycleId ? store.getHyroxCycle(b.cycleId) : null;
+  const collector = store.collectorFor(cycle?.bftSessionId || b.sessionId);
   const cname = collector ? esc(collector.preferredName || collector.fullName) : "the on-duty collector";
   const payouts = collector ? store.collectorPayoutsFor(collector.id) : null;
   const payme = payouts?.paymeLink || collector?.paymeLink || "";
   const fps = payouts?.fpsPhone || collector?.fpsPhone || "";
   const paymentReference = bookingPaymentReference(b);
   const memberName = user.fullName || user.preferredName || "ITC Member";
-  const paymentNote = `${s.name} · ${fmtDate(s.dateISO)} · ${s.location || "Venue TBC"} · ${memberName}`;
+  const paymentNote = cycle
+    ? `${s.name} · ${fmtDate(s.dateISO)} · ${memberName}`
+    : `${s.name} · ${fmtDate(s.dateISO)} · ${s.location || "Venue TBC"} · ${memberName}`;
+  const paymentHeading = cycle
+    ? b.promotedFromWaitlistAt
+      ? "You’ve been promoted — pay by Thursday 8 PM"
+      : Date.now() >= cycle.paymentDeadlineAt
+        ? "Final payment grace — pay now by Thursday 7 PM"
+        : `Pay ${fmtMoney(s.price)} by Thursday 6 PM`
+    : `${fmtMoney(s.price)} to ${cname}.`;
 
   return `
-    <a class="back-link" href="#/activity/${b.sessionId}">← ${esc(s.name)}</a>
+    <a class="back-link" href="${cycle ? `#/hyrox/${esc(cycle.id)}` : `#/activity/${b.sessionId}`}">← ${esc(s.name)}</a>
     <div class="kicker mt16">Pay to secure your spot</div>
-    <h1 class="display sm">${fmtMoney(s.price)} to ${cname}.</h1>
+    <h1 class="display sm">${paymentHeading}</h1>
     <p class="subcopy mt8">Deadline: <strong>${fmtDeadline(b.payDeadlineAt)}</strong> — unpaid spots go to the waitlist.</p>
     <div class="card mt16"><div class="card-body">
       <h3>PayMe</h3>
@@ -2077,25 +2108,35 @@ export function viewBooking(bookingId) {
     return viewNotFound("Booking not found.");
   }
   const s = b.snapshot;
+  const cycle = b.cycleId ? store.getHyroxCycle(b.cycleId) : null;
+  const assignedSession = b.sessionId ? store.getSession(b.sessionId) : null;
+  const started = assignedSession ? sessionStarted(assignedSession) : false;
   const receipt = store.receiptForBooking(b.id);
   const mine = b.userId === user.id;
 
   let head = "";
   let actions = "";
   if (b.status === "reserved" && !b.paymentMarkedAt) {
+    const paymentHeading = cycle
+      ? b.promotedFromWaitlistAt
+        ? "You’ve been promoted — pay by Thursday 8 PM"
+        : Date.now() >= cycle.paymentDeadlineAt
+          ? "Final payment grace — pay now by Thursday 7 PM"
+          : `Pay ${fmtMoney(s.price)} by Thursday 6 PM`
+      : "Spot held.";
     head = `
-      <h1 class="display sm mt16">Spot held.</h1>
+      <h1 class="display sm mt16">${paymentHeading}</h1>
       <p class="subcopy mt8">Pay ${fmtMoney(s.price)} by <strong>${fmtDeadline(b.payDeadlineAt)}</strong> or the spot goes to the waitlist.</p>`;
     actions = mine ? `
       <a class="btn" href="#/pay/${b.id}">Pay ${fmtMoney(s.price)}</a>
       <button class="btn ghost" type="button" data-action="release-reservation" data-booking="${b.id}">Cancel booking</button>` : "";
   } else if (b.status === "reserved" && b.paymentMarkedAt) {
-    const collector = store.collectorFor(b.sessionId);
+    const collector = store.collectorFor(cycle?.bftSessionId || b.sessionId);
     const cname = collector ? esc(collector.preferredName || collector.fullName) : "the collector";
     head = `
       <h1 class="display sm mt16">Payment being confirmed.</h1>
       <p class="subcopy mt8">${cname} is checking your ${esc(b.paidMethod || "payment")}${b.paymentRef ? ` (ref ${esc(b.paymentRef)})` : ""} — your spot is held meanwhile.</p>`;
-  } else if (b.status === "confirmed" && !sessionStarted(s) && Number(s.price) === 0) {
+  } else if (b.status === "confirmed" && !started && Number(s.price) === 0) {
     head = `
       <div class="confirm-mark">${ICONS.check}</div>
       <h1 class="display sm center mt16">You’re going.</h1>
@@ -2103,19 +2144,36 @@ export function viewBooking(bookingId) {
     actions = `
       <button class="btn ghost" type="button" data-action="ics-booking" data-booking="${b.id}">Add to calendar</button>
       ${mine ? `<button class="btn ghost" type="button" data-action="rsvp-withdraw" data-booking="${b.id}">Can’t make it</button>` : ""}`;
-  } else if (b.status === "confirmed" && !sessionStarted(s)) {
-    const movedFrom = mine && b.deferredFrom ? store.getBooking(b.deferredFrom) : null;
+  } else if (b.status === "confirmed" && !started) {
+    const movedFrom = !cycle && mine && b.deferredFrom ? store.getBooking(b.deferredFrom) : null;
     head = `
       <div class="confirm-mark">${ICONS.check}</div>
-      <h1 class="display sm center mt16">${movedFrom ? "Booking moved." : "You’re booked in."}</h1>
-      <p class="subcopy center mt8">${movedFrom
-        ? "Your payment has carried over."
-        : `Booking ref <span class="mono">${esc(b.id.toUpperCase())}</span>`}</p>`;
+      <h1 class="display sm center mt16">${cycle ? "Your weekly HYROX place is confirmed" : movedFrom ? "Booking moved." : "You’re booked in."}</h1>
+      <p class="subcopy center mt8">${cycle
+        ? cycle.venuePlan === "both" ? "Both gyms confirmed" : b.sessionId ? "Your weekly HYROX place is confirmed" : "Your venue is pending automatic allocation."
+        : movedFrom ? "Your payment has carried over."
+          : `Booking ref <span class="mono">${esc(b.id.toUpperCase())}</span>`}</p>
+      ${cycle ? `<p class="hyrox-queue-state">${b.sessionId
+        ? `${b.allocationState === "final" ? "Your venue is final" : "Your venue is provisional until Friday 9 PM"} · ${esc(assignedSession?.location || "Venue pending")}`
+        : "Venue pending"}</p>` : ""}`;
     const targets = mine ? store.deferTargetsFor(b) : [];
     actions = `
       ${movedFrom ? `<div class="card mt16"><div class="card-body"><strong>Previous spot released</strong><p class="muted small mt8">${esc(fmtDate(movedFrom.snapshot.dateISO))} · ${fmtTime(movedFrom.snapshot.time)}</p></div></div>` : ""}
       <button class="btn ghost" type="button" data-action="ics-booking" data-booking="${b.id}">Add to calendar</button>
       ${receipt ? `<a class="btn ghost" href="#/receipt/${receipt.id}">View receipt · ${esc(receipt.number)}</a>` : ""}`;
+    if (cycle && mine && cycle.venuePlan === "both" && b.allocationState === "provisional" && b.sessionId) {
+      const target = hyroxCycleVenues(cycle).find((venue) => venue.id !== b.sessionId);
+      const switchEntry = store.hyroxCycleQueues(cycle.id).venueSwitches
+        .find((entry) => entry.userId === b.userId && entry.status === "active");
+      const queueName = target?.location?.includes("BFT") ? "BFT switch queue" : "Midtown switch queue";
+      actions += `<div class="card mt16"><div class="card-body"><h3>Venue choice</h3>
+        <p class="muted small">Current assignment: <strong>${esc(assignedSession?.location || "Venue pending")}</strong>.</p>
+        ${switchEntry ? `<p class="hyrox-queue-state">${esc(queueName)} · queue position ${store.hyroxCycleQueuePosition(b.userId, cycle.id, "venue_switch", switchEntry.targetSessionId)}. Your ${esc(target?.location || "other venue")} place remains guaranteed while you wait.</p>
+          <button class="btn ghost sm" type="button" data-action="leave-hyrox-switch-queue" data-entry="${switchEntry.id}">Leave switch queue</button>`
+          : `<div class="actions"><button class="btn ghost sm" type="button" data-action="select-hyrox-venue" data-booking="${b.id}" data-session="${target?.id}">Change to ${esc(target?.location || "other venue")}</button>
+            <button class="btn ghost sm" type="button" data-action="join-hyrox-switch-queue" data-booking="${b.id}" data-session="${target?.id}">${esc(queueName)}</button></div>`}
+      </div></div>`;
+    }
     if (targets.length) {
       actions += `
       <div class="card mt16"><div class="card-body">
@@ -2146,8 +2204,8 @@ export function viewBooking(bookingId) {
     <div class="card mt24"><div class="card-body">
       <div class="receipt-lines" style="margin-top:0;border-top:0">
         <div class="line"><span>Session</span><strong>${esc(s.name)}</strong></div>
-        <div class="line"><span>When</span><strong>${esc(fmtDate(s.dateISO))} · ${fmtTime(s.time)}</strong></div>
-        <div class="line"><span>Where</span><strong>${esc(s.location)}</strong></div>
+        <div class="line"><span>When</span><strong>${esc(fmtDate(s.dateISO))}${s.time ? ` · ${fmtTime(s.time)}` : ""}</strong></div>
+        <div class="line"><span>Where</span><strong>${esc(assignedSession?.location || s.location || "Venue pending")}</strong></div>
         <div class="line"><span>Status</span><strong>${esc(b.status)}</strong></div>
         <div class="line total"><span>Price</span><strong>${Number(s.price) > 0 ? fmtMoney(s.price) : "Pay your own bill"}</strong></div>
       </div>

@@ -836,6 +836,39 @@ document.addEventListener("click", async (e) => {
       }
       break;
 
+    case "select-hyrox-venue":
+      if (controlBusy.has(el)) break;
+      try {
+        await withBusyControl(el, "Updating…", async () => {
+          await store.selectHyroxCycleVenue(el.dataset.booking, el.dataset.session);
+          toast("HYROX venue updated");
+          await renderWithFeedback();
+        });
+      } catch (err) { toast(err.message || "Unable to change HYROX venue", true); }
+      break;
+
+    case "join-hyrox-switch-queue":
+      if (controlBusy.has(el)) break;
+      try {
+        await withBusyControl(el, "Joining…", async () => {
+          await store.joinHyroxVenueSwitchQueue(el.dataset.booking, el.dataset.session);
+          toast("Switch queue joined");
+          await renderWithFeedback();
+        });
+      } catch (err) { toast(err.message || "Unable to join switch queue", true); }
+      break;
+
+    case "leave-hyrox-switch-queue":
+      if (controlBusy.has(el)) break;
+      try {
+        await withBusyControl(el, "Leaving…", async () => {
+          await store.leaveHyroxVenueSwitchQueue(el.dataset.entry);
+          toast("Switch queue left");
+          await renderWithFeedback();
+        });
+      } catch (err) { toast(err.message || "Unable to leave switch queue", true); }
+      break;
+
     case "defer-to":
       if (confirm("Defer to this session? Your current spot will be released and your payment will carry over.")) {
         try {

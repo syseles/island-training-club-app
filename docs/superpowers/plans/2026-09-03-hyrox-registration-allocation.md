@@ -1343,7 +1343,7 @@ git commit -m "feat(hyrox): add pooled registration experience"
 - Consumes: pooled booking/allocation selectors and actions from Tasks 7–8.
 - Produces member controls `join-hyrox-weekly-waitlist`, `leave-hyrox-cycle-queue`, `select-hyrox-venue`, `join-hyrox-switch-queue` and `leave-hyrox-switch-queue`.
 
-- [ ] **Step 1: Write failing state-specific rendering tests**
+- [x] **Step 1: Write failing state-specific rendering tests**
 
 Assert these eight exact state headings/copy fragments:
 
@@ -1364,16 +1364,16 @@ Before allocation, assert Home **My Week**, Profile History and Payments & Recei
 
 For full BFT, assert `BFT switch queue`, queue position and `Your Midtown place remains guaranteed while you wait.`.
 
-- [ ] **Step 2: Run smoke and verify failure**
+- [x] **Step 2: Run smoke and verify failure**
 
 Run: `node app/smoke.mjs`
 Expected: FAIL on the first pooled booking-state copy assertion.
 
-- [ ] **Step 3: Make `viewPay` null-session safe**
+- [x] **Step 3: Make `viewPay` null-session safe**
 
 Use `booking.cycleId` to resolve collector duty by cycle date. Build payment note as `ITC HYROX · <date> · <member>` and show both possible venues in explanatory copy, not as assigned location. Before Thursday 6 PM show the standard deadline; for an unmarked original between 6–7 PM show final-grace copy; for `promotedFromWaitlistAt` show the Thursday 8 PM hard deadline. Keep existing PayMe/FPS controls.
 
-- [ ] **Step 4: Render allocation states in `viewBooking`**
+- [x] **Step 4: Render allocation states in `viewBooking`**
 
 Branch pooled bookings before legacy confirmed-booking deferral rendering:
 
@@ -1388,11 +1388,11 @@ Branch pooled bookings before legacy confirmed-booking deferral rendering:
 
 Always derive current counts from store selectors rather than snapshot counts. Reuse the pooled booking presenter on Home **My Week**, Profile History and Payments & Receipts so an unallocated booking says `Venue pending`; after allocation use the receipt/session link and avoid duplicate weekly entries.
 
-- [ ] **Step 5: Add delegated queue/move controls**
+- [x] **Step 5: Add delegated queue/move controls**
 
-Each handler uses `withBusyControl`, awaits the exact store action, shows success only after resolution and calls `renderWithFeedback()`. On target-full response, leave current allocation visible and offer `join-hyrox-switch-queue`; do not optimistically move DOM state.
+Each handler uses `withBusyControl` awaits the exact store action, shows success only after resolution and calls `renderWithFeedback()`. On target-full response, leave current allocation visible and offer `join-hyrox-switch-queue`; do not optimistically move DOM state.
 
-- [ ] **Step 6: Run both suites**
+- [x] **Step 6: Run both suites**
 
 Run:
 
@@ -1403,7 +1403,7 @@ node app/live-auth-smoke.mjs
 
 Expected: PASS for all member states, exact RPC args, duplicate-click suppression and failed-live-RPC no-fallback assertions.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add app/js/views.js app/js/app.js app/styles.css app/smoke.mjs app/live-auth-smoke.mjs

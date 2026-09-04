@@ -4368,6 +4368,57 @@ console.log("ok  reset");
   }
   console.log("ok  pooled HYROX Schedule and registration views explain the automatic venue plan");
 }
+{
+  store.resetLocalData();
+  installLocalFixtures();
+  const cycleDate = data.isoDate(data.addDays(data.saturdayOnOrAfter(data.todayLocal()), 7));
+  const cycle = store.scheduleHyroxCycle(cycleDate);
+  const booking = store.reserveHyroxCycle("fixture-member", cycle.id, "either", true,
+    cycle.registrationOpensAt);
+  store.signIn("member@example.test");
+  const payHtml = views.viewPay(booking.id);
+  if (!payHtml.includes("Pay HK$180 by Thursday 6 PM")
+      || !payHtml.includes(cycleDate) || payHtml.includes("BFT Causeway Bay")
+      || payHtml.includes("Midtown28 Fitness")) {
+    throw new Error("pooled payment should show weekly payment timing without assigning a venue");
+  }
+  const pendingHtml = views.viewBooking(booking.id);
+  if (!pendingHtml.includes("Pay HK$180 by Thursday 6 PM")) {
+    throw new Error("pooled reservation should show the standard payment heading");
+  }
+  store.markBookingPaid(booking.id, "PayMe", "task10", cycle.registrationOpensAt + 1);
+  const confirmingHtml = views.viewBooking(booking.id);
+  if (!confirmingHtml.includes("Payment being confirmed")) {
+    throw new Error("pooled marked payment should show collector confirmation state");
+  }
+  store.signOut();
+  store.signIn("admin@example.test");
+  store.confirmBookingPayment(booking.id, cycle.registrationOpensAt + 2);
+  store.signIn("member@example.test");
+  const confirmedHtml = views.viewBooking(booking.id);
+  if (!confirmedHtml.includes("Your weekly HYROX place is confirmed")
+      || !confirmedHtml.includes("Venue pending")
+      || confirmedHtml.includes("defer-to")
+      || confirmedHtml.includes("release-reservation")) {
+    throw new Error("unallocated pooled booking should show a confirmed weekly place without deferral or cancellation");
+  }
+  const homeHtml = views.viewHome();
+  const historyHtml = await views.viewAccount("history");
+  const paymentsHtml = await views.viewAccount("payments");
+  if (![homeHtml, historyHtml, paymentsHtml].every((html) => html.includes(data.fmtDate(cycleDate)) && html.includes("Venue pending"))) {
+    throw new Error("pooled booking surfaces should show the weekly date and Venue pending before allocation");
+  }
+  store.signOut();
+  store.signIn("admin@example.test");
+  store.finalizeHyroxVenuePlan(cycle.id, cycle.paymentDeadlineAt + 1);
+  store.signIn("member@example.test");
+  const allocatedHtml = views.viewBooking(booking.id);
+  if (!allocatedHtml.includes("Your venue is final") || !allocatedHtml.includes("BFT Causeway Bay")
+      || !store.receiptForBooking(booking.id)) {
+    throw new Error("allocated pooled booking surfaces should show one final venue and its receipt");
+  }
+  console.log("ok  pooled HYROX payment and weekly booking states render without a session");
+}
 
 // --- Install neutral fixtures for local authenticated paths (no demo seeds) ---
 function installLocalFixtures({ withMemberBooking = false } = {}) {
