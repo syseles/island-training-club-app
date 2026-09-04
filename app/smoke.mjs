@@ -104,6 +104,10 @@ const rsvpIntegrityMigrationSource = readFileSync(
   resolve(__dirnameSmoke, "../supabase/migrations/20260829000008_rsvp_integrity.sql"),
   "utf8"
 );
+const sept5LunchCleanupMigrationSource = readFileSync(
+  resolve(__dirnameSmoke, "../supabase/migrations/20260905000003_cleanup_sept5_lunch_duplicate.sql"),
+  "utf8"
+);
 const operationalIntegrationSource = readFileSync(
   resolve(__dirnameSmoke, "../supabase/tests/operational_backend_integration.sql"),
   "utf8"
@@ -117,6 +121,12 @@ for (const marker of [
   "withdraw_operational_rsvp",
   "grant execute on function public.get_operational_rsvp_counts() to anon, authenticated",
 ]) assert.ok(rsvpIntegrityMigrationSource.includes(marker));
+for (const marker of [
+  "event-1788509289-2026-09-05",
+  "lunch-2026-09-05",
+  "Cannot remove Sept 5 RSVP duplicate with booking history.",
+  "cancelled_at = null",
+]) assert.ok(sept5LunchCleanupMigrationSource.includes(marker));
 const rsvpCountFunctionSource = rsvpIntegrityMigrationSource.match(
   /create or replace function public\.get_operational_rsvp_counts\(\)[\s\S]*?\n\$\$;/
 )?.[0] || "";
