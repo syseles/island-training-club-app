@@ -4332,6 +4332,42 @@ console.log("ok  reset");
   }
   console.log("ok  local HYROX reconciliation derives thresholds and serializes venue switches");
 }
+{
+  store.resetLocalData();
+  installLocalFixtures();
+  const cycleDate = data.isoDate(data.addDays(data.saturdayOnOrAfter(data.todayLocal()), 7));
+  const cycle = store.scheduleHyroxCycle(cycleDate);
+  views.resetScheduleState();
+  views.scheduleState.weekOffset = Math.floor((data.parseISO(cycleDate) - data.sundayOf(data.todayLocal()))
+    / (7 * 24 * 60 * 60 * 1000));
+  views.scheduleState.selected = cycleDate;
+  const lockedSchedule = views.viewSchedule();
+  if ((lockedSchedule.match(new RegExp(`href=\\"#/hyrox/${cycle.id}\\"`, "g")) || []).length !== 1
+      || !lockedSchedule.includes("Opens Monday at 6 PM")
+      || lockedSchedule.includes(`href=\"#/activity/${cycle.bftSessionId}\"`)
+      || lockedSchedule.includes(`href=\"#/activity/${cycle.midtownSessionId}\"`)
+      || !lockedSchedule.includes("Quarry Bay")) {
+    throw new Error("scheduled HYROX weeks should render one locked pool card and a separate Quarry Bay row");
+  }
+  const lockedDetail = views.viewHyroxCycle(cycle.id);
+  if (!lockedDetail.includes("BFT Causeway Bay") || !lockedDetail.includes("Midtown")
+      || !lockedDetail.includes("Opens Monday at 6 PM")) {
+    throw new Error("HYROX detail should expose both venues and the locked opening checkpoint");
+  }
+  store.sweepHyroxCycleDeadlines(cycle.registrationOpensAt);
+  const registration = views.viewHyroxRegistration(cycle.id);
+  for (const marker of [
+    "Your preference helps us plan. It does not reserve a particular gym.",
+    'value="bft"', 'value="midtown"', 'value="either"',
+    "If 20 or fewer people have paid", "If more than 20 people have paid",
+    "Thursday 6 PM", "Friday 9 PM", 'name="fallbackAcknowledged"',
+    "I understand that my booking will be at BFT at 11:15 if only BFT opens.",
+    "Reserve &amp; continue to pay",
+  ]) {
+    if (!registration.includes(marker)) throw new Error(`HYROX registration missing ${marker}`);
+  }
+  console.log("ok  pooled HYROX Schedule and registration views explain the automatic venue plan");
+}
 
 // --- Install neutral fixtures for local authenticated paths (no demo seeds) ---
 function installLocalFixtures({ withMemberBooking = false } = {}) {
@@ -4393,6 +4429,23 @@ for (const marker of [
   if (!integratedAppSource.includes(marker)) {
     failures++;
     console.error(`FAIL integrated Giving router missing ${marker}`);
+  }
+}
+for (const marker of [
+  'case "hyrox":', 'views.viewHyroxRegistration(arg)', 'views.viewHyroxCycle(arg)',
+  'case "form-hyrox-reserve":', 'store.reserveHyroxCycle(',
+]) {
+  if (!integratedAppSource.includes(marker)) {
+    failures++;
+    console.error(`FAIL HYROX router missing ${marker}`);
+  }
+}
+for (const api of [
+  "viewHyroxCycle", "viewHyroxRegistration",
+]) {
+  if (typeof views[api] !== "function") {
+    failures++;
+    console.error(`FAIL pooled HYROX view missing ${api}`);
   }
 }
 for (const api of [

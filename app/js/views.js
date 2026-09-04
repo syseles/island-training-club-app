@@ -107,6 +107,51 @@ function spotsLabel(s) {
 const fmtDeadline = (ts) =>
   new Date(ts).toLocaleString("en-HK", { weekday: "short", hour: "numeric", minute: "2-digit" });
 
+function hyroxCycleVenues(cycle) {
+  return [cycle.bftSessionId, cycle.midtownSessionId].map((id) => store.getSession(id)).filter(Boolean);
+}
+
+function hyroxCycleStatus(cycle) {
+  const now = Date.now();
+  if (cycle.registrationState === "cancelled") return { label: "Cancelled", className: "danger" };
+  if (now < cycle.registrationOpensAt) return { label: "Opens Monday at 6 PM", className: "neutral" };
+  if (cycle.venuePlan === "bft_only") return { label: "BFT only", className: "free" };
+  if (cycle.venuePlan === "both") return { label: cycle.allocationClosedAt ? "Both gyms confirmed" : "Both gyms open", className: "free" };
+  if (cycle.registrationState === "reconciling") return { label: "Payment review", className: "warn" };
+  return { label: "Registration open", className: "paid" };
+}
+
+function hyroxCycleBookingForUser(cycle) {
+  const user = store.currentUser();
+  if (!user) return null;
+  return store.bookingsForUser(user.id).find((booking) => booking.cycleId === cycle.id
+    && ["reserved", "confirmed"].includes(booking.status)) || null;
+}
+
+function hyroxCycleRow(cycle) {
+  const status = hyroxCycleStatus(cycle);
+  const booking = hyroxCycleBookingForUser(cycle);
+  const action = booking
+    ? `<span class="badge free">${booking.status === "confirmed" ? "Booked" : "Payment due"}</span>`
+    : `<span class="badge ${status.className}">${esc(status.label)}</span>`;
+  const venues = hyroxCycleVenues(cycle)
+    .map((venue) => `${esc(venue.location)} · ${esc(fmtTime(venue.time))}`).join(" · ");
+  return `<a class="session-row hyrox-cycle-row" href="#/hyrox/${esc(cycle.id)}">
+    <time>${esc(fmtTime(hyroxCycleVenues(cycle)[0]?.time || "00:00"))}</time>
+    <div><h3>ITC HYROX · BFT + Midtown pool</h3><p>${venues}</p></div>
+    <div class="row-end">${action}</div>
+  </a>`;
+}
+
+function hyroxVenueCards(cycle) {
+  return hyroxCycleVenues(cycle).map((venue) => `
+    <div class="card hyrox-venue-card">
+      <span class="kicker">${esc(venue.location)}</span>
+      <h3>${esc(fmtTime(venue.time))}</h3>
+      <p class="muted small">${venue.capacity} places · ${fmtMoney(venue.price)}</p>
+    </div>`).join("");
+}
+
 function sessionRow(s, { past, showDate = true, highlight } = {}) {
   // A session the signed-in member has already booked shows a "Booked"
   // badge instead of price/spots, so Home, Schedule and the booking itself
@@ -398,12 +443,16 @@ export function viewSchedule() {
       </button>`;
   }).join("");
 
+  const cycle = store.hyroxCycleForDate(scheduleState.selected);
+  const cycleChildIds = cycle ? new Set([cycle.bftSessionId, cycle.midtownSessionId]) : new Set();
   const list = weekSessions
     .filter((s) => s.dateISO === scheduleState.selected)
+    .filter((s) => !cycleChildIds.has(s.id))
     .filter((s) => matchesFilter(s, scheduleState.filter));
-
-  const listHTML = list.length
-    ? list.map((s) => sessionRow(s, { past: sessionStarted(s), showDate: false })).join("")
+  const poolItem = cycle && matchesFilter({ category: "HYROX" }, scheduleState.filter)
+    ? hyroxCycleRow(cycle) : "";
+  const listHTML = list.length || poolItem
+    ? `${poolItem}${list.map((s) => sessionRow(s, { past: sessionStarted(s), showDate: false })).join("")}`
     : `<div class="empty">No ${scheduleState.filter === "all" ? "" : esc(scheduleState.filter) + " "}sessions on ${esc(fmtDate(scheduleState.selected))}.</div>`;
 
   return `
@@ -426,6 +475,52 @@ export function viewSchedule() {
 }
 
 // --- Activity detail ------------------------------------------------------------------
+
+export function viewHyroxCycle(cycleId) {
+  const cycle = store.getHyroxCycle(cycleId);
+  if (!cycle) return viewNotFound("That HYROX registration does not exist.");
+  const status = hyroxCycleStatus(cycle);
+  const user = store.currentUser();
+  const approved = user?.status === "approved";
+  const booking = hyroxCycleBookingForUser(cycle);
+  const open = (cycle.registrationState === "open" || Date.now() >= cycle.registrationOpensAt)
+    && Date.now() < cycle.paymentDeadlineAt && cycle.registrationState !== "cancelled";
+  const action = cycle.registrationState === "cancelled"
+    ? `<div class="banner warn"><span class="kicker">Cancelled</span><p>Session cancelled by ITC — ${esc(cycle.cancelReason || "reason unavailable")}.</p></div>`
+    : booking ? `<div class="banner"><p>Your HYROX registration is already in your account.</p><a class="btn sm" href="#/booking/${booking.id}">View booking</a></div>`
+      : approved && open ? `<a class="btn" href="#/hyrox/${esc(cycle.id)}/register">Reserve your place</a>`
+        : approved ? memberOnlyNote(status.label) : memberOnlyNote(open ? "Approved members can reserve from Monday at 6 PM HKT." : status.label);
+  return `<div class="kicker">HYROX · ${esc(fmtDate(cycle.dateISO))}</div>
+    <h1 class="display">One weekly pool. Two possible gyms.</h1>
+    <p class="lede">Register once for the shared 32-place pool. Your venue is allocated automatically from confirmed payments.</p>
+    <div class="hyrox-pool-card card"><div class="section-head"><div><span class="kicker">${esc(status.label)}</span><h2>ITC HYROX</h2></div><span class="badge paid">${fmtMoney(hyroxCycleVenues(cycle)[0]?.price || 180)}</span></div>
+      <div class="hyrox-venue-options">${hyroxVenueCards(cycle)}</div>
+      <div class="hyrox-threshold-rule"><strong>Monday 6 PM HKT</strong><span>Registration opens</span><strong>Thursday 6 PM HKT</strong><span>Standard payment deadline</span><strong>Thursday 7 PM HKT</strong><span>Holder grace ends</span><strong>Friday 9 PM HKT</strong><span>Venue changes close</span></div>
+      ${action}
+    </div>`;
+}
+
+export function viewHyroxRegistration(cycleId) {
+  const cycle = store.getHyroxCycle(cycleId);
+  if (!cycle) return viewNotFound("That HYROX registration does not exist.");
+  const user = store.currentUser();
+  if (!user || user.status !== "approved") return `${memberOnlyNote("Approved members can reserve a HYROX place.")}<a class="btn ghost" href="#/account">Go to Profile</a>`;
+  const open = (cycle.registrationState === "open" || Date.now() >= cycle.registrationOpensAt)
+    && Date.now() < cycle.paymentDeadlineAt;
+  if (!open) return viewHyroxCycle(cycleId);
+  return `<div class="kicker">HYROX registration</div><h1 class="display">Choose how we plan your place</h1>
+    <p class="lede">Your preference helps us plan. It does not reserve a particular gym.</p>
+    <form id="form-hyrox-reserve" class="card" data-cycle="${esc(cycle.id)}">
+      <fieldset class="hyrox-preference-grid"><legend>Venue preference</legend>
+        <label><input type="radio" name="preference" value="bft" required> BFT Causeway Bay</label>
+        <label><input type="radio" name="preference" value="midtown"> Midtown 28</label>
+        <label><input type="radio" name="preference" value="either"> Either venue</label>
+      </fieldset>
+      <label class="check-row"><input type="checkbox" name="fallbackAcknowledged" required> I understand that my booking will be at BFT at 11:15 if only BFT opens.</label>
+      <div class="hyrox-threshold-rule"><p>If 20 or fewer people have paid, we’ll only book BFT CwB.</p><p>If more than 20 people have paid, we’ll book both gyms.</p><p>Mark payment by Thursday 6 PM. Venue changes close Friday 9 PM.</p></div>
+      <button class="btn" type="submit">Reserve &amp; continue to pay</button>
+    </form>`;
+}
 
 function venuePresentationHTML(presentation) {
   if (presentation.kind === "image") return `

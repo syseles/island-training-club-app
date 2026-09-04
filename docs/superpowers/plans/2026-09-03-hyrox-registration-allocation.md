@@ -1258,7 +1258,7 @@ git commit -m "feat(hyrox): add pooled allocation lifecycle"
   - routes `#/hyrox/:cycleId` and `#/hyrox/:cycleId/register`
   - submit action `form-hyrox-reserve`
 
-- [ ] **Step 1: Write failing combined-card and registration-copy tests**
+- [x] **Step 1: Write failing combined-card and registration-copy tests**
 
 Schedule a local cycle and render Schedule before Monday 6 PM. Assert exactly one `href="#/hyrox/<cycle-id>"`, `Opens Monday at 6 PM`, no reserve/direct BFT/Midtown CTA for that date, and one separate Quarry Bay row. Advance the lifecycle sweep to Monday 6 PM; render as visitor, pending and approved member and assert all see both venue names/times while only approved sees reserve.
 
@@ -1277,22 +1277,22 @@ for (const marker of [
 ]) assert.match(registrationHtml, new RegExp(marker));
 ```
 
-- [ ] **Step 2: Run smoke and verify failure**
+- [x] **Step 2: Run smoke and verify failure**
 
 Run: `node app/smoke.mjs`
 Expected: FAIL because `viewHyroxCycle` is not exported.
 
-- [ ] **Step 3: Group pooled Schedule rows without hiding Quarry Bay**
+- [x] **Step 3: Group pooled Schedule rows without hiding Quarry Bay**
 
 In `viewSchedule`, when a scheduled draft/open/reconciling/closed/cancelled cycle exists for the selected date, remove only its BFT/Midtown child rows and insert one cycle presentation item. A draft item is visibly locked while `now < registrationOpensAt`; at/after Monday 6 PM its effective presentation is open even if an anonymous client has not invoked the authenticated sweep, and the reserve RPC performs the authoritative transition. Never group Quarry Bay. Render status badges from the member’s cycle booking/queue state; a cancelled cycle shows one canonical cancellation card rather than two child rows.
 
-- [ ] **Step 4: Add detail and registration views**
+- [x] **Step 4: Add detail and registration views**
 
 `viewHyroxCycle` always displays date, price, BFT/Midtown names, times, capacities, Monday opening, payment/grace and venue-choice deadlines. Use existing membership gates. Before opening it shows the locked state. When full before Thursday 6 PM, the weekly-waitlist form repeats the three preference controls and required BFT fallback acknowledgement, while showing exact no-payment copy and join/leave actions.
 
 `viewHyroxRegistration` renders a semantic radio group, required fallback checkbox and `form-hyrox-reserve`. Keep controls at least 44px high and use existing `.card`, `.kicker`, `.badge`, `.btn`, `.muted` classes plus focused additions.
 
-- [ ] **Step 5: Add routes and reserve submission**
+- [x] **Step 5: Add routes and reserve submission**
 
 Parse hash segments so:
 
@@ -1306,11 +1306,11 @@ case "hyrox":
 
 In submit delegation, read `preference` and `fallbackAcknowledged`, call `store.reserveHyroxCycle`, and navigate to `#/pay/<booking-id>` only after success. Use `withBusyControl` and render errors through the existing toast/feedback path.
 
-- [ ] **Step 6: Add responsive styles**
+- [x] **Step 6: Add responsive styles**
 
 Add `.hyrox-pool-card`, `.hyrox-venue-options`, `.hyrox-preference-grid`, `.hyrox-threshold-rule` and `.hyrox-queue-state`. At widths below 600px use one-column venue cards; maintain visible focus, 44px controls and no layout-shifting selected state.
 
-- [ ] **Step 7: Run both suites**
+- [x] **Step 7: Run both suites**
 
 Run:
 
@@ -1321,7 +1321,7 @@ node app/live-auth-smoke.mjs
 
 Expected: PASS for visitor/pending/member pooled presentation and delegated reserve RPC payload.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add app/js/views.js app/js/app.js app/styles.css app/smoke.mjs app/live-auth-smoke.mjs

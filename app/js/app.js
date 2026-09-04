@@ -156,6 +156,7 @@ const NAV_FOR = {
   home: "home",
   schedule: "schedule",
   activity: "schedule",
+  hyrox: "schedule",
   community: "community",
   giving: "giving",
   notifications: "notifications",
@@ -412,6 +413,9 @@ async function render(generation = renderGeneration) {
       break;
     case "activity":
       out = views.viewActivity(arg);
+      break;
+    case "hyrox":
+      out = arg2 === "register" ? views.viewHyroxRegistration(arg) : views.viewHyroxCycle(arg);
       break;
     case "community":
       out = views.viewCommunity(arg);
@@ -1194,6 +1198,28 @@ document.addEventListener("submit", async (e) => {
       toast("Application submitted — a leader will review it");
       location.hash = "#/account";
       render();
+      break;
+    }
+
+    case "form-hyrox-reserve": {
+      e.preventDefault();
+      const user = store.currentUser();
+      if (!user || user.status !== "approved" || !form.dataset.cycle) return;
+      const fd = new FormData(form);
+      const control = form.querySelector('[type="submit"]');
+      const controls = [...form.querySelectorAll("input, button")];
+      try {
+        await withBusyControl(control, "Reserving…", async () => {
+          const booking = await store.reserveHyroxCycle(
+            user.id, form.dataset.cycle, String(fd.get("preference") || ""),
+            fd.get("fallbackAcknowledged") === "on",
+          );
+          toast("Place reserved — continue to payment");
+          location.hash = `#/pay/${booking.id}`;
+        }, { busyKey: form, controls });
+      } catch (err) {
+        toast(err.message || "Unable to reserve this HYROX place", true);
+      }
       break;
     }
 
