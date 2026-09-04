@@ -305,7 +305,7 @@ begin
       and weekday = 6
       and start_time = '11:00'::time
       and duration_minutes = 60
-      and capacity = 12
+      and capacity = 30
       and price_hkd = 180
       and default_open
       and active
@@ -313,6 +313,14 @@ begin
       and maps_query = 'Island ECC, Quarry Bay, Hong Kong'
   ) then
     raise notice 'FAIL: IA-37 Quarry Bay HYROX activity template seed missing';
+    failures := failures + 1;
+  end if;
+  if exists (
+    select 1 from public.operational_sessions
+    where activity_id = 'hyrox-quarry-bay'
+      and capacity <> 30
+  ) then
+    raise notice 'FAIL: every Quarry Bay HYROX session must have capacity 30';
     failures := failures + 1;
   end if;
   perform 1 from pg_class c join pg_namespace n on n.oid = c.relnamespace

@@ -32,7 +32,7 @@ const STORAGE_KEY = "itc.prototype.v1";
 const APPLY_DEVICE_KEY = "itc.device.id";
 const APPLY_DRAFT_KEY = "itc.apply.draft.v1";
 const APPLY_DRAFT_VERSION = 1;
-const STATE_VERSION = 18;
+const STATE_VERSION = 19;
 
 // Live-mode (Supabase) session cache. Avoids hammering the DB on every
 // page load. The TTL is short so role flips and welcome notifications
@@ -137,6 +137,13 @@ function migrate() {
 
   const v = state.version || 0;
   if (v >= STATE_VERSION) return;
+  if (v < 19) {
+    // v19: all Quarry Bay session capacity is expanded to 30, including
+    // sessions already materialized in local state.
+    for (const activity of state.activities) {
+      if (activity.id === "hyrox-quarry-bay") activity.capacity = 30;
+    }
+  }
   if (v < 18) {
     // v18: Quarry Bay's member-facing venue uses the recognizable Island ECC
     // name while directions use an unambiguous Hong Kong maps query. Only

@@ -46,7 +46,9 @@ push` from a trusted workstation):
    and the 15 August 2026 seed.
 5. Apply every later migration in filename order, including
    `20260902000001_hyrox_bft_quarry_bay.sql`, which safely renames BFT’s
-   canonical identifier and adds Quarry Bay.
+   canonical identifier and adds Quarry Bay, followed by
+   `20260904000001_hyrox_quarry_bay_capacity.sql`, which sets every Quarry
+   Bay session row to capacity 30.
 
 Apply each migration on its own. Resolve any error before moving to the
 next migration. The verified `feature/shared-operations` branch uses
@@ -121,7 +123,7 @@ select activity_id, venue, capacity, price_hkd
 
 Expected: `hyrox-bft` (BFT Causeway Bay, 20, 180), `hyrox-midtown`
 (Midtown28 Fitness, 12, 180), and `hyrox-quarry-bay` (10/F, Island ECC,
-Quarry Bay; Saturday 11:00; 60 minutes; capacity 12; HK$180; open by
+Quarry Bay; Saturday 11:00; 60 minutes; capacity 30; HK$180; open by
 default; directions query `Island ECC, Quarry Bay, Hong Kong`).
 
 Confirm the rejected registrations, gym confirmation, and cancellation
