@@ -741,6 +741,16 @@ operationalRpcHandler = (name, args) => {
       error: null,
     });
   }
+  if (name === "cancel_operational_session") {
+    const session = operationalTableRows.operational_sessions.find((row) => row.id === args.p_session_id);
+    if (!session) return Promise.resolve({ data: null, error: { message: "Session not found." } });
+    if (session.cancelled_at) return Promise.resolve({ data: null, error: { message: "Session is already cancelled." } });
+    session.cancelled_at = now;
+    session.cancelled_by = actingProfile;
+    session.cancelled_source = "admin";
+    session.cancel_reason = args.p_reason;
+    return Promise.resolve({ data: session, error: null });
+  }
   if (name === "create_operational_event") {
     const activityId = `event-${operationalTableRows.operational_activity_templates.length + 1}`;
     operationalTableRows.operational_activity_templates.push({
@@ -756,6 +766,7 @@ operationalRpcHandler = (name, args) => {
       active: false,
       category: args.p_category || "Other",
       maps_query: args.p_maps_query || null,
+      requires_rsvp: !!args.p_requires_rsvp,
     });
     const session = {
       id: `${activityId}-${args.p_session_date}`,
@@ -1917,6 +1928,17 @@ if (store.getSession(otherLunchSession.id)?.location !== "TBC") {
   throw new Error("resetting a live lunch venue must not change another dated lunch");
 }
 console.log("ok  live sessions order by start time and lunch accepts isolated weekly venue overrides");
+
+await store.cancelSessionWeek(lunchSession.id, "Organizer away");
+const repostedLiveRsvpRow = await store.repostRsvpEvent(lunchSession.id);
+const repostedLiveRsvp = store.getSession(repostedLiveRsvpRow.id);
+if (!repostedLiveRsvp || !repostedLiveRsvp.oneOff || repostedLiveRsvp.kind !== "rsvp"
+    || repostedLiveRsvp.name !== lunchSession.name || repostedLiveRsvp.dateISO !== lunchSession.dateISO
+    || repostedLiveRsvp.time !== lunchSession.time || repostedLiveRsvp.capacity !== null
+    || repostedLiveRsvp.cancelled) {
+  throw new Error("live repost should create a distinct matching RSVP event");
+}
+console.log("ok  live Admin can repost a cancelled RSVP event");
 
 // A live Admin must compose the Supabase UUID directory with device-local
 // Payment operations without copying editable identity records into storage.
