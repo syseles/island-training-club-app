@@ -1101,7 +1101,7 @@ console.log("ok  document registry scopes provisional watermarks by document");
 const indemnityBody = DOCS.indemnity?.renderBody?.() || "";
 for (const marker of [
   "ITC Hyrox Training - Liability Release &amp; Data Privacy Form",
-  "Hyrox Training from the date of signing to 31 December 2026",
+  "Hyrox Training from the date of signing to 30 June 2027",
 ]) {
   if (!indemnityBody.includes(marker)) {
     failures++;
