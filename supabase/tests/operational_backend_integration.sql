@@ -2548,6 +2548,345 @@ begin
 end $$;
 
 -- =====================================================================
+-- Pooled HYROX venue selection and switch queues
+-- =====================================================================
+
+do $$
+declare
+  v_date date := (now() at time zone 'Asia/Hong_Kong')::date
+    + ((6 - extract(dow from (now() at time zone 'Asia/Hong_Kong')::date)::integer + 7) % 7)
+    + 294;
+  v_cycle_id text;
+  v_booking_id uuid;
+  v_target text;
+begin
+  v_cycle_id := 'hyrox-pool-' || v_date::text;
+  v_target := 'hyrox-midtown-' || v_date::text;
+  select id into v_booking_id
+    from public.operational_bookings
+   where hyrox_cycle_id = v_cycle_id
+     and profile_id = '70000000-0000-0000-0000-000000000001';
+
+  perform set_config('request.jwt.claim.sub', '70000000-0000-0000-0000-000000000001', true);
+  set local role authenticated;
+  perform public.select_hyrox_cycle_venue(v_booking_id, v_target);
+  reset role;
+
+  perform pg_temp.op_assert(
+    (select session_id = v_target
+        and allocation_state = 'provisional'
+        and allocation_source = 'member'
+       from public.operational_bookings where id = v_booking_id),
+    'two-venue member moves immediately while the target has capacity'
+  );
+  perform pg_temp.op_assert(
+    (select allocation_snapshot -> -1 ->> 'source' = 'member'
+       from public.operational_bookings where id = v_booking_id),
+    'immediate member move appends allocation history'
+  );
+end $$;
+
+do $$
+declare
+  v_date date := (now() at time zone 'Asia/Hong_Kong')::date
+    + ((6 - extract(dow from (now() at time zone 'Asia/Hong_Kong')::date)::integer + 7) % 7)
+    + 294;
+  v_cycle_id text;
+  v_bft text;
+  v_midtown text;
+  v_bft_booking uuid;
+  v_midtown_booking uuid;
+  v_entry public.operational_hyrox_queue_entries;
+begin
+  v_cycle_id := 'hyrox-pool-' || v_date::text;
+  v_bft := 'hyrox-bft-' || v_date::text;
+  v_midtown := 'hyrox-midtown-' || v_date::text;
+
+  -- The preceding immediate move leaves 19 BFT / 2 Midtown. Add eleven
+  -- confirmed allocations to create an exact full 20 / 12 cycle.
+  insert into public.operational_bookings (
+    profile_id, session_id, hyrox_cycle_id, status, reserved_at,
+    pay_deadline_at, venue_preference, fallback_acknowledged_at,
+    payment_marked_at, payment_method, payment_reference, paid_at,
+    confirmed_by, allocation_state, allocation_source, allocated_at,
+    allocation_snapshot, snapshot
+  )
+  select ('70000000-0000-0000-0000-' || lpad(i::text, 12, '0'))::uuid,
+         case when i = 22 then v_bft else v_midtown end,
+         v_cycle_id, 'confirmed', now(), now() + interval '1 day',
+         case when i = 22 then 'bft' else 'midtown' end, now(),
+         now(), 'fps', 'SWITCH-FILL-' || i, now(),
+         'aa000000-0000-0000-0000-00000000a001', 'provisional',
+         'automatic', now(),
+         jsonb_build_array(jsonb_build_object(
+           'session_id', case when i = 22 then v_bft else v_midtown end,
+           'source', 'switch-test-fill', 'assigned_at', now()
+         )),
+         '{"name":"ITC HYROX","booking_mode":"weekly_pool"}'::jsonb
+    from generate_series(22, 32) i;
+
+  perform pg_temp.op_assert(
+    (select count(*) from public.operational_bookings
+      where hyrox_cycle_id = v_cycle_id and status = 'confirmed'
+        and session_id = v_bft) = 20
+      and (select count(*) from public.operational_bookings
+            where hyrox_cycle_id = v_cycle_id and status = 'confirmed'
+              and session_id = v_midtown) = 12,
+    'switch fixture starts at exact 20/12 venue capacity'
+  );
+
+  select id into v_bft_booking from public.operational_bookings
+   where hyrox_cycle_id = v_cycle_id
+     and profile_id = '70000000-0000-0000-0000-000000000002';
+  perform set_config('request.jwt.claim.sub', '70000000-0000-0000-0000-000000000002', true);
+  set local role authenticated;
+  select * into v_entry
+    from public.join_hyrox_venue_switch_queue(v_bft_booking, v_midtown);
+  reset role;
+  perform pg_temp.op_assert(
+    v_entry.status = 'active'
+      and v_entry.target_session_id = v_midtown
+      and (select session_id = v_bft
+             from public.operational_bookings where id = v_bft_booking),
+    'full target creates an ordered switch entry without releasing the current venue'
+  );
+
+  select id into v_midtown_booking from public.operational_bookings
+   where hyrox_cycle_id = v_cycle_id
+     and profile_id = '70000000-0000-0000-0000-000000000021';
+  perform set_config('request.jwt.claim.sub', '70000000-0000-0000-0000-000000000021', true);
+  set local role authenticated;
+  perform public.join_hyrox_venue_switch_queue(v_midtown_booking, v_bft);
+  reset role;
+  perform pg_temp.op_assert(
+    (select session_id = v_midtown from public.operational_bookings where id = v_bft_booking)
+      and (select session_id = v_bft from public.operational_bookings where id = v_midtown_booking)
+      and (select count(*) from public.operational_hyrox_queue_entries
+            where cycle_id = v_cycle_id and kind = 'venue_switch'
+              and status = 'matched') = 2,
+    'opposite full-venue requests atomically swap and match both entries'
+  );
+  perform pg_temp.op_assert(
+    (select count(*) from public.operational_bookings
+      where hyrox_cycle_id = v_cycle_id and status = 'confirmed'
+        and session_id = v_bft) = 20
+      and (select count(*) from public.operational_bookings
+            where hyrox_cycle_id = v_cycle_id and status = 'confirmed'
+              and session_id = v_midtown) = 12,
+    'atomic switch matching preserves exact 20/12 capacity'
+  );
+end $$;
+
+do $$
+declare
+  v_date date := (now() at time zone 'Asia/Hong_Kong')::date
+    + ((6 - extract(dow from (now() at time zone 'Asia/Hong_Kong')::date)::integer + 7) % 7)
+    + 294;
+  v_cycle_id text;
+  v_midtown text;
+  v_booking uuid;
+  v_entry public.operational_hyrox_queue_entries;
+  v_closed public.operational_hyrox_cycles;
+begin
+  v_cycle_id := 'hyrox-pool-' || v_date::text;
+  v_midtown := 'hyrox-midtown-' || v_date::text;
+
+  select id into v_booking from public.operational_bookings
+   where hyrox_cycle_id = v_cycle_id
+     and profile_id = '70000000-0000-0000-0000-000000000003';
+  perform set_config('request.jwt.claim.sub', '70000000-0000-0000-0000-000000000003', true);
+  set local role authenticated;
+  select * into v_entry from public.join_hyrox_venue_switch_queue(v_booking, v_midtown);
+  select * into v_entry from public.leave_hyrox_venue_switch_queue(v_entry.id);
+  reset role;
+  perform pg_temp.op_assert(v_entry.status = 'left' and v_entry.resolved_at is not null,
+    'member can leave an active venue-switch request');
+
+  select id into v_booking from public.operational_bookings
+   where hyrox_cycle_id = v_cycle_id
+     and profile_id = '70000000-0000-0000-0000-000000000004';
+  perform set_config('request.jwt.claim.sub', '70000000-0000-0000-0000-000000000004', true);
+  set local role authenticated;
+  perform public.join_hyrox_venue_switch_queue(v_booking, v_midtown);
+  reset role;
+
+  update public.operational_hyrox_cycles
+     set registration_opens_at = now() - interval '5 hours',
+         payment_deadline_at = now() - interval '4 hours',
+         holder_grace_deadline_at = now() - interval '3 hours',
+         promoted_payment_deadline_at = now() - interval '2 hours',
+         venue_choice_deadline_at = now() - interval '1 hour'
+   where id = v_cycle_id;
+  perform set_config('request.jwt.claim.sub', 'aa000000-0000-0000-0000-00000000a001', true);
+  set local role authenticated;
+  select * into v_closed from public.close_hyrox_venue_allocation(v_cycle_id);
+  reset role;
+
+  perform pg_temp.op_assert(
+    v_closed.allocation_closed_at is not null
+      and not exists (select 1 from public.operational_bookings
+        where hyrox_cycle_id = v_cycle_id and allocation_state <> 'final')
+      and not exists (select 1 from public.operational_hyrox_queue_entries
+        where cycle_id = v_cycle_id and status = 'active'),
+    'Friday 21:00 closes allocations and dissolves unmatched switch requests'
+  );
+  perform pg_temp.op_assert(
+    (select count(*) from public.notifications
+      where kind = 'operational_hyrox_allocation_final'
+        and body like '%' || v_date::text || '%') = 32,
+    'Friday closure sends every confirmed member their final allocation'
+  );
+end $$;
+
+-- Cancelling a pooled week owns both child sessions and carries confirmed
+-- payment into the next eligible open pool when capacity exists.
+do $$
+declare
+  v_base date := (now() at time zone 'Asia/Hong_Kong')::date
+    + ((6 - extract(dow from (now() at time zone 'Asia/Hong_Kong')::date)::integer + 7) % 7);
+  v_source_date date := v_base + 308;
+  v_target_date date := v_base + 315;
+  v_source text;
+  v_target text;
+  v_confirmed uuid;
+  v_cancelled public.operational_hyrox_cycles;
+begin
+  v_source := 'hyrox-pool-' || v_source_date::text;
+  v_target := 'hyrox-pool-' || v_target_date::text;
+  perform public.ensure_operational_sessions(v_source_date, 2);
+  perform set_config('request.jwt.claim.sub', 'aa000000-0000-0000-0000-00000000a001', true);
+  set local role authenticated;
+  perform public.schedule_hyrox_cycle(v_source);
+  perform public.schedule_hyrox_cycle(v_target);
+  reset role;
+  update public.operational_hyrox_cycles
+     set registration_state = 'closed', venue_plan = 'bft_only',
+         opened_at = now(), reconciliation_started_at = now(),
+         plan_confirmed_at = now(), plan_confirmed_source = 'automatic_sweep',
+         allocation_closed_at = now()
+   where id = v_source;
+  update public.operational_hyrox_cycles
+     set registration_state = 'open', opened_at = now()
+   where id = v_target;
+
+  insert into public.operational_bookings (
+    profile_id, session_id, hyrox_cycle_id, status, reserved_at,
+    pay_deadline_at, venue_preference, fallback_acknowledged_at,
+    payment_marked_at, payment_method, payment_reference, paid_at,
+    confirmed_by, allocation_state, allocation_source, allocated_at,
+    allocation_snapshot, snapshot
+  ) values (
+    '70000000-0000-0000-0000-000000000009',
+    'hyrox-bft-' || v_source_date::text, v_source, 'confirmed', now(),
+    now() + interval '1 day', 'either', now(), now(), 'fps', 'CARRY-PAID', now(),
+    'aa000000-0000-0000-0000-00000000a001', 'final', 'automatic', now(),
+    jsonb_build_array(jsonb_build_object('session_id', 'hyrox-bft-' || v_source_date::text)),
+    '{"name":"ITC HYROX","booking_mode":"weekly_pool"}'::jsonb
+  ) returning id into v_confirmed;
+  insert into public.operational_bookings (
+    profile_id, session_id, hyrox_cycle_id, status, reserved_at,
+    pay_deadline_at, venue_preference, fallback_acknowledged_at, snapshot
+  ) values (
+    '70000000-0000-0000-0000-000000000010', null, v_source, 'reserved', now(),
+    now() + interval '1 day', 'bft', now(),
+    '{"name":"ITC HYROX","booking_mode":"weekly_pool"}'::jsonb
+  );
+  insert into public.operational_hyrox_queue_entries
+    (cycle_id, profile_id, kind, venue_preference, fallback_acknowledged_at)
+  values (v_source, '70000000-0000-0000-0000-000000000011',
+          'weekly_waitlist', 'midtown', now());
+
+  perform set_config('request.jwt.claim.sub', 'aa000000-0000-0000-0000-00000000a001', true);
+  set local role authenticated;
+  select * into v_cancelled from public.cancel_hyrox_cycle(v_source, 'Race weekend');
+  reset role;
+  perform pg_temp.op_assert(
+    v_cancelled.registration_state = 'cancelled'
+      and v_cancelled.cancel_reason = 'Race weekend'
+      and (select count(*) from public.operational_sessions
+            where id in ('hyrox-bft-' || v_source_date::text,
+                         'hyrox-midtown-' || v_source_date::text)
+              and cancelled_at is not null
+              and cancel_reason = 'Race weekend') = 2,
+    'cycle cancellation atomically cancels the cycle and both child sessions'
+  );
+  perform pg_temp.op_assert(
+    (select status = 'deferred' and deferred_to_booking_id is not null
+       from public.operational_bookings where id = v_confirmed)
+      and exists (select 1 from public.operational_bookings
+        where hyrox_cycle_id = v_target
+          and profile_id = '70000000-0000-0000-0000-000000000009'
+          and status = 'confirmed'
+          and venue_preference = 'either')
+      and not exists (select 1 from public.operational_hyrox_queue_entries
+        where cycle_id = v_source and status = 'active'),
+    'cancellation carries confirmed payment forward and dissolves active queues'
+  );
+  perform pg_temp.op_assert(
+    (select status in ('cancelled', 'expired') from public.operational_bookings
+      where hyrox_cycle_id = v_source
+        and profile_id = '70000000-0000-0000-0000-000000000010'),
+    'cycle cancellation removes unpaid source reservations'
+  );
+end $$;
+
+-- Pooled child controls must route through the parent cycle and its plan.
+do $$
+declare
+  v_base date := (now() at time zone 'Asia/Hong_Kong')::date
+    + ((6 - extract(dow from (now() at time zone 'Asia/Hong_Kong')::date)::integer + 7) % 7);
+  v_date date := v_base + 322;
+  v_cycle text := 'hyrox-pool-' || v_date::text;
+  v_midtown text := 'hyrox-midtown-' || v_date::text;
+  v_bft text := 'hyrox-bft-' || v_date::text;
+begin
+  perform public.ensure_operational_sessions(v_date, 2);
+  perform set_config('request.jwt.claim.sub', 'aa000000-0000-0000-0000-00000000a001', true);
+  set local role authenticated;
+  perform public.schedule_hyrox_cycle(v_cycle);
+  reset role;
+  update public.operational_hyrox_cycles
+     set registration_state = 'open', opened_at = now()
+   where id = v_cycle;
+  set local role authenticated;
+
+  begin
+    perform public.cancel_operational_session(v_bft, 'Child-only cancellation');
+    raise exception 'pooled child cancellation must be rejected';
+  exception when others then
+    if sqlerrm not like '%Cancel the weekly HYROX cycle instead.%' then raise; end if;
+  end;
+  begin
+    perform public.set_operational_midtown_open(v_midtown, true);
+    raise exception 'pooled Midtown toggle must be rejected';
+  exception when others then
+    if sqlerrm not like '%Midtown availability is derived from the weekly HYROX plan.%' then raise; end if;
+  end;
+  begin
+    perform public.finalize_operational_gym(v_bft, 'Before allocation closure');
+    raise exception 'pooled gym finalization must wait for allocation closure';
+  exception when others then
+    if sqlerrm not like '%HYROX venue allocation must be closed first.%' then raise; end if;
+  end;
+  reset role;
+
+  perform pg_temp.op_assert(
+    (select count(*) from pg_publication_tables
+      where pubname = 'supabase_realtime'
+        and schemaname = 'public'
+        and tablename = 'operational_hyrox_cycles') = 1,
+    'HYROX cycles are published to Realtime exactly once'
+  );
+  perform pg_temp.op_assert(
+    (select count(*) from pg_publication_tables
+      where pubname = 'supabase_realtime'
+        and schemaname = 'public'
+        and tablename = 'operational_hyrox_queue_entries') = 1,
+    'HYROX queues are published to Realtime exactly once'
+  );
+end $$;
+
+-- =====================================================================
 -- Semantic notification destinations
 -- =====================================================================
 

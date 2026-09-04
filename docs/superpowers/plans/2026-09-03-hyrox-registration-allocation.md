@@ -799,7 +799,7 @@ git commit -m "feat(hyrox): add collector reconciliation and allocation"
   - pooled guards in `cancel_operational_session` and `finalize_operational_gym`
   - Realtime publication for both new tables.
 
-- [ ] **Step 1: Add failing allocation-lifecycle tests**
+- [x] **Step 1: Add failing allocation-lifecycle tests**
 
 Add SQL scenarios that assert:
 
@@ -824,7 +824,7 @@ waitlist position one. Run two background calls for the last BFT allocation and
 assert final venue counts no greater than 20/12. Clean every per-run fixture in
 an EXIT trap.
 
-- [ ] **Step 2: Run verifier and verify failure**
+- [x] **Step 2: Run verifier and verify failure**
 
 Run:
 
@@ -834,7 +834,7 @@ ITC_ALLOW_DATABASE_RESET=1 bash supabase/tests/verify_operational_backend.sh
 
 Expected: FAIL with `function select_hyrox_cycle_venue(uuid,text) does not exist`.
 
-- [ ] **Step 3: Implement immediate moves and switch queue entry**
+- [x] **Step 3: Implement immediate moves and switch queue entry**
 
 Each member RPC locks cycle, both child sessions in ID order and the member booking. Require `venue_plan = 'both'`, `allocation_state = 'provisional'`, `now() < venue_choice_deadline_at`, ownership and target membership in the cycle.
 
@@ -842,13 +842,13 @@ Each member RPC locks cycle, both child sessions in ID order and the member book
 
 `join_hyrox_venue_switch_queue` first checks for target vacancy and performs the move instead of queueing. If full, select the oldest active opposite-direction entry `for update skip locked`; when found, swap both bookings atomically and mark the opposite entry `matched`. Otherwise insert the caller’s active ordered entry.
 
-- [ ] **Step 4: Implement queue leave and Friday closure**
+- [x] **Step 4: Implement queue leave and Friday closure**
 
 `leave_hyrox_venue_switch_queue` permits owner/Admin and transitions only an active switch entry to `left`.
 
 `close_hyrox_venue_allocation` locks the cycle and both sessions, requires `now() >= venue_choice_deadline_at`, updates all provisional cycle bookings to `final`, dissolves active switch entries, records `allocation_closed_at` and sends final-venue notifications.
 
-- [ ] **Step 5: Implement cycle cancellation and child guards**
+- [x] **Step 5: Implement cycle cancellation and child guards**
 
 `cancel_hyrox_cycle` requires a nonblank reason and atomically:
 
@@ -861,7 +861,7 @@ Each member RPC locks cycle, both child sessions in ID order and the member book
 
 Replace linked child cancellation with `Cancel the weekly HYROX cycle instead.`. Replace `set_operational_midtown_open` so it rejects any child referenced by a non-draft pooled cycle with `Midtown availability is derived from the weekly HYROX plan.`. Extend gym finalization so a child referenced by a pooled cycle requires non-null `allocation_closed_at` and the child must be enabled by the plan.
 
-- [ ] **Step 6: Add Realtime publication idempotently**
+- [x] **Step 6: Add Realtime publication idempotently**
 
 Use the existing publication guard pattern:
 
@@ -888,7 +888,7 @@ end;
 $$;
 ```
 
-- [ ] **Step 7: Register and run the concurrency verifier**
+- [x] **Step 7: Register and run the concurrency verifier**
 
 Append this after the existing RSVP concurrency call in
 `verify_operational_backend.sh`:
@@ -908,7 +908,7 @@ ITC_ALLOW_DATABASE_RESET=1 bash supabase/tests/verify_operational_backend.sh
 
 Expected: all schema, RLS, RPC, concurrency, cancellation, RSVP and notification checks PASS.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add supabase/migrations/20260903000004_hyrox_cycle_allocation.sql \

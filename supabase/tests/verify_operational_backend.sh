@@ -135,4 +135,8 @@ echo "Running bounded RSVP concurrency checks"
 ITC_OPERATIONS_PSQL_BIN="$psql_bin" \
   bash "$repo_root/supabase/tests/operational_rsvp_concurrency.sh"
 
+echo "Running pooled HYROX concurrency checks"
+ITC_OPERATIONS_PSQL_BIN="$psql_bin" \
+  bash "$repo_root/supabase/tests/operational_hyrox_cycle_concurrency.sh"
+
 echo "All operational backend verifications passed."

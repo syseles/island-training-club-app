@@ -165,6 +165,7 @@ for (const relativePath of [
   "../supabase/migrations/20260903000001_hyrox_cycle_schema.sql",
   "../supabase/migrations/20260903000002_hyrox_cycle_member_rpcs.sql",
   "../supabase/migrations/20260903000003_hyrox_cycle_reconciliation.sql",
+  "../supabase/migrations/20260903000004_hyrox_cycle_allocation.sql",
 ]) {
   const absolutePath = resolve(__dirnameSmoke, relativePath);
   if (!existsSync(absolutePath)) {
