@@ -112,7 +112,7 @@ export const SEED_ACTIVITIES = [
       "Weekly hybrid race training: ski, sled, burpees and running intervals. Every session is purchased separately at one fixed price.",
     memberNote: "Gym entry fee is included in the session price.",
     price: 180, // HKD
-    capacity: 12,
+    capacity: 30,
     published: true,
   },
   {

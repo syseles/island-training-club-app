@@ -86,7 +86,7 @@ assert.deepEqual(quarryBaySeed && {
   location: "10/F, Island ECC, Quarry Bay",
   mapsQuery: "Island ECC, Quarry Bay, Hong Kong",
   price: 180,
-  capacity: 12,
+  capacity: 30,
 }, "IA-37 Quarry Bay HYROX must match the approved recurring-session details");
 assert.equal(data.fmtMoney(180), "HK$180",
   "consumer-facing Hong Kong prices should use the standard HK$ symbol");
@@ -96,6 +96,7 @@ localStorage.setItem("itc.prototype.v1", JSON.stringify({
   sessionUserId: null,
   activities: [legacyBftActivity, {
     ...quarryBaySeed,
+    capacity: 12,
     location: "10/F, 633 King's Road, Quarry Bay, Hong Kong",
     mapsQuery: "10/F, 633 King's Road, Quarry Bay, Hong Kong",
   }],
@@ -119,7 +120,7 @@ localStorage.setItem("itc.prototype.v1", JSON.stringify({
   duty: {},
 }));
 const renamedState = store.load();
-assert.equal(renamedState.version, 18, "legacy state must advance through the HYROX identifier and venue migrations");
+assert.equal(renamedState.version, 19, "legacy state must advance through the HYROX identifier, venue, and capacity migrations");
 assert.ok(renamedState.activities.some((activity) => activity.id === "hyrox-bft"));
 assert.ok(renamedState.activities.some((activity) => activity.id === "hyrox-quarry-bay"));
 assert.equal(renamedState.activities.some((activity) => activity.id === "hyrox"), false);
@@ -134,6 +135,8 @@ const migratedQuarryBay = renamedState.activities.find((activity) =>
 );
 assert.equal(migratedQuarryBay.location, "10/F, Island ECC, Quarry Bay");
 assert.equal(migratedQuarryBay.mapsQuery, "Island ECC, Quarry Bay, Hong Kong");
+assert.equal(migratedQuarryBay.capacity, 30,
+  "existing Quarry Bay local state must migrate to the new capacity");
 assert.equal(
   renamedState.bookings.find((booking) => booking.id === "legacy-quarry-booking")?.snapshot.location,
   "10/F, Island ECC, Quarry Bay",
@@ -161,6 +164,7 @@ for (const relativePath of [
   "../supabase/migrations/20260827000001_hyrox_indemnity_fields.sql",
   "../supabase/migrations/20260902000001_hyrox_bft_quarry_bay.sql",
   "../supabase/migrations/20260902000002_quarry_bay_island_ecc.sql",
+  "../supabase/migrations/20260904000001_hyrox_quarry_bay_capacity.sql",
 ]) {
   const absolutePath = resolve(__dirnameSmoke, relativePath);
   if (!existsSync(absolutePath)) {
@@ -189,6 +193,10 @@ const quarryBayVenueMigrationSource = readFileSync(
   resolve(__dirnameSmoke, "../supabase/migrations/20260902000002_quarry_bay_island_ecc.sql"),
   "utf8"
 );
+const quarryBayCapacityMigrationSource = readFileSync(
+  resolve(__dirnameSmoke, "../supabase/migrations/20260904000001_hyrox_quarry_bay_capacity.sql"),
+  "utf8"
+);
 for (const marker of [
   "10/F, Island ECC, Quarry Bay",
   "Island ECC, Quarry Bay, Hong Kong",
@@ -210,6 +218,13 @@ const tightenHyroxTemplateAt = hyroxActivityMigrationSource.indexOf(
 );
 assert.ok(settleHyroxConstraintsAt >= 0 && settleHyroxConstraintsAt < tightenHyroxTemplateAt,
   "deferred rename constraints must settle before altering the template table again");
+for (const marker of [
+  "capacity = 30",
+  "where activity_id = 'hyrox-quarry-bay'",
+]) {
+  assert.ok(quarryBayCapacityMigrationSource.includes(marker),
+    `Quarry Bay capacity migration must include ${marker}`);
+}
 for (const marker of [
   "'hyrox-bft'",
   "'hyrox-quarry-bay'",
@@ -2551,9 +2566,10 @@ store.resetLocalData();
 {
   const bft = store.activities().find((a) => a.id === "hyrox-bft");
   const mid = store.activities().find((a) => a.id === "hyrox-midtown");
-  if (bft.capacity !== 20 || mid.capacity !== 12)
-    throw new Error("HYROX capacities should be BFT 20 / Midtown 12");
-  console.log("ok  seeds: capacities 20/12");
+  const quarry = store.activities().find((a) => a.id === "hyrox-quarry-bay");
+  if (bft.capacity !== 20 || mid.capacity !== 12 || quarry.capacity !== 30)
+    throw new Error("HYROX capacities should be BFT 20 / Midtown 12 / Quarry Bay 30");
+  console.log("ok  seeds: capacities BFT 20 / Midtown 12 / Quarry Bay 30");
 }
 {
   const correctedWater = store.activities().find((activity) => activity.id === "water");
@@ -2619,8 +2635,8 @@ store.resetLocalData();
   localStorage.setItem("itc.prototype.v1", JSON.stringify(locationV13));
   store.load();
   const migratedV13 = JSON.parse(localStorage.getItem("itc.prototype.v1"));
-  if (migratedV13.version !== 18) {
-    throw new Error("v18 migration must persist version 18");
+  if (migratedV13.version !== 19) {
+    throw new Error("v19 migration must persist version 19");
   }
   const repairedWater = store.activities().find((activity) => activity.id === "water");
   if (repairedWater.location !== "TBC" || repairedWater.mapsQuery !== ""
@@ -3997,10 +4013,10 @@ console.log("ok  reset");
     failures++;
     console.error("FAIL v10 migration must clear session tied to a removed demo user");
   } else console.log("ok  v10 migration clears removed session");
-  if (migrated.version !== 18) {
+  if (migrated.version !== 19) {
     failures++;
-    console.error(`FAIL integrated migration must advance version to 16, got ${migrated.version}`);
-  } else console.log("ok  integrated migration advances genuine v9 state to v18");
+    console.error(`FAIL integrated migration must advance version to 19, got ${migrated.version}`);
+  } else console.log("ok  integrated migration advances genuine v9 state to v19");
 }
 
 {
@@ -4019,7 +4035,7 @@ console.log("ok  reset");
   store.load();
   const v14 = JSON.parse(mem.get("itc.prototype.v1"));
   const migratedUser = v14.users.find((user) => user.id === "real-v13-member");
-  if (v14.version !== 18 || !migratedUser) throw new Error("v18 migration lost the genuine member");
+  if (v14.version !== 19 || !migratedUser) throw new Error("v19 migration lost the genuine member");
   for (const field of ["indemnitySignature", "indemnitySignedAt", "indemnityFormVersion", "emergencyRelationship"]) {
     if (!(field in migratedUser) || migratedUser[field] !== null) {
       throw new Error(`v14 migration should initialize ${field} to null`);
@@ -4502,11 +4518,11 @@ for (const fixture of sourceSnapshots) {
     && !Array.isArray(migrated.paymentPayouts);
   const suppliedPayoutsPreserved = fixture.version !== 12
     || migrated.paymentPayouts["real-admin"]?.fpsPhone === "+852 6000 0000";
-  if (migrated.version !== 18 || suppliedIds.some((id) => !serialized.includes(id))
+  if (migrated.version !== 19 || suppliedIds.some((id) => !serialized.includes(id))
       || !payoutMapValid || !suppliedPayoutsPreserved) {
     failures++;
-    console.error(`FAIL genuine v${fixture.version} fixture must reach v16 intact`);
-  } else console.log(`ok  genuine v${fixture.version} fixture reaches v18 intact`);
+    console.error(`FAIL genuine v${fixture.version} fixture must reach v19 intact`);
+  } else console.log(`ok  genuine v${fixture.version} fixture reaches v19 intact`);
 }
 
 for (const invalidCounter of [null, -1, 1.5, "broken"]) {
