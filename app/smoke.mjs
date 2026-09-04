@@ -3582,9 +3582,8 @@ store.signIn("member@example.test");
   if (!ops.includes(">Payments</a>") || ops.includes(">HYROX</a>")
       || (ops.match(/aria-current="page"/g) || []).length !== 1)
     throw new Error("Admin payments tab should be labeled Payments and expose one active tab");
-  if (ops.includes("Weekly Session Overrides") || ops.includes("form-cancel-week")
-      || ops.includes("midtown-toggle"))
-    throw new Error("payments tab must not carry weekly session controls");
+  if (ops.includes("Weekly Session Overrides") || ops.includes("form-cancel-week"))
+    throw new Error("payments tab must not carry weekly session setup controls");
   if (!ops.includes('<details class="admin-section') || !ops.includes("<summary>"))
     throw new Error("payments tab sections must collapse behind their headers");
   if (!ops.includes("Pending payments") || !ops.includes("9921"))
@@ -3592,8 +3591,8 @@ store.signIn("member@example.test");
   if (!ops.includes('data-action="confirm-payment"'))
     throw new Error("pending payments need a confirm action");
   console.log("ok  ops lists pending payments for the collector");
-  if (!ops.includes("Finalize with gym") || !ops.includes("wa.me"))
-    throw new Error("ops should include the finalize card with a WhatsApp link");
+  if (!ops.includes("HYROX booking &amp; payment") || !ops.includes("wa.me"))
+    throw new Error("ops should include the HYROX booking and payment card with a WhatsApp link");
   if (!ops.toLowerCase().includes("duty"))
     throw new Error("ops should include the duty card");
   console.log("ok  ops has finalize-with-gym (WhatsApp) + duty cards");
@@ -4597,9 +4596,8 @@ console.log("ok  reset");
   if (!adminHtml.includes("<h2>ITC HYROX<br><span>Payment reconciliation</span></h2>")
       || !adminHtml.includes('class="admin-hyrox-count"><strong>1</strong><span>Confirmed paid</span></div>')
       || !adminHtml.includes('class="admin-hyrox-count"><strong>0</strong><span>Payment claims to review</span></div>')
-      || !adminHtml.includes("form-cancel-hyrox-cycle")
-      || adminHtml.includes("midtown-toggle")) {
-    throw new Error("pooled Admin should show one authoritative cycle card without manual Midtown controls");
+      || !adminHtml.includes("form-cancel-hyrox-cycle")) {
+    throw new Error("pooled Admin should show one authoritative cycle card with payment reconciliation");
   }
   console.log("ok  pooled HYROX payment and weekly booking states render without a session");
 }
@@ -5488,6 +5486,19 @@ if (!activitiesHtml.includes("Current venue: <strong>Victoria Park Swimming Pool
     || !activitiesHtml.includes("Recurring default: <strong>TBC</strong>")) {
   throw new Error("Activities must show distinct current and recurring venues for overridden Swimming");
 }
+if (activitiesHtml.includes("BFT Causeway Bay (BFT)")
+    || activitiesHtml.includes("Midtown28 Fitness (Midtown)")) {
+  throw new Error("Admin Activities must not append redundant HYROX venue suffixes");
+}
+if (activitiesHtml.includes("confirmed in-app")
+    || activitiesHtml.includes("awaiting payment")
+    || activitiesHtml.includes("Not open")) {
+  throw new Error("Activities must not contain HYROX booking/payment status");
+}
+if (hyroxAdminHtml.includes("BFT Causeway Bay (BFT)")
+    || hyroxAdminHtml.includes("Midtown28 Fitness (Midtown)")) {
+  throw new Error("Admin Payments must not append redundant HYROX venue suffixes");
+}
 if ((activitiesHtml.match(/>Weekly Event Controls</g) || []).length !== 1
     || !activitiesHtml.includes("Free &amp; RSVP Events")
     || !activitiesHtml.includes("Paid Sessions")) {
@@ -5519,7 +5530,6 @@ for (const marker of [
   'id="form-session-time"',
   'id="form-session-notice"',
   'data-action="venue-tbc-toggle"',
-  'data-action="midtown-toggle"',
   'id="form-cancel-week"',
 ]) {
   if (!weeklyControlsHtml.includes(marker)) {

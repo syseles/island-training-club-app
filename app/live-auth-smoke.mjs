@@ -2000,7 +2000,6 @@ for (const marker of [
   'id="form-session-time"',
   'id="form-session-notice"',
   'data-action="venue-tbc-toggle"',
-  'data-action="midtown-toggle"',
   'id="form-cancel-week"',
 ]) {
   assert.ok(liveWeeklyControlsHtml.includes(marker),
@@ -2014,6 +2013,13 @@ assert.match(liveActivitiesHtml,
   /aria-labelledby="paid-sessions-title">[\s\S]*<\/section>\s*<\/details>\s*<details class="admin-section mt24">\s*<summary><h2>One-off Events<\/h2>/,
   "Live One-off Events must remain outside Weekly Event Controls");
 assert.match(liveActivitiesHtml, /Weekly Event Controls &gt; Free &amp; RSVP Events/);
+assert.doesNotMatch(liveActivitiesHtml, /BFT Causeway Bay \(BFT\)|Midtown28 Fitness \(Midtown\)/,
+  "Live Admin Activities must not append redundant HYROX venue suffixes");
+assert.doesNotMatch(liveActivitiesHtml, /confirmed in-app|awaiting payment|Not open/,
+  "Live Admin Activities must not carry HYROX booking/payment status");
+const livePaymentsHtml = await views.viewAdmin("payments");
+assert.match(livePaymentsHtml, /Payment reconciliation|HYROX booking &amp; payment/,
+  "Live Admin Payments must carry HYROX payment controls");
 const liveActivityEditorHtml = views.viewAdminActivity("wnt");
 assert.match(liveActivityEditorHtml, /Weekly Event Controls &gt; Free &amp; RSVP Events/);
 console.log("ok  live Admin Activities groups dated controls without changing form contracts");
