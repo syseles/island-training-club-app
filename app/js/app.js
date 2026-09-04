@@ -1028,6 +1028,20 @@ document.addEventListener("click", async (e) => {
       break;
     }
 
+    case "repost-rsvp": {
+      if (!confirm("Repost this RSVP event as a new event on the same date and time? The cancelled event will remain in the record.")) return;
+      withBusyControl(el, "Reposting…", async () => {
+        try {
+          await store.repostRsvpEvent(el.dataset.session);
+          toast("RSVP event reposted");
+          await renderWithFeedback();
+        } catch (err) {
+          toast(err.message || "Unable to repost RSVP event", true);
+        }
+      }, { busyKey: el });
+      break;
+    }
+
     case "rsvp-join": {
       withBusyControl(el, "Counting you in…", async () => {
         try {

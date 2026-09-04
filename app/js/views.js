@@ -2369,12 +2369,14 @@ function adminFreeEventControls() {
               <button class="btn ghost sm" type="button" data-action="reset-week-venue" data-session="${safeId}">Reset to Recurring Default</button>
             </div>
           </form>
-          ${s.kind === "rsvp" ? `
-          <p class="muted small mt8">${store.attendeeCountFor(s)} going${s.capacity != null ? ` · cap ${s.capacity}` : ""}</p>
-          <form id="form-cancel-week" data-session="${safeId}" class="mt8">
-            <div class="field"><label>Cancel this week — reason (required)</label><input name="reason" placeholder="e.g. Organizer away" required></div>
-            <button class="btn danger sm" type="submit">Cancel this week's event</button>
-          </form>` : ""}
+          ${s.kind === "rsvp" && !s.oneOff ? s.cancelled
+            ? `<p class="badge danger mt8">${esc(sessionCancellationCopy(s))}</p>
+            <button class="btn ghost sm mt8" type="button" data-action="repost-rsvp" data-session="${safeId}">Repost RSVP</button>`
+            : `<p class="muted small mt8">${store.attendeeCountFor(s)} going${s.capacity != null ? ` · cap ${s.capacity}` : ""}</p>
+            <form id="form-cancel-week" data-session="${safeId}" class="mt8">
+              <div class="field"><label>Cancel this week — reason (required)</label><input name="reason" placeholder="e.g. Organizer away" required></div>
+              <button class="btn danger sm" type="submit">Cancel this week's event</button>
+            </form>` : ""}
         </div></div>`;
     }).join("") : `<div class="empty mt8">No upcoming free or RSVP events.</div>`}`;
 }
@@ -2553,9 +2555,9 @@ function adminOneOffEvents() {
       <div class="card mt16 ${cancelled ? "is-cancelled" : ""}"><div class="card-body">
         <div class="kicker dim" style="margin-top:0">${esc(fmtDate(s.dateISO))} · ${fmtTime(s.time)}</div>
         <h3 class="mt8">${esc(s.name)}</h3>
-        <p class="muted small mt8">${esc(s.location)} · ${s.kind === "paid" ? `${fmtMoney(s.price)} · cap ${s.capacity}` : "Free · no booking"}</p>
+        <p class="muted small mt8">${esc(s.location)} · ${s.kind === "paid" ? `${fmtMoney(s.price)} · cap ${s.capacity}` : s.kind === "rsvp" ? `RSVP${s.capacity != null ? ` · cap ${s.capacity}` : ""}` : "Free · no booking"}</p>
         ${cancelled
-          ? `<p class="badge danger">${esc(sessionCancellationCopy(override))}</p>`
+          ? `<p class="badge danger">${esc(sessionCancellationCopy(override))}</p>${s.kind === "rsvp" ? `<button class="btn ghost sm mt8" type="button" data-action="repost-rsvp" data-session="${esc(s.id)}">Repost RSVP</button>` : ""}`
           : `
           <form id="form-cancel-week" data-session="${esc(s.id)}" class="mt8">
             <div class="field"><label>Cancel this event — reason (required)</label><input name="reason" placeholder="e.g. Venue unavailable" required></div>

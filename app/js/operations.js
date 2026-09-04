@@ -692,7 +692,8 @@ export async function liveCreateEvent(payload) {
     p_maps_query: payload.mapsQuery || null,
     p_category: payload.category || "Other",
     p_price_hkd: payload.price ?? 0,
-    p_capacity: payload.capacity ?? 20,
+    p_capacity: payload.capacity,
+    p_requires_rsvp: !!payload.requiresRsvp,
   });
   return row;
 }

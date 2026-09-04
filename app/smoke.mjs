@@ -3928,6 +3928,18 @@ installLocalFixtures();
     throw new Error("the lunch venue card must offer the per-week cancel control");
   if (freeRsvpRegion.includes("cap"))
     throw new Error("the uncapped lunch must not show a capacity");
+  store.cancelSessionWeek(lunch.id, "Organizer away");
+  const repostedLunchRow = await store.repostRsvpEvent(lunch.id);
+  const repostedLunch = store.getSession(repostedLunchRow.id);
+  if (!repostedLunch || !repostedLunch.oneOff || repostedLunch.kind !== "rsvp"
+      || repostedLunch.name !== lunch.name || repostedLunch.dateISO !== lunch.dateISO
+      || repostedLunch.time !== lunch.time || repostedLunch.location !== "Cafe Deco, Central"
+      || repostedLunch.capacity !== null || repostedLunch.cancelled) {
+    throw new Error("reposting a cancelled RSVP should create a distinct matching RSVP event");
+  }
+  const repostAdminHtml = await views.viewAdmin("activities");
+  if (!repostAdminHtml.includes(`data-action="repost-rsvp" data-session="${lunch.id}"`))
+    throw new Error("Admin should expose Repost RSVP for a cancelled RSVP event");
   store.signIn("member@example.test");
   store.signOut();
   console.log("ok  RSVP lunch: join, going state, withdraw, Socials filter, no checkout");
