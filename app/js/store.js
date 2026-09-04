@@ -9,8 +9,10 @@ import {
   SEED_ACTIVITIES,
   sessionsInRange,
   sessionStarted,
+  hktEventStartMs,
   parseISO,
   findSession,
+  todayHktISO,
   todayLocal,
   isoDate,
   saturdayOnOrAfter,
@@ -30,7 +32,7 @@ const STORAGE_KEY = "itc.prototype.v1";
 const APPLY_DEVICE_KEY = "itc.device.id";
 const APPLY_DRAFT_KEY = "itc.apply.draft.v1";
 const APPLY_DRAFT_VERSION = 1;
-const STATE_VERSION = 14;
+const STATE_VERSION = 16;
 
 // Live-mode (Supabase) session cache. Avoids hammering the DB on every
 // page load. The TTL is short so role flips and welcome notifications
@@ -59,6 +61,7 @@ function freshState() {
     campaigns: [],
     donations: [],
     prayers: [],
+    oneOffEvents: [],
     sessionOverrides: {},
     queues: {},
     notifications: [],
@@ -108,7 +111,7 @@ function normalizeReceiptCounter() {
 function migrate() {
   // Persisted prototypes may predate individual collections or contain null
   // values. Normalize every collection before a legacy step or early return.
-  for (const key of ["users", "activities", "bookings", "receipts", "campaigns", "donations", "prayers", "notifications"]) {
+  for (const key of ["users", "activities", "bookings", "receipts", "campaigns", "donations", "prayers", "notifications", "oneOffEvents"]) {
     if (!Array.isArray(state[key])) state[key] = [];
   }
   if (!state.queues || typeof state.queues !== "object" || Array.isArray(state.queues)) {
@@ -134,6 +137,22 @@ function migrate() {
 
   const v = state.version || 0;
   if (v >= STATE_VERSION) return;
+  if (v < 16) {
+    // v16: the recurring post-training lunch (RSVP kind, Meals category)
+    // joins the seed activities. Existing states get it appended without
+    // touching admin edits.
+    if (Array.isArray(state.activities) && !state.activities.some((a) => a.id === "lunch")) {
+      const lunch = SEED_ACTIVITIES.find((a) => a.id === "lunch");
+      if (lunch) state.activities.push(structuredClone(lunch));
+    }
+  }
+  if (v < 15) {
+    // v15: admin-created one-off events live in state.oneOffEvents
+    // (activity-shaped entries with oneOff + dateISO). The collection
+    // normalization above guarantees the array; this step only documents
+    // the version boundary.
+    if (!Array.isArray(state.oneOffEvents)) state.oneOffEvents = [];
+  }
   if (v < 2) {
     // v2: Sunday Trail Run removed; HYROX moved to Sat 11:15 at Causeway Bay
     // BFT (HK$180) and a second Saturday session added at Midtown 28 (11:00).
@@ -567,7 +586,7 @@ function normalizeIndemnityAcceptance({
   const validDate = /^\d{4}-\d{2}-\d{2}$/.test(normalizedSignedAt)
     && isoDate(parseISO(normalizedSignedAt)) === normalizedSignedAt;
   if (!validDate) throw new Error("Enter a valid signing date");
-  if (normalizedSignedAt > isoDate(todayLocal())) {
+  if (normalizedSignedAt > todayHktISO()) {
     throw new Error("Signing date cannot be in the future");
   }
   if (formVersion !== INDEMNITY_VERSION) {
@@ -783,12 +802,21 @@ export function activeBookingsForSession(sessionId) {
 
 export function spotsLeft(session) {
   if (!session) return null;
+  if (session.kind === "free") return null;
+  if (session.capacity == null) return null; // uncapped (e.g. the RSVP lunch)
   if (isLive()) {
-    if (session.kind !== "paid") return null;
     return Math.max(0, session.capacity - liveOps.liveHeldBookingsForSession(session.id).length);
   }
-  if (session.kind !== "paid") return null;
   return Math.max(0, session.capacity - heldBookingsForSession(session.id).length);
+}
+
+export function attendeeCountFor(session) {
+  if (!session?.id) return 0;
+  if (isLive()) {
+    const exactCount = liveOps.liveRsvpCountFor(session.id);
+    if (exactCount !== null) return exactCount;
+  }
+  return activeBookingsForSession(session.id).length;
 }
 
 export function attendeesFor(session) {
@@ -1263,7 +1291,11 @@ export function getSession(sessionId) {
     return null;
   }
   const s = findSession(state.activities, sessionId);
-  if (!s) return null;
+  if (!s) {
+    const event = state.oneOffEvents.find((e) => `${e.id}-${e.dateISO}` === sessionId);
+    if (!event) return null;
+    return decorateSession(oneOffSessionFor(event));
+  }
   return decorateSession(s);
 }
 
@@ -1326,12 +1358,17 @@ export function weekVenueOverride(sessionId) {
 // --- Next relevant activity (home) ---------------------------------------------------
 
 export function upcomingSessions(days = 14) {
+  const todayISO = todayHktISO();
+  const today = parseISO(todayISO);
   if (isLive()) {
-    const today = todayLocal().getTime();
+    const end = new Date(today);
+    end.setDate(end.getDate() + days - 1);
+    const endISO = isoDate(end);
     const livePaid = liveOps.listLiveSessions()
-      .filter((s) => parseISO(s.dateISO).getTime() >= today)
-      .sort((a, b) => a.dateISO.localeCompare(b.dateISO))
-      .slice(0, days * 2)
+      .filter((s) => s.dateISO >= todayISO && s.dateISO <= endISO)
+      .sort((a, b) =>
+        a.dateISO.localeCompare(b.dateISO) || String(a.time).localeCompare(String(b.time))
+      )
       .map((s) => ({
         ...s,
         spots: spotsLeft(s),
@@ -1339,7 +1376,7 @@ export function upcomingSessions(days = 14) {
       }));
     const freeSessions = sessionsInRange(
       state.activities.filter((a) => a.kind === "free"),
-      todayLocal(),
+      today,
       days
     ).map((s) => {
       const decorated = decorateFreeSession(s);
@@ -1349,21 +1386,45 @@ export function upcomingSessions(days = 14) {
         past: false,
       };
     });
-    return [...freeSessions, ...livePaid];
+    // Free (local) and paid/RSVP (live) sessions interleave by start time so
+    // each day reads chronologically.
+    return [...freeSessions, ...livePaid].sort((a, b) =>
+      a.dateISO.localeCompare(b.dateISO) || String(a.time).localeCompare(String(b.time))
+    );
   }
-  const today = todayLocal();
-  return sessionsInRange(state.activities, today, days).map((s) => {
+  const todayStart = today.getTime();
+  const horizon = todayStart + days * 24 * 60 * 60 * 1000;
+  const oneOffs = state.oneOffEvents
+    .map(oneOffSessionFor)
+    .filter((s) => s.date.getTime() >= todayStart && s.date.getTime() < horizon)
+    .map((s) => {
+      const decorated = decorateSession(s);
+      return { ...decorated, spots: spotsLeft(decorated), past: false };
+    });
+  return [...sessionsInRange(state.activities, today, days).map((s) => {
     const decorated = decorateSession(s);
     return {
       ...decorated,
       spots: spotsLeft(decorated),
       past: false,
     };
-  });
+  }), ...oneOffs].sort((a, b) =>
+    a.dateISO.localeCompare(b.dateISO) || String(a.time).localeCompare(String(b.time))
+  );
 }
 
 export function nextSession() {
   return upcomingSessions(14)[0] ?? null;
+}
+
+export function nextSocialSession() {
+  const now = Date.now();
+  const latest = now + 7 * 24 * 60 * 60 * 1000;
+  return upcomingSessions(8).find((session) => {
+    if (session.category !== "Socials" || session.cancelled) return false;
+    const startMs = hktEventStartMs(session.dateISO, session.time);
+    return startMs >= now && startMs <= latest;
+  }) ?? null;
 }
 
 // --- Community: prayer requests ------------------------------------------------
@@ -1558,6 +1619,156 @@ export function deferBooking(bookingId, targetSessionId, now = Date.now()) {
 
 // --- Per-week session admin --------------------------------------------------
 
+// --- One-off events -----------------------------------------------------------
+// Admin-created single-date events. Live mode stores them in Supabase (an
+// inactive template + one session row via RPC); local mode keeps them in
+// state.oneOffEvents as activity-shaped entries with a fixed dateISO.
+
+function oneOffSessionFor(event) {
+  const date = parseISO(event.dateISO);
+  return {
+    ...event,
+    id: `${event.id}-${event.dateISO}`,
+    activityId: event.id,
+    date,
+  };
+}
+
+// --- RSVP events ------------------------------------------------------------
+// Price-0 sessions that still need a headcount (e.g. the post-training
+// lunch): joining confirms instantly — no reserve/pay/confirm pipeline.
+
+export async function rsvpSession(userId, sessionOrId, now = Date.now()) {
+  const sessionId = typeof sessionOrId === "string" ? sessionOrId : sessionOrId?.id;
+  if (isLive()) {
+    // The reserve RPC branches on price_hkd = 0 and confirms immediately.
+    return liveOps.liveReserveSession(sessionId);
+  }
+  requireAuthorizedPaymentOwner(userId);
+  const session = getSession(sessionId);
+  if (!session) throw new Error("Unknown session");
+  if (session.kind !== "rsvp") throw new Error("Session is not an RSVP event");
+  if (session.cancelled) throw new Error("Session is cancelled");
+  if (sessionStarted(session)) throw new Error("Session has already started");
+  const spots = spotsLeft(session);
+  if (spots !== null && spots <= 0) throw new Error("Session is full");
+  if (userBookingFor(userId, session.id)) throw new Error("Already booked");
+  const booking = {
+    id: uid("b"),
+    userId,
+    sessionId: session.id,
+    status: "confirmed",
+    createdAt: now,
+    reservedAt: now,
+    payDeadlineAt: now,
+    paymentMarkedAt: null,
+    paidAt: now,
+    paidMethod: null,
+    paymentRef: null,
+    confirmedBy: null,
+    deferredTo: null,
+    deferredFrom: null,
+    reminderSentAt: null,
+    snapshot: snapshotFor(session),
+  };
+  state.bookings.push(booking);
+  save();
+  return booking;
+}
+
+// Withdrawing an RSVP is member self-service: no money ever moved, so no
+// admin involvement is needed (unlike paid confirmed bookings).
+export async function withdrawRsvp(bookingId) {
+  if (isLive()) {
+    return liveOps.liveWithdrawRsvp(bookingId);
+  }
+  const booking = getBooking(bookingId);
+  if (!booking || booking.status !== "confirmed") return null;
+  if (Number(booking.snapshot?.price) > 0) return null;
+  requireAuthorizedPaymentOwner(booking.userId);
+  booking.status = "cancelled";
+  save();
+  return booking;
+}
+
+export async function createOneOffEvent(fields) {
+  const name = String(fields.name ?? "").trim();
+  const dateISO = String(fields.dateISO ?? "").trim();
+  const time = String(fields.time ?? "").trim();
+  const durationMin = Number(fields.durationMin);
+  const location = String(fields.location ?? "").trim();
+  const mapsQuery = String(fields.mapsQuery ?? "").trim();
+  const category = String(fields.category ?? "").trim() || "Other";
+  const price = Math.max(0, Number(fields.price) || 0);
+  const capacity = Math.max(1, Number(fields.capacity) || 20);
+  if (!name) throw new Error("Enter the event name.");
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(dateISO)) throw new Error("Pick the event date.");
+  if (!time) throw new Error("Pick the start time.");
+  if (!Number.isFinite(durationMin) || durationMin <= 0) throw new Error("Enter a positive duration.");
+  if (!location) throw new Error("Enter the venue.");
+  const payload = { name, dateISO, time, durationMin, location, mapsQuery, category, price, capacity };
+  if (isLive()) {
+    return liveOps.liveCreateEvent(payload);
+  }
+  requirePaymentAdminActor();
+  const event = {
+    id: uid("event"),
+    oneOff: true,
+    dateISO,
+    name,
+    kind: price > 0 ? "paid" : "free",
+    category,
+    weekday: parseISO(dateISO).getDay(),
+    time,
+    durationMin,
+    location,
+    mapsQuery: mapsQuery || location,
+    photo: "../assets/itc/main.webp",
+    price,
+    capacity,
+    blurb: "",
+    memberNote: "",
+    published: true,
+  };
+  state.oneOffEvents.push(event);
+  save();
+  return oneOffSessionFor(event);
+}
+
+export async function repostRsvpEvent(sessionId) {
+  requirePaymentAdminActor();
+  const source = getSession(sessionId);
+  if (!source || source.kind !== "rsvp" || !source.cancelled) {
+    throw new Error("Only a cancelled RSVP event can be reposted.");
+  }
+  if (sessionStarted(source)) throw new Error("The RSVP event has already started.");
+  if (isLive()) {
+    return liveOps.liveReopenRsvp(sessionId);
+  }
+  const override = state.sessionOverrides[sessionId];
+  delete override.cancelled;
+  if (!Object.keys(override).length) delete state.sessionOverrides[sessionId];
+  save();
+  return getSession(sessionId);
+}
+
+export async function deleteOneOffEvent(sessionId) {
+  if (isLive()) {
+    return liveOps.liveDeleteEvent(sessionId);
+  }
+  requirePaymentAdminActor();
+  const event = state.oneOffEvents.find((e) => `${e.id}-${e.dateISO}` === sessionId);
+  if (!event) throw new Error("Event not found.");
+  const active = state.bookings.filter(
+    (b) => b.sessionId === sessionId && (b.status === "reserved" || b.status === "confirmed")
+  );
+  if (active.length) {
+    throw new Error("Event has active bookings — cancel the session instead.");
+  }
+  state.oneOffEvents = state.oneOffEvents.filter((e) => e.id !== event.id);
+  save();
+}
+
 export function cancelSessionWeek(sessionId, reason, now = Date.now()) {
   if (isLive()) {
     return liveOps.liveCancelSession(sessionId, reason);
@@ -1640,12 +1851,14 @@ export function confirmGymBooking(sessionId, note, now = Date.now()) {
 export function setWeekVenue(sessionId, {
   location, mapsQuery, meetingLat = null, meetingLng = null,
 } = {}) {
-  const cleanLocation = String(location || "").trim();
-  const cleanMapsQuery = String(mapsQuery || "").trim();
-  const overrideActivityId = String(sessionId).replace(/-\d{4}-\d{2}-\d{2}$/, "");
-  if (!new Set(["wnt", "run", "water"]).has(overrideActivityId)) {
+  const before = getSession(sessionId);
+  const fallbackActivityId = String(sessionId).replace(/-\d{4}-\d{2}-\d{2}$/, "");
+  const overrideActivityId = before?.activityId || fallbackActivityId;
+  if (!new Set(["wnt", "run", "water", "lunch"]).has(overrideActivityId)) {
     throw new Error("Activity venue is fixed.");
   }
+  const cleanLocation = String(location || "").trim();
+  const cleanMapsQuery = String(mapsQuery || "").trim();
   const rawPointProvided = ![meetingLat, meetingLng].every(
     (value) => value === null || value === undefined || value === ""
   );
@@ -1656,7 +1869,6 @@ export function setWeekVenue(sessionId, {
     throw new Error("Choose a valid meeting point.");
   }
   const meetingPoint = acceptsPoint ? normalizedPoint : null;
-  const before = getSession(sessionId);
   if (isLive()) {
     const wasTBC = before?.location === "TBC"
       || !hasConfirmedVenue(before?.location, before?.mapsQuery);
@@ -1668,7 +1880,7 @@ export function setWeekVenue(sessionId, {
       wasTBC,
     });
   }
-  if (!before || before.kind !== "free") throw new Error("Session not found.");
+  if (!before || (before.kind !== "free" && before.kind !== "rsvp")) throw new Error("Session not found.");
   const wasTBC = before.location === "TBC"
     || !hasConfirmedVenue(before.location, before.mapsQuery);
   requirePaymentAdminActor();

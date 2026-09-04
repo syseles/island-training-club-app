@@ -24,6 +24,7 @@ import {
   parseISO,
   mondayOf,
   addDays,
+  todayHktISO,
   todayLocal,
   isoDate,
   fmtDate,
@@ -64,20 +65,36 @@ const esc = (s) =>
     "'": "&#39;",
   })[c]);
 
-const todayISO = () => isoDate(todayLocal());
+const todayISO = () => todayHktISO();
 
 const fmtDay = (ts) =>
-  new Date(ts).toLocaleDateString("en-HK", { day: "numeric", month: "short", year: "numeric" });
+  new Date(ts).toLocaleDateString("en-HK", {
+    timeZone: "Asia/Hong_Kong",
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+  });
 
 const fmtMonthYear = (ts) =>
-  new Date(ts).toLocaleDateString("en-HK", { month: "short", year: "numeric" });
+  new Date(ts).toLocaleDateString("en-HK", {
+    timeZone: "Asia/Hong_Kong",
+    month: "short",
+    year: "numeric",
+  });
 
 // --- Shared fragments ---------------------------------------------------------
 
-function badgeFor(s) {
-  return s.kind === "free"
-    ? `<span class="badge free">Free · No booking</span>`
-    : `<span class="badge paid">${fmtMoney(s.price)} per session</span>`;
+function badgeFor(s, booking = null, reservation = null) {
+  if (s.kind === "free") return `<span class="badge free">Free</span>`;
+  if (s.kind === "rsvp") {
+    return booking
+      ? `<span class="badge free">Going</span>`
+      : `<span class="badge free">RSVP</span>`;
+  }
+  if (booking) return `<span class="badge free">Paid</span>`;
+  if (reservation?.paymentMarkedAt) return `<span class="badge warn">Awaiting confirmation</span>`;
+  if (reservation) return `<span class="badge warn">To be paid</span>`;
+  return `<span class="badge paid">${fmtMoney(s.price)}</span>`;
 }
 
 function spotsLabel(s) {
@@ -103,9 +120,14 @@ function sessionRow(s, { past, showDate = true, highlight } = {}) {
   if (s.cancelled) {
     end = `<span class="badge danger">Cancelled</span>`;
   } else if (booked) {
-    end = `<span class="badge free booked">Booked</span>`;
+    end = s.kind === "rsvp"
+      ? `<span class="badge free booked">Going</span><span class="spots">${store.attendeeCountFor(s)} going</span>`
+      : `<span class="badge free booked">Booked</span>`;
   } else if (reserved) {
     end = `<span class="badge warn">Pay by ${fmtDeadline(reserved.payDeadlineAt)}</span>`;
+  } else if (s.kind === "rsvp") {
+    const going = store.attendeeCountFor(s);
+    end = `<span class="badge free">RSVP</span><span class="spots">${going} going</span>`;
   } else if (s.kind === "free") {
     end = `<span class="badge free">Free</span><span class="spots">Just show up</span>`;
   } else if (midtownClosed) {
@@ -313,6 +335,7 @@ const FILTERS = [
   ["Water", "Water"],
   ["Strength", "Strength"],
   ["HYROX", "HYROX"],
+  ["Socials", "Socials"],
 ];
 
 function matchesFilter(s, filter) {
@@ -469,6 +492,35 @@ export function viewActivity(sessionId) {
         <button class="btn" type="button" data-action="ics" data-session="${s.id}">Add to calendar</button>
         ${directionsLink}
       </div>`;
+  } else if (s.kind === "rsvp") {
+    // RSVP sessions (e.g. the post-training lunch): no payment moves in-app,
+    // but the organizer needs a headcount — joining confirms instantly.
+    const goingCount = store.attendeeCountFor(s);
+    if (booking) {
+      actionBlock = `
+        <div class="banner mt16">
+          <span class="kicker">You're going</span>
+          <p>${goingCount} going — see you there. Everyone pays their own bill at the venue.</p>
+        </div>
+        <div class="btn-row ${showDirections ? "two" : ""}">
+          <button class="btn ghost" type="button" data-action="rsvp-withdraw" data-booking="${booking.id}">Can't make it</button>
+          ${directionsLink}
+        </div>`;
+    } else if (isMember) {
+      actionBlock = `
+        <div class="free-banner">
+          ${ICONS.pin}
+          <div><strong>Free to join — pay your own bill.</strong><br><span class="muted small">${goingCount} going so far · the organizer books a table from this list, so only tap if you're coming.</span></div>
+        </div>
+        <div class="btn-row ${showDirections ? "two" : ""}">
+          <button class="btn" type="button" data-action="rsvp-join" data-session="${s.id}">Count me in</button>
+          ${directionsLink}
+        </div>`;
+    } else if (user && user.status === "pending") {
+      actionBlock = `<div class="banner mt16"><p>Your membership is being reviewed — you can RSVP once you're approved.</p></div>`;
+    } else {
+      actionBlock = membersOnlyGate();
+    }
   } else if (midtownClosed) {
     const pos = user ? store.interestPosition(user.id, s.id) : null;
     const actionInner = isMember
@@ -560,7 +612,7 @@ export function viewActivity(sessionId) {
   return `
     <a class="back-link" href="#/schedule">← Schedule</a>
     <img class="detail-photo" src="${esc(photo)}" alt="${esc(s.name)}" data-photo-fallback="${photoFallback}">
-    <div class="mt16">${badgeFor(s)}</div>
+    <div class="mt16">${badgeFor(s, booking, reservation)}</div>
     <h1 class="display sm">${esc(s.name)}</h1>
     <div class="meta-grid">
       <div><small>When</small><strong>${esc(fmtDate(s.date))}<br>${fmtTime(s.time)}</strong></div>
@@ -793,7 +845,8 @@ export function viewCommunity(section) {
     case "fellowship":
       return communityFellowship();
     case "meals":
-      return communityMeals();
+      // Meals moved to the Schedule tab (recurring RSVP lunch).
+      return { redirect: "#/schedule" };
     case "announcements":
       return communityAnnouncements();
     case "about":
@@ -813,6 +866,11 @@ function communityHeading(user) {
 function communityHome() {
   const user = store.currentUser();
   const announcement = ANNOUNCEMENTS[0];
+  const nextSocial = store.nextSocialSession();
+  const socialHref = nextSocial ? `#/activity/${nextSocial.id}` : "#/schedule";
+  const socialDetail = nextSocial
+    ? `<p class="muted small mt8">Next up: ${esc(nextSocial.name)} · ${esc(fmtDate(nextSocial.dateISO))}</p>`
+    : "";
   return `
     <div class="community-pulse">
       <div class="kicker">Community</div>
@@ -820,12 +878,12 @@ function communityHome() {
       <p class="subcopy mt8">Island Training Club is a Hong Kong training community with a Christian foundation — open to everyone. Training is the doorway; find your next way to connect.</p>
 
       <section class="community-feature" aria-labelledby="next-connection-title">
-        <span class="kicker">Next connection</span>
-        <h2 id="next-connection-title">Post-training dinner</h2>
-        <p>Date and venue are announced in the session WhatsApp group a few days ahead.</p>
+        <span class="kicker">Socials</span>
+        <h2 id="next-connection-title">Connect beyond training</h2>
+        <p>Meet up, share a meal, and find your people.</p>
+        ${socialDetail}
         <div class="community-feature-actions">
-          <button class="btn sm" type="button" data-action="connect-interest" data-topic="the next ad-hoc meal">Count me in</button>
-          <a class="btn ghost sm" href="#/community/meals">View details</a>
+          <a class="btn sm" href="${socialHref}">View next social</a>
         </div>
       </section>
 
@@ -857,7 +915,7 @@ function communityHome() {
 
       <div class="community-section-head"><h2>Explore</h2></div>
       <nav class="community-explore" aria-label="Explore the ITC community">
-        <a href="#/community/meals">Meals</a>
+        <a href="#/schedule">Socials</a>
         <a href="#/community/announcements">Announcements</a>
         <a href="#/community/about">About ITC</a>
       </nav>
@@ -934,21 +992,6 @@ function communityFellowship() {
     </div></div>
     <button class="btn mt16" type="button" data-action="connect-interest" data-topic="fellowship groups">I’m interested — tell me more</button>
     <p class="muted small mt16 center">Draft content — fellowship details to be confirmed with ITC leadership.</p>`;
-}
-
-function communityMeals() {
-  return `
-    <a class="back-link" href="#/community">← Community</a>
-    <div class="kicker mt16">Community · Ad-Hoc Meals</div>
-    <h1 class="display sm">Ad-Hoc Meals.</h1>
-    <p class="subcopy mt8">The best conversations happen over food. After some sessions we head straight to a nearby cha chaan teng — no programme, no agenda, just dinner. First-timers especially welcome.</p>
-    <div class="card mt16"><div class="card-body">
-      <span class="kicker">Next meal</span>
-      <h3 class="mt8">Post-training dinner — details TBC</h3>
-      <p class="hero-meta">Date and venue are announced in the session WhatsApp group a few days ahead. Pay for your own meal; the company is free.</p>
-    </div></div>
-    <button class="btn mt16" type="button" data-action="connect-interest" data-topic="the next ad-hoc meal">Count me in</button>
-    <p class="muted small mt16 center">Prototype placeholder — meal scheduling will plug in here.</p>`;
 }
 
 function communityAnnouncements() {
@@ -1856,6 +1899,14 @@ export function viewBooking(bookingId) {
     head = `
       <h1 class="display sm mt16">Payment being confirmed.</h1>
       <p class="subcopy mt8">${cname} is checking your ${esc(b.paidMethod || "payment")}${b.paymentRef ? ` (ref ${esc(b.paymentRef)})` : ""} — your spot is held meanwhile.</p>`;
+  } else if (b.status === "confirmed" && !sessionStarted(s) && Number(s.price) === 0) {
+    head = `
+      <div class="confirm-mark">${ICONS.check}</div>
+      <h1 class="display sm center mt16">You’re going.</h1>
+      <p class="subcopy center mt8">No payment needed — everyone pays their own bill at the venue.</p>`;
+    actions = `
+      <button class="btn ghost" type="button" data-action="ics-booking" data-booking="${b.id}">Add to calendar</button>
+      ${mine ? `<button class="btn ghost" type="button" data-action="rsvp-withdraw" data-booking="${b.id}">Can’t make it</button>` : ""}`;
   } else if (b.status === "confirmed" && !sessionStarted(s)) {
     head = `
       <div class="confirm-mark">${ICONS.check}</div>
@@ -1898,7 +1949,7 @@ export function viewBooking(bookingId) {
         <div class="line"><span>When</span><strong>${esc(fmtDate(s.dateISO))} · ${fmtTime(s.time)}</strong></div>
         <div class="line"><span>Where</span><strong>${esc(s.location)}</strong></div>
         <div class="line"><span>Status</span><strong>${esc(b.status)}</strong></div>
-        <div class="line total"><span>Price</span><strong>${fmtMoney(s.price)}</strong></div>
+        <div class="line total"><span>Price</span><strong>${Number(s.price) > 0 ? fmtMoney(s.price) : "Pay your own bill"}</strong></div>
       </div>
     </div></div>
     <div class="btn-row">
@@ -1972,7 +2023,7 @@ export async function viewAdmin(tab = "approvals") {
         ["members", "Members"],
         ["activities", "Activities"],
         ["giving", "Giving"],
-        ["payments", "HYROX"],
+        ["payments", "Payments"],
       ]
         .map(([key, label]) => `<a href="#/admin/${key}" class="${key === canonicalTab ? "active" : ""}"${key === canonicalTab ? ' aria-current="page"' : ""}>${label}</a>`)
         .join("")}
@@ -2000,7 +2051,7 @@ export async function viewAdmin(tab = "approvals") {
 
   return `
     <div class="kicker">Admin</div>
-    <h1 class="display">Club ops.</h1>
+    <h1 class="display">Club Operations</h1>
     ${tabs}
     ${body}`;
 }
@@ -2025,8 +2076,9 @@ function adminOps(viewer, memberUsers) {
   const pending = pendingPayments(memberUsers);
 
   const dutyCard = `
-    <div class="card mt16"><div class="card-body">
-      <h3>Payment duty</h3>
+    <details class="admin-section mt16">
+      <summary><h2>Payment duty</h2></summary>
+    <div class="card mt8"><div class="card-body">
       <p class="muted small">One collector per week covers both venues. Member payment screens show this collector’s PayMe/FPS details.</p>
       <p class="mt8">On duty this week: <strong>${dutyUser ? esc(dutyUser.preferredName || dutyUser.fullName) : "—"}</strong></p>
       <div class="btn-row">
@@ -2042,10 +2094,12 @@ function adminOps(viewer, memberUsers) {
         <div class="field"><label for="fps-phone">FPS phone</label><input id="fps-phone" name="fpsPhone" value="${esc(viewerPayouts.fpsPhone)}" placeholder="+852 …"></div>
         <button class="btn ghost sm mt8" type="submit">Save payout details</button>
       </form>
-    </div></div>`;
+    </div></div>
+    </details>`;
 
   const pendingCard = `
-    <div class="section-head mt24"><h2>Pending payments</h2></div>
+    <details class="admin-section mt24">
+      <summary><h2>Pending payments</h2></summary>
     ${pending.length ? pending.map(({ booking: b, who }) => `
       <div class="card booking-card mt16"><div class="card-body">
         <header>
@@ -2059,16 +2113,27 @@ function adminOps(viewer, memberUsers) {
           <button class="btn sm" type="button" data-action="confirm-payment" data-booking="${esc(b.id)}">Confirm received</button>
         </div>
       </div></div>`).join("")
-    : `<div class="empty">Nothing waiting. When members mark “I’ve paid”, they land here.</div>`}`;
+    : `<div class="empty mt8">Nothing waiting. When members mark “I’ve paid”, they land here.</div>`}
+    </details>`;
 
+  return `
+    ${dutyCard}
+    ${pendingCard}
+    ${adminFinalizeGym()}`;
+}
+
+// Weekly paid-session controls (time, note, cancel, venue TBC, Midtown) live
+// on the Activities tab alongside the recurring defaults and free-event venue
+// overrides — setup and scheduling in one place.
+function adminWeeklySessions() {
+  const upcoming = store.upcomingSessions(21).filter(
+    (s) => s.category === "HYROX" && s.kind === "paid" && !sessionStarted(s)
+  );
+  if (!upcoming.length) return "";
   const sessionCards = upcoming.map((s) => {
     const confirmed = store.heldBookingsForSession(s.id).filter((b) => b.status === "confirmed");
     const atRisk = store.heldBookingsForSession(s.id).filter((b) => b.status === "reserved");
     const override = store.getSession(s.id);
-    const names = store.attendeesFor(s);
-    const gymMsg = `ITC HYROX booking — ${fmtDate(s.dateISO)} ${fmtTime(s.time)} at ${s.location}. Confirmed: ${confirmed.length} of ${s.capacity}. Names: ${names.join(", ")}. Total: ${fmtMoney(confirmed.length * s.price)}.`;
-    const wa = `https://wa.me/?text=${encodeURIComponent(gymMsg)}`;
-    const gymDone = override.gymConfirmedAt;
     const isMid = store.isMidtown(s);
     const open = store.midtownOpenFor(s);
     return `
@@ -2097,13 +2162,38 @@ function adminOps(viewer, memberUsers) {
             <div class="field"><label>Cancel this week — reason (required)</label><input name="reason" placeholder="e.g. HYROX race weekend — no session" required></div>
             <button class="btn danger sm" type="submit">Cancel session</button>
           </form>
-        </details>
-        <div class="section-head mt16"><h2>Finalize with gym</h2></div>
+        </details>` : ""}
+      </div></div>`;
+  }).join("");
+  return `
+    <details class="admin-section mt24">
+      <summary><h2>Weekly Session Overrides</h2></summary>
+      <p class="muted small mt8">Change the time, venue status or note for one dated HYROX session — or cancel that week.</p>
+      ${sessionCards}
+    </details>`;
+}
+
+// Money-side per-session work stays on the Payments tab: confirming paid
+// headcount with the gym reads bookings/receipts, not session setup.
+function adminFinalizeGym() {
+  const upcoming = store.upcomingSessions(21).filter((s) => s.category === "HYROX" && !sessionStarted(s));
+  const cards = upcoming.map((s) => {
+    const override = store.getSession(s.id);
+    if (override.cancelled) return "";
+    const confirmed = store.heldBookingsForSession(s.id).filter((b) => b.status === "confirmed");
+    const names = store.attendeesFor(s);
+    const gymMsg = `ITC HYROX booking — ${fmtDate(s.dateISO)} ${fmtTime(s.time)} at ${s.location}. Confirmed: ${confirmed.length} of ${s.capacity}. Names: ${names.join(", ")}. Total: ${fmtMoney(confirmed.length * s.price)}.`;
+    const wa = `https://wa.me/?text=${encodeURIComponent(gymMsg)}`;
+    const gymDone = override.gymConfirmedAt;
+    const isMid = store.isMidtown(s);
+    return `
+      <div class="card mt16"><div class="card-body">
+        <div class="kicker dim" style="margin-top:0">${esc(fmtDate(s.dateISO))} · ${fmtTime(s.time)}</div>
+        <h3 class="mt8">${esc(s.location)}${isMid ? " (Midtown)" : " (BFT)"}</h3>
         ${gymDone
-          ? `<p class="badge free">Confirmed with gym ${new Date(gymDone).toLocaleDateString("en-HK", { day: "numeric", month: "short" })}${override.gymNote ? ` — ${esc(override.gymNote)}` : ""}</p>`
+          ? `<p class="badge free mt8">Confirmed with gym ${new Date(gymDone).toLocaleDateString("en-HK", { day: "numeric", month: "short" })}${override.gymNote ? ` — ${esc(override.gymNote)}` : ""}</p>`
           : `
-          <p class="muted small">Send Friday after the 2 PM checkpoint. The app number is what’s sent.</p>
-          <div class="btn-row">
+          <div class="btn-row mt8">
             <a class="btn sm" href="${wa}" target="_blank" rel="noopener">Send via WhatsApp</a>
             <button class="btn ghost sm" type="button" data-action="copy-gym" data-msg="${esc(gymMsg)}">Copy message</button>
           </div>
@@ -2111,24 +2201,24 @@ function adminOps(viewer, memberUsers) {
             <div class="field"><label>Note (optional)</label><input name="note" placeholder="e.g. confirmed 16 with BFT"></div>
             <button class="btn sm" type="submit">Mark confirmed with gym</button>
           </form>`}
-        ` : ""}
       </div></div>`;
   }).join("");
-
   return `
-    ${dutyCard}
-    ${pendingCard}
-    <div class="section-head mt24"><h2>HYROX sessions</h2></div>
-    ${sessionCards}`;
+    <details class="admin-section mt24">
+      <summary><h2>Finalize with gym</h2></summary>
+      <p class="muted small mt8">Send Friday after the 2 PM checkpoint. The app number is what’s sent.</p>
+      ${cards}
+    </details>`;
 }
 
 function adminFreeEventVenues() {
   const upcoming = store.upcomingSessions(21)
-    .filter((s) => s.kind === "free" && !sessionStarted(s));
+    .filter((s) => s.kind !== "paid" && !sessionStarted(s));
   if (!upcoming.length) return "";
   return `
-    <div class="section-head mt24"><h2>Weekly Venue Overrides</h2></div>
-    <p class="muted small">Set a venue for one dated free event. Later weeks keep the recurring default.</p>
+    <details class="admin-section mt24">
+      <summary><h2>Weekly Venue Overrides</h2></summary>
+    <p class="muted small mt8">Set a venue for one dated free or RSVP event. Later weeks keep the recurring default.</p>
     ${upcoming.map((s) => {
       const override = store.weekVenueOverride(s.id);
       const recurring = store.getActivity(s.activityId);
@@ -2170,8 +2260,17 @@ function adminFreeEventVenues() {
               <button class="btn ghost sm" type="button" data-action="reset-week-venue" data-session="${safeId}">Reset to Recurring Default</button>
             </div>
           </form>
+          ${s.kind === "rsvp" && !s.oneOff ? s.cancelled
+            ? `<p class="badge danger mt8">${esc(sessionCancellationCopy(s))}</p>
+            <button class="btn ghost sm mt8" type="button" data-action="repost-rsvp" data-session="${safeId}">Repost RSVP</button>`
+            : `<p class="muted small mt8">${store.attendeeCountFor(s)} going${s.capacity != null ? ` · cap ${s.capacity}` : ""}</p>
+            <form id="form-cancel-week" data-session="${safeId}" class="mt8">
+              <div class="field"><label>Cancel this week — reason (required)</label><input name="reason" placeholder="e.g. Organizer away" required></div>
+              <button class="btn danger sm" type="submit">Cancel this week's event</button>
+            </form>` : ""}
         </div></div>`;
-    }).join("")}`;
+    }).join("")}
+    </details>`;
 }
 
 function adminApprovals(pending) {
@@ -2322,6 +2421,74 @@ export async function viewAdminCampaign(id) {
     </form>`;
 }
 
+// One-off events: single-date admin-created events (race days, socials,
+// pop-ups). Paid events flow through the normal reserve/pay pipeline; free
+// events are show-up. Deletion is only possible before anyone books.
+function adminOneOffEvents() {
+  const upcoming = store.upcomingSessions(60).filter((s) => s.oneOff && !sessionStarted(s));
+  const cards = upcoming.map((s) => {
+    const override = store.getSession(s.id);
+    const cancelled = override?.cancelled;
+    return `
+      <div class="card mt16 ${cancelled ? "is-cancelled" : ""}"><div class="card-body">
+        <div class="kicker dim" style="margin-top:0">${esc(fmtDate(s.dateISO))} · ${fmtTime(s.time)}</div>
+        <h3 class="mt8">${esc(s.name)}</h3>
+        <p class="muted small mt8">${esc(s.location)} · ${s.kind === "paid" ? `${fmtMoney(s.price)} · cap ${s.capacity}` : s.kind === "rsvp" ? `RSVP${s.capacity != null ? ` · cap ${s.capacity}` : ""}` : "Free · no booking"}</p>
+        ${cancelled
+          ? `<p class="badge danger">${esc(sessionCancellationCopy(override))}</p>${s.kind === "rsvp" ? `<button class="btn ghost sm mt8" type="button" data-action="repost-rsvp" data-session="${esc(s.id)}">Repost RSVP</button>` : ""}`
+          : `
+          <form id="form-cancel-week" data-session="${esc(s.id)}" class="mt8">
+            <div class="field"><label>Cancel this event — reason (required)</label><input name="reason" placeholder="e.g. Venue unavailable" required></div>
+            <div class="btn-row">
+              <button class="btn danger sm" type="submit">Cancel event</button>
+              <button class="btn ghost sm" type="button" data-action="delete-event" data-session="${esc(s.id)}">Delete</button>
+            </div>
+          </form>`}
+      </div></div>`;
+  }).join("");
+  return `
+    <details class="admin-section mt24">
+      <summary><h2>One-off Events</h2></summary>
+      <p class="muted small mt8">Single-date events — race days, socials, pop-ups. Free events need no booking; paid events use the normal reserve-and-pay flow. Delete works only before anyone books; afterwards cancel instead.</p>
+      ${cards || `<div class="empty mt8">No upcoming one-off events.</div>`}
+      <form id="form-one-off-event" class="card mt16"><div class="card-body">
+        <h3>Add one-off event</h3>
+        <div class="field"><label for="oe-name">Name *</label><input id="oe-name" name="name" required placeholder="e.g. Dragon boat taster"></div>
+        <div class="field-row">
+          <div class="field"><label for="oe-date">Date *</label><input id="oe-date" name="date" type="date" required></div>
+          <div class="field"><label for="oe-time">Start time *</label><input id="oe-time" name="time" type="time" required></div>
+          <div class="field"><label for="oe-dur">Duration (min)</label><input id="oe-dur" name="durationMin" type="number" min="15" step="15" value="60"></div>
+        </div>
+        <div class="field-row">
+          <div class="field"><label for="oe-loc">Venue *</label><input id="oe-loc" name="location" required placeholder="e.g. Central Harbourfront"></div>
+          <div class="field"><label for="oe-maps">Google Maps search</label><input id="oe-maps" name="mapsQuery" placeholder="Defaults to venue"></div>
+        </div>
+        <div class="field-row">
+          <div class="field">
+            <label for="oe-cat">Category</label>
+            <select id="oe-cat" name="category">
+              ${["Other", "Strength", "Run", "HYROX", "Water", "Socials"].map((c) => `<option>${c}</option>`).join("")}
+            </select>
+          </div>
+          <div class="field">
+            <label for="oe-kind">Type</label>
+            <select id="oe-kind" name="kind" data-change="kind-toggle">
+              <option value="free" selected>Free — open attendance</option>
+              <option value="paid">Paid — book & pay in app</option>
+            </select>
+          </div>
+        </div>
+        <div class="paid-only hidden">
+          <div class="field-row">
+            <div class="field"><label for="oe-price">Price (HKD)</label><input id="oe-price" name="price" type="number" min="0" value="180"></div>
+            <div class="field"><label for="oe-cap">Capacity</label><input id="oe-cap" name="capacity" type="number" min="1" value="20"></div>
+          </div>
+        </div>
+        <button class="btn sm mt8" type="submit">Add event</button>
+      </div></form>
+    </details>`;
+}
+
 function adminActivities() {
   const acts = store.activities();
   const activityRows = acts
@@ -2334,20 +2501,24 @@ function adminActivities() {
             <p>${esc(a.location)}${a.kind === "paid" ? ` · ${fmtMoney(a.price)} · cap ${a.capacity}` : " · open attendance"}</p>
           </div>
           <div class="row-end">
-            ${a.kind === "free" ? '<span class="badge free">Free</span>' : '<span class="badge paid">Paid</span>'}
+            ${a.kind === "free" ? '<span class="badge free">Free</span>' : a.kind === "rsvp" ? '<span class="badge free">RSVP</span>' : '<span class="badge paid">Paid</span>'}
             ${a.published ? "" : '<span class="badge neutral">Hidden</span>'}
           </div>
         </a>`
     )
     .join("");
   return `
-    <div class="section-head"><h2>Recurring Activity Defaults</h2></div>
-    <p class="muted small">${isLive()
+    <details class="admin-section">
+      <summary><h2>Recurring Activity Defaults</h2></summary>
+    <p class="muted small mt8">${isLive()
       ? "Live deployment — recurring defaults are bundled with the app build and read-only. Set a venue for one week with the dated overrides below."
       : "Changes here affect all future weeks unless a dated override is set below."}</p>
     <div class="session-list">${activityRows}</div>
     ${isLive() ? "" : `<a class="btn ghost mt16" href="#/admin/activity/new">+ New activity</a>`}
-    ${adminFreeEventVenues()}`;
+    </details>
+    ${adminFreeEventVenues()}
+    ${adminWeeklySessions()}
+    ${adminOneOffEvents()}`;
 }
 
 function adminMembers(viewer, users) {
@@ -2469,7 +2640,7 @@ export function viewAdminActivity(id) {
         <div class="field">
           <label for="ac-cat">Category</label>
           <select id="ac-cat" name="category">
-            ${["Strength", "Run", "HYROX", "Water", "Other"].map((c) => `<option ${a.category === c ? "selected" : ""}>${c}</option>`).join("")}
+            ${["Strength", "Run", "HYROX", "Water", "Socials", "Other"].map((c) => `<option ${a.category === c ? "selected" : ""}>${c}</option>`).join("")}
           </select>
         </div>
       </div>
