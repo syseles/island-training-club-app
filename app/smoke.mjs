@@ -4357,6 +4357,7 @@ console.log("ok  reset");
   views.scheduleState.selected = cycleDate;
   const lockedSchedule = views.viewSchedule();
   if ((lockedSchedule.match(new RegExp(`href=\\"#/hyrox/${cycle.id}\\"`, "g")) || []).length !== 1
+      || !lockedSchedule.includes("ITC HYROX<br><span>BFT + Midtown Pool</span>")
       || !lockedSchedule.includes("Sign up opens Monday at 6 PM HKT")
       || lockedSchedule.includes(`href=\"#/activity/${cycle.bftSessionId}\"`)
       || lockedSchedule.includes(`href=\"#/activity/${cycle.midtownSessionId}\"`)

@@ -138,7 +138,7 @@ function hyroxCycleRow(cycle) {
     .map((venue) => `${esc(venue.location)} · ${esc(fmtTime(venue.time))}`).join(" · ");
   return `<a class="session-row hyrox-cycle-row" href="#/hyrox/${esc(cycle.id)}">
     <time>${esc(fmtTime(hyroxCycleVenues(cycle)[0]?.time || "00:00"))}</time>
-    <div><h3>ITC HYROX · BFT + Midtown pool</h3><p>${venues}</p></div>
+    <div><h3>ITC HYROX<br><span>BFT + Midtown Pool</span></h3><p>${venues}</p></div>
     <div class="row-end">${action}</div>
   </a>`;
 }
