@@ -1192,6 +1192,25 @@ await assert.rejects(
 assert.equal(operations.operationalStateStatus().error, "HYROX sweep unavailable");
 operationalRpcHandler = successfulHyroxRpcHandler;
 await store.hydrateLiveOperations({ force: true });
+const pooledBookingBeforeReject = structuredClone(store.getBooking("pooled-booking"));
+const pooledCycleBeforeReject = structuredClone(store.getHyroxCycle("hyrox-pool-2099-01-03"));
+const pooledQueueBeforeReject = structuredClone(store.hyroxCycleQueues("hyrox-pool-2099-01-03"));
+operationalRpcHandler = (name, args) => {
+  if (name === "reserve_hyrox_cycle") {
+    operationalRpcCalls.push({ name, args: structuredClone(args) });
+    return Promise.resolve({ data: null, error: { message: "HYROX registration is closed." } });
+  }
+  return successfulHyroxRpcHandler(name, args);
+};
+await assert.rejects(
+  () => store.reserveHyroxCycle("approved-member", "hyrox-pool-2099-01-03", "midtown", true),
+  /HYROX registration is closed/,
+  "live pooled reserve failures must surface without local fallback",
+);
+assert.deepEqual(store.getBooking("pooled-booking"), pooledBookingBeforeReject);
+assert.deepEqual(store.getHyroxCycle("hyrox-pool-2099-01-03"), pooledCycleBeforeReject);
+assert.deepEqual(store.hyroxCycleQueues("hyrox-pool-2099-01-03"), pooledQueueBeforeReject);
+operationalRpcHandler = successfulHyroxRpcHandler;
 const initialRealtimeHandlers = operationalSubscriptions.flatMap((channel) => channel.handlers);
 assert.equal(
   initialRealtimeHandlers.filter(({ filter }) => filter.table === "operational_hyrox_cycles").length,

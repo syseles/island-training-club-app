@@ -120,7 +120,7 @@ localStorage.setItem("itc.prototype.v1", JSON.stringify({
   duty: {},
 }));
 const renamedState = store.load();
-assert.equal(renamedState.version, 18, "legacy state must advance through the HYROX identifier and venue migrations");
+assert.equal(renamedState.version, 19, "legacy state must advance through the HYROX identifier, venue and pooled-cycle migrations");
 assert.ok(renamedState.activities.some((activity) => activity.id === "hyrox-bft"));
 assert.ok(renamedState.activities.some((activity) => activity.id === "hyrox-quarry-bay"));
 assert.equal(renamedState.activities.some((activity) => activity.id === "hyrox"), false);
@@ -2656,8 +2656,8 @@ store.resetLocalData();
   localStorage.setItem("itc.prototype.v1", JSON.stringify(locationV13));
   store.load();
   const migratedV13 = JSON.parse(localStorage.getItem("itc.prototype.v1"));
-  if (migratedV13.version !== 18) {
-    throw new Error("v18 migration must persist version 18");
+  if (migratedV13.version !== 19) {
+    throw new Error("v19 migration must persist version 19");
   }
   const repairedWater = store.activities().find((activity) => activity.id === "water");
   if (repairedWater.location !== "TBC" || repairedWater.mapsQuery !== ""
@@ -4034,10 +4034,10 @@ console.log("ok  reset");
     failures++;
     console.error("FAIL v10 migration must clear session tied to a removed demo user");
   } else console.log("ok  v10 migration clears removed session");
-  if (migrated.version !== 18) {
+  if (migrated.version !== 19) {
     failures++;
-    console.error(`FAIL integrated migration must advance version to 16, got ${migrated.version}`);
-  } else console.log("ok  integrated migration advances genuine v9 state to v18");
+    console.error(`FAIL integrated migration must advance version to 19, got ${migrated.version}`);
+  } else console.log("ok  integrated migration advances genuine v9 state to v19");
 }
 
 {
@@ -4056,7 +4056,7 @@ console.log("ok  reset");
   store.load();
   const v14 = JSON.parse(mem.get("itc.prototype.v1"));
   const migratedUser = v14.users.find((user) => user.id === "real-v13-member");
-  if (v14.version !== 18 || !migratedUser) throw new Error("v18 migration lost the genuine member");
+  if (v14.version !== 19 || !migratedUser) throw new Error("v19 migration lost the genuine member");
   for (const field of ["indemnitySignature", "indemnitySignedAt", "indemnityFormVersion", "emergencyRelationship"]) {
     if (!(field in migratedUser) || migratedUser[field] !== null) {
       throw new Error(`v14 migration should initialize ${field} to null`);
@@ -4069,6 +4069,151 @@ console.log("ok  reset");
     throw new Error("timestamp-only v13 acceptance must be stale in v14");
   }
   console.log("ok  v14 migration preserves legacy acceptance and initializes consent fields");
+}
+
+// --- HYROX pooled local registration engine (Task 7) -----------------------
+{
+  const v18 = store.resetLocalData();
+  v18.version = 18;
+  delete v18.hyroxCycles;
+  delete v18.hyroxCycleQueues;
+  v18.bookings = [{
+    id: "v18-booking", userId: "fixture-member", sessionId: "hyrox-bft-2099-01-03",
+    status: "confirmed", snapshot: { name: "ITC HYROX", dateISO: "2099-01-03" },
+  }];
+  localStorage.setItem("itc.prototype.v1", JSON.stringify(v18));
+  const migrated = store.load();
+  if (migrated.version !== 19 || !migrated.hyroxCycles || !migrated.hyroxCycleQueues
+      || migrated.bookings[0]?.id !== "v18-booking") {
+    throw new Error("v19 migration must add pooled collections without losing v18 bookings");
+  }
+  console.log("ok  v19 migration preserves bookings and initializes pooled collections");
+}
+{
+  store.resetLocalData();
+  installLocalFixtures();
+  const local = JSON.parse(localStorage.getItem("itc.prototype.v1"));
+  const fixtureTemplate = local.users.find((user) => user.id === "fixture-member");
+  for (let i = 1; i <= 32; i++) {
+    local.users.push({
+      ...structuredClone(fixtureTemplate),
+      id: `hyrox-local-${i}`,
+      email: `hyrox-local-${i}@example.test`,
+      fullName: `HYROX Local ${i}`,
+      preferredName: `Local ${i}`,
+    });
+  }
+  local.users.push({
+    ...structuredClone(fixtureTemplate), id: "hyrox-local-waitlist",
+    email: "hyrox-local-waitlist@example.test", fullName: "HYROX Waitlist",
+  });
+  localStorage.setItem("itc.prototype.v1", JSON.stringify(local));
+  store.load();
+  const cycle = store.scheduleHyroxCycle("2099-01-03");
+  if (cycle.id !== "hyrox-pool-2099-01-03" || cycle.registrationState !== "draft") {
+    throw new Error("scheduled local HYROX cycle should start as a locked draft");
+  }
+  if (cycle.registrationOpensAt !== Date.parse("2098-12-29T18:00:00+08:00")
+      || cycle.paymentDeadlineAt !== Date.parse("2099-01-01T18:00:00+08:00")
+      || cycle.holderGraceDeadlineAt !== Date.parse("2099-01-01T19:00:00+08:00")
+      || cycle.promotedPaymentDeadlineAt !== Date.parse("2099-01-01T20:00:00+08:00")) {
+    throw new Error("local HYROX cycle must use the approved HKT checkpoints");
+  }
+  assert.throws(() => store.reserveHyroxCycle(
+    "fixture-member", cycle.id, "midtown", true,
+    Date.parse("2098-12-29T17:59:59+08:00")
+  ), /opens Monday at 6 PM/);
+  store.sweepHyroxCycleDeadlines(Date.parse("2098-12-29T18:00:00+08:00"));
+  const pooled = store.reserveHyroxCycle(
+    "fixture-member", cycle.id, "midtown", true,
+    Date.parse("2098-12-29T18:00:01+08:00")
+  );
+  if (pooled.sessionId !== null || pooled.cycleId !== cycle.id
+      || pooled.venuePreference !== "midtown") {
+    throw new Error("pooled local reservation must hold the cycle without a venue session");
+  }
+  assert.throws(() => store.reserveHyroxCycle(
+    "hyrox-local-1", cycle.id, "bft", false,
+    Date.parse("2098-12-29T18:01:00+08:00")
+  ), /fallback/i);
+  for (let i = 1; i <= 31; i++) {
+    store.reserveHyroxCycle(
+      `hyrox-local-${i}`, cycle.id, "either", true,
+      Date.parse("2098-12-29T18:02:00+08:00") + i
+    );
+  }
+  assert.throws(() => store.reserveHyroxCycle(
+    "hyrox-local-32", cycle.id, "bft", true,
+    Date.parse("2098-12-29T18:03:00+08:00")
+  ), /full/);
+  const queued = store.joinHyroxCycleWaitlist(
+    "hyrox-local-waitlist", cycle.id, "midtown", true,
+    Date.parse("2098-12-29T18:03:01+08:00")
+  );
+  if (queued.kind !== "weekly_waitlist"
+      || queued.venuePreference !== "midtown"
+      || store.hyroxCycleQueuePosition("hyrox-local-waitlist", cycle.id, "weekly_waitlist") !== 1
+      || store.getBooking("hyrox-local-waitlist")) {
+    throw new Error("full pooled registration must create a preference-bearing waitlist entry only");
+  }
+  store.releaseReservation(pooled.id, Date.parse("2098-12-29T18:04:00+08:00"));
+  const promoted = store.bookingsForUser("hyrox-local-waitlist")
+    .find((booking) => booking.cycleId === cycle.id && booking.status === "reserved");
+  if (!promoted || promoted.payDeadlineAt !== cycle.holderGraceDeadlineAt
+      || store.hyroxCycleQueuePosition("hyrox-local-waitlist", cycle.id, "weekly_waitlist") !== null) {
+    throw new Error("unpaid pooled cancellation should promote the oldest waitlist member with holder grace");
+  }
+  console.log("ok  local HYROX registration enforces HKT opening, 32-place capacity and waitlist preference");
+}
+{
+  store.resetLocalData();
+  installLocalFixtures();
+  const local = JSON.parse(localStorage.getItem("itc.prototype.v1"));
+  const fixtureTemplate = local.users.find((user) => user.id === "fixture-member");
+  local.users.push({
+    ...structuredClone(fixtureTemplate), id: "hyrox-sweep-waitlist",
+    email: "hyrox-sweep-waitlist@example.test", fullName: "Sweep Waitlist",
+  });
+  localStorage.setItem("itc.prototype.v1", JSON.stringify(local));
+  store.load();
+  const cycle = store.scheduleHyroxCycle("2099-01-03");
+  const opening = cycle.registrationOpensAt;
+  store.reserveHyroxCycle("fixture-member", cycle.id, "either", true, opening + 1000);
+  store.sweepHyroxCycleDeadlines(cycle.paymentDeadlineAt - 1);
+  const reminderCount = store.notificationsFor("fixture-member")
+    .filter((note) => note.kind === "hyrox-payment-reminder").length;
+  store.sweepHyroxCycleDeadlines(cycle.paymentDeadlineAt - 1);
+  if (!cycle.paymentReminderSentAt || reminderCount !== store.notificationsFor("fixture-member")
+    .filter((note) => note.kind === "hyrox-payment-reminder").length) {
+    throw new Error("HYROX payment reminders should be timestamped and idempotent");
+  }
+  store.sweepHyroxCycleDeadlines(cycle.paymentDeadlineAt + 1);
+  if (!cycle.holderGraceStartedAt || cycle.registrationState !== "reconciling") {
+    throw new Error("Thursday 6 PM should start pooled holder grace and reconciliation");
+  }
+  const sweepState = JSON.parse(localStorage.getItem("itc.prototype.v1"));
+  sweepState.hyroxCycleQueues[cycle.id].push({
+    id: "hyrox-sweep-preexisting", cycleId: cycle.id, userId: "hyrox-sweep-waitlist",
+    kind: "weekly_waitlist", targetSessionId: null, venuePreference: "midtown",
+    fallbackAcknowledgedAt: cycle.registrationOpensAt, status: "active",
+    joinedAt: cycle.holderGraceDeadlineAt - 1000, resolvedAt: null,
+  });
+  localStorage.setItem("itc.prototype.v1", JSON.stringify(sweepState));
+  store.load();
+  const atSeven = cycle.holderGraceDeadlineAt + 1;
+  store.sweepHyroxCycleDeadlines(atSeven);
+  const original = store.bookingsForUser("fixture-member").find((booking) => booking.cycleId === cycle.id);
+  const promoted = store.bookingsForUser("hyrox-sweep-waitlist").find((booking) => booking.cycleId === cycle.id);
+  if (original?.status !== "expired" || !promoted?.promotedFromWaitlistAt
+      || promoted.payDeadlineAt !== cycle.promotedPaymentDeadlineAt) {
+    throw new Error("7 PM should demote original holders and promote only pre-existing waitlist entries");
+  }
+  store.sweepHyroxCycleDeadlines(cycle.promotedPaymentDeadlineAt + 1);
+  if (store.getBooking(promoted.id).status !== "expired"
+      || store.hyroxCycleQueues(cycle.id).weeklyWaitlist.length !== 0) {
+    throw new Error("8 PM should expire unmarked promotions without cascading promotion");
+  }
+  console.log("ok  local HYROX checkpoint sweep is idempotent and uses one promotion round");
 }
 
 // --- Install neutral fixtures for local authenticated paths (no demo seeds) ---
@@ -4539,11 +4684,11 @@ for (const fixture of sourceSnapshots) {
     && !Array.isArray(migrated.paymentPayouts);
   const suppliedPayoutsPreserved = fixture.version !== 12
     || migrated.paymentPayouts["real-admin"]?.fpsPhone === "+852 6000 0000";
-  if (migrated.version !== 18 || suppliedIds.some((id) => !serialized.includes(id))
+  if (migrated.version !== 19 || suppliedIds.some((id) => !serialized.includes(id))
       || !payoutMapValid || !suppliedPayoutsPreserved) {
     failures++;
     console.error(`FAIL genuine v${fixture.version} fixture must reach v16 intact`);
-  } else console.log(`ok  genuine v${fixture.version} fixture reaches v18 intact`);
+  } else console.log(`ok  genuine v${fixture.version} fixture reaches v19 intact`);
 }
 
 for (const invalidCounter of [null, -1, 1.5, "broken"]) {

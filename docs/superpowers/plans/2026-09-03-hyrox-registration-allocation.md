@@ -1074,7 +1074,7 @@ git commit -m "feat(hyrox): hydrate live pooled operations"
   - `hyroxCycleQueues(cycleId)` / `hyroxCycleQueuePosition(userId, cycleId, kind, targetSessionId)`
   - `sweepHyroxCycleDeadlines(now)`
 
-- [ ] **Step 1: Write failing v19 migration and local registration tests**
+- [x] **Step 1: Write failing v19 migration and local registration tests**
 
 Add tests that persist a genuine v18 state without cycle keys, load it, and assert version 19 plus empty object/array collections without losing bookings. Then schedule a future cycle, verify it is locked before Monday 6 PM and assert every checkpoint:
 
@@ -1103,12 +1103,12 @@ assert.throws(() => store.reserveHyroxCycle("fixture-member-2", cycle.id, "bft",
 
 Fill 32 with approved fixtures; assert the next reservation throws full. Assert weekly waitlist join requires preference and fallback acknowledgement, stores both, reports position one and creates no booking/payment route for that member.
 
-- [ ] **Step 2: Run smoke and verify failure**
+- [x] **Step 2: Run smoke and verify failure**
 
 Run: `node app/smoke.mjs`
 Expected: FAIL because `scheduleHyroxCycle` is not exported.
 
-- [ ] **Step 3: Bump and migrate state**
+- [x] **Step 3: Bump and migrate state**
 
 Set `STATE_VERSION = 19`. Add `hyroxCycles: {}` and `hyroxCycleQueues: {}` to `freshState()`. Normalize both before migration early return. Add `v < 19` without modifying existing booking/session records:
 
@@ -1119,7 +1119,7 @@ if (v < 19) {
 }
 ```
 
-- [ ] **Step 4: Implement selectors/scheduling/reserve/queue actions**
+- [x] **Step 4: Implement selectors/scheduling/reserve/queue actions**
 
 Use pure helpers for IDs/checkpoints. A local cycle shape must match `buildHyroxCycleRow`. `scheduleHyroxCycle` requires an Admin actor, resolves matching BFT/Midtown sessions, rejects legacy active child bookings/queues and writes a draft cycle that is immediately visible as locked.
 
@@ -1127,11 +1127,11 @@ Use pure helpers for IDs/checkpoints. A local cycle shape must match `buildHyrox
 
 `joinHyroxCycleWaitlist` performs the same preference/fallback/opening validation and closes at Thursday 6 PM. Queue entries use `{ id, cycleId, userId, kind, targetSessionId, venuePreference, fallbackAcknowledgedAt, status, joinedAt, resolvedAt }`; switch entries keep preference/acknowledgement null.
 
-- [ ] **Step 5: Implement automatic opening and Thursday checkpoint sweep**
+- [x] **Step 5: Implement automatic opening and Thursday checkpoint sweep**
 
 Before Thursday 6 PM, unpaid cancellation promotes the oldest weekly entry with holder grace to 7 PM. `sweepHyroxCycleDeadlines` opens due Monday cycles, sends one Thursday 5 PM reminder, starts holder grace and sends collector/member notices at 6 PM, demotes still-unmarked originals and promotes only the pre-existing oldest waitlist cohort at 7 PM, then expires unmarked promoted bookings without further promotion and dissolves remaining weekly entries at 8 PM. Persist each checkpoint timestamp before sending notifications so repeated calls are idempotent. Do not call the legacy `nextPayDeadline` helper for pooled bookings.
 
-- [ ] **Step 6: Add live branches and verify no fallback**
+- [x] **Step 6: Add live branches and verify no fallback**
 
 At the top of each public action:
 
@@ -1143,7 +1143,7 @@ if (isLive()) return liveOps.liveReserveHyroxCycle(
 
 Add live-auth tests that reject the fake RPC and assert local `state.hyroxCycles`, bookings and queues remain unchanged.
 
-- [ ] **Step 7: Run JavaScript suites**
+- [x] **Step 7: Run JavaScript suites**
 
 Run:
 
@@ -1154,7 +1154,7 @@ node app/live-auth-smoke.mjs
 
 Expected: PASS including v19 preservation, 32/33 capacity, fallback and no-live-fallback checks.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add app/js/store.js app/smoke.mjs app/live-auth-smoke.mjs
