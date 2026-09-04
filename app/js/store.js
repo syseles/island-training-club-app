@@ -1496,7 +1496,7 @@ export function nextSocialSession() {
   const now = Date.now();
   const latest = now + 7 * 24 * 60 * 60 * 1000;
   return upcomingSessions(8).find((session) => {
-    if (session.category !== "Socials") return false;
+    if (session.category !== "Socials" || session.cancelled) return false;
     const startMs = hktEventStartMs(session.dateISO, session.time);
     return startMs >= now && startMs <= latest;
   }) ?? null;
