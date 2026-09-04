@@ -4417,6 +4417,15 @@ console.log("ok  reset");
       || !store.receiptForBooking(booking.id)) {
     throw new Error("allocated pooled booking surfaces should show one final venue and its receipt");
   }
+  store.signOut();
+  store.signIn("admin@example.test");
+  const adminHtml = await views.viewAdmin("payments");
+  if (!adminHtml.includes("Saturday HYROX · Payment reconciliation")
+      || !adminHtml.includes("1 confirmed paid")
+      || !adminHtml.includes("form-cancel-hyrox-cycle")
+      || adminHtml.includes("midtown-toggle")) {
+    throw new Error("pooled Admin should show one authoritative cycle card without manual Midtown controls");
+  }
   console.log("ok  pooled HYROX payment and weekly booking states render without a session");
 }
 

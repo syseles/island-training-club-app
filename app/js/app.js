@@ -1006,6 +1006,28 @@ document.addEventListener("click", async (e) => {
       break;
     }
 
+    case "hyrox-plan-retry":
+      if (controlBusy.has(el)) break;
+      try {
+        await withBusyControl(el, "Retrying…", async () => {
+          await store.finalizeHyroxVenuePlan(el.dataset.cycle);
+          toast("Automatic venue plan retried — members notified");
+          await renderWithFeedback();
+        });
+      } catch (err) { toast(err.message || "Unable to retry automatic venue plan", true); }
+      break;
+
+    case "hyrox-allocation-close":
+      if (controlBusy.has(el)) break;
+      try {
+        await withBusyControl(el, "Finalizing…", async () => {
+          await store.closeHyroxVenueAllocation(el.dataset.cycle);
+          toast("Venue allocations finalized");
+          await renderWithFeedback();
+        });
+      } catch (err) { toast(err.message || "Unable to finalize venue allocations", true); }
+      break;
+
     case "midtown-toggle":
       try {
         await withBusyControl(el, "Updating…", async () => {
@@ -1372,6 +1394,37 @@ document.addEventListener("submit", async (e) => {
       toast("Prayer request sent — leaders will pray with you");
       location.hash = "#/community";
       render();
+      break;
+    }
+
+    case "form-hyrox-payment-reject": {
+      e.preventDefault();
+      if (!form.reportValidity()) return;
+      const reason = String(new FormData(form).get("reason") || "").trim();
+      const control = form.querySelector('[type="submit"]');
+      try {
+        await withBusyControl(control, "Rejecting…", async () => {
+          await store.rejectHyroxCyclePayment(form.dataset.booking, reason);
+          toast("Payment claim rejected — member notified");
+          await renderWithFeedback();
+        }, { busyKey: form, controls: [...form.querySelectorAll("input, button")] });
+      } catch (err) { toast(err.message || "Unable to reject payment claim", true); }
+      break;
+    }
+
+    case "form-cancel-hyrox-cycle": {
+      e.preventDefault();
+      if (!form.reportValidity()) return;
+      const reason = String(new FormData(form).get("reason") || "").trim();
+      if (!confirm("Cancel this HYROX cycle? Members will be notified.")) return;
+      const control = form.querySelector('[type="submit"]');
+      try {
+        await withBusyControl(control, "Cancelling…", async () => {
+          await store.cancelHyroxCycle(form.dataset.cycle, reason);
+          toast("HYROX cycle cancelled — members notified");
+          await renderWithFeedback();
+        }, { busyKey: form, controls: [...form.querySelectorAll("input, button")] });
+      } catch (err) { toast(err.message || "Unable to cancel HYROX cycle", true); }
       break;
     }
 

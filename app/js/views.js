@@ -2330,6 +2330,54 @@ function pendingPayments(memberUsers) {
   });
 }
 
+function adminHyroxGymControls(cycle) {
+  if (!cycle.allocationClosedAt || cycle.venuePlan === "pending") return "";
+  const sessionIds = cycle.venuePlan === "bft_only"
+    ? [cycle.bftSessionId] : [cycle.bftSessionId, cycle.midtownSessionId];
+  return `<div class="hyrox-gym-controls"><h3>Gym handoff</h3>${sessionIds.map((sessionId) => {
+    const session = store.getSession(sessionId);
+    const confirmed = store.hyroxCycleBookings(cycle.id).filter((booking) => booking.status === "confirmed"
+      && booking.sessionId === sessionId);
+    const message = `ITC HYROX booking — ${fmtDate(cycle.dateISO)} at ${session?.location || "venue"}. Confirmed: ${confirmed.length}.`;
+    const override = store.weekVenueOverride(sessionId);
+    return `<div class="member-row"><div class="who"><strong>${esc(session?.location || sessionId)}</strong><span>${confirmed.length} confirmed</span></div>
+      ${override.gymConfirmedAt ? `<span class="badge free">Confirmed with gym</span>` : `<a class="btn sm" href="https://wa.me/?text=${encodeURIComponent(message)}" target="_blank" rel="noopener">Send via WhatsApp</a><button class="btn ghost sm" type="button" data-action="copy-gym" data-msg="${esc(message)}">Copy message</button><form id="form-gym-note" data-session="${esc(sessionId)}"><input name="note" placeholder="Optional note"><button class="btn ghost sm" type="submit">Mark confirmed</button></form>`}
+    </div>`;
+  }).join("")}</div>`;
+}
+
+function adminHyroxCycleCards() {
+  return store.hyroxCycles().map((cycle) => {
+    const bookings = store.hyroxCycleBookings(cycle.id);
+    const active = bookings.filter((booking) => ["reserved", "confirmed"].includes(booking.status));
+    const confirmed = bookings.filter((booking) => booking.status === "confirmed");
+    const claims = bookings.filter((booking) => booking.status === "reserved" && booking.paymentMarkedAt);
+    const unpaid = bookings.filter((booking) => booking.status === "reserved" && !booking.paymentMarkedAt);
+    const queues = store.hyroxCycleQueues(cycle.id);
+    const locked = Date.now() < cycle.registrationOpensAt && cycle.registrationState === "draft";
+    const afterPromotion = Date.now() >= cycle.promotedPaymentDeadlineAt;
+    const allocationCounts = cycle.venuePlan === "both"
+      ? `<p class="muted small">BFT assignments: ${confirmed.filter((b) => b.sessionId === cycle.bftSessionId).length} · Midtown assignments: ${confirmed.filter((b) => b.sessionId === cycle.midtownSessionId).length} · switch queue: ${queues.venueSwitches.length}</p>`
+      : "";
+    const pendingClaims = claims.map((booking) => `
+      <div class="member-row"><div class="who"><strong>${esc(booking.snapshot?.name || "Member")}</strong><span>${esc(booking.paymentRef || "No reference")}</span></div>
+        <button class="btn sm" type="button" data-action="confirm-payment" data-booking="${esc(booking.id)}">Confirm received</button></div>
+      <form id="form-hyrox-payment-reject" class="mt8" data-booking="${esc(booking.id)}"><div class="field"><label>Reject reason</label><input name="reason" required placeholder="e.g. Reference not found"></div><button class="btn danger ghost sm" type="submit">Reject claim</button></form>`).join("");
+    const retry = !claims.length && cycle.venuePlan === "pending" && cycle.reconciliationStartedAt
+      ? `<button class="btn sm" type="button" data-action="hyrox-plan-retry" data-cycle="${esc(cycle.id)}">Retry automatic venue plan</button>` : "";
+    const close = cycle.venuePlan !== "pending" && !cycle.allocationClosedAt && Date.now() >= cycle.venueChoiceDeadlineAt
+      ? `<button class="btn ghost sm" type="button" data-action="hyrox-allocation-close" data-cycle="${esc(cycle.id)}">Close venue allocation</button>` : "";
+    return `<section class="card hyrox-admin-cycle mt16"><div class="card-body">
+      <div class="section-head"><div><span class="kicker">${esc(fmtDate(cycle.dateISO))}</span><h2>Saturday HYROX · Payment reconciliation</h2></div><span class="badge ${locked ? "neutral" : "warn"}">${locked ? "Locked" : esc(cycle.registrationState)}</span></div>
+      <p class="muted small">${locked ? "Registration opens Monday at 6 PM HKT." : afterPromotion ? "Final reconciliation summary after Thursday 8 PM HKT." : "Payment review runs Thursday at 6 PM HKT."}</p>
+      <div class="admin-hyrox-counts"><strong>${confirmed.length} confirmed paid</strong><strong>${claims.length} payment claims to review</strong><strong>${unpaid.length} unpaid</strong><strong>${active.length} active places</strong><strong>${queues.weeklyWaitlist.length} weekly waitlist</strong></div>
+      ${claims.length ? `<p class="banner warn">Review ${claims.length} pending payment claims before the venue plan can be confirmed automatically.</p>` : allocationCounts}
+      <div class="actions">${retry}${close}</div>${pendingClaims}${adminHyroxGymControls(cycle)}
+      <form id="form-cancel-hyrox-cycle" class="mt16" data-cycle="${esc(cycle.id)}"><div class="field"><label>Cancel this HYROX cycle — reason</label><input name="reason" required placeholder="e.g. Gym unavailable"></div><button class="btn danger ghost sm" type="submit">Cancel HYROX cycle</button></form>
+    </div></section>`;
+  }).join("");
+}
+
 function adminOps(viewer, memberUsers, profilePhone = "") {
   const upcoming = store.upcomingSessions(21).filter((s) => s.category === "HYROX" && !sessionStarted(s));
   const thisWeekSat = upcoming[0]?.dateISO;
@@ -2386,6 +2434,7 @@ function adminOps(viewer, memberUsers, profilePhone = "") {
   return `
     ${dutyCard}
     ${pendingCard}
+    ${adminHyroxCycleCards()}
     ${adminFinalizeGym()}`;
 }
 
@@ -2395,6 +2444,7 @@ function adminOps(viewer, memberUsers, profilePhone = "") {
 function adminPaidSessionControls() {
   const upcoming = store.upcomingSessions(21).filter(
     (s) => !s.oneOff && s.category === "HYROX" && s.kind === "paid" && !sessionStarted(s)
+      && ![store.hyroxCycleForDate(s.dateISO)?.bftSessionId, store.hyroxCycleForDate(s.dateISO)?.midtownSessionId].includes(s.id)
   );
   const sessionCards = upcoming.map((s) => {
     const confirmed = store.heldBookingsForSession(s.id).filter((b) => b.status === "confirmed");
@@ -2440,7 +2490,8 @@ function adminPaidSessionControls() {
 // Money-side per-session work stays on the Payments tab: confirming paid
 // headcount with the gym reads bookings/receipts, not session setup.
 function adminFinalizeGym() {
-  const upcoming = store.upcomingSessions(21).filter((s) => s.category === "HYROX" && !sessionStarted(s));
+  const upcoming = store.upcomingSessions(21).filter((s) => s.category === "HYROX" && !sessionStarted(s)
+    && ![store.hyroxCycleForDate(s.dateISO)?.bftSessionId, store.hyroxCycleForDate(s.dateISO)?.midtownSessionId].includes(s.id));
   const cards = upcoming.map((s) => {
     const override = store.getSession(s.id);
     if (override.cancelled) return "";

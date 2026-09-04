@@ -971,6 +971,11 @@ export function getHyroxCycle(id) {
   return hyroxCycleById(id);
 }
 
+export function hyroxCycleBookings(cycleId) {
+  if (isLive()) return liveOps.listLiveBookings((booking) => booking.cycleId === cycleId);
+  return state.bookings.filter((booking) => booking.cycleId === cycleId);
+}
+
 export function getReceipt(id) {
   if (isLive()) return liveOps.liveReceiptById(id);
   return state.receipts.find((r) => r.id === id) ?? null;

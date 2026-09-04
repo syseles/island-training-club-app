@@ -1425,7 +1425,7 @@ git commit -m "feat(hyrox): add member venue allocation states"
 - Consumes: Admin cycle actions and cycle/member selectors from Tasks 7–8.
 - Produces Admin controls `hyrox-cycle-schedule`, `hyrox-payment-reject`, `hyrox-plan-retry`, `hyrox-allocation-close`, `form-cancel-hyrox-cycle`.
 
-- [ ] **Step 1: Write failing Admin dashboard assertions**
+- [x] **Step 1: Write failing Admin dashboard assertions**
 
 Build a cycle with 32 reservations, 22 confirmed, three marked-pending, seven unpaid and four historical/dissolved queue fixtures. Assert the dashboard renders authoritative active counts and:
 
@@ -1439,24 +1439,24 @@ Review 3 pending payment claims before the venue plan can be confirmed automatic
 
 Assert the cycle is locked before Monday 6 PM and opens automatically afterward. Assert no collector choice between one or two gyms is rendered; after Thursday 8 PM the card prompts only for unresolved payment claims, and resolving the last claim reveals the automatic plan. Render **Retry automatic venue plan** only for a failed/stalled reconciliation state. Assert old Midtown manual toggle/interest controls are absent for the pooled date and gym finalization is unavailable before Friday 9 PM.
 
-- [ ] **Step 2: Run smoke and verify failure**
+- [x] **Step 2: Run smoke and verify failure**
 
 Run: `node app/smoke.mjs`
 Expected: FAIL because the pooled Admin cycle card is absent.
 
-- [ ] **Step 3: Render weekly cycle and payment reconciliation cards**
+- [x] **Step 3: Render weekly cycle and payment reconciliation cards**
 
 Under Payments, render one card per scheduled/open/reconciling/closed cycle with the Monday opening time, lifecycle checkpoint, active/confirmed/pending/unpaid/waitlist totals, derived threshold preview and allocation counts. At Thursday 6 PM show the grace summary and at Thursday 8 PM show the final reconciliation summary. Keep existing collector duty/payout controls unchanged.
 
 Add Confirm and Reject actions per payment claim. Reject requires a nonblank reason via an inline form, not `prompt()`.
 
-- [ ] **Step 4: Render plan/allocation and gym controls**
+- [x] **Step 4: Render plan/allocation and gym controls**
 
 After the Thursday 20:00 checkpoint, show unresolved payment-review actions or the automatically derived venue plan—never a collector choice between gym outcomes. A narrowly scoped **Retry automatic venue plan** action may call the idempotent recovery RPC only when reconciliation has no pending claims but the plan remains pending. After finalization show BFT/Midtown assigned counts and switch queues. Show **Close venue allocation** at/after Friday 21:00 when still open.
 
 Under Activities, remove per-child Midtown toggle and cancellation for pooled dates; render one cycle cancellation form. Under Payments, enable per-venue WhatsApp/copy/finalize only after allocation closure and only for venues enabled by the plan.
 
-- [ ] **Step 5: Add awaited Admin handlers**
+- [x] **Step 5: Add awaited Admin handlers**
 
 Map controls to exact store functions, guard duplicate clicks/forms and use these success messages:
 
@@ -1470,7 +1470,7 @@ HYROX cycle cancelled — members notified
 
 A failed RPC shows its domain error, refetches through `renderWithFeedback()` and never displays success.
 
-- [ ] **Step 6: Run both suites**
+- [x] **Step 6: Run both suites**
 
 Run:
 
@@ -1481,7 +1481,7 @@ node app/live-auth-smoke.mjs
 
 Expected: PASS for counts, gating, exact RPC payloads, busy controls and no-live-fallback behaviour.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add app/js/views.js app/js/app.js app/styles.css app/smoke.mjs app/live-auth-smoke.mjs
