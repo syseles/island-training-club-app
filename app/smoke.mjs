@@ -4351,7 +4351,7 @@ console.log("ok  reset");
   views.scheduleState.selected = cycleDate;
   const lockedSchedule = views.viewSchedule();
   if ((lockedSchedule.match(new RegExp(`href=\\"#/hyrox/${cycle.id}\\"`, "g")) || []).length !== 1
-      || !lockedSchedule.includes("Opens Monday at 6 PM")
+      || !lockedSchedule.includes("Sign up opens Monday at 6 PM HKT")
       || lockedSchedule.includes(`href=\"#/activity/${cycle.bftSessionId}\"`)
       || lockedSchedule.includes(`href=\"#/activity/${cycle.midtownSessionId}\"`)
       || !lockedSchedule.includes("Quarry Bay")) {
@@ -4359,7 +4359,7 @@ console.log("ok  reset");
   }
   const lockedDetail = views.viewHyroxCycle(cycle.id);
   if (!lockedDetail.includes("BFT Causeway Bay") || !lockedDetail.includes("Midtown")
-      || !lockedDetail.includes("Opens Monday at 6 PM")) {
+      || !lockedDetail.includes("Sign up opens Monday at 6 PM HKT")) {
     throw new Error("HYROX detail should expose both venues and the locked opening checkpoint");
   }
   store.sweepHyroxCycleDeadlines(cycle.registrationOpensAt);
