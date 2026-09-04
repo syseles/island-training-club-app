@@ -786,12 +786,19 @@ if (headerLogoBytes.toString("ascii", 12, 16) !== "IHDR"
   throw new Error("header logo must use the complete compact ITC mark crop");
 }
 const manifestSource = readFileSync(resolve(__dirnameSmoke, "manifest.webmanifest"), "utf8");
-if (!appIndexSource.includes('<link rel="icon" href="../assets/itc/logo-header.png">')
-    || !manifestSource.includes('"src": "../assets/itc/logo-header.png"')
-    || !manifestSource.includes('"type": "image/png"')) {
-  throw new Error("webpage and installed-app icons must use the new ITC logo asset");
+const faviconPath = "../assets/itc/logo-favicon.png";
+const faviconAbsolutePath = resolve(__dirnameSmoke, faviconPath);
+const faviconBytes = existsSync(faviconAbsolutePath) ? readFileSync(faviconAbsolutePath) : null;
+if (!appIndexSource.includes(`<link rel="icon" href="${faviconPath}">`)
+    || !manifestSource.includes(`"src": "${faviconPath}"`)
+    || !manifestSource.includes('"type": "image/png"')
+    || !faviconBytes
+    || faviconBytes.toString("ascii", 12, 16) !== "IHDR"
+    || faviconBytes.readUInt32BE(16) !== 512
+    || faviconBytes.readUInt32BE(20) !== 275) {
+  throw new Error("webpage and installed-app icons must use the undistorted ITC favicon asset");
 }
-console.log("ok  webpage and installed-app icons use the new ITC logo");
+console.log("ok  webpage and installed-app icons use the undistorted ITC favicon");
 if (/## Vercel env vars|Vercel project settings[^\n]*Environment Variables/i.test(liveAuthRunbookSource)) {
   throw new Error("runbook must not claim Vercel env vars inject into static HTML");
 }
