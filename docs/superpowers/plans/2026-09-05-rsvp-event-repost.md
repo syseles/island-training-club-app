@@ -10,6 +10,8 @@
 
 **Spec:** Admin needs a safe way to repost a cancelled RSVP Social from the existing Admin Activities controls.
 
+> Superseded by `docs/superpowers/plans/2026-09-05-rsvp-event-reopen.md`: reposting now reopens the original session in place instead of creating a duplicate.
+
 ## Global Constraints
 
 - Keep the implementation on `feature/rsvp-events`.
