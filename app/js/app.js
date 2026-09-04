@@ -157,6 +157,7 @@ const NAV_FOR = {
   home: "home",
   schedule: "schedule",
   activity: "schedule",
+  hyrox: "schedule",
   community: "community",
   giving: "giving",
   notifications: "notifications",
@@ -413,6 +414,9 @@ async function render(generation = renderGeneration) {
       break;
     case "activity":
       out = views.viewActivity(arg);
+      break;
+    case "hyrox":
+      out = arg2 === "register" ? views.viewHyroxRegistration(arg) : views.viewHyroxCycle(arg);
       break;
     case "community":
       out = views.viewCommunity(arg);
@@ -857,6 +861,39 @@ document.addEventListener("click", async (e) => {
       }
       break;
 
+    case "select-hyrox-venue":
+      if (controlBusy.has(el)) break;
+      try {
+        await withBusyControl(el, "Updating…", async () => {
+          await store.selectHyroxCycleVenue(el.dataset.booking, el.dataset.session);
+          toast("HYROX venue updated");
+          await renderWithFeedback();
+        });
+      } catch (err) { toast(err.message || "Unable to change HYROX venue", true); }
+      break;
+
+    case "join-hyrox-switch-queue":
+      if (controlBusy.has(el)) break;
+      try {
+        await withBusyControl(el, "Joining…", async () => {
+          await store.joinHyroxVenueSwitchQueue(el.dataset.booking, el.dataset.session);
+          toast("Switch queue joined");
+          await renderWithFeedback();
+        });
+      } catch (err) { toast(err.message || "Unable to join switch queue", true); }
+      break;
+
+    case "leave-hyrox-switch-queue":
+      if (controlBusy.has(el)) break;
+      try {
+        await withBusyControl(el, "Leaving…", async () => {
+          await store.leaveHyroxVenueSwitchQueue(el.dataset.entry);
+          toast("Switch queue left");
+          await renderWithFeedback();
+        });
+      } catch (err) { toast(err.message || "Unable to leave switch queue", true); }
+      break;
+
     case "defer-to":
       if (confirm("Defer to this session? Your current spot will be released and your payment will carry over.")) {
         try {
@@ -993,6 +1030,28 @@ document.addEventListener("click", async (e) => {
       } catch (err) { toast(err.message || "Unable to confirm payment", true); }
       break;
     }
+
+    case "hyrox-plan-retry":
+      if (controlBusy.has(el)) break;
+      try {
+        await withBusyControl(el, "Retrying…", async () => {
+          await store.finalizeHyroxVenuePlan(el.dataset.cycle);
+          toast("Automatic venue plan retried — members notified");
+          await renderWithFeedback();
+        });
+      } catch (err) { toast(err.message || "Unable to retry automatic venue plan", true); }
+      break;
+
+    case "hyrox-allocation-close":
+      if (controlBusy.has(el)) break;
+      try {
+        await withBusyControl(el, "Finalizing…", async () => {
+          await store.closeHyroxVenueAllocation(el.dataset.cycle);
+          toast("Venue allocations finalized");
+          await renderWithFeedback();
+        });
+      } catch (err) { toast(err.message || "Unable to finalize venue allocations", true); }
+      break;
 
     case "midtown-toggle":
       try {
@@ -1236,6 +1295,28 @@ document.addEventListener("submit", async (e) => {
       break;
     }
 
+    case "form-hyrox-reserve": {
+      e.preventDefault();
+      const user = store.currentUser();
+      if (!user || user.status !== "approved" || !form.dataset.cycle) return;
+      const fd = new FormData(form);
+      const control = form.querySelector('[type="submit"]');
+      const controls = [...form.querySelectorAll("input, button")];
+      try {
+        await withBusyControl(control, "Reserving…", async () => {
+          const booking = await store.reserveHyroxCycle(
+            user.id, form.dataset.cycle, String(fd.get("preference") || ""),
+            fd.get("fallbackAcknowledged") === "on",
+          );
+          toast("Place reserved — continue to payment");
+          location.hash = `#/pay/${booking.id}`;
+        }, { busyKey: form, controls });
+      } catch (err) {
+        toast(err.message || "Unable to reserve this HYROX place", true);
+      }
+      break;
+    }
+
     case "form-reserve": {
       e.preventDefault();
       const user = store.currentUser();
@@ -1352,6 +1433,37 @@ document.addEventListener("submit", async (e) => {
       toast("Prayer request sent — leaders will pray with you");
       location.hash = "#/community";
       render();
+      break;
+    }
+
+    case "form-hyrox-payment-reject": {
+      e.preventDefault();
+      if (!form.reportValidity()) return;
+      const reason = String(new FormData(form).get("reason") || "").trim();
+      const control = form.querySelector('[type="submit"]');
+      try {
+        await withBusyControl(control, "Rejecting…", async () => {
+          await store.rejectHyroxCyclePayment(form.dataset.booking, reason);
+          toast("Payment claim rejected — member notified");
+          await renderWithFeedback();
+        }, { busyKey: form, controls: [...form.querySelectorAll("input, button")] });
+      } catch (err) { toast(err.message || "Unable to reject payment claim", true); }
+      break;
+    }
+
+    case "form-cancel-hyrox-cycle": {
+      e.preventDefault();
+      if (!form.reportValidity()) return;
+      const reason = String(new FormData(form).get("reason") || "").trim();
+      if (!confirm("Cancel this HYROX cycle? Members will be notified.")) return;
+      const control = form.querySelector('[type="submit"]');
+      try {
+        await withBusyControl(control, "Cancelling…", async () => {
+          await store.cancelHyroxCycle(form.dataset.cycle, reason);
+          toast("HYROX cycle cancelled — members notified");
+          await renderWithFeedback();
+        }, { busyKey: form, controls: [...form.querySelectorAll("input, button")] });
+      } catch (err) { toast(err.message || "Unable to cancel HYROX cycle", true); }
       break;
     }
 

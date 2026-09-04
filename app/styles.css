@@ -301,6 +301,37 @@ input, select, textarea { font: inherit; }
 
 .admin-section[open] > summary::after { transform: rotate(-135deg); }
 
+.admin-hyrox-counts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(112px, 1fr));
+  gap: 8px;
+  margin: 14px 0;
+}
+
+.admin-hyrox-count {
+  display: grid;
+  gap: 4px;
+  padding: 10px;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+}
+
+.admin-hyrox-count strong {
+  font-family: var(--font-display);
+  font-size: 22px;
+  line-height: 1;
+}
+
+.admin-hyrox-count span {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 800;
+  line-height: 1.25;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+}
+
 /* ---- Badges ----------------------------------------------------------- */
 
 .badge {
@@ -1628,6 +1659,30 @@ a.profile-row:hover .pr-text strong { color: var(--accent); }
 
 .check input[disabled] + span { opacity: .55; }
 .check input[disabled] + span .modal-link { opacity: 1; }
+
+/* ---- Pooled HYROX registration ---------------------------------------- */
+.hyrox-pool-card { display: grid; gap: 18px; }
+.hyrox-cycle-row h3 { margin-bottom: 4px; }
+.hyrox-venue-options { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.hyrox-venue-card { border: 1px solid var(--line-soft); margin: 0; }
+.hyrox-preference-grid { display: grid; gap: 10px; border: 0; padding: 0; margin: 0 0 18px; }
+.hyrox-preference-grid legend { font-weight: 700; margin-bottom: 8px; }
+.hyrox-preference-grid label,
+.hyrox-pool-card .check-row { min-height: 44px; display: flex; align-items: center; gap: 10px; }
+.hyrox-preference-grid input,
+.hyrox-pool-card .check-row input { width: 20px; height: 20px; flex: 0 0 auto; }
+.hyrox-threshold-rule { display: grid; grid-template-columns: auto 1fr; gap: 6px 14px; padding: 14px; border: 1px solid var(--line-soft); border-radius: var(--radius-sm); background: var(--surface-3); }
+.hyrox-queue-state { padding: 12px 14px; border-left: 3px solid var(--accent); background: var(--surface-3); }
+.hyrox-gym-controls { display: grid; gap: 10px; margin-top: 16px; }
+.hyrox-gym-controls form { display: flex; gap: 8px; align-items: center; }
+.hyrox-gym-controls form input { min-height: 40px; width: 150px; }
+.hyrox-threshold-rule p { grid-column: 1 / -1; margin: 0; }
+.hyrox-threshold-rule strong { white-space: nowrap; }
+.hyrox-pool-card .banner { margin: 0; }
+@media (max-width: 600px) {
+  .hyrox-venue-options { grid-template-columns: 1fr; }
+  .hyrox-threshold-rule { grid-template-columns: 1fr; gap: 3px; }
+}
 
 /* ---- Free-event venue override + activity map ----------------------- */
 .activity-map-section { margin-top: 16px; }
