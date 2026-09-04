@@ -3364,9 +3364,10 @@ store.signIn("member@example.test");
   if (!ops.includes(">Payments</a>") || ops.includes(">HYROX</a>")
       || (ops.match(/aria-current="page"/g) || []).length !== 1)
     throw new Error("Admin payments tab should be labeled Payments and expose one active tab");
-  if (ops.includes("Weekly Session Overrides") || ops.includes("form-cancel-week")
-      || ops.includes("midtown-toggle"))
-    throw new Error("payments tab must not carry weekly session controls");
+  if (ops.includes("Weekly Session Overrides") || ops.includes("form-cancel-week"))
+    throw new Error("payments tab must not carry weekly session setup controls");
+  if (!ops.includes('data-action="midtown-toggle"'))
+    throw new Error("payments tab must carry the Midtown registration control");
   if (!ops.includes('<details class="admin-section') || !ops.includes("<summary>"))
     throw new Error("payments tab sections must collapse behind their headers");
   if (!ops.includes("Pending payments") || !ops.includes("9921"))
@@ -3374,8 +3375,8 @@ store.signIn("member@example.test");
   if (!ops.includes('data-action="confirm-payment"'))
     throw new Error("pending payments need a confirm action");
   console.log("ok  ops lists pending payments for the collector");
-  if (!ops.includes("Finalize with gym") || !ops.includes("wa.me"))
-    throw new Error("ops should include the finalize card with a WhatsApp link");
+  if (!ops.includes("HYROX booking &amp; payment") || !ops.includes("wa.me"))
+    throw new Error("ops should include the HYROX booking and payment card with a WhatsApp link");
   if (!ops.toLowerCase().includes("duty"))
     throw new Error("ops should include the duty card");
   console.log("ok  ops has finalize-with-gym (WhatsApp) + duty cards");
@@ -4860,6 +4861,19 @@ if (!activitiesHtml.includes("Current venue: <strong>Victoria Park Swimming Pool
     || !activitiesHtml.includes("Recurring default: <strong>TBC</strong>")) {
   throw new Error("Activities must show distinct current and recurring venues for overridden Swimming");
 }
+if (activitiesHtml.includes("10/F, Island ECC, Quarry Bay (BFT)")
+    || hyroxAdminHtml.includes("10/F, Island ECC, Quarry Bay (BFT)")) {
+  throw new Error("Quarry Bay must not be mislabeled as BFT in Admin controls");
+}
+if (activitiesHtml.includes("confirmed in-app")
+    || activitiesHtml.includes("awaiting payment")
+    || activitiesHtml.includes("Not open")
+    || activitiesHtml.includes("Registration:")) {
+  throw new Error("Activities must not contain HYROX booking/payment status");
+}
+if (!hyroxAdminHtml.includes("confirmed in-app") || !hyroxAdminHtml.includes("awaiting payment")) {
+  throw new Error("Payments must contain booking payment counts");
+}
 if ((activitiesHtml.match(/>Weekly Event Controls</g) || []).length !== 1
     || !activitiesHtml.includes("Free &amp; RSVP Events")
     || !activitiesHtml.includes("Paid Sessions")) {
@@ -4891,7 +4905,6 @@ for (const marker of [
   'id="form-session-time"',
   'id="form-session-notice"',
   'data-action="venue-tbc-toggle"',
-  'data-action="midtown-toggle"',
   'id="form-cancel-week"',
 ]) {
   if (!weeklyControlsHtml.includes(marker)) {

@@ -1773,7 +1773,6 @@ for (const marker of [
   'id="form-session-time"',
   'id="form-session-notice"',
   'data-action="venue-tbc-toggle"',
-  'data-action="midtown-toggle"',
   'id="form-cancel-week"',
 ]) {
   assert.ok(liveWeeklyControlsHtml.includes(marker),
@@ -1787,6 +1786,13 @@ assert.match(liveActivitiesHtml,
   /aria-labelledby="paid-sessions-title">[\s\S]*<\/section>\s*<\/details>\s*<details class="admin-section mt24">\s*<summary><h2>One-off Events<\/h2>/,
   "Live One-off Events must remain outside Weekly Event Controls");
 assert.match(liveActivitiesHtml, /Weekly Event Controls &gt; Free &amp; RSVP Events/);
+assert.doesNotMatch(liveActivitiesHtml, /data-action="midtown-toggle"/,
+  "Live Admin Activities must not carry the Midtown booking control");
+const livePaymentsHtml = await views.viewAdmin("payments");
+assert.match(livePaymentsHtml, /data-action="midtown-toggle"/,
+  "Live Admin Payments must carry the Midtown booking control");
+assert.match(livePaymentsHtml, /confirmed in-app[\s\S]*awaiting payment/,
+  "Live Admin Payments must carry booking payment counts");
 const liveActivityEditorHtml = views.viewAdminActivity("wnt");
 assert.match(liveActivityEditorHtml, /Weekly Event Controls &gt; Free &amp; RSVP Events/);
 console.log("ok  live Admin Activities groups dated controls without changing form contracts");
