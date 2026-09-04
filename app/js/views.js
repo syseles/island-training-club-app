@@ -2370,7 +2370,13 @@ function adminHyroxCycleCards() {
     return `<section class="card hyrox-admin-cycle mt16"><div class="card-body">
       <div class="section-head"><div><span class="kicker">${esc(fmtDate(cycle.dateISO))}</span><h2>Saturday HYROX · Payment reconciliation</h2></div><span class="badge ${locked ? "neutral" : "warn"}">${locked ? "Locked" : esc(cycle.registrationState)}</span></div>
       <p class="muted small">${locked ? "Registration opens Monday at 6 PM HKT." : afterPromotion ? "Final reconciliation summary after Thursday 8 PM HKT." : "Payment review runs Thursday at 6 PM HKT."}</p>
-      <div class="admin-hyrox-counts"><strong>${confirmed.length} confirmed paid</strong><strong>${claims.length} payment claims to review</strong><strong>${unpaid.length} unpaid</strong><strong>${active.length} active places</strong><strong>${queues.weeklyWaitlist.length} weekly waitlist</strong></div>
+      <div class="admin-hyrox-counts" aria-label="HYROX registration status">
+        <div class="admin-hyrox-count"><strong>${confirmed.length}</strong><span>Confirmed paid</span></div>
+        <div class="admin-hyrox-count"><strong>${claims.length}</strong><span>Payment claims to review</span></div>
+        <div class="admin-hyrox-count"><strong>${unpaid.length}</strong><span>Unpaid reservations</span></div>
+        <div class="admin-hyrox-count"><strong>${active.length}</strong><span>Active places</span></div>
+        <div class="admin-hyrox-count"><strong>${queues.weeklyWaitlist.length}</strong><span>Weekly waitlist</span></div>
+      </div>
       ${claims.length ? `<p class="banner warn">Review ${claims.length} pending payment claims before the venue plan can be confirmed automatically.</p>` : allocationCounts}
       <div class="actions">${retry}${close}</div>${pendingClaims}${adminHyroxGymControls(cycle)}
       <form id="form-cancel-hyrox-cycle" class="mt16" data-cycle="${esc(cycle.id)}"><div class="field"><label>Cancel this HYROX cycle — reason</label><input name="reason" required placeholder="e.g. Gym unavailable"></div><button class="btn danger ghost sm" type="submit">Cancel HYROX cycle</button></form>
@@ -2397,7 +2403,7 @@ function adminHyroxScheduleControl() {
   return `<details class="admin-section mt16" open>
     <summary><h2>Schedule pooled HYROX</h2></summary>
     <div class="card mt8"><div class="card-body">
-      <p class="muted small">Choose a clean future Saturday to replace the separate BFT and Midtown booking cards with one shared 32-place pool. The pool remains locked until Monday at 6 PM HKT.</p>
+      <p class="muted small">Choose a clean future Saturday to replace the separate BFT and Midtown booking cards with one shared 32-place pool. This creates the locked parent card; sign up opens automatically Monday at 6 PM HKT.</p>
       ${dates.length ? `<form id="form-hyrox-cycle-schedule" class="mt16"><div class="field"><label for="hyrox-cycle-date">Saturday</label><select id="hyrox-cycle-date" name="dateISO" required>${dates.map((dateISO) => `<option value="${esc(dateISO)}">${esc(fmtDate(dateISO))}</option>`).join("")}</select></div><button class="btn sm" type="submit">Schedule HYROX cycle</button></form>` : `<p class="empty mt16">No unscheduled future BFT + Midtown Saturdays are available.</p>`}
     </div></div>
   </details>`;

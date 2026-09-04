@@ -301,6 +301,37 @@ input, select, textarea { font: inherit; }
 
 .admin-section[open] > summary::after { transform: rotate(-135deg); }
 
+.admin-hyrox-counts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(112px, 1fr));
+  gap: 8px;
+  margin: 14px 0;
+}
+
+.admin-hyrox-count {
+  display: grid;
+  gap: 4px;
+  padding: 10px;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+}
+
+.admin-hyrox-count strong {
+  font-family: var(--font-display);
+  font-size: 22px;
+  line-height: 1;
+}
+
+.admin-hyrox-count span {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 800;
+  line-height: 1.25;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+}
+
 /* ---- Badges ----------------------------------------------------------- */
 
 .badge {

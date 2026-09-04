@@ -4436,7 +4436,8 @@ console.log("ok  reset");
   store.signIn("admin@example.test");
   const adminHtml = await views.viewAdmin("payments");
   if (!adminHtml.includes("Saturday HYROX · Payment reconciliation")
-      || !adminHtml.includes("1 confirmed paid")
+      || !adminHtml.includes('class="admin-hyrox-count"><strong>1</strong><span>Confirmed paid</span></div>')
+      || !adminHtml.includes('class="admin-hyrox-count"><strong>0</strong><span>Payment claims to review</span></div>')
       || !adminHtml.includes("form-cancel-hyrox-cycle")
       || adminHtml.includes("midtown-toggle")) {
     throw new Error("pooled Admin should show one authoritative cycle card without manual Midtown controls");
