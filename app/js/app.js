@@ -1397,6 +1397,21 @@ document.addEventListener("submit", async (e) => {
       break;
     }
 
+    case "form-hyrox-cycle-schedule": {
+      e.preventDefault();
+      if (!form.reportValidity()) return;
+      const dateISO = String(new FormData(form).get("dateISO") || "").trim();
+      const control = form.querySelector('[type="submit"]');
+      try {
+        await withBusyControl(control, "Scheduling…", async () => {
+          await store.scheduleHyroxCycle(dateISO);
+          toast("HYROX cycle scheduled — registration opens Monday at 6 PM");
+          await renderWithFeedback();
+        }, { busyKey: form, controls: [...form.querySelectorAll("select, button")] });
+      } catch (err) { toast(err.message || "Unable to schedule HYROX cycle", true); }
+      break;
+    }
+
     case "form-hyrox-payment-reject": {
       e.preventDefault();
       if (!form.reportValidity()) return;

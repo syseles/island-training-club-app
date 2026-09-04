@@ -1748,6 +1748,12 @@ for (const tab of ["approvals", "members", "activities", "giving", "payments"]) 
   }
 }
 console.log("ok  every Admin route exposes exactly one active tab");
+const adminScheduleHtml = await views.viewAdmin("payments");
+if (!adminScheduleHtml.includes('id="form-hyrox-cycle-schedule"')
+    || !adminScheduleHtml.includes("Schedule HYROX cycle")) {
+  throw new Error("Admin Payments must expose the HYROX cycle scheduling control");
+}
+console.log("ok  Admin Payments exposes HYROX cycle scheduling");
 
 // --- Admin Giving (local mode) ---
 // Empty local state still surfaces an actionable Create campaign link.
