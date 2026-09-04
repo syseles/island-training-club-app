@@ -2368,7 +2368,7 @@ function adminHyroxCycleCards() {
     const close = cycle.venuePlan !== "pending" && !cycle.allocationClosedAt && Date.now() >= cycle.venueChoiceDeadlineAt
       ? `<button class="btn ghost sm" type="button" data-action="hyrox-allocation-close" data-cycle="${esc(cycle.id)}">Close venue allocation</button>` : "";
     return `<section class="card hyrox-admin-cycle mt16"><div class="card-body">
-      <div class="section-head"><div><span class="kicker">${esc(fmtDate(cycle.dateISO))}</span><h2>Saturday HYROX · Payment reconciliation</h2></div><span class="badge ${locked ? "neutral" : "warn"}">${locked ? "Locked" : esc(cycle.registrationState)}</span></div>
+      <div class="section-head"><div><span class="kicker">${esc(fmtDate(cycle.dateISO))}</span><h2>ITC HYROX<br><span>Payment reconciliation</span></h2></div><span class="badge ${locked ? "neutral" : "warn"}">${locked ? "Locked" : esc(cycle.registrationState)}</span></div>
       <p class="muted small">${locked ? "Registration opens Monday at 6 PM HKT." : afterPromotion ? "Final reconciliation summary after Thursday 8 PM HKT." : "Payment review runs Thursday at 6 PM HKT."}</p>
       <div class="admin-hyrox-counts" aria-label="HYROX registration status">
         <div class="admin-hyrox-count"><strong>${confirmed.length}</strong><span>Confirmed paid</span></div>
