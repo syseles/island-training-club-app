@@ -6,7 +6,7 @@ All three images were retrieved from the official Unsplash image CDN on 2 Septem
 
 | App asset | Activity | Selected source | Treatment |
 | --- | --- | --- | --- |
-| `running.webp` | Monday Running | [`images.unsplash.com/photo-1513593771513-7b58b6c4af38`](https://images.unsplash.com/photo-1513593771513-7b58b6c4af38) | Resized and converted to WebP; the app applies its existing responsive crop. |
+| `running.webp` | Monday Running | [`images.unsplash.com/photo-1552674605-db6ffd4facb5`](https://images.unsplash.com/photo-1552674605-db6ffd4facb5) | Resized and converted to WebP; the app applies its existing responsive crop. |
 | `water.webp` | Tuesday Swimming | [`images.unsplash.com/photo-1519315901367-f34ff9154487`](https://images.unsplash.com/photo-1519315901367-f34ff9154487) | Resized and converted to WebP; the app applies its existing responsive crop. |
 | `hyrox.webp` | Saturday HYROX sessions | [`images.unsplash.com/photo-1571902943202-507ec2618e8f`](https://images.unsplash.com/photo-1571902943202-507ec2618e8f) | Resized and converted to WebP; shared by BFT, Midtown28, and Quarry Bay sessions. |
 
