@@ -112,7 +112,7 @@ export async function hydrateLiveOperations({ ensureWindow = false, force = fals
     authenticated = false;
   }
   if (authenticated) await liveOps.liveSweepHyroxDeadlines({ refresh: false });
-  await liveOps.hydrateOperationalState({ force });
+  await liveOps.hydrateOperationalState({ force, authenticated });
   await liveOps.startOperationalRealtime();
   return liveOps.operationalStateStatus();
 }

@@ -545,7 +545,9 @@ const fakeSupabase = {
       const result = () => {
         const error = table === "operational_session_venue_overrides"
           ? operationalVenueOverrideReadError
-          : null;
+          : table === "operational_hyrox_queue_entries" && !liveSession
+            ? { message: "permission denied for table operational_hyrox_queue_entries" }
+            : null;
         if (table === "operational_session_venue_overrides") {
           operationalVenueOverrideReadError = null;
         }
@@ -1223,6 +1225,11 @@ assert.equal(
   operationalRpcCalls.filter((call) => call.name === "sweep_hyrox_cycle_deadlines").length,
   sweepCountBeforeAnonymousHydration,
   "anonymous live hydration must not invoke the authenticated HYROX sweep",
+);
+assert.deepEqual(
+  store.hyroxCycleQueues("hyrox-pool-2099-01-03"),
+  { weeklyWaitlist: [], venueSwitches: [] },
+  "anonymous live hydration must omit private HYROX queues",
 );
 liveSession = {
   access_token: "test-access-token", token_type: "bearer", expires_in: 3600,

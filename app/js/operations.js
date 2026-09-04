@@ -428,8 +428,16 @@ async function fetchRsvpCounts() {
   }
 }
 
-async function fetchOperationalState() {
+async function fetchOperationalState({ authenticated } = {}) {
   if (!isLive() || !supabase) return null;
+  if (authenticated === undefined) {
+    try {
+      const { data } = await supabase.auth.getSession();
+      authenticated = Boolean(data?.session);
+    } catch {
+      authenticated = false;
+    }
+  }
   const since = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
   const [
     sessions,
@@ -458,8 +466,9 @@ async function fetchOperationalState() {
     supabase.from("operational_session_venue_overrides").select("*"),
     fetchRsvpCounts(),
     supabase.from("operational_hyrox_cycles").select("*").order("session_date"),
-    supabase.from("operational_hyrox_queue_entries").select("*")
-      .order("joined_at"),
+    authenticated
+      ? supabase.from("operational_hyrox_queue_entries").select("*").order("joined_at")
+      : Promise.resolve({ data: [], error: null }),
   ]);
   for (const result of [
     sessions,
@@ -540,7 +549,7 @@ export async function ensureLiveSessionWindow() {
   return null;
 }
 
-export async function hydrateOperationalState({ force = false } = {}) {
+export async function hydrateOperationalState({ force = false, authenticated } = {}) {
   if (!isLive() || !supabase) return null;
   if (liveCache.loaded && !force) return liveCache;
   if (hydrationPromise) {
@@ -552,7 +561,7 @@ export async function hydrateOperationalState({ force = false } = {}) {
   }
   liveCache.loading = Promise.resolve().then(async () => {
     try {
-      const payload = await fetchOperationalState();
+      const payload = await fetchOperationalState({ authenticated });
       replaceState(payload);
       try { localStorage.setItem(cutoverMarker, "supabase"); } catch {}
       notifyListeners();
