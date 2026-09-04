@@ -1699,18 +1699,14 @@ export async function createOneOffEvent(fields) {
   const location = String(fields.location ?? "").trim();
   const mapsQuery = String(fields.mapsQuery ?? "").trim();
   const category = String(fields.category ?? "").trim() || "Other";
-  const requiresRsvp = fields.requiresRsvp === true;
   const price = Math.max(0, Number(fields.price) || 0);
-  const capacity = fields.capacity === null
-    ? null
-    : Math.max(1, Number(fields.capacity) || 20);
+  const capacity = Math.max(1, Number(fields.capacity) || 20);
   if (!name) throw new Error("Enter the event name.");
   if (!/^\d{4}-\d{2}-\d{2}$/.test(dateISO)) throw new Error("Pick the event date.");
   if (!time) throw new Error("Pick the start time.");
   if (!Number.isFinite(durationMin) || durationMin <= 0) throw new Error("Enter a positive duration.");
   if (!location) throw new Error("Enter the venue.");
-  if (requiresRsvp && price !== 0) throw new Error("RSVP events must be free.");
-  const payload = { name, dateISO, time, durationMin, location, mapsQuery, category, price, capacity, requiresRsvp };
+  const payload = { name, dateISO, time, durationMin, location, mapsQuery, category, price, capacity };
   if (isLive()) {
     return liveOps.liveCreateEvent(payload);
   }
@@ -1720,7 +1716,7 @@ export async function createOneOffEvent(fields) {
     oneOff: true,
     dateISO,
     name,
-    kind: requiresRsvp ? "rsvp" : price > 0 ? "paid" : "free",
+    kind: price > 0 ? "paid" : "free",
     category,
     weekday: parseISO(dateISO).getDay(),
     time,
@@ -1746,18 +1742,14 @@ export async function repostRsvpEvent(sessionId) {
     throw new Error("Only a cancelled RSVP event can be reposted.");
   }
   if (sessionStarted(source)) throw new Error("The RSVP event has already started.");
-  return createOneOffEvent({
-    name: source.name,
-    dateISO: source.dateISO,
-    time: source.time,
-    durationMin: source.durationMin,
-    location: source.location || "TBC",
-    mapsQuery: source.mapsQuery || "",
-    category: source.category || "Socials",
-    price: 0,
-    capacity: source.capacity,
-    requiresRsvp: true,
-  });
+  if (isLive()) {
+    return liveOps.liveReopenRsvp(sessionId);
+  }
+  const override = state.sessionOverrides[sessionId];
+  delete override.cancelled;
+  if (!Object.keys(override).length) delete state.sessionOverrides[sessionId];
+  save();
+  return getSession(sessionId);
 }
 
 export async function deleteOneOffEvent(sessionId) {

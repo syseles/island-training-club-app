@@ -605,6 +605,12 @@ export async function liveCancelSession(sessionId, reason) {
   });
 }
 
+export async function liveReopenRsvp(sessionId) {
+  return runOperationalRpc("reopen_operational_rsvp", {
+    p_session_id: sessionId,
+  });
+}
+
 // One-off events: an inactive template + a single session row, created and
 // removed atomically server-side. Deletion is only allowed while the event
 // has no active bookings; afterwards admins cancel instead.
@@ -618,8 +624,7 @@ export async function liveCreateEvent(payload) {
     p_maps_query: payload.mapsQuery || null,
     p_category: payload.category || "Other",
     p_price_hkd: payload.price ?? 0,
-    p_capacity: payload.capacity,
-    p_requires_rsvp: !!payload.requiresRsvp,
+    p_capacity: payload.capacity ?? 20,
   });
   return row;
 }

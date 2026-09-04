@@ -2633,17 +2633,22 @@ installLocalFixtures();
   if (venueSection.includes("cap"))
     throw new Error("the uncapped lunch must not show a capacity");
   store.cancelSessionWeek(lunch.id, "Organizer away");
-  const repostedLunchRow = await store.repostRsvpEvent(lunch.id);
-  const repostedLunch = store.getSession(repostedLunchRow.id);
-  if (!repostedLunch || !repostedLunch.oneOff || repostedLunch.kind !== "rsvp"
-      || repostedLunch.name !== lunch.name || repostedLunch.dateISO !== lunch.dateISO
-      || repostedLunch.time !== lunch.time || repostedLunch.location !== "Cafe Deco, Central"
-      || repostedLunch.capacity !== null || repostedLunch.cancelled) {
-    throw new Error("reposting a cancelled RSVP should create a distinct matching RSVP event");
-  }
-  const repostAdminHtml = await views.viewAdmin("activities");
-  if (!repostAdminHtml.includes(`data-action="repost-rsvp" data-session="${lunch.id}"`))
+  const cancelledAdminHtml = await views.viewAdmin("activities");
+  if (!cancelledAdminHtml.includes(`data-action="repost-rsvp" data-session="${lunch.id}"`))
     throw new Error("Admin should expose Repost RSVP for a cancelled RSVP event");
+  const reopenedLunchRow = await store.repostRsvpEvent(lunch.id);
+  const reopenedLunch = store.getSession(lunch.id);
+  if (!reopenedLunchRow || reopenedLunchRow.id !== lunch.id || !reopenedLunch
+      || reopenedLunch.oneOff || reopenedLunch.kind !== "rsvp"
+      || reopenedLunch.name !== lunch.name || reopenedLunch.dateISO !== lunch.dateISO
+      || reopenedLunch.time !== lunch.time || reopenedLunch.location !== "Cafe Deco, Central"
+      || reopenedLunch.capacity !== null || reopenedLunch.cancelled
+      || store.upcomingSessions(21).filter((s) => s.id === lunch.id).length !== 1) {
+    throw new Error("reposting a cancelled RSVP should reopen the original event");
+  }
+  const reopenedAdminHtml = await views.viewAdmin("activities");
+  if (reopenedAdminHtml.includes(`data-action="repost-rsvp" data-session="${lunch.id}"`))
+    throw new Error("Admin should hide Repost RSVP after the event is reopened");
   store.signIn("member@example.test");
   store.signOut();
   console.log("ok  RSVP lunch: join, going state, withdraw, Socials filter, no checkout");
