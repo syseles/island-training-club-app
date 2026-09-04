@@ -2455,32 +2455,26 @@ function adminOps(viewer, memberUsers, profilePhone = "") {
     ${adminFinalizeGym()}`;
 }
 
-// Weekly paid-session controls (time, note, cancel, venue TBC, Midtown) live
+// Weekly paid-session setup controls (time, note, venue TBC) live
 // on the Activities tab alongside the recurring defaults and free/RSVP event
-// controls — setup and scheduling in one place.
+// controls. Booking and payment status belongs on Payments.
 function adminPaidSessionControls() {
   const upcoming = store.upcomingSessions(21).filter(
     (s) => !s.oneOff && s.category === "HYROX" && s.kind === "paid" && !sessionStarted(s)
       && ![store.hyroxCycleForDate(s.dateISO)?.bftSessionId, store.hyroxCycleForDate(s.dateISO)?.midtownSessionId].includes(s.id)
   );
   const sessionCards = upcoming.map((s) => {
-    const confirmed = store.heldBookingsForSession(s.id).filter((b) => b.status === "confirmed");
-    const atRisk = store.heldBookingsForSession(s.id).filter((b) => b.status === "reserved");
     const override = store.getSession(s.id);
-    const isMid = store.isMidtown(s);
-    const open = store.midtownOpenFor(s);
     return `
       <div class="card mt16 ${override.cancelled ? "is-cancelled" : ""}"><div class="card-body">
         <div class="kicker dim" style="margin-top:0">${esc(fmtDate(s.dateISO))} · ${fmtTime(s.time)}</div>
-        <h3 class="mt8">${esc(s.location)}${isMid ? " (Midtown)" : " (BFT)"}</h3>
+        <h3 class="mt8">${esc(s.location)}</h3>
         ${override.cancelled ? `<p class="badge danger">${esc(sessionCancellationCopy(override))}</p>` : ""}
-        ${isMid && !open && !override.cancelled ? `<p class="badge neutral">Not open</p>` : ""}
-        <p class="muted small mt8">${confirmed.length} confirmed in-app · ${atRisk.length} awaiting payment · cap ${s.capacity}</p>
+        <p class="muted small mt8">Session setup only. Booking and payment status is shown under Admin → Payments.</p>
         ${!override.cancelled ? `
         <details class="mt8">
           <summary>Session controls</summary>
           <div class="btn-row mt8">
-            ${isMid ? `<button class="btn ghost sm" type="button" data-action="midtown-toggle" data-session="${esc(s.id)}" data-open="${open ? "0" : "1"}">${open ? "Close Midtown" : "Open Midtown"}</button>` : ""}
             <button class="btn ghost sm" type="button" data-action="venue-tbc-toggle" data-session="${esc(s.id)}" data-on="${override.venueTBC ? "0" : "1"}">${override.venueTBC ? "Venue confirmed" : "Mark venue TBC"}</button>
           </div>
           <form id="form-session-time" data-session="${esc(s.id)}" class="mt8">
@@ -2513,15 +2507,21 @@ function adminFinalizeGym() {
     const override = store.getSession(s.id);
     if (override.cancelled) return "";
     const confirmed = store.heldBookingsForSession(s.id).filter((b) => b.status === "confirmed");
+    const atRisk = store.heldBookingsForSession(s.id).filter((b) => b.status === "reserved");
     const names = store.attendeesFor(s);
     const gymMsg = `ITC HYROX booking — ${fmtDate(s.dateISO)} ${fmtTime(s.time)} at ${s.location}. Confirmed: ${confirmed.length} of ${s.capacity}. Names: ${names.join(", ")}. Total: ${fmtMoney(confirmed.length * s.price)}.`;
     const wa = `https://wa.me/?text=${encodeURIComponent(gymMsg)}`;
     const gymDone = override.gymConfirmedAt;
     const isMid = store.isMidtown(s);
+    const open = store.midtownOpenFor(s);
     return `
       <div class="card mt16"><div class="card-body">
         <div class="kicker dim" style="margin-top:0">${esc(fmtDate(s.dateISO))} · ${fmtTime(s.time)}</div>
-        <h3 class="mt8">${esc(s.location)}${isMid ? " (Midtown)" : " (BFT)"}</h3>
+        <h3 class="mt8">${esc(s.location)}</h3>
+        <p class="muted small mt8">${confirmed.length} confirmed in-app · ${atRisk.length} awaiting payment · cap ${s.capacity}</p>
+        ${isMid ? `
+          <p class="muted small mt8">Registration: <strong>${open ? "Open" : "Closed"}</strong></p>
+          <button class="btn ghost sm" type="button" data-action="midtown-toggle" data-session="${esc(s.id)}" data-open="${open ? "0" : "1"}">${open ? "Close Midtown" : "Open Midtown"}</button>` : ""}
         ${gymDone
           ? `<p class="badge free mt8">Confirmed with gym ${new Date(gymDone).toLocaleDateString("en-HK", { day: "numeric", month: "short" })}${override.gymNote ? ` — ${esc(override.gymNote)}` : ""}</p>`
           : `
@@ -2537,8 +2537,8 @@ function adminFinalizeGym() {
   }).join("");
   return `
     <details class="admin-section mt24">
-      <summary><h2>Finalize with gym</h2></summary>
-      <p class="muted small mt8">Send Friday after the 2 PM checkpoint. The app number is what’s sent.</p>
+      <summary><h2>HYROX booking &amp; payment</h2></summary>
+      <p class="muted small mt8">Payment status, reservation opening and gym handoff for each HYROX session. Send the gym message Friday after the 2 PM checkpoint.</p>
       ${cards}
     </details>`;
 }
