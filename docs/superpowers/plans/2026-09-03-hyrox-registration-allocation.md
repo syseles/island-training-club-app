@@ -1503,7 +1503,7 @@ git commit -m "feat(hyrox): add pooled collector operations"
 - Consumes: complete pooled workflow from Tasks 1–11.
 - Produces: verified migration/cutover contract, operator instructions and final regression evidence.
 
-- [ ] **Step 1: Add clean-week cutover and legacy compatibility assertions**
+- [x] **Step 1: Add clean-week cutover and legacy compatibility assertions**
 
 Add tests proving:
 
@@ -1515,7 +1515,7 @@ Add tests proving:
 - free/RSVP paths and existing notification destinations are unchanged; and
 - cancellation copy remains `Session cancelled by ITC — <reason>`.
 
-- [ ] **Step 2: Run tests and correct only demonstrated failures**
+- [x] **Step 2: Run tests and correct only demonstrated failures**
 
 Run:
 
@@ -1526,7 +1526,7 @@ node app/live-auth-smoke.mjs
 
 Expected: PASS. If an assertion fails, fix the owning implementation file from Tasks 6–11 and rerun both commands before proceeding.
 
-- [ ] **Step 3: Update the operational runbook**
+- [x] **Step 3: Update the operational runbook**
 
 Document migrations in exact order:
 
@@ -1539,11 +1539,11 @@ Document migrations in exact order:
 
 Add read-only SQL checks for tables, RLS, RPC execute privileges and Realtime publication. Add the activation rule: choose a clean future Saturday, deploy code and migrations, perform two-browser acceptance, then schedule that cycle before its Monday 6 PM HKT automatic opening. State that after the first pooled reservation, rollback must remain pooled-booking compatible.
 
-- [ ] **Step 4: Update README ownership and product summary**
+- [x] **Step 4: Update README ownership and product summary**
 
 Change prototype state to v19, describe one BFT/Midtown weekly pool with Quarry Bay separate, and state Monday 6 PM opening, Thursday 6 PM standard payment, Thursday 7 PM holder grace, Thursday 8 PM promoted-member close and Friday 9 PM venue-choice close. Do not describe PayMe/FPS as real payment processing.
 
-- [ ] **Step 5: Run the complete verification matrix**
+- [x] **Step 5: Run the complete verification matrix**
 
 Run:
 
@@ -1580,7 +1580,7 @@ Use one Admin and multiple approved member profiles against the same disposable/
 9. match an opposite swap and observe Realtime in the second browser;
 10. close Friday allocation, finalize gym lists and verify focus refetch.
 
-- [ ] **Step 7: Commit documentation and final compatibility tests**
+- [x] **Step 7: Commit documentation and final compatibility tests**
 
 ```bash
 git add README.md docs/runbooks/operational-backend.md \
@@ -1589,7 +1589,7 @@ git add README.md docs/runbooks/operational-backend.md \
 git commit -m "docs(hyrox): document pooled booking rollout"
 ```
 
-- [ ] **Step 8: Final branch verification**
+- [x] **Step 8: Final branch verification**
 
 Run:
 

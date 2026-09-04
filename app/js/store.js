@@ -1099,6 +1099,12 @@ function reserveApprovedSession(userId, sessionOrId, now = Date.now()) {
   if (!session) throw new Error("Unknown session");
   if (session.kind !== "paid") throw new Error("Session is not paid");
   if (session.cancelled) throw new Error("Session is cancelled");
+  if (session.activityId === "hyrox-quarry-bay") {
+    const cycle = hyroxCycleForDateLocal(session.dateISO);
+    if (cycle && hyroxActiveBookings(cycle.id).some((booking) => booking.userId === userId)) {
+      throw new Error("You already have a HYROX booking for this Saturday.");
+    }
+  }
   if (sessionStarted(session)) throw new Error("Session has already started");
   if (isMidtown(session) && !midtownOpenFor(session)) throw new Error("Session is not open");
   if (spotsLeft(session) <= 0) throw new Error("Session is full");

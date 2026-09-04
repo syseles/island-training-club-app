@@ -4336,8 +4336,16 @@ console.log("ok  reset");
   store.resetLocalData();
   installLocalFixtures();
   const cycleDate = data.isoDate(data.addDays(data.saturdayOnOrAfter(data.todayLocal()), 7));
-  const cycle = store.scheduleHyroxCycle(cycleDate);
   views.resetScheduleState();
+  views.scheduleState.weekOffset = Math.floor((data.parseISO(cycleDate) - data.sundayOf(data.todayLocal()))
+    / (7 * 24 * 60 * 60 * 1000));
+  views.scheduleState.selected = cycleDate;
+  const legacySchedule = views.viewSchedule();
+  if (!legacySchedule.includes(`href=\"#/activity/hyrox-bft-${cycleDate}\"`)
+      || !legacySchedule.includes(`href=\"#/activity/hyrox-midtown-${cycleDate}\"`)) {
+    throw new Error("unscheduled HYROX dates should preserve separate legacy venue cards");
+  }
+  const cycle = store.scheduleHyroxCycle(cycleDate);
   views.scheduleState.weekOffset = Math.floor((data.parseISO(cycleDate) - data.sundayOf(data.todayLocal()))
     / (7 * 24 * 60 * 60 * 1000));
   views.scheduleState.selected = cycleDate;
@@ -4917,7 +4925,7 @@ for (const fixture of sourceSnapshots) {
   if (migrated.version !== 19 || suppliedIds.some((id) => !serialized.includes(id))
       || !payoutMapValid || !suppliedPayoutsPreserved) {
     failures++;
-    console.error(`FAIL genuine v${fixture.version} fixture must reach v16 intact`);
+    console.error(`FAIL genuine v${fixture.version} fixture must reach v19 intact`);
   } else console.log(`ok  genuine v${fixture.version} fixture reaches v19 intact`);
 }
 
