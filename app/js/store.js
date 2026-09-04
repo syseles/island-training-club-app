@@ -104,7 +104,14 @@ export async function hydrateLiveOperations({ ensureWindow = false, force = fals
       console.warn("ensureLiveSessionWindow failed", err);
     }
   }
-  await liveOps.liveSweepHyroxDeadlines({ refresh: false });
+  let authenticated = false;
+  try {
+    const { data } = await supabase.auth.getSession();
+    authenticated = Boolean(data?.session);
+  } catch {
+    authenticated = false;
+  }
+  if (authenticated) await liveOps.liveSweepHyroxDeadlines({ refresh: false });
   await liveOps.hydrateOperationalState({ force });
   await liveOps.startOperationalRealtime();
   return liveOps.operationalStateStatus();

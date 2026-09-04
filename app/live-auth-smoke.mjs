@@ -301,6 +301,14 @@ globalThis.Date = class extends RealDate {
   }
 };
 
+let liveSession = {
+  access_token: "test-access-token",
+  token_type: "bearer",
+  expires_in: 3600,
+  expires_at: 9999999999,
+  refresh_token: "test-refresh-token",
+  user: authUser,
+};
 const fakeSupabase = {
   auth: {
     getSession: () => {
@@ -309,14 +317,7 @@ const fakeSupabase = {
       }
       return Promise.resolve({
         data: {
-          session: {
-            access_token: "test-access-token",
-            token_type: "bearer",
-            expires_in: 3600,
-            expires_at: 9999999999,
-            refresh_token: "test-refresh-token",
-            user: authUser,
-          },
+          session: liveSession,
         },
         error: null,
       });
@@ -1214,6 +1215,19 @@ assert.deepEqual(store.getBooking("pooled-booking"), pooledBookingBeforeReject);
 assert.deepEqual(store.getHyroxCycle("hyrox-pool-2099-01-03"), pooledCycleBeforeReject);
 assert.deepEqual(store.hyroxCycleQueues("hyrox-pool-2099-01-03"), pooledQueueBeforeReject);
 operationalRpcHandler = successfulHyroxRpcHandler;
+const sweepCountBeforeAnonymousHydration = operationalRpcCalls
+  .filter((call) => call.name === "sweep_hyrox_cycle_deadlines").length;
+liveSession = null;
+await store.hydrateLiveOperations({ force: true });
+assert.equal(
+  operationalRpcCalls.filter((call) => call.name === "sweep_hyrox_cycle_deadlines").length,
+  sweepCountBeforeAnonymousHydration,
+  "anonymous live hydration must not invoke the authenticated HYROX sweep",
+);
+liveSession = {
+  access_token: "test-access-token", token_type: "bearer", expires_in: 3600,
+  expires_at: 9999999999, refresh_token: "test-refresh-token", user: authUser,
+};
 const initialRealtimeHandlers = operationalSubscriptions.flatMap((channel) => channel.handlers);
 assert.equal(
   initialRealtimeHandlers.filter(({ filter }) => filter.table === "operational_hyrox_cycles").length,
