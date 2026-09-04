@@ -107,6 +107,22 @@ const appIndexSource = readFileSync(resolve(__dirnameSmoke, "index.html"), "utf8
 if (!appIndexSource.includes("window.SUPABASE_URL") || !appIndexSource.includes("window.SUPABASE_ANON_KEY")) {
   throw new Error("static Supabase configuration seam must remain explicit in app/index.html");
 }
+const headerLogoPath = "../assets/itc/logo-header.png";
+const headerLogoAbsolutePath = resolve(__dirnameSmoke, headerLogoPath);
+const headerLogoMatch = appIndexSource.match(/<a href="#\/home" class="top-logo"[\s\S]*?<img src="([^"]+)"/);
+if (headerLogoMatch?.[1] !== headerLogoPath || !existsSync(headerLogoAbsolutePath)) {
+  throw new Error("top-left header must use the compact ITC logo asset");
+}
+const headerLogoBytes = readFileSync(headerLogoAbsolutePath);
+if (headerLogoBytes.toString("ascii", 12, 16) !== "IHDR"
+    || headerLogoBytes.readUInt32BE(16) !== 1929
+    || headerLogoBytes.readUInt32BE(20) !== 1357) {
+  throw new Error("header logo must use the complete compact ITC mark crop");
+}
+if (!appIndexSource.includes('<link rel="icon" href="../assets/itc/logo.webp">')) {
+  throw new Error("favicon should remain on the existing icon asset");
+}
+console.log("ok  compact ITC header logo is wired without changing the favicon");
 if (/## Vercel env vars|Vercel project settings[^\n]*Environment Variables/i.test(liveAuthRunbookSource)) {
   throw new Error("runbook must not claim Vercel env vars inject into static HTML");
 }
