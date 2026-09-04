@@ -2684,6 +2684,11 @@ function adminMembers(viewer, users) {
   const hasActiveFilters = adminMemberFilters.query.length > 0 ||
     adminMemberFilters.status !== "all" || adminMemberFilters.role !== "all";
   return `
+    <div class="card mt16"><div class="card-body">
+      <h2>Indemnity records</h2>
+      <p class="muted small mt8">Download every profile, including members who have not accepted the current indemnity.</p>
+      <button class="btn ghost sm mt16" type="button" data-action="download-indemnity-list">Download indemnity list</button>
+    </div></div>
     <p class="muted small mt16">${canEdit ? "Role changes are Super Admin only." : "Only a Super Admin can change roles."}</p>
     <div class="member-filters" aria-label="Filter members">
       <div class="field"><label for="member-search">Search members</label><input id="member-search" type="search" value="${esc(adminMemberFilters.query)}" placeholder="Name or email" data-input="member-search"></div>
