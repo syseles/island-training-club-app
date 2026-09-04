@@ -935,7 +935,7 @@ git commit -m "feat(hyrox): add venue switching and cycle lifecycle"
   - live booking fields `cycleId`, `venuePreference`, `promotedFromWaitlistAt`, `allocationState`, `allocationSource`, `allocationSnapshot`
   - live RPC wrappers named after every member/Admin function in Tasks 3–5.
 
-- [ ] **Step 1: Extend fake Supabase and write failing hydration assertions**
+- [x] **Step 1: Extend fake Supabase and write failing hydration assertions**
 
 Add fixture arrays for `operational_hyrox_cycles` and `operational_hyrox_queue_entries` to `app/live-auth-smoke.mjs`. Hydrate one open cycle and assert:
 
@@ -947,12 +947,12 @@ assert.equal(store.getBooking("pooled-booking")?.venuePreference, "midtown");
 
 Record table subscriptions and assert both new tables subscribe exactly once.
 
-- [ ] **Step 2: Run live smoke and verify failure**
+- [x] **Step 2: Run live smoke and verify failure**
 
 Run: `node app/live-auth-smoke.mjs`
 Expected: FAIL because pooled live selectors/row fields are absent.
 
-- [ ] **Step 3: Add cycle and cycle-queue row builders/cache collections**
+- [x] **Step 3: Add cycle and cycle-queue row builders/cache collections**
 
 Extend `LIVE_TABLES`, `liveCache`, `fetchOperationalState` and `replaceState`. Use these UI shapes:
 
@@ -1004,7 +1004,7 @@ function buildHyroxQueueRow(row) {
 
 Extend `buildBookingRow` and `buildReceiptRow` with `cycleId`, `venuePreference`, `fallbackAcknowledgedAt`, `promotedFromWaitlistAt`, `allocationState`, `allocationSource`, `allocatedAt`, `allocationSnapshot`, `paymentRejectedAt`, `paymentRejectedBy` and `paymentRejectionReason`; tolerate null `session_id`.
 
-- [ ] **Step 4: Add live selectors, errors and RPC wrappers**
+- [x] **Step 4: Add live selectors, errors and RPC wrappers**
 
 Add exact wrappers:
 
@@ -1032,11 +1032,11 @@ export const liveSelectHyroxVenue = (bookingId, sessionId) =>
 
 Add wrappers for cycle scheduling/sweeping, weekly waitlist join/leave, reject payment, switch join/leave, close allocation and cycle cancellation. Map every exact domain error from the spec in `operationalProblem`.
 
-- [ ] **Step 5: Advance lifecycle on synchronization and subscribe/refetch both tables**
+- [x] **Step 5: Advance lifecycle on synchronization and subscribe/refetch both tables**
 
 Before authenticated initial hydration and focus refetch, call `sweep_hyrox_cycle_deadlines` with the server default timestamp, then fetch authoritative rows. The reserve RPC independently opens a due scheduled cycle, so availability never depends on a client sweep. Add `postgres_changes` subscriptions for `operational_hyrox_cycles` and `operational_hyrox_queue_entries`; use the existing coalesced `scheduleRealtimeRefresh()` rather than view-owned subscriptions. Surface a sweep failure through the live error path and never fall back to local state.
 
-- [ ] **Step 6: Run both JavaScript suites**
+- [x] **Step 6: Run both JavaScript suites**
 
 Run:
 
@@ -1047,7 +1047,7 @@ node app/live-auth-smoke.mjs
 
 Expected: PASS with cycle hydration, null-session booking and subscription assertions.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add app/js/operations.js app/live-auth-smoke.mjs

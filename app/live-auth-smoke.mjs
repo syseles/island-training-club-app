@@ -178,15 +178,87 @@ const operationalRpcCalls = [];
 const operationalPayoutDirectReads = [];
 const operationalSessionQueries = [];
 const operationalSubscriptions = [];
+const fixtureMember = { id: "approved-member" };
 const operationalTableRows = {
   operational_sessions: [],
+  operational_hyrox_cycles: [{
+    id: "hyrox-pool-2099-01-03",
+    session_date: "2099-01-03",
+    bft_session_id: "hyrox-bft-2099-01-03",
+    midtown_session_id: "hyrox-midtown-2099-01-03",
+    registration_state: "open",
+    venue_plan: "pending",
+    registration_capacity: 32,
+    registration_opens_at: "2098-12-29T10:00:00.000Z",
+    payment_deadline_at: "2099-01-01T10:00:00.000Z",
+    holder_grace_deadline_at: "2099-01-01T11:00:00.000Z",
+    promoted_payment_deadline_at: "2099-01-01T12:00:00.000Z",
+    venue_choice_deadline_at: "2099-01-02T13:00:00.000Z",
+    capacity_warning_sent_at: null,
+    payment_reminder_sent_at: null,
+    holder_grace_started_at: null,
+    waitlist_promoted_at: null,
+    reconciliation_started_at: null,
+    opened_at: "2098-12-29T10:00:00.000Z",
+    plan_confirmed_at: null,
+    plan_confirmed_by: null,
+    plan_confirmed_source: null,
+    allocation_closed_at: null,
+    cancelled_at: null,
+    cancel_reason: null,
+  }],
+  operational_hyrox_queue_entries: [{
+    id: "hyrox-queue-1",
+    cycle_id: "hyrox-pool-2099-01-03",
+    profile_id: fixtureMember.id,
+    kind: "weekly_waitlist",
+    target_session_id: null,
+    venue_preference: "midtown",
+    fallback_acknowledged_at: "2098-12-29T10:01:00.000Z",
+    status: "active",
+    joined_at: "2098-12-29T10:02:00.000Z",
+    resolved_at: null,
+  }],
   operational_activity_templates: [
     { activity_id: "hyrox-bft", name: "ITC HYROX", venue: "BFT Causeway Bay", weekday: 6, start_time: "11:15:00", duration_minutes: 60, capacity: 20, price_hkd: 180, default_open: true, active: true, category: "HYROX", maps_query: null, requires_rsvp: false },
     { activity_id: "hyrox-midtown", name: "ITC HYROX", venue: "Midtown 28", weekday: 6, start_time: "11:00:00", duration_minutes: 60, capacity: 12, price_hkd: 180, default_open: false, active: true, category: "HYROX", maps_query: null, requires_rsvp: false },
     { activity_id: "hyrox-quarry-bay", name: "ITC HYROX", venue: "10/F, Island ECC, Quarry Bay", weekday: 6, start_time: "11:00:00", duration_minutes: 60, capacity: 12, price_hkd: 180, default_open: true, active: true, category: "HYROX", maps_query: "Island ECC, Quarry Bay, Hong Kong", requires_rsvp: false },
     { activity_id: "lunch", name: "Post-Training Lunch", venue: "TBC", weekday: 6, start_time: "12:45:00", duration_minutes: 75, capacity: null, price_hkd: 0, default_open: true, active: true, category: "Socials", maps_query: null, requires_rsvp: true },
   ],
-  operational_bookings: [],
+  operational_bookings: [{
+    id: "pooled-booking",
+    profile_id: fixtureMember.id,
+    session_id: null,
+    hyrox_cycle_id: "hyrox-pool-2099-01-03",
+    status: "reserved",
+    reserved_at: "2098-12-29T10:03:00.000Z",
+    pay_deadline_at: "2099-01-01T11:00:00.000Z",
+    payment_marked_at: null,
+    payment_method: null,
+    payment_reference: null,
+    paid_at: null,
+    confirmed_by: null,
+    deferred_from_booking_id: null,
+    deferred_to_booking_id: null,
+    venue_preference: "midtown",
+    fallback_acknowledged_at: "2098-12-29T10:03:00.000Z",
+    promoted_from_waitlist_at: null,
+    allocation_state: null,
+    allocation_source: null,
+    allocated_at: null,
+    allocation_snapshot: null,
+    payment_rejected_at: null,
+    payment_rejected_by: null,
+    payment_rejection_reason: null,
+    snapshot: {
+      name: "ITC HYROX",
+      booking_mode: "weekly_pool",
+      session_date: "2099-01-03",
+      price_hkd: 180,
+    },
+    created_at: "2098-12-29T10:03:00.000Z",
+    updated_at: "2098-12-29T10:03:00.000Z",
+  }],
   operational_queue_entries: [],
   operational_receipts: [],
   collector_assignments: [],
@@ -211,7 +283,7 @@ let releaseOAuth = null;
 let signOutCalls = 0;
 let releaseSignOut = null;
 const deferredAuthTasks = [];
-const LIVE_TABLES_COUNT = 8;
+const LIVE_TABLES_COUNT = 10;
 const fixedIso = "2026-08-05T02:00:00.000Z";
 const RealDate = Date;
 globalThis.Date = class extends RealDate {
@@ -1050,6 +1122,87 @@ assert.equal(
 );
 store.load();
 await store.hydrateLiveOperations();
+assert.equal(store.getHyroxCycle("hyrox-pool-2099-01-03")?.venuePlan, "pending");
+assert.equal(
+  store.hyroxCycleQueues("hyrox-pool-2099-01-03").weeklyWaitlist[0].userId,
+  fixtureMember.id,
+);
+assert.equal(store.getBooking("pooled-booking")?.venuePreference, "midtown");
+assert.equal(
+  operationalRpcCalls.filter((call) => call.name === "sweep_hyrox_cycle_deadlines").length,
+  1,
+  "initial live hydration must sweep HYROX deadlines",
+);
+const hyroxRpcCases = [
+  ["liveReserveHyroxCycle", "reserve_hyrox_cycle", ["hyrox-pool-2099-01-03", "midtown", true], {
+    p_cycle_id: "hyrox-pool-2099-01-03", p_preference: "midtown", p_fallback_acknowledged: true,
+  }],
+  ["liveJoinHyroxCycleWaitlist", "join_hyrox_cycle_waitlist", ["hyrox-pool-2099-01-03", "either", true], {
+    p_cycle_id: "hyrox-pool-2099-01-03", p_preference: "either", p_fallback_acknowledged: true,
+  }],
+  ["liveLeaveHyroxCycleQueue", "leave_hyrox_cycle_queue", ["hyrox-queue-1"], { p_entry_id: "hyrox-queue-1" }],
+  ["liveRejectHyroxPayment", "reject_hyrox_cycle_payment", ["pooled-booking", "Unreadable reference"], {
+    p_booking_id: "pooled-booking", p_reason: "Unreadable reference",
+  }],
+  ["liveScheduleHyroxCycle", "schedule_hyrox_cycle", ["hyrox-pool-2099-01-03"], {
+    p_cycle_id: "hyrox-pool-2099-01-03",
+  }],
+  ["liveSweepHyroxDeadlines", "sweep_hyrox_cycle_deadlines", [], {}],
+  ["liveFinalizeHyroxVenuePlan", "finalize_hyrox_venue_plan", ["hyrox-pool-2099-01-03"], {
+    p_cycle_id: "hyrox-pool-2099-01-03",
+  }],
+  ["liveSelectHyroxVenue", "select_hyrox_cycle_venue", ["pooled-booking", "hyrox-midtown-2099-01-03"], {
+    p_booking_id: "pooled-booking", p_target_session_id: "hyrox-midtown-2099-01-03",
+  }],
+  ["liveJoinHyroxVenueSwitchQueue", "join_hyrox_venue_switch_queue", ["pooled-booking", "hyrox-bft-2099-01-03"], {
+    p_booking_id: "pooled-booking", p_target_session_id: "hyrox-bft-2099-01-03",
+  }],
+  ["liveLeaveHyroxVenueSwitchQueue", "leave_hyrox_venue_switch_queue", ["hyrox-queue-1"], {
+    p_entry_id: "hyrox-queue-1",
+  }],
+  ["liveCloseHyroxVenueAllocation", "close_hyrox_venue_allocation", ["hyrox-pool-2099-01-03"], {
+    p_cycle_id: "hyrox-pool-2099-01-03",
+  }],
+  ["liveCancelHyroxCycle", "cancel_hyrox_cycle", ["hyrox-pool-2099-01-03", "Storm warning"], {
+    p_cycle_id: "hyrox-pool-2099-01-03", p_reason: "Storm warning",
+  }],
+];
+for (const [exportName, rpcName, args, expectedArgs] of hyroxRpcCases) {
+  assert.equal(typeof operations[exportName], "function", `${exportName} must be exported`);
+  await operations[exportName](...args);
+  assert.deepEqual(
+    operationalRpcCalls.filter((call) => call.name === rpcName).at(-1)?.args,
+    expectedArgs,
+    `${exportName} must send the approved ${rpcName} payload`,
+  );
+}
+const successfulHyroxRpcHandler = operationalRpcHandler;
+operationalRpcHandler = (name, args) => {
+  if (name === "sweep_hyrox_cycle_deadlines") {
+    operationalRpcCalls.push({ name, args: structuredClone(args) });
+    return Promise.resolve({ data: null, error: { message: "HYROX sweep unavailable" } });
+  }
+  return successfulHyroxRpcHandler(name, args);
+};
+await assert.rejects(
+  () => store.hydrateLiveOperations({ force: true }),
+  /HYROX sweep unavailable/,
+  "HYROX sweep failures must surface instead of falling back to local state",
+);
+assert.equal(operations.operationalStateStatus().error, "HYROX sweep unavailable");
+operationalRpcHandler = successfulHyroxRpcHandler;
+await store.hydrateLiveOperations({ force: true });
+const initialRealtimeHandlers = operationalSubscriptions.flatMap((channel) => channel.handlers);
+assert.equal(
+  initialRealtimeHandlers.filter(({ filter }) => filter.table === "operational_hyrox_cycles").length,
+  1,
+  "live operations must subscribe to pooled HYROX cycles exactly once",
+);
+assert.equal(
+  initialRealtimeHandlers.filter(({ filter }) => filter.table === "operational_hyrox_queue_entries").length,
+  1,
+  "live operations must subscribe to pooled HYROX queues exactly once",
+);
 
 // Assigned collector payout enrichment is optional. Missing, forbidden, or
 // membership-gated RPCs must never hide the public operational schedule or

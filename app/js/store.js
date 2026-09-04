@@ -91,6 +91,7 @@ export async function hydrateLiveOperations({ ensureWindow = false, force = fals
       console.warn("ensureLiveSessionWindow failed", err);
     }
   }
+  await liveOps.liveSweepHyroxDeadlines({ refresh: false });
   await liveOps.hydrateOperationalState({ force });
   await liveOps.startOperationalRealtime();
   return liveOps.operationalStateStatus();
@@ -934,6 +935,21 @@ export function receiptsForUser(userId) {
 export function getBooking(id) {
   if (isLive()) return liveOps.liveBookingById(id);
   return state.bookings.find((b) => b.id === id) ?? null;
+}
+
+export function listHyroxCycles() {
+  if (isLive()) return liveOps.listLiveHyroxCycles();
+  return [];
+}
+
+export function getHyroxCycle(id) {
+  if (isLive()) return liveOps.getLiveHyroxCycle(id);
+  return null;
+}
+
+export function hyroxCycleQueues(id) {
+  if (isLive()) return liveOps.liveHyroxQueuesForCycle(id);
+  return { weeklyWaitlist: [], venueSwitches: [] };
 }
 
 export function getReceipt(id) {

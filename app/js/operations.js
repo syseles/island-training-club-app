@@ -24,6 +24,8 @@ const LIVE_TABLES = [
   "collector_payout_profiles",
   "operational_session_venue_overrides",
   "operational_rsvp_counts",
+  "operational_hyrox_cycles",
+  "operational_hyrox_queue_entries",
 ];
 
 const cutoverMarker = "itc.live.operations.backend.v1";
@@ -44,6 +46,8 @@ const liveCache = {
   payout: new Map(),
   venueOverrides: new Map(),
   rsvpCounts: new Map(),
+  hyroxCycles: new Map(),
+  hyroxQueues: [],
   rsvpCountError: null,
   loaded: false,
   loading: null,
@@ -76,6 +80,50 @@ function buildTemplateRow(row) {
     category: row.category || null,
     maps_query: row.maps_query || null,
     requires_rsvp: !!row.requires_rsvp,
+  };
+}
+
+function buildHyroxCycleRow(row) {
+  return {
+    id: row.id,
+    dateISO: String(row.session_date).slice(0, 10),
+    bftSessionId: row.bft_session_id,
+    midtownSessionId: row.midtown_session_id,
+    registrationState: row.registration_state,
+    venuePlan: row.venue_plan,
+    capacity: row.registration_capacity,
+    paymentDeadlineAt: parseTimestamp(row.payment_deadline_at),
+    venueChoiceDeadlineAt: parseTimestamp(row.venue_choice_deadline_at),
+    registrationOpensAt: parseTimestamp(row.registration_opens_at),
+    holderGraceDeadlineAt: parseTimestamp(row.holder_grace_deadline_at),
+    promotedPaymentDeadlineAt: parseTimestamp(row.promoted_payment_deadline_at),
+    capacityWarningSentAt: parseTimestamp(row.capacity_warning_sent_at),
+    paymentReminderSentAt: parseTimestamp(row.payment_reminder_sent_at),
+    holderGraceStartedAt: parseTimestamp(row.holder_grace_started_at),
+    waitlistPromotedAt: parseTimestamp(row.waitlist_promoted_at),
+    reconciliationStartedAt: parseTimestamp(row.reconciliation_started_at),
+    openedAt: parseTimestamp(row.opened_at),
+    planConfirmedAt: parseTimestamp(row.plan_confirmed_at),
+    planConfirmedBy: row.plan_confirmed_by,
+    planConfirmedSource: row.plan_confirmed_source || null,
+    allocationClosedAt: parseTimestamp(row.allocation_closed_at),
+    cancelledAt: parseTimestamp(row.cancelled_at),
+    cancelReason: row.cancel_reason || null,
+  };
+}
+
+function buildHyroxQueueRow(row) {
+  return {
+    id: row.id,
+    cycleId: row.cycle_id,
+    userId: row.profile_id,
+    kind: row.kind,
+    targetSessionId: row.target_session_id || null,
+    venuePreference: row.venue_preference || null,
+    fallbackAcknowledgedAt: parseTimestamp(row.fallback_acknowledged_at),
+    status: row.status,
+    joinedAt: parseTimestamp(row.joined_at),
+    resolvedAt: parseTimestamp(row.resolved_at),
   };
 }
 
@@ -159,6 +207,17 @@ function buildBookingRow(row, sessionsById = null) {
     confirmedBy: row.confirmed_by || null,
     deferredFrom: row.deferred_from_booking_id || null,
     deferredTo: row.deferred_to_booking_id || null,
+    cycleId: row.hyrox_cycle_id || null,
+    venuePreference: row.venue_preference || null,
+    fallbackAcknowledgedAt: parseTimestamp(row.fallback_acknowledged_at),
+    promotedFromWaitlistAt: parseTimestamp(row.promoted_from_waitlist_at),
+    allocationState: row.allocation_state || null,
+    allocationSource: row.allocation_source || null,
+    allocatedAt: parseTimestamp(row.allocated_at),
+    allocationSnapshot: row.allocation_snapshot || null,
+    paymentRejectedAt: parseTimestamp(row.payment_rejected_at),
+    paymentRejectedBy: row.payment_rejected_by || null,
+    paymentRejectionReason: row.payment_rejection_reason || null,
     snapshot: {
       ...snapshot,
       price: snapshot.price_hkd ?? snapshot.price ?? session?.price ?? null,
@@ -200,7 +259,8 @@ function buildReceiptRow(row) {
     method: String(row.payment_method || "").toUpperCase(),
     status: row.status,
     issuedAt: Date.parse(row.issued_at) || Date.now(),
-    line: `ITC HYROX — ${row.session_id}`,
+    cycleId: row.hyrox_cycle_id || null,
+    line: row.session_id ? `ITC HYROX — ${row.session_id}` : "ITC HYROX",
   };
 }
 
@@ -242,6 +302,10 @@ function buildVenueOverrideRow(row) {
 
 function replaceState(payload) {
   liveCache.sessions = new Map(payload.sessions.map((row) => [row.id, row]));
+  liveCache.hyroxCycles = new Map(
+    (payload.hyroxCycles || []).map((row) => [row.id, row])
+  );
+  liveCache.hyroxQueues = payload.hyroxQueues || [];
   liveCache.templates = payload.templates || [];
   liveCache.bookings = payload.bookings;
   liveCache.queues = payload.queues;
@@ -302,6 +366,36 @@ function operationalProblem(error) {
   if (message.includes("Booking not found")) return new Error("Booking not found.");
   if (message.includes("Queue entry not found")) return new Error("Queue entry not found.");
   if (message.includes("Authentication required")) return new Error("Authentication required.");
+  if (message.includes("Choose BFT, Midtown, or Either")) return new Error("Choose BFT, Midtown, or Either.");
+  if (message.includes("Fallback acknowledgement is required")) return new Error("Fallback acknowledgement is required.");
+  if (message.includes("HYROX cycle not found")) return new Error("HYROX cycle not found.");
+  if (message.includes("This HYROX cycle is cancelled")) return new Error("This HYROX cycle is cancelled.");
+  if (message.includes("HYROX registration opens Monday")) return new Error("HYROX registration opens Monday at 6 PM HKT.");
+  if (message.includes("HYROX registration is closed")) return new Error("HYROX registration is closed.");
+  if (message.includes("HYROX registration is full")) return new Error("HYROX registration is full. Join the weekly waitlist.");
+  if (message.includes("You already joined this HYROX registration")) return new Error("You already joined this HYROX registration.");
+  if (message.includes("You already have a HYROX booking for this Saturday")) return new Error("You already have a HYROX booking for this Saturday.");
+  if (message.includes("HYROX places are still available")) return new Error("HYROX places are still available.");
+  if (message.includes("HYROX queue entry not found")) return new Error("HYROX queue entry not found.");
+  if (message.includes("Queue entry is no longer active")) return new Error("Queue entry is no longer active.");
+  if (message.includes("Use the weekly HYROX registration")) return new Error("Use the weekly HYROX registration.");
+  if (message.includes("Payment rejection reason is required")) return new Error("Payment rejection reason is required.");
+  if (message.includes("Booking has no pending payment claim")) return new Error("Booking has no pending payment claim.");
+  if (message.includes("Venue changes are available only when both gyms open")) return new Error("Venue changes are available only when both gyms open.");
+  if (message.includes("Booking allocation is not changeable")) return new Error("Booking allocation is not changeable.");
+  if (message.includes("Venue changes closed Friday at 9 PM HKT")) return new Error("Venue changes closed Friday at 9 PM HKT.");
+  if (message.includes("Venue changes close Friday at 9 PM HKT")) return new Error("Venue changes close Friday at 9 PM HKT.");
+  if (message.includes("Target venue is not part of this HYROX cycle")) return new Error("Target venue is not part of this HYROX cycle.");
+  if (message.includes("Target venue is full")) return new Error("Target venue is full.");
+  if (message.includes("Choose the other venue in this HYROX cycle")) return new Error("Choose the other venue in this HYROX cycle.");
+  if (message.includes("You already have an active HYROX queue request")) return new Error("You already have an active HYROX queue request.");
+  if (message.includes("Venue-switch request is no longer active")) return new Error("Venue-switch request is no longer active.");
+  if (message.includes("HYROX venue plan is not ready")) return new Error("HYROX venue plan is not ready.");
+  if (message.includes("HYROX cycle is already cancelled")) return new Error("HYROX cycle is already cancelled.");
+  if (message.includes("Cancel the weekly HYROX cycle instead")) return new Error("Cancel the weekly HYROX cycle instead.");
+  if (message.includes("Midtown availability is derived from the weekly HYROX plan")) return new Error("Midtown availability is derived from the weekly HYROX plan.");
+  if (message.includes("HYROX venue allocation must be closed first")) return new Error("HYROX venue allocation must be closed first.");
+  if (message.includes("HYROX child venue is not enabled by the weekly plan")) return new Error("HYROX child venue is not enabled by the weekly plan.");
   if (message.includes("Midtown toggle is only valid")) return new Error("Midtown toggle is only valid for Midtown sessions.");
   if (message.includes("Interest list is only for closed Midtown")) return new Error("Interest list is only for closed Midtown sessions.");
   if (message.includes("Waitlist is only for open sessions")) return new Error("Waitlist is only for open sessions.");
@@ -348,6 +442,8 @@ async function fetchOperationalState() {
     templates,
     venueOverrides,
     rsvpCounts,
+    hyroxCycles,
+    hyroxQueues,
   ] = await Promise.all([
     supabase.from("operational_sessions").select("*").gte("session_date", since).order("session_date"),
     supabase.from("operational_bookings").select("*"),
@@ -361,6 +457,9 @@ async function fetchOperationalState() {
     supabase.from("operational_activity_templates").select("*").order("activity_id"),
     supabase.from("operational_session_venue_overrides").select("*"),
     fetchRsvpCounts(),
+    supabase.from("operational_hyrox_cycles").select("*").order("session_date"),
+    supabase.from("operational_hyrox_queue_entries").select("*")
+      .order("joined_at"),
   ]);
   for (const result of [
     sessions,
@@ -371,6 +470,8 @@ async function fetchOperationalState() {
     payouts,
     templates,
     venueOverrides,
+    hyroxCycles,
+    hyroxQueues,
   ]) {
     if (result.error) throw operationalProblem(result.error);
   }
@@ -410,6 +511,8 @@ async function fetchOperationalState() {
   return {
     sessions: sessionRows,
     templates: templateRows,
+    hyroxCycles: (hyroxCycles.data || []).map(buildHyroxCycleRow),
+    hyroxQueues: (hyroxQueues.data || []).map(buildHyroxQueueRow),
     bookings: (bookings.data || []).map((row) => buildBookingRow(row, sessionsById)),
     queues: (queues.data || []).map(buildQueueRow),
     receipts: (receipts.data || []).map(buildReceiptRow),
@@ -524,6 +627,12 @@ export async function startOperationalRealtime() {
     .on("postgres_changes",
       { event: "*", schema: "public", table: "operational_rsvp_counts" },
       () => scheduleRealtimeRefresh())
+    .on("postgres_changes",
+      { event: "*", schema: "public", table: "operational_hyrox_cycles" },
+      () => scheduleRealtimeRefresh())
+    .on("postgres_changes",
+      { event: "*", schema: "public", table: "operational_hyrox_queue_entries" },
+      () => scheduleRealtimeRefresh())
     .subscribe();
   subscription = channel;
   return channel;
@@ -551,7 +660,9 @@ export async function runOperationalRpc(name, args, options = {}) {
   const { data, error } = await supabase.rpc(name, args);
   if (error) throw operationalProblem(error);
   options.applyResult?.(data);
-  try { await refreshOperationalState(); } catch (err) { console.warn("operations refresh after rpc failed", err); }
+  if (!options.skipRefresh) {
+    try { await refreshOperationalState(); } catch (err) { console.warn("operations refresh after rpc failed", err); }
+  }
   return data;
 }
 
@@ -583,6 +694,26 @@ export function getLiveSession(id) {
 
 export function listLiveSessions() {
   return [...liveCache.sessions.values()].map(applyLiveVenueOverride);
+}
+
+export function listLiveHyroxCycles() {
+  return [...liveCache.hyroxCycles.values()];
+}
+
+export function getLiveHyroxCycle(id) {
+  return liveCache.hyroxCycles.get(id) || null;
+}
+
+export function liveHyroxQueuesForCycle(id) {
+  const rows = liveCache.hyroxQueues.filter((row) => row.cycleId === id);
+  return {
+    weeklyWaitlist: rows
+      .filter((row) => row.kind === "weekly_waitlist")
+      .sort((a, b) => (a.joinedAt - b.joinedAt) || a.id.localeCompare(b.id)),
+    venueSwitches: rows
+      .filter((row) => row.kind === "venue_switch")
+      .sort((a, b) => (a.joinedAt - b.joinedAt) || a.id.localeCompare(b.id)),
+  };
 }
 
 export function liveActivityTemplates() {
@@ -666,6 +797,69 @@ export function liveBookingById(id) {
 export function liveReceiptById(id) {
   return liveCache.receipts.find((r) => r.id === id) || null;
 }
+
+export async function liveSweepHyroxDeadlines({ refresh = true } = {}) {
+  try {
+    return await runOperationalRpc("sweep_hyrox_cycle_deadlines", {}, { skipRefresh: !refresh });
+  } catch (error) {
+    liveCache.error = operationalProblem(error);
+    notifyListeners();
+    throw liveCache.error;
+  }
+}
+
+export const liveReserveHyroxCycle = (cycleId, preference, fallbackAcknowledged) =>
+  runOperationalRpc("reserve_hyrox_cycle", {
+    p_cycle_id: cycleId,
+    p_preference: preference,
+    p_fallback_acknowledged: fallbackAcknowledged,
+  });
+
+export const liveJoinHyroxCycleWaitlist = (cycleId, preference, fallbackAcknowledged) =>
+  runOperationalRpc("join_hyrox_cycle_waitlist", {
+    p_cycle_id: cycleId,
+    p_preference: preference,
+    p_fallback_acknowledged: fallbackAcknowledged,
+  });
+
+export const liveLeaveHyroxCycleQueue = (entryId) =>
+  runOperationalRpc("leave_hyrox_cycle_queue", { p_entry_id: entryId });
+
+export const liveRejectHyroxPayment = (bookingId, reason) =>
+  runOperationalRpc("reject_hyrox_cycle_payment", {
+    p_booking_id: bookingId,
+    p_reason: reason,
+  });
+
+export const liveScheduleHyroxCycle = (cycleId) =>
+  runOperationalRpc("schedule_hyrox_cycle", { p_cycle_id: cycleId });
+
+export const liveFinalizeHyroxVenuePlan = (cycleId) =>
+  runOperationalRpc("finalize_hyrox_venue_plan", { p_cycle_id: cycleId });
+
+export const liveSelectHyroxVenue = (bookingId, sessionId) =>
+  runOperationalRpc("select_hyrox_cycle_venue", {
+    p_booking_id: bookingId,
+    p_target_session_id: sessionId,
+  });
+
+export const liveJoinHyroxVenueSwitchQueue = (bookingId, sessionId) =>
+  runOperationalRpc("join_hyrox_venue_switch_queue", {
+    p_booking_id: bookingId,
+    p_target_session_id: sessionId,
+  });
+
+export const liveLeaveHyroxVenueSwitchQueue = (entryId) =>
+  runOperationalRpc("leave_hyrox_venue_switch_queue", { p_entry_id: entryId });
+
+export const liveCloseHyroxVenueAllocation = (cycleId) =>
+  runOperationalRpc("close_hyrox_venue_allocation", { p_cycle_id: cycleId });
+
+export const liveCancelHyroxCycle = (cycleId, reason) =>
+  runOperationalRpc("cancel_hyrox_cycle", {
+    p_cycle_id: cycleId,
+    p_reason: reason,
+  });
 
 export async function liveReserveSession(sessionId) {
   const row = await runOperationalRpc("reserve_operational_session", { p_session_id: sessionId });
