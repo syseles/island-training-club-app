@@ -75,7 +75,6 @@ if (indemnityExportCsv.charCodeAt(0) !== 0xFEFF
     || !indemnityExportCsv.includes('Grace O""Connor')) {
   throw new Error("indemnity export must be Excel-compatible CSV with escaped values");
 }
-
 const hktRolloverInstant = Date.parse("2026-08-05T16:30:00.000Z");
 assert.equal(data.todayHktISO(hktRolloverInstant), "2026-08-06",
   "current HKT date must not depend on the browser timezone");
@@ -1879,7 +1878,6 @@ try {
 }
 store.signIn("admin@example.test");
 console.log("ok  Admin Members exposes a gated all-profile indemnity export");
-
 const adminScheduleHtml = await views.viewAdmin("payments");
 if (!adminScheduleHtml.includes("HYROX weekly setup")
     || !adminScheduleHtml.includes("created automatically")
@@ -2208,7 +2206,7 @@ console.log("ok  document registry scopes provisional watermarks by document");
 const indemnityBody = DOCS.indemnity?.renderBody?.() || "";
 for (const marker of [
   "ITC Hyrox Training - Liability Release &amp; Data Privacy Form",
-  "Hyrox Training from the date of signing to 31 December 2026",
+  "Hyrox Training from the date of signing to 30 June 2027",
 ]) {
   if (!indemnityBody.includes(marker)) {
     failures++;
