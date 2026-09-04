@@ -2295,22 +2295,11 @@ if (!liveGapPaidCard.includes("11:15 AM")
     || liveGapPaidCard.includes("paid HK$180")) {
   throw new Error("live History must hydrate paid booking display data and unpaid copy from its session");
 }
-const liveRsvpCards = liveGapHistoryHtml
-  .split('<div class="card booking-card">')
-  .filter((card) => card.includes(`href="#/booking/${liveHistoryRsvpRows[1].id}"`));
-if (liveRsvpCards.length !== 1
-    || liveGapHistoryHtml.includes(`href="#/booking/${liveHistoryRsvpRows[0].id}"`)
-    || !liveRsvpCards[0].includes("Cancelled")
-    || !liveRsvpCards[0].includes("RSVP")
-    || liveRsvpCards[0].includes("paid HK$0")) {
-  throw new Error("live History must deduplicate repeated RSVPs, retain cancellation, and never show paid HK$0");
+if (liveGapHistoryHtml.includes(`href="#/booking/${liveHistoryRsvpRows[0].id}"`)
+    || liveGapHistoryHtml.includes(`href="#/booking/${liveHistoryRsvpRows[1].id}"`)) {
+  throw new Error("live History must omit cancelled RSVP records that are not current bookings");
 }
-const liveRsvpPosition = liveGapHistoryHtml.indexOf(`href="#/booking/${liveHistoryRsvpRows[1].id}"`);
-const livePaidPosition = liveGapHistoryHtml.indexOf(`href="#/booking/${liveHistoryGapBooking.id}"`);
-if (liveRsvpPosition < 0 || livePaidPosition < 0 || liveRsvpPosition > livePaidPosition) {
-  throw new Error("History must sort the newest booking first when event dates tie");
-}
-console.log("ok  live History hydrates gaps, deduplicates RSVPs, and sorts newest booking first");
+console.log("ok  live History hydrates gaps and omits cancelled RSVP records");
 
 // A booking can outlive the operational Schedule horizon. The History read
 // must fetch its missing session by ID rather than rendering a partial row.

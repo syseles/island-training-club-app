@@ -1635,6 +1635,8 @@ function compareHistoryBookings(a, b) {
 function accountHistory(user) {
   const seenSessionIds = new Set();
   const history = store.bookingsForUser(user.id)
+    .filter((booking) => !(booking.status === "cancelled"
+      && bookingDisplaySnapshot(booking).kind === "rsvp"))
     .slice()
     .sort(compareHistoryBookings)
     .filter((booking) => {
