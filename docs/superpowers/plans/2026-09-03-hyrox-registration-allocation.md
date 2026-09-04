@@ -1182,7 +1182,7 @@ git commit -m "feat(hyrox): add local pooled registration engine"
   - `cancelHyroxCycle(cycleId, reason, now)`
   - pooled branches in payment approval, receipts, deferral and gym finalization.
 
-- [ ] **Step 1: Write failing 20/21, switch and policy assertions**
+- [x] **Step 1: Write failing 20/21, switch and policy assertions**
 
 Create two local cycles. Confirm 20 payments in one and assert `bft_only`, final BFT assignments and no venue changes. Confirm 21 BFT-preference payments in the second and assert `both`, BFT count 20, Midtown count 1 and provisional allocation.
 
@@ -1198,30 +1198,30 @@ assert.equal(store.hyroxCycleQueuePosition(memberBooking.userId, cycle.id, "venu
 
 Assert pooled `deferTargetsFor` is empty and `deferBooking` rejects with `Paid pooled HYROX bookings cannot be deferred.`.
 
-- [ ] **Step 2: Run smoke and verify failure**
+- [x] **Step 2: Run smoke and verify failure**
 
 Run: `node app/smoke.mjs`
 Expected: FAIL because `finalizeHyroxVenuePlan` is not exported.
 
-- [ ] **Step 3: Extend payment approval and rejection**
+- [x] **Step 3: Extend payment approval and rejection**
 
 `confirmBookingPayment` branches on `booking.cycleId`: create a cycle-linked receipt without assuming a session, do not release child sibling holds, and keep `status = 'confirmed'`. `rejectHyroxCyclePayment` requires Admin, a reserved/marked pooled booking and nonblank reason; before `booking.payDeadlineAt` reopen payment, otherwise expire and notify.
 
-- [ ] **Step 4: Implement plan finalization and receipt linking**
+- [x] **Step 4: Implement plan finalization and receipt linking**
 
 Reject unresolved marked payments. Derive plan solely from confirmed count. Use `allocateHyroxVenues`; for BFT-only set final BFT, for both set provisional unless now is at/after Friday 21:00. Append initial allocation objects to each booking’s `allocationSnapshot` history, update receipt `sessionId`, stamp cycle actor/time and notify members.
 
-- [ ] **Step 5: Implement capacity moves and switch matching**
+- [x] **Step 5: Implement capacity moves and switch matching**
 
 Use one private local transaction-style function that validates everything before mutating arrays. A vacancy moves immediately and appends an allocation-history object. A full target keeps current assignment and inserts a switch entry. An opposite active request swaps both assignments, appends one history object per booking and marks the existing request matched. Recompute counts before every commit to enforce 20/12.
 
-- [ ] **Step 6: Implement allocation close/cycle cancellation and pooled policy guards**
+- [x] **Step 6: Implement allocation close/cycle cancellation and pooled policy guards**
 
 Friday close marks provisional allocations final and dissolves switch queues. `cancelHyroxCycle` atomically cancels both session overrides, expires unpaid, dissolves queues and carries confirmed bookings into the next available pooled cycle; if none exists, cancel and notify follow-up.
 
 Return no defer targets for pooled bookings; reject direct defer. Block `confirmGymBooking` for pooled child sessions until allocation closes. Preserve all legacy/Quarry direct-session behaviour.
 
-- [ ] **Step 7: Add live RPC branches and run suites**
+- [x] **Step 7: Add live RPC branches and run suites**
 
 Wire each public action, including `leaveHyroxVenueSwitchQueue`, to its Task 6 adapter when live. Run:
 
@@ -1232,7 +1232,7 @@ node app/live-auth-smoke.mjs
 
 Expected: PASS with threshold, allocation, guaranteed-place switch queue, no-deferral and cancellation parity checks.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add app/js/store.js app/smoke.mjs app/live-auth-smoke.mjs

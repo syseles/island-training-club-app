@@ -4215,6 +4215,123 @@ console.log("ok  reset");
   }
   console.log("ok  local HYROX checkpoint sweep is idempotent and uses one promotion round");
 }
+{
+  store.resetLocalData();
+  installLocalFixtures();
+  const local = JSON.parse(localStorage.getItem("itc.prototype.v1"));
+  const fixtureTemplate = local.users.find((user) => user.id === "fixture-member");
+  const addMembers = (prefix, count) => {
+    for (let i = 1; i <= count; i++) {
+      local.users.push({ ...structuredClone(fixtureTemplate), id: `${prefix}-${i}`,
+        email: `${prefix}-${i}@example.test`, fullName: `${prefix} ${i}` });
+    }
+  };
+  addMembers("hyrox-threshold", 20);
+  addMembers("hyrox-switch", 32);
+  localStorage.setItem("itc.prototype.v1", JSON.stringify(local));
+  store.load();
+  const bftOnly = store.scheduleHyroxCycle("2099-01-10");
+  const bftOnlyOpening = bftOnly.registrationOpensAt;
+  const bftOnlyBookings = [];
+  for (let i = 1; i <= 20; i++) {
+    const booking = store.reserveHyroxCycle(`hyrox-threshold-${i}`, bftOnly.id, "bft", true, bftOnlyOpening);
+    store.markBookingPaid(booking.id, "PayMe", `threshold-${i}`, bftOnlyOpening + i);
+    store.confirmBookingPayment(booking.id, bftOnlyOpening + i + 1);
+    bftOnlyBookings.push(booking.id);
+  }
+  const bftPlan = store.finalizeHyroxVenuePlan(bftOnly.id, bftOnly.paymentDeadlineAt + 1);
+  if (bftPlan.venuePlan !== "bft_only" || !bftPlan.allocationClosedAt
+      || bftOnlyBookings.some((id) => store.getBooking(id).sessionId !== bftOnly.bftSessionId
+        || store.getBooking(id).allocationState !== "final")) {
+    throw new Error("20 confirmed pooled payments should finalize BFT-only assignments");
+  }
+  const thresholdBoth = store.scheduleHyroxCycle("2099-01-17");
+  const thresholdOpening = thresholdBoth.registrationOpensAt;
+  let thresholdBooking = null;
+  for (let i = 1; i <= 21; i++) {
+    thresholdBooking = store.reserveHyroxCycle(`hyrox-switch-${i}`, thresholdBoth.id, "bft", true, thresholdOpening);
+    store.markBookingPaid(thresholdBooking.id, "PayMe", `threshold-both-${i}`, thresholdOpening + i);
+    store.confirmBookingPayment(thresholdBooking.id, thresholdOpening + i + 1);
+  }
+  const thresholdPlan = store.finalizeHyroxVenuePlan(thresholdBoth.id, thresholdBoth.paymentDeadlineAt + 1);
+  if (thresholdPlan.venuePlan !== "both" || store.getBooking(thresholdBooking.id).allocationState !== "provisional") {
+    throw new Error("21 confirmed pooled payments should open both venues provisionally");
+  }
+  const both = store.scheduleHyroxCycle("2099-01-24");
+  const bothOpening = both.registrationOpensAt;
+  const bothBookings = [];
+  for (let i = 1; i <= 32; i++) {
+    const booking = store.reserveHyroxCycle(`hyrox-switch-${i}`, both.id, "bft", true, bothOpening);
+    store.markBookingPaid(booking.id, "PayMe", `switch-${i}`, bothOpening + i);
+    store.confirmBookingPayment(booking.id, bothOpening + i + 1);
+    bothBookings.push(booking.id);
+  }
+  const bothPlan = store.finalizeHyroxVenuePlan(both.id, both.paymentDeadlineAt + 1);
+  const bftAssigned = bothBookings.filter((id) => store.getBooking(id).sessionId === both.bftSessionId);
+  const midtownAssigned = bothBookings.filter((id) => store.getBooking(id).sessionId === both.midtownSessionId);
+  if (bothPlan.venuePlan !== "both" || bftAssigned.length !== 20 || midtownAssigned.length !== 12) {
+    throw new Error("32 confirmed pooled payments should respect the 20/12 venue capacities");
+  }
+  const midtownBooking = store.getBooking(midtownAssigned[0]);
+  const bftBooking = store.getBooking(bftAssigned[0]);
+  const beforeSession = midtownBooking.sessionId;
+  const switchEntry = store.joinHyroxVenueSwitchQueue(midtownBooking.id, both.bftSessionId,
+    both.paymentDeadlineAt + 2);
+  if (switchEntry.kind !== "venue_switch" || store.getBooking(midtownBooking.id).sessionId !== beforeSession
+      || store.hyroxCycleQueuePosition(midtownBooking.userId, both.id, "venue_switch", both.bftSessionId) !== 1) {
+    throw new Error("full pooled target should preserve assignment and queue a guaranteed venue switch");
+  }
+  const opposite = store.joinHyroxVenueSwitchQueue(bftBooking.id, both.midtownSessionId,
+    both.paymentDeadlineAt + 3);
+  if (store.getBooking(midtownBooking.id).sessionId !== both.bftSessionId
+      || store.getBooking(bftBooking.id).sessionId !== both.midtownSessionId
+      || opposite.status !== "matched") {
+    throw new Error("opposite pooled switch requests should atomically swap assignments");
+  }
+  if (store.deferTargetsFor(midtownBooking).length !== 0) {
+    throw new Error("pooled HYROX bookings must not expose deferral targets");
+  }
+  try {
+    store.deferBooking(midtownBooking.id, both.bftSessionId, both.paymentDeadlineAt + 4);
+    throw new Error("pooled HYROX deferral should be rejected");
+  } catch (err) {
+    if (!/Paid pooled HYROX bookings cannot be deferred/.test(err.message)) throw err;
+  }
+  try {
+    store.confirmGymBooking(both.bftSessionId, "too early", both.venueChoiceDeadlineAt);
+    throw new Error("pooled child gym finalization should be blocked before allocation close");
+  } catch (err) {
+    if (!/Pooled HYROX child sessions/.test(err.message)) throw err;
+  }
+  store.closeHyroxVenueAllocation(both.id, both.venueChoiceDeadlineAt + 1);
+  if (!both.allocationClosedAt || store.getBooking(midtownBooking.id).allocationState !== "final") {
+    throw new Error("Friday allocation close should finalize provisional pooled bookings");
+  }
+  store.confirmGymBooking(both.bftSessionId, "finalized", both.venueChoiceDeadlineAt + 1);
+  const rejectCycle = store.scheduleHyroxCycle("2099-01-31");
+  const rejected = store.reserveHyroxCycle("fixture-member", rejectCycle.id, "bft", true,
+    rejectCycle.registrationOpensAt);
+  store.markBookingPaid(rejected.id, "FPS", "reject-before", rejected.payDeadlineAt - 1000);
+  store.rejectHyroxCyclePayment(rejected.id, "Receipt mismatch", rejected.payDeadlineAt - 1);
+  if (store.getBooking(rejected.id).status !== "reserved" || store.getBooking(rejected.id).paymentMarkedAt) {
+    throw new Error("pre-deadline HYROX payment rejection should reopen the reservation");
+  }
+  store.markBookingPaid(rejected.id, "FPS", "reject-after", rejected.payDeadlineAt);
+  store.rejectHyroxCyclePayment(rejected.id, "Still unmatched", rejected.payDeadlineAt + 1);
+  if (store.getBooking(rejected.id).status !== "expired") {
+    throw new Error("post-deadline HYROX payment rejection should expire the reservation");
+  }
+  const carryTarget = store.scheduleHyroxCycle("2099-02-07");
+  store.sweepHyroxCycleDeadlines(carryTarget.registrationOpensAt);
+  const oldCycleBooking = store.getBooking(thresholdBooking.id);
+  store.cancelHyroxCycle(thresholdBoth.id, "Gym unavailable", carryTarget.registrationOpensAt);
+  const carried = store.getBooking(oldCycleBooking.deferredTo);
+  if (oldCycleBooking.status !== "deferred" || carried?.cycleId !== carryTarget.id
+      || carried.status !== "confirmed") {
+    throw new Error("paid HYROX bookings should carry forward to the next available pooled cycle");
+  }
+  console.log("ok  local HYROX reconciliation derives thresholds and serializes venue switches");
+}
 
 // --- Install neutral fixtures for local authenticated paths (no demo seeds) ---
 function installLocalFixtures({ withMemberBooking = false } = {}) {
