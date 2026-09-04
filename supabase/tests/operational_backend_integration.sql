@@ -669,6 +669,7 @@ end $$;
 
 \ir ../migrations/20260829000008_rsvp_integrity.sql
 \ir ../migrations/20260830000001_rsvp_count_trigger_locking.sql
+\ir ../migrations/20260903000002_hyrox_cycle_member_rpcs.sql
 
 do $$
 declare
@@ -1802,6 +1803,237 @@ begin
 end $$;
 
 -- =====================================================================
+-- Pooled HYROX member registration and weekly waitlist
+-- =====================================================================
+
+do $$
+declare
+  v_member_bft constant uuid := 'bb000000-0000-0000-0000-00000000b001';
+  v_member_midtown constant uuid := 'dd000000-0000-0000-0000-00000000d001';
+  v_member_either constant uuid := 'ee000000-0000-0000-0000-00000000e001';
+  v_direct_member constant uuid := '70000000-0000-0000-0000-000000000031';
+  v_quarry_member constant uuid := '70000000-0000-0000-0000-000000000032';
+  v_waitlist_member constant uuid := '70000000-0000-0000-0000-000000000030';
+  v_date date := (now() at time zone 'Asia/Hong_Kong')::date
+    + ((6 - extract(dow from (now() at time zone 'Asia/Hong_Kong')::date)::integer + 7) % 7)
+    + 210;
+  v_cycle_id text;
+  v_bft_session text;
+  v_midtown_session text;
+  v_quarry_session text;
+  v_booking public.operational_bookings;
+  v_queue public.operational_hyrox_queue_entries;
+  v_error text;
+begin
+  v_cycle_id := 'hyrox-pool-' || v_date::text;
+  v_bft_session := 'hyrox-bft-' || v_date::text;
+  v_midtown_session := 'hyrox-midtown-' || v_date::text;
+  v_quarry_session := 'hyrox-quarry-bay-' || v_date::text;
+
+  insert into auth.users (id, email, raw_user_meta_data)
+  select ('70000000-0000-0000-0000-' || lpad(i::text, 12, '0'))::uuid,
+         'hyrox-pool-' || i::text || '@itc.invalid',
+         '{}'::jsonb
+    from generate_series(1, 32) i;
+  update public.profiles
+     set full_name = 'HYROX Pool Member ' || right(id::text, 2),
+         role = 'member'
+   where id::text like '70000000-0000-0000-0000-%';
+
+  perform public.ensure_operational_sessions(v_date, 1);
+  insert into public.operational_hyrox_cycles (
+    id, session_date, bft_session_id, midtown_session_id,
+    registration_state, venue_plan, registration_opens_at,
+    payment_deadline_at, holder_grace_deadline_at,
+    promoted_payment_deadline_at, venue_choice_deadline_at
+  ) values (
+    v_cycle_id, v_date, v_bft_session, v_midtown_session,
+    'draft', 'pending', now() + interval '1 hour',
+    now() + interval '3 days', now() + interval '3 days 1 hour',
+    now() + interval '3 days 2 hours', now() + interval '4 days'
+  );
+
+  -- Scheduled cycles are visible but locked until their opening instant.
+  perform pg_temp.op_assert(
+    (select registration_state = 'draft' and opened_at is null
+       from public.operational_hyrox_cycles where id = v_cycle_id),
+    'scheduled pooled cycle is visible and locked before Monday opening'
+  );
+  perform set_config('request.jwt.claim.sub', v_member_bft::text, true);
+  set local role authenticated;
+  begin
+    perform public.reserve_hyrox_cycle(v_cycle_id, 'bft', true);
+    raise exception 'early pooled registration should fail';
+  exception when others then
+    v_error := sqlerrm;
+    if v_error not like '%HYROX registration opens Monday at 6 PM HKT.%' then raise; end if;
+  end;
+  reset role;
+
+  -- Moving the stored opening checkpoint into the past simulates Monday 18:00
+  -- HKT without depending on the verifier host clock.
+  update public.operational_hyrox_cycles
+     set registration_opens_at = now() - interval '1 minute'
+   where id = v_cycle_id;
+
+  perform set_config('request.jwt.claim.sub', v_member_bft::text, true);
+  set local role authenticated;
+  begin
+    perform public.reserve_hyrox_cycle(v_cycle_id, 'bft', false);
+    raise exception 'missing fallback acknowledgement should fail';
+  exception when others then
+    v_error := sqlerrm;
+    if v_error not like '%Fallback acknowledgement is required.%' then raise; end if;
+  end;
+  select * into v_booking
+    from public.reserve_hyrox_cycle(v_cycle_id, 'bft', true);
+  reset role;
+  perform pg_temp.op_assert(
+    v_booking.venue_preference = 'bft'
+      and v_booking.fallback_acknowledged_at is not null
+      and v_booking.session_id is null
+      and v_booking.pay_deadline_at = (
+        select holder_grace_deadline_at
+          from public.operational_hyrox_cycles where id = v_cycle_id
+      ),
+    'BFT preference creates an acknowledged pooled reservation'
+  );
+  perform pg_temp.op_assert(
+    (select registration_state = 'open' and opened_at is not null
+       from public.operational_hyrox_cycles where id = v_cycle_id),
+    'first due reservation opens the scheduled cycle under lock'
+  );
+  perform pg_temp.op_assert(
+    exists (
+      select 1 from public.notifications
+       where profile_id = v_member_bft
+         and kind = 'operational_hyrox_reserved'
+         and destination = '#/pay/' || v_booking.id::text
+    ),
+    'pooled reservation sends its exact payment notification'
+  );
+
+  perform set_config('request.jwt.claim.sub', v_member_midtown::text, true);
+  set local role authenticated;
+  select * into v_booking
+    from public.reserve_hyrox_cycle(v_cycle_id, 'midtown', true);
+  reset role;
+  perform pg_temp.op_assert(v_booking.venue_preference = 'midtown',
+    'Midtown preference is recorded');
+
+  perform set_config('request.jwt.claim.sub', v_member_either::text, true);
+  set local role authenticated;
+  select * into v_booking
+    from public.reserve_hyrox_cycle(v_cycle_id, 'either', true);
+  reset role;
+  perform pg_temp.op_assert(v_booking.venue_preference = 'either',
+    'Either preference is recorded');
+
+  -- Once a cycle is scheduled, its child sessions cannot use legacy booking
+  -- or Midtown interest/waitlist entry points.
+  perform pg_temp.op_assert(
+    exists (
+      select 1 from public.operational_hyrox_cycles c
+       where c.id = v_cycle_id
+         and c.bft_session_id = v_bft_session
+         and c.midtown_session_id = v_midtown_session
+         and c.cancelled_at is null
+    ),
+    'pooled cycle retains its authoritative child-session links'
+  );
+  perform set_config('request.jwt.claim.sub', v_direct_member::text, true);
+  set local role authenticated;
+  begin
+    perform public.reserve_operational_session(v_bft_session);
+    raise exception 'direct pooled child reservation should fail';
+  exception when others then
+    v_error := sqlerrm;
+    if v_error not like '%Use the weekly HYROX registration.%' then raise; end if;
+  end;
+  begin
+    perform public.join_operational_queue(v_midtown_session, 'interest');
+    raise exception 'legacy pooled child queue should fail';
+  exception when others then
+    v_error := sqlerrm;
+    if v_error not like '%Use the weekly HYROX registration.%' then raise; end if;
+  end;
+  reset role;
+
+  -- Quarry Bay remains separately bookable but cannot overlap the pool.
+  perform set_config('request.jwt.claim.sub', v_quarry_member::text, true);
+  set local role authenticated;
+  perform public.reserve_operational_session(v_quarry_session);
+  begin
+    perform public.reserve_hyrox_cycle(v_cycle_id, 'either', true);
+    raise exception 'same-date Quarry and pooled bookings should conflict';
+  exception when others then
+    v_error := sqlerrm;
+    if v_error not like '%You already have a HYROX booking for this Saturday.%' then raise; end if;
+  end;
+  reset role;
+
+  -- Fill the remaining 29 places directly; the RPC behaviors under test are
+  -- capacity rejection and non-payable waitlist placement for member #33.
+  insert into public.operational_bookings (
+    profile_id, session_id, hyrox_cycle_id, status, reserved_at,
+    pay_deadline_at, venue_preference, fallback_acknowledged_at, snapshot
+  )
+  select ('70000000-0000-0000-0000-' || lpad(i::text, 12, '0'))::uuid,
+         null, v_cycle_id, 'reserved', now(),
+         (select holder_grace_deadline_at
+            from public.operational_hyrox_cycles where id = v_cycle_id),
+         'either', now(),
+         jsonb_build_object('name', 'ITC HYROX', 'booking_mode', 'weekly_pool',
+           'session_date', v_date, 'price_hkd', 180)
+    from generate_series(1, 29) i;
+  perform pg_temp.op_assert(
+    (select count(*) from public.operational_bookings
+      where hyrox_cycle_id = v_cycle_id
+        and status in ('reserved', 'confirmed')) = 32,
+    'pooled registration capacity is 32 active bookings'
+  );
+
+  perform set_config('request.jwt.claim.sub', v_waitlist_member::text, true);
+  set local role authenticated;
+  begin
+    perform public.reserve_hyrox_cycle(v_cycle_id, 'either', true);
+    raise exception '33rd pooled reservation should fail';
+  exception when others then
+    v_error := sqlerrm;
+    if v_error not like '%HYROX registration is full. Join the weekly waitlist.%' then raise; end if;
+  end;
+  begin
+    perform public.join_hyrox_cycle_waitlist(v_cycle_id, 'midtown', false);
+    raise exception 'unacknowledged weekly waitlist should fail';
+  exception when others then
+    v_error := sqlerrm;
+    if v_error not like '%Fallback acknowledgement is required.%' then raise; end if;
+  end;
+  select * into v_queue
+    from public.join_hyrox_cycle_waitlist(v_cycle_id, 'midtown', true);
+  reset role;
+  perform pg_temp.op_assert(
+    v_queue.kind = 'weekly_waitlist'
+      and v_queue.status = 'active'
+      and v_queue.venue_preference = 'midtown'
+      and v_queue.fallback_acknowledged_at is not null
+      and not exists (
+        select 1 from public.operational_bookings
+         where profile_id = v_waitlist_member
+           and hyrox_cycle_id = v_cycle_id
+      ),
+    '33rd member joins the non-payable weekly waitlist without a booking'
+  );
+
+  perform set_config('request.jwt.claim.sub', v_waitlist_member::text, true);
+  set local role authenticated;
+  select * into v_queue from public.leave_hyrox_cycle_queue(v_queue.id);
+  reset role;
+  perform pg_temp.op_assert(v_queue.status = 'left' and v_queue.resolved_at is not null,
+    'member can leave their active weekly waitlist entry');
+end $$;
+
+-- =====================================================================
 -- Semantic notification destinations
 -- =====================================================================
 
@@ -2692,8 +2924,9 @@ begin
   perform pg_temp.op_assert(
     (select count(*) from public.notifications
        where kind = 'operational_session_venue_updated'
-         and destination = '#/activity/' || v_session) = 4,
-    'every notification carries the dated activity destination'
+         and destination = '#/activity/' || v_session)
+      = (select count(*) from public.profiles where role = 'member') + 1,
+    'every member and the non-acting Super Admin receive the dated activity destination'
   );
   perform pg_temp.op_assert(
     exists (
