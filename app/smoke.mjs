@@ -794,8 +794,8 @@ if (!appIndexSource.includes(`<link rel="icon" href="${faviconPath}">`)
     || !manifestSource.includes('"type": "image/png"')
     || !faviconBytes
     || faviconBytes.toString("ascii", 12, 16) !== "IHDR"
-    || faviconBytes.readUInt32BE(16) !== 48
-    || faviconBytes.readUInt32BE(20) !== 48) {
+    || faviconBytes.readUInt32BE(16) !== 1929
+    || faviconBytes.readUInt32BE(20) !== 1929) {
   throw new Error("webpage and installed-app icons must use the undistorted ITC favicon asset");
 }
 console.log("ok  webpage and installed-app icons use the undistorted ITC favicon");
