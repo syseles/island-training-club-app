@@ -1124,6 +1124,12 @@ assert.equal(
   "live event wall time must resolve as an HKT instant in every host timezone",
 );
 store.load();
+await operations.ensureLiveSessionWindow();
+assert.deepEqual(
+  operationalRpcCalls.find((call) => call.name === "ensure_hyrox_cycles")?.args,
+  { p_start_date: fixedHktTodayIso, p_weeks: 16 },
+  "live boot must automatically provision the bounded HYROX cycle window",
+);
 await store.hydrateLiveOperations();
 assert.equal(store.getHyroxCycle("hyrox-pool-2099-01-03")?.venuePlan, "pending");
 assert.equal(

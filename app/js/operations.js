@@ -543,6 +543,11 @@ export async function ensureLiveSessionWindow() {
       p_weeks: 16,
     });
     if (error) throw operationalProblem(error);
+    const { error: hyroxError } = await supabase.rpc("ensure_hyrox_cycles", {
+      p_start_date: iso,
+      p_weeks: 16,
+    });
+    if (hyroxError) throw operationalProblem(hyroxError);
   } catch (err) {
     console.warn("ensureLiveSessionWindow failed", err);
   }

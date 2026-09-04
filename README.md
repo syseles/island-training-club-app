@@ -12,7 +12,7 @@ The prototype implements the selected "Night Circuit" direction and the confirme
 
 - Free vs paid activity classification everywhere (home, schedule, detail).
 - Wednesday Night Training is free, open attendance — no booking, no capacity, no checkout. Actions are Add to Calendar (.ics download) and Get Directions.
-- Weekly HYROX uses one shared 32-place BFT/Midtown pool at a fixed price, with automatic venue allocation, confirmation, receipt, and member-area management. Quarry Bay remains a separate direct-booking session.
+- Weekly HYROX uses one shared 32-place BFT/Midtown pool at a fixed price, with automatic recurring parent-card provisioning, Monday opening, venue allocation, confirmation, receipt, and member-area management. Quarry Bay remains a separate direct-booking session.
 - Account lifecycle: public visitor → application → leader approval → member. Pending applicants keep public access only.
 - Member area: upcoming bookings, receipts, payment history, profile.
 - Admin area: applicant approval queue, activity editor (including the unresolved HYROX price/capacity as editable placeholders), member role list.

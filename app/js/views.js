@@ -2384,27 +2384,12 @@ function adminHyroxCycleCards() {
   }).join("");
 }
 
-function adminHyroxScheduleControl() {
-  const grouped = new Map();
-  for (const session of store.upcomingSessions(60).filter((item) =>
-    item.category === "HYROX"
-      && item.dateISO > todayHktISO()
-      && ["hyrox-bft", "hyrox-midtown"].includes(item.activityId)
-  )) {
-    const ids = grouped.get(session.dateISO) || new Set();
-    ids.add(session.activityId);
-    grouped.set(session.dateISO, ids);
-  }
-  const dates = [...grouped.entries()]
-    .filter(([dateISO, ids]) => ids.has("hyrox-bft") && ids.has("hyrox-midtown")
-      && !store.hyroxCycleForDate(dateISO))
-    .map(([dateISO]) => dateISO)
-    .sort();
-  return `<details class="admin-section mt16" open>
-    <summary><h2>Schedule pooled HYROX</h2></summary>
+function adminHyroxProvisioningInfo() {
+  return `<details class="admin-section mt16">
+    <summary><h2>HYROX weekly setup</h2></summary>
     <div class="card mt8"><div class="card-body">
-      <p class="muted small">Choose a clean future Saturday to replace the separate BFT and Midtown booking cards with one shared 32-place pool. This creates the locked parent card; sign up opens automatically Monday at 6 PM HKT.</p>
-      ${dates.length ? `<form id="form-hyrox-cycle-schedule" class="mt16"><div class="field"><label for="hyrox-cycle-date">Saturday</label><select id="hyrox-cycle-date" name="dateISO" required>${dates.map((dateISO) => `<option value="${esc(dateISO)}">${esc(fmtDate(dateISO))}</option>`).join("")}</select></div><button class="btn sm" type="submit">Schedule HYROX cycle</button></form>` : `<p class="empty mt16">No unscheduled future BFT + Midtown Saturdays are available.</p>`}
+      <p class="muted small">BFT + Midtown parent cards are created automatically for clean future Saturdays. Sign up opens automatically Monday at 6 PM HKT; collectors only review payments and reconciliation.</p>
+      <p class="muted small mt8">A week with existing legacy bookings or queues remains separate until those records are safely resolved.</p>
     </div></div>
   </details>`;
 }
@@ -2465,7 +2450,7 @@ function adminOps(viewer, memberUsers, profilePhone = "") {
   return `
     ${dutyCard}
     ${pendingCard}
-    ${adminHyroxScheduleControl()}
+    ${adminHyroxProvisioningInfo()}
     ${adminHyroxCycleCards()}
     ${adminFinalizeGym()}`;
 }

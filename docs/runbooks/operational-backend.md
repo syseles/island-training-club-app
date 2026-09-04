@@ -43,13 +43,15 @@ All mutations are routed through `SECURITY DEFINER` RPCs:
   `join_hyrox_cycle_waitlist`, `leave_hyrox_cycle_queue`,
   `select_hyrox_cycle_venue`, `join_hyrox_venue_switch_queue`, and
   `leave_hyrox_venue_switch_queue`.
-- Both: `ensure_operational_sessions` (idempotent rolling window).
+- Both: `ensure_operational_sessions` (idempotent rolling window) and
+  `ensure_hyrox_cycles` (idempotent parent-cycle provisioning for clean future
+  BFT + Midtown Saturdays).
 
 ## Apply the migrations
 
 The deployment is intentionally manual. First apply the repository’s
 pre-existing migrations through `20260902000001_hyrox_bft_quarry_bay.sql`.
-Then apply these four pooled-HYROX migrations in this exact order, in the
+Then apply these five pooled-HYROX migrations in this exact order, in the
 Supabase SQL Editor (or via `supabase db push` from a trusted workstation):
 
 1. `20260903000001_hyrox_cycle_schema.sql` — cycle/queue columns, RLS and
@@ -59,13 +61,24 @@ Supabase SQL Editor (or via `supabase db push` from a trusted workstation):
    automatic allocation and receipts.
 4. `20260903000004_hyrox_cycle_allocation.sql` — venue switches, closure
    and cancellation carry-forward.
-
-Apply each migration on its own. Resolve any error before the next one.
+5. `20260904000001_hyrox_cycle_auto_provision.sql` — automatic recurring
+   parent-cycle provisioning.
 
 Apply each migration on its own. Resolve any error before moving to the
 next migration. The verified `feature/shared-operations` branch uses
 `origin/testing` as its base; the same migrations must be applied to
 the same database that the App's anon key reaches.
+
+## Automatic recurring provisioning
+
+The app calls `ensure_operational_sessions` and `ensure_hyrox_cycles` during
+live boot. Clean future Saturdays receive a draft parent cycle automatically;
+the parent card is visible immediately and registration opens at Monday 6 PM
+HKT. No collector scheduling click is required.
+
+A week with active legacy BFT/Midtown bookings or queues is intentionally
+skipped. It remains on the legacy presentation until those records are resolved
+or explicitly migrated; this prevents orphaning member reservations.
 
 ## Post-deployment verification
 

@@ -166,6 +166,7 @@ for (const relativePath of [
   "../supabase/migrations/20260903000002_hyrox_cycle_member_rpcs.sql",
   "../supabase/migrations/20260903000003_hyrox_cycle_reconciliation.sql",
   "../supabase/migrations/20260903000004_hyrox_cycle_allocation.sql",
+  "../supabase/migrations/20260904000001_hyrox_cycle_auto_provision.sql",
 ]) {
   const absolutePath = resolve(__dirnameSmoke, relativePath);
   if (!existsSync(absolutePath)) {
@@ -1749,11 +1750,12 @@ for (const tab of ["approvals", "members", "activities", "giving", "payments"]) 
 }
 console.log("ok  every Admin route exposes exactly one active tab");
 const adminScheduleHtml = await views.viewAdmin("payments");
-if (!adminScheduleHtml.includes('id="form-hyrox-cycle-schedule"')
-    || !adminScheduleHtml.includes("Schedule HYROX cycle")) {
-  throw new Error("Admin Payments must expose the HYROX cycle scheduling control");
+if (!adminScheduleHtml.includes("HYROX weekly setup")
+    || !adminScheduleHtml.includes("created automatically")
+    || adminScheduleHtml.includes("form-hyrox-cycle-schedule")) {
+  throw new Error("Admin Payments must explain automatic HYROX cycle provisioning");
 }
-console.log("ok  Admin Payments exposes HYROX cycle scheduling");
+console.log("ok  Admin Payments explains automatic HYROX cycle provisioning");
 
 // --- Admin Giving (local mode) ---
 // Empty local state still surfaces an actionable Create campaign link.
