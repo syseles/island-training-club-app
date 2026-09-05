@@ -1125,11 +1125,14 @@ const bookingCardFixtureState = JSON.parse(bookingStateBeforeCardFixtures);
 const bookingRecord = bookingCardFixtureState.bookings.find((item) => item.id === booking.id);
 const relatedSession = store.getSession(booking.sessionId);
 bookingRecord.snapshot.durationMin = 999;
-bookingCardFixtureState.bookings.push({
+const duplicateBookingRecord = {
   ...structuredClone(bookingRecord),
   id: "duplicate-booking-record",
   status: "cancelled",
-});
+};
+delete duplicateBookingRecord.snapshot.time;
+delete duplicateBookingRecord.snapshot.startTime;
+bookingCardFixtureState.bookings.push(duplicateBookingRecord);
 bookingCardFixtureState.bookings.push({
   id: "rsvp-booking-record",
   userId: booking.userId,
@@ -1160,6 +1163,16 @@ if (!relatedCardsPage.includes("Community RSVP")
   failures++;
   console.error("FAIL RSVP booking should show RSVP instead of paid HK$0");
 } else console.log("ok  RSVP booking shows RSVP details");
+try {
+  const cancelledBookingPage = views.viewBooking("duplicate-booking-record");
+  if (!cancelledBookingPage.includes("Booking cancelled")) {
+    failures++;
+    console.error("FAIL cancelled booking details should render safely");
+  } else console.log("ok  cancelled booking details render safely");
+} catch (err) {
+  failures++;
+  console.error(`FAIL cancelled booking details should render safely: ${err.message}`);
+}
 mem.set("itc.prototype.v1", bookingStateBeforeCardFixtures);
 store.load();
 store.signIn(signIn.user.email);

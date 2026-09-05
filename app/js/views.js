@@ -1736,7 +1736,7 @@ export function viewBooking(bookingId) {
   if (!b || !user || (b.userId !== user.id && !isAdminRole(user.role))) {
     return viewNotFound("Booking not found.");
   }
-  const s = b.snapshot;
+  const s = bookingSnapshot(b);
   const receipt = store.receiptForBooking(b.id);
   const mine = b.userId === user.id;
 
