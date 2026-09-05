@@ -1106,7 +1106,7 @@ async function accountMember(user) {
     superadmin: "Super admin",
   }[normalized];
 
-  const bookings = store.bookingsForUser(user.id);
+  const bookings = dedupeBookings(store.bookingsForUser(user.id));
   const attended = bookings.filter((b) => b.status === "attended").length;
 
   return `
@@ -1363,10 +1363,37 @@ async function accountPrivacy(user) {
 
 function bookingSnapshot(b) {
   const snapshot = b.snapshot || b;
+  const event = b.sessionId ? store.getSession(b.sessionId) : null;
   return {
     ...snapshot,
-    time: snapshot.time || snapshot.startTime || "00:00",
+    name: event?.name ?? snapshot.name,
+    dateISO: event?.dateISO ?? snapshot.dateISO,
+    time: event?.time || event?.startTime || snapshot.time || snapshot.startTime || "00:00",
+    location: event?.location ?? snapshot.location,
+    durationMin: event?.durationMin ?? snapshot.durationMin,
+    price: event?.price ?? snapshot.price,
+    kind: event?.kind ?? snapshot.kind,
   };
+}
+
+function bookingPriority(b) {
+  return { confirmed: 4, reserved: 3, attended: 2, cancelled: 1 }[b.status] || 0;
+}
+
+function dedupeBookings(records) {
+  const unique = new Map();
+  for (const booking of records) {
+    const snapshot = bookingSnapshot(booking);
+    const key = booking.sessionId || `${snapshot.dateISO}|${snapshot.time}|${snapshot.name}`;
+    const current = unique.get(key);
+    if (!current
+        || bookingPriority(booking) > bookingPriority(current)
+        || (bookingPriority(booking) === bookingPriority(current)
+          && Number(booking.createdAt || 0) > Number(current.createdAt || 0))) {
+      unique.set(key, booking);
+    }
+  }
+  return [...unique.values()];
 }
 
 function bookingSortKey(b) {
@@ -1395,6 +1422,8 @@ function bookingCard(b) {
           : started
             ? '<span class="badge neutral">Ended</span>'
             : '<span class="badge free">Confirmed</span>';
+  const isRsvp = s.kind === "rsvp" || (s.kind !== "paid" && Number(s.price) === 0);
+  const paymentDetail = isRsvp ? "RSVP" : `paid ${fmtMoney(s.price)}`;
   return `
     <div class="card booking-card"><div class="card-body">
       <header>
@@ -1404,7 +1433,7 @@ function bookingCard(b) {
         </div>
         ${status}
       </header>
-      <p>${esc(s.location)} · ${s.durationMin} min · paid ${fmtMoney(s.price)}</p>
+      <p>${esc(s.location)} · ${s.durationMin} min · ${paymentDetail}</p>
       <div class="actions">
         <a class="btn ghost sm" href="#/booking/${b.id}">${live ? "Manage" : "Details"}</a>
       </div>
@@ -1418,7 +1447,7 @@ function bookingGroup(title, bookings) {
 }
 
 function accountBookings(user, filter = "all") {
-  const records = store.bookingsForUser(user.id);
+  const records = dedupeBookings(store.bookingsForUser(user.id));
   const filtered = filter === "attended"
     ? records.filter((b) => b.status === "attended")
     : records;

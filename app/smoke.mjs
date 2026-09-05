@@ -1083,8 +1083,10 @@ if (!activeBookingsPage.includes(booking.snapshot.name)
 } else console.log("ok  Bookings page shows active confirmed bookings");
 const originalBookingStatus = booking.status;
 const originalBookingDateISO = booking.snapshot.dateISO;
+const originalBookingSessionId = booking.sessionId;
 try {
   booking.status = "confirmed";
+  booking.sessionId = booking.sessionId.replace(/\d{4}-\d{2}-\d{2}$/, "2000-01-01");
   booking.snapshot.dateISO = "2000-01-01";
   const endedBookingsPage = await views.viewAccount("bookings");
   if (!endedBookingsPage.includes("Ended") || !endedBookingsPage.includes(booking.snapshot.name)) {
@@ -1099,6 +1101,7 @@ try {
     console.error("FAIL Attended view should show attended bookings");
   } else console.log("ok  Attended view shows attended bookings");
   booking.status = "cancelled";
+  booking.sessionId = originalBookingSessionId;
   booking.snapshot.dateISO = originalBookingDateISO;
   const cancelledBookingsPage = await views.viewAccount("bookings");
   if (!cancelledBookingsPage.includes(booking.snapshot.name)
@@ -1108,6 +1111,7 @@ try {
   } else console.log("ok  Bookings page shows cancelled bookings");
 } finally {
   booking.status = originalBookingStatus;
+  booking.sessionId = originalBookingSessionId;
   booking.snapshot.dateISO = originalBookingDateISO;
 }
 const legacyHistoryPage = await views.viewAccount("history");
@@ -1115,6 +1119,50 @@ if (!legacyHistoryPage.includes("Bookings") || !legacyHistoryPage.includes(booki
   failures++;
   console.error("FAIL legacy History route should preserve access to Bookings");
 } else console.log("ok  legacy History route maps to Bookings");
+
+const bookingStateBeforeCardFixtures = mem.get("itc.prototype.v1");
+const bookingCardFixtureState = JSON.parse(bookingStateBeforeCardFixtures);
+const bookingRecord = bookingCardFixtureState.bookings.find((item) => item.id === booking.id);
+const relatedSession = store.getSession(booking.sessionId);
+bookingRecord.snapshot.durationMin = 999;
+bookingCardFixtureState.bookings.push({
+  ...structuredClone(bookingRecord),
+  id: "duplicate-booking-record",
+  status: "cancelled",
+});
+bookingCardFixtureState.bookings.push({
+  id: "rsvp-booking-record",
+  userId: booking.userId,
+  sessionId: "rsvp-session-2099-01-01",
+  status: "confirmed",
+  snapshot: {
+    kind: "rsvp", name: "Community RSVP", dateISO: "2099-01-01", time: "10:00",
+    durationMin: 45, location: "Community Hall", price: 0,
+  },
+});
+mem.set("itc.prototype.v1", JSON.stringify(bookingCardFixtureState));
+store.load();
+store.signIn(signIn.user.email);
+const relatedCardsPage = await views.viewAccount("bookings");
+const bookingNameHeading = `<h3 class="mt8">${booking.snapshot.name}</h3>`;
+if ((relatedCardsPage.match(new RegExp(bookingNameHeading, "g")) || []).length !== 1) {
+  failures++;
+  console.error("FAIL Bookings should deduplicate records for the same event");
+} else console.log("ok  Bookings deduplicates records for the same event");
+if (!relatedCardsPage.includes(`${relatedSession.durationMin} min`) || relatedCardsPage.includes("999 min")) {
+  failures++;
+  console.error("FAIL Booking details should use the related event duration");
+} else console.log("ok  Booking details use the related event duration");
+if (!relatedCardsPage.includes("Community RSVP")
+    || !relatedCardsPage.includes("45 min")
+    || !relatedCardsPage.includes("RSVP")
+    || relatedCardsPage.includes("paid HK$0")) {
+  failures++;
+  console.error("FAIL RSVP booking should show RSVP instead of paid HK$0");
+} else console.log("ok  RSVP booking shows RSVP details");
+mem.set("itc.prototype.v1", bookingStateBeforeCardFixtures);
+store.load();
+store.signIn(signIn.user.email);
 
 // donor ID skipped at signup ("Not applicable" above) can be added later;
 // it now lives inside Membership Details, not on the Profile card face.
