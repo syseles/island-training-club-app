@@ -3605,6 +3605,14 @@ store.signIn("member@example.test");
 // --- Generic Socials preview: rolling seven-day selector ---
 store.resetLocalData();
 installLocalFixtures();
+// Keep this selector test independent of seeded Social activities such as the
+// recurring Post-Training Lunch, so the synthetic ordering fixtures are the
+// only candidates under test.
+const socialFixtureState = JSON.parse(mem.get("itc.prototype.v1"));
+socialFixtureState.activities = socialFixtureState.activities.filter((activity) => activity.category !== "Socials");
+socialFixtureState.oneOffEvents = [];
+mem.set("itc.prototype.v1", JSON.stringify(socialFixtureState));
+store.load();
 store.signIn("admin@example.test");
 {
   const todayHktISO = data.todayHktISO();
@@ -3783,8 +3791,9 @@ try {
 }
 store.signIn("admin@example.test");
 {
+  const oneOffDate = (daysAhead) => data.isoDate(data.addDays(data.parseISO(data.todayHktISO()), daysAhead));
   const paidEvent = await store.createOneOffEvent({
-    name: "HYROX Race Day Send-off", dateISO: "2026-09-05", time: "10:00",
+    name: "HYROX Race Day Send-off", dateISO: oneOffDate(1), time: "10:00",
     durationMin: 90, location: "Kai Tak", mapsQuery: "", category: "HYROX",
     price: 250, capacity: 12,
   });
@@ -3797,7 +3806,7 @@ store.signIn("admin@example.test");
   if (!eventHtml.includes("Book & pay") || !eventHtml.includes("HK$250"))
     throw new Error("paid one-off activity page should offer booking");
   const freeEvent = await store.createOneOffEvent({
-    name: "Community Picnic", dateISO: "2026-09-06", time: "15:00",
+    name: "Community Picnic", dateISO: oneOffDate(2), time: "15:00",
     durationMin: 120, location: "Tamar Park", category: "Other",
   });
   if (freeEvent.kind !== "free") throw new Error("zero-price one-off should be free");
@@ -3805,7 +3814,7 @@ store.signIn("admin@example.test");
   if (!freeEventHtml.includes("Free · No booking needed"))
     throw new Error("free one-off should render the free banner");
   const freeCancelledEvent = await store.createOneOffEvent({
-    name: "Cancelled Community Social", dateISO: "2026-09-07", time: "15:00",
+    name: "Cancelled Community Social", dateISO: oneOffDate(3), time: "15:00",
     durationMin: 90, location: "Tamar Park", category: "Socials",
   });
   store.cancelSessionWeek(freeCancelledEvent.id, "Weather warning");
