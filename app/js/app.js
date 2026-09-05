@@ -1371,26 +1371,23 @@ document.addEventListener("submit", async (e) => {
       break;
     }
 
-    case "form-donor-id": {
+    case "form-membership-details": {
       e.preventDefault();
       const user = store.currentUser();
       if (!user) return;
-      const errEl = form.querySelector("#donor-error");
+      const errEl = form.querySelector("#membership-details-error");
       const raw = String(new FormData(form).get("donorId") || "").trim();
       if (donorIdProblem(raw)) {
         errEl.innerHTML =
           `<div class="form-error">That Donor ID doesn’t look right — it needs a hyphen between your last name and the 4- or 5-digit number (e.g. CHUI-08879 or CHUI-8879). Please enter it again.</div>`;
         return;
       }
-      if (!raw) {
-        errEl.innerHTML = `<div class="form-error">Enter your Donor ID to save it.</div>`;
-        return;
-      }
       try {
-        await store.updateMyDonorId(raw);
-        toast("Donor ID saved");
+        if (raw) await store.updateMyDonorId(raw);
+        toast("Membership details saved");
+        location.hash = "#/account/details";
         await renderWithFeedback();
-      } catch (err) { toast(err.message || "Unable to save Donor ID", true); }
+      } catch (err) { toast(err.message || "Unable to save membership details", true); }
       break;
     }
 

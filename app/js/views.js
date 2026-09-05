@@ -1166,12 +1166,12 @@ export async function viewAccount(section, sub) {
         if (!app) {
           const sectionTitle = {
             details: "Membership Details",
+            donor: "Membership Details",
             indemnity: "Indemnity",
             privacy: "Privacy &amp; Notifications",
           }[section] || "Profile";
           return `
             <a class="back-link" href="#/home">← Home</a>
-            <div class="kicker mt16">Profile · ${sectionTitle}</div>
             <h1 class="display sm">${sectionTitle}</h1>
             <div class="card mt16"><div class="card-body">
               <h3>Application details unavailable</h3>
@@ -1195,15 +1195,17 @@ export async function viewAccount(section, sub) {
     case "indemnity":
       return await accountIndemnity(user);
     case "donor":
-      return accountDonor(user, isLive() ? await store.fetchApplicationForUser(user) : null);
+      return await accountDetails(user);
     case "payments":
       return accountPayments(user);
     case "privacy":
       return await accountPrivacy(user);
     case "privacy/edit":
       return await accountPrivacyEdit(user);
+    case "bookings":
+      return accountBookings(user, sub === "attended" ? "attended" : "all");
     case "history":
-      return accountHistory(user);
+      return accountBookings(user, "all");
     default:
       return viewNotFound();
   }
@@ -1223,6 +1225,7 @@ async function hydrateLiveUser(user) {
       emergencyPhone: app.emergency_phone ?? user.emergencyPhone ?? "",
       preferredName: (Object.prototype.hasOwnProperty.call(app, "preferred_name")) ? (app.preferred_name || "") : user.preferredName,
       heard: app.heard_source ?? user.heard ?? "",
+      donorId: app.donor_id ?? user.donorId ?? null,
       isMinor: app.is_minor !== undefined ? !!app.is_minor : user.isMinor,
       guardianName: app.guardian_name ?? user.guardianName ?? "",
       guardianPhone: app.guardian_phone ?? user.guardianPhone ?? "",
@@ -1366,7 +1369,7 @@ async function accountMember(user) {
     superadmin: "Super admin",
   }[normalized];
 
-  const bookings = store.bookingsForUser(user.id).filter((b) => b.status !== "cancelled");
+  const bookings = dedupeBookings(store.bookingsForUser(user.id));
   const attended = bookings.filter((b) => b.status === "attended").length;
 
   return `
@@ -1382,14 +1385,18 @@ async function accountMember(user) {
         </div>
       </div>
       <div class="ph-stats">
-        <div><strong>${bookings.length}</strong><span>Bookings</span></div>
-        <div><strong>${attended}</strong><span>Attended</span></div>
+        <a class="ph-stat" href="#/account/bookings" aria-label="View all bookings">
+          <strong>${bookings.length}</strong><span>Bookings</span>
+        </a>
+        <a class="ph-stat" href="#/account/bookings/attended" aria-label="View attended bookings">
+          <strong>${attended}</strong><span>Attended</span>
+        </a>
       </div>
     </div>
 
     <div class="profile-rows">
       ${isAdmin ? profileRow("#/admin", ICONS.shield, "Admin Tools", "Approvals, activities and members") : ""}
-      ${profileRow("#/account/details", ICONS.user, "Membership Details", "Contact and emergency information")}
+      ${profileRow("#/account/details", ICONS.user, "Membership Details", "Contact, emergency and donor information")}
       ${profileRow(
         "#/account/indemnity",
         ICONS.check,
@@ -1397,10 +1404,8 @@ async function accountMember(user) {
         indemnity.row,
         { cls: indemnity.kind === "current" ? "ok" : "todo" }
       )}
-      ${profileRow("#/account/donor", ICONS.heart, "Donor Profile", "Donor ID and e-receipt details")}
       ${profileRow("#/account/payments", ICONS.dollar, "Payments & Receipts", "Bookings, donations and orders")}
       ${profileRow("#/account/privacy", ICONS.bell, "Privacy & Notifications", "Consent and communication choices")}
-      ${profileRow("#/account/history", ICONS.clock, "History", "Activity history")}
     </div>
 
     <div class="btn-row">
@@ -1426,11 +1431,16 @@ async function accountDetailsEdit(user) {
   const hydrated = await hydrateLiveUser(user);
   return `
     <a class="back-link" href="#/account/details">← Membership Details</a>
-    <div class="kicker mt16">Profile · Membership Details · Edit</div>
     <h1 class="display sm">Membership Details</h1>
     <form id="form-membership-details" data-form="membership-details" class="card mt16"><div class="card-body">
       <div class="line"><span>Full name</span><strong>${esc(user.fullName)}</strong></div>
       <div class="line"><span>Email</span><strong>${esc(user.email)}</strong></div>
+      <div class="field">
+        <label for="md-donorId">Donor ID</label>
+        <input id="md-donorId" name="donorId" value="${esc(hydrated.donorId || "")}" placeholder="e.g. CHUI-08879" autocomplete="off">
+        <div class="hint">Optional. Use the Donor ID from your IECC donor record so leaders can match your giving.</div>
+      </div>
+      <div id="membership-details-error"></div>
       <div class="field">
         <label for="md-preferred_name">Preferred name</label>
         <input id="md-preferred_name" name="preferred_name" value="${esc(hydrated.preferredName || "")}">
@@ -1476,13 +1486,13 @@ async function accountDetails(user) {
   const ageStatus = hydrated.isMinor ? "Under 18" : "18 or over";
   return `
     <a class="back-link" href="#/account">← Profile</a>
-    <div class="kicker mt16">Profile · Membership Details</div>
     <h1 class="display sm">Membership Details</h1>
     <div class="card mt16"><div class="card-body">
       <div class="receipt-lines" style="margin-top:0;border-top:0">
         <div class="line"><span>Full name</span><strong>${esc(user.fullName)}</strong></div>
         <div class="line"><span>Preferred name</span><strong>${hydrated.preferredName ? esc(hydrated.preferredName) : "Not provided"}</strong></div>
         <div class="line"><span>Email</span><strong>${esc(user.email)}</strong></div>
+        <div class="line"><span>Donor ID</span><strong>${hydrated.donorId ? esc(hydrated.donorId) : "Not provided"}</strong></div>
         <div class="line"><span>Member since</span><strong>${fmtDay(hydrated.appliedAt)}</strong></div>
         <div class="line"><span>Mobile / WhatsApp number</span><strong>${esc(hydrated.phone)}</strong></div>
         <div class="line"><span>Age status</span><strong>${ageStatus}</strong></div>
@@ -1520,7 +1530,6 @@ async function accountIndemnity(user) {
   const defaultDate = todayISO();
   return `
     <a class="back-link" href="#/account">← Profile</a>
-    <div class="kicker mt16">Profile · Indemnity</div>
     <h1 class="display sm">Indemnity</h1>
     ${current ? `
       <div class="banner mt16">
@@ -1562,59 +1571,12 @@ async function accountIndemnity(user) {
   `;
 }
 
-function accountDonor(user, application) {
-  const donorId = application?.donor_id || user.donorId || null;
-  const gifts = store.donationsForUser(user.id);
-  const totalGiven = gifts.reduce((sum, d) => sum + d.amount, 0);
-  return `
-    <a class="back-link" href="#/account">← Profile</a>
-    <div class="kicker mt16">Profile · Donor Profile</div>
-    <h1 class="display sm">Donor Profile</h1>
-    <div class="card mt16"><div class="card-body">
-      <div class="receipt-lines" style="margin-top:0;border-top:0">
-        <div class="line"><span>Donor ID</span><strong>${donorId ? esc(donorId) : "Not provided"}</strong></div>
-        ${
-          gifts.length
-            ? `
-          <div class="line"><span>Total given</span><strong>${fmtMoney(totalGiven)}</strong></div>
-          <div class="line"><span>Gifts</span><strong>${gifts.length}</strong></div>
-          <div class="line"><span>Latest gift</span><strong>${new Date(gifts[0].createdAt).toLocaleDateString("en-HK", { day: "numeric", month: "short" })}</strong></div>`
-            : ""
-        }
-      </div>
-      ${
-        donorId
-          ? ""
-          : `
-        <form id="form-donor-id" class="mt16" novalidate>
-          <div class="field">
-            <label for="donor-id">Add your Donor ID</label>
-            <input id="donor-id" name="donorId" placeholder="e.g. CHUI-08879" autocomplete="off">
-            <div class="hint">Format: your last name, a hyphen, then the 4- or 5-digit number from your IECC donor record (e.g. CHUI-08879 or CHUI-8879). Left this blank at sign-up? Add it here any time — leaders use it to match your giving to your donor record.</div>
-          </div>
-          <div id="donor-error"></div>
-          <button class="btn ghost sm" type="submit">Save Donor ID</button>
-        </form>`
-      }
-      ${
-        gifts.length
-          ? `
-        <p class="muted small mt16">FPS gifts stay pending until a leader reconciles them against the club account. Full history lives on the Giving tab.</p>
-        <a class="btn ghost sm mt16" href="#/giving">Open Giving &amp; Fundraising →</a>`
-          : `
-        <p class="hero-meta mt16">No gifts yet — every step can give back. Support the current campaign via FPS.</p>
-        <a class="btn ghost sm mt16" href="#/giving">Give via FPS →</a>`
-      }
-    </div></div>`;
-}
-
 function accountPayments(user) {
   const receipts = store.receiptsForUser(user.id);
   const pooledBookings = store.bookingsForUser(user.id)
     .filter((booking) => booking.cycleId && ["reserved", "confirmed"].includes(booking.status));
   return `
     <a class="back-link" href="#/account">← Profile</a>
-    <div class="kicker mt16">Profile · Payments &amp; Receipts</div>
     <h1 class="display sm">Payments &amp; Receipts</h1>
     ${pooledBookings.length ? `<div class="session-list">${pooledBookings.map((booking) => pooledBookingRow(booking)).join("")}</div>` : ""}
     ${
@@ -1639,7 +1601,6 @@ async function accountPrivacyEdit(user) {
   const hydrated = await hydrateLiveUser(user);
   return `
     <a class="back-link" href="#/account/privacy">← Privacy &amp; Notifications</a>
-    <div class="kicker mt16">Profile · Privacy &amp; Notifications · Edit</div>
     <h1 class="display sm">Privacy &amp; Notifications</h1>
     <form id="form-privacy" data-form="privacy-preferences" class="card mt16"><div class="card-body">
       <div class="line"><span>Privacy policy accepted</span><strong>${hydrated.privacyAcceptedAt ? fmtDay(hydrated.privacyAcceptedAt) : "To be accepted"}</strong></div>
@@ -1659,7 +1620,6 @@ async function accountPrivacy(user) {
   const onOff = (v) => (v ? "On" : "Off");
   return `
     <a class="back-link" href="#/account">← Profile</a>
-    <div class="kicker mt16">Profile · Privacy &amp; Notifications</div>
     <h1 class="display sm">Privacy &amp; Notifications</h1>
     <div class="card mt16"><div class="card-body">
       <div class="receipt-lines" style="margin-top:0;border-top:0">
@@ -1680,13 +1640,13 @@ function bookingDisplaySnapshot(b) {
   const cycle = b.cycleId ? store.getHyroxCycle(b.cycleId) : null;
   return {
     ...snapshot,
-    dateISO: snapshot.dateISO ?? session?.dateISO ?? cycle?.dateISO,
-    time: snapshot.time ?? session?.time,
-    name: snapshot.name ?? session?.name ?? "ITC HYROX",
-    location: snapshot.location ?? session?.location ?? (cycle ? "Venue pending" : undefined),
-    durationMin: snapshot.durationMin ?? session?.durationMin,
-    kind: snapshot.kind ?? session?.kind ?? (cycle ? "paid" : undefined),
-    price: snapshot.price ?? session?.price ?? snapshot.priceHkd,
+    dateISO: session?.dateISO ?? snapshot.dateISO ?? cycle?.dateISO,
+    time: session?.time || session?.startTime || snapshot.time || snapshot.startTime || cycle?.time || "00:00",
+    name: session?.name ?? snapshot.name ?? "ITC HYROX",
+    location: session?.location ?? snapshot.location ?? (cycle ? "Venue pending" : undefined),
+    durationMin: session?.durationMin ?? snapshot.durationMin ?? cycle?.durationMin,
+    kind: session?.kind ?? snapshot.kind ?? (cycle ? "paid" : undefined),
+    price: session?.price ?? snapshot.price ?? snapshot.priceHkd ?? cycle?.price,
   };
 }
 
@@ -1699,17 +1659,55 @@ function pooledBookingRow(b, { highlight = false } = {}) {
   </a>`;
 }
 
+function bookingPriority(b) {
+  return { confirmed: 4, reserved: 3, attended: 2, cancelled: 1 }[b.status] || 0;
+}
+
+function dedupeBookings(records) {
+  const unique = new Map();
+  for (const booking of records) {
+    const snapshot = bookingDisplaySnapshot(booking);
+    const key = booking.cycleId || booking.sessionId || `${snapshot.dateISO}|${snapshot.time}|${snapshot.name}`;
+    const current = unique.get(key);
+    if (!current
+        || bookingPriority(booking) > bookingPriority(current)
+        || (bookingPriority(booking) === bookingPriority(current)
+          && Number(booking.createdAt || 0) > Number(current.createdAt || 0))) {
+      unique.set(key, booking);
+    }
+  }
+  return [...unique.values()];
+}
+
+function bookingSortKey(b) {
+  const s = bookingDisplaySnapshot(b);
+  return `${s.dateISO || ""}T${s.time || ""}`;
+}
+
+function sortBookings(list, direction = "asc") {
+  return list.slice().sort((a, b) => {
+    const result = bookingSortKey(a).localeCompare(bookingSortKey(b));
+    return direction === "desc" ? -result : result;
+  });
+}
+
 function bookingCard(b) {
   const s = bookingDisplaySnapshot(b);
   const assigned = b.sessionId ? store.getSession(b.sessionId) : null;
-  const live = b.status === "confirmed" && (!assigned || !sessionStarted(assigned));
+  const started = assigned ? sessionStarted(assigned) : sessionStarted(s);
+  const live = b.status === "confirmed" && !started;
   const status =
     b.status === "cancelled"
       ? '<span class="badge danger">Cancelled</span>'
       : b.status === "attended"
         ? '<span class="badge neutral">Attended</span>'
-        : '<span class="badge free">Booked</span>';
-  const amount = s.kind === "rsvp"
+        : b.status === "reserved"
+          ? '<span class="badge warn">Awaiting payment</span>'
+          : started
+            ? '<span class="badge neutral">Ended</span>'
+            : '<span class="badge free">Confirmed</span>';
+  const isRsvp = s.kind === "rsvp" || (s.kind !== "paid" && Number(s.price) === 0);
+  const amount = isRsvp
     ? "RSVP"
     : (b.paymentMarkedAt != null || ["confirmed", "attended"].includes(b.status))
       ? `paid ${fmtMoney(s.price)}`
@@ -1730,42 +1728,40 @@ function bookingCard(b) {
     </div></div>`;
 }
 
-function bookingHistoryTimestamp(booking) {
-  const createdAt = Number(booking.createdAt);
-  if (booking.createdAt != null && Number.isFinite(createdAt)) return createdAt;
-  const reservedAt = Number(booking.reservedAt);
-  return booking.reservedAt != null && Number.isFinite(reservedAt) ? reservedAt : 0;
+function bookingGroup(title, bookings) {
+  return bookings.length
+    ? `<section class="booking-group"><div class="section-head"><h2>${title}</h2></div>${bookings.map(bookingCard).join("")}</section>`
+    : "";
 }
 
-function compareHistoryBookings(a, b) {
-  const aSnapshot = bookingDisplaySnapshot(a);
-  const bSnapshot = bookingDisplaySnapshot(b);
-  const dateOrder = (bSnapshot.dateISO || "").localeCompare(aSnapshot.dateISO || "");
-  if (dateOrder) return dateOrder;
-  const timestampOrder = bookingHistoryTimestamp(b) - bookingHistoryTimestamp(a);
-  if (timestampOrder) return timestampOrder;
-  return String(a.id || "").localeCompare(String(b.id || ""));
-}
-
-function accountHistory(user) {
-  const seenSessionIds = new Set();
-  const history = store.bookingsForUser(user.id)
-    .filter((booking) => !(booking.status === "cancelled"
-      && bookingDisplaySnapshot(booking).kind === "rsvp"))
-    .slice()
-    .sort(compareHistoryBookings)
-    .filter((booking) => {
-      const key = booking.cycleId || booking.sessionId || booking.id;
-      if (seenSessionIds.has(key)) return false;
-      seenSessionIds.add(key);
-      if (booking.cycleId) return true;
-      return !(booking.status === "confirmed" && !sessionStarted(bookingDisplaySnapshot(booking)));
-    });
+function accountBookings(user, filter = "all") {
+  const records = dedupeBookings(store.bookingsForUser(user.id))
+    .filter((booking) => !(booking.status === "cancelled" && bookingDisplaySnapshot(booking).kind === "rsvp"));
+  const filtered = filter === "attended"
+    ? records.filter((b) => b.status === "attended")
+    : records;
+  const upcoming = sortBookings(
+    filtered.filter((b) => b.status !== "cancelled" && !sessionStarted(bookingDisplaySnapshot(b)))
+  );
+  const ended = sortBookings(
+    filtered.filter((b) => b.status !== "cancelled" && sessionStarted(bookingDisplaySnapshot(b))),
+    "desc"
+  );
+  const cancelled = sortBookings(
+    filtered.filter((b) => b.status === "cancelled"),
+    "desc"
+  );
+  const hasRecords = upcoming.length || ended.length || cancelled.length;
   return `
     <a class="back-link" href="#/account">← Profile</a>
-    <div class="kicker mt16">Profile · History</div>
-    <h1 class="display sm">History</h1>
-    ${history.length ? history.map(bookingCard).join("") : `<div class="empty">Past sessions will appear here.</div>`}`;
+    <h1 class="display sm">Bookings</h1>
+    <div class="chip-row mt16" aria-label="Booking filter">
+      <a class="chip ${filter === "all" ? "active" : ""}" href="#/account/bookings">All bookings</a>
+      <a class="chip ${filter === "attended" ? "active" : ""}" href="#/account/bookings/attended">Attended</a>
+    </div>
+    ${hasRecords
+      ? `${bookingGroup("Upcoming", upcoming)}${bookingGroup("Past", ended)}${bookingGroup("Cancelled", cancelled)}`
+      : `<div class="empty mt16">${filter === "attended" ? "Attended sessions will appear here." : "Your bookings will appear here."}</div>`}`;
 }
 
 // --- Apply ---------------------------------------------------------------------------------
@@ -2109,10 +2105,10 @@ export function viewBooking(bookingId) {
   if (!b || !user || (b.userId !== user.id && !isAdminRole(user.role))) {
     return viewNotFound("Booking not found.");
   }
-  const s = b.snapshot;
+  const s = bookingDisplaySnapshot(b);
   const cycle = b.cycleId ? store.getHyroxCycle(b.cycleId) : null;
   const assignedSession = b.sessionId ? store.getSession(b.sessionId) : null;
-  const started = assignedSession ? sessionStarted(assignedSession) : false;
+  const started = assignedSession ? sessionStarted(assignedSession) : sessionStarted(s);
   const receipt = store.receiptForBooking(b.id);
   const mine = b.userId === user.id;
 
