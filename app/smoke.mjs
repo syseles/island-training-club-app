@@ -190,6 +190,13 @@ for (const marker of ['case "pay"', 'case "form-reserve"', 'case "form-mark-paid
   }
 }
 console.log("ok  Payment reserve and mark-paid routes remain delegated");
+for (const marker of ['case "form-membership-details"', "store.updateMyDonorId"]) {
+  if (!integratedAppSource.includes(marker)) {
+    failures++;
+    console.error(`FAIL Membership Details donor edit handler missing ${marker}`);
+  }
+}
+console.log("ok  Membership Details donor edit handler is delegated");
 for (const marker of ['case "release-reservation"', 'case "defer-to"', 'case "copy-fps"']) {
   if (!integratedAppSource.includes(marker)) {
     throw new Error(`integrated Payment router missing ${marker}`);
@@ -852,7 +859,6 @@ for (const link of [
   "#/account/bookings/attended",
   "#/account/details",
   "#/account/indemnity",
-  "#/account/donor",
   "#/account/payments",
   "#/account/privacy",
 ]) {
@@ -863,13 +869,16 @@ for (const link of [
   }
 }
 if (cardsOk) console.log("ok  Profile shows interactive booking stats and five section rows");
+if (newMemberAcct.includes("#/account/donor") || newMemberAcct.includes("Donor Profile")) {
+  failures++;
+  console.error("FAIL Profile should not expose a redundant Donor Profile destination");
+} else console.log("ok  Profile removes the redundant Donor Profile destination");
 if (newMemberAcct.includes("#/account/about")) {
   failures++;
   console.error("FAIL About card should have moved to the Community tab");
 } else console.log("ok  About card moved off Profile");
 for (const sub of [
-  "Contact and emergency information",
-  "Donor ID and e-receipt details",
+  "Contact, emergency and donor information",
   "Bookings, donations and orders",
   "Consent and communication choices",
 ]) {
@@ -886,8 +895,8 @@ await check("profile > payments", () => views.viewAccount("payments"));
 await check("profile > bookings", () => views.viewAccount("bookings"));
 await check("profile > attended bookings", () => views.viewAccount("bookings", "attended"));
 await check("profile > details", () => views.viewAccount("details"));
+await check("profile > membership details edit", () => views.viewAccount("details", "edit"));
 await check("profile > indemnity", () => views.viewAccount("indemnity"));
-await check("profile > donor", () => views.viewAccount("donor"));
 await check("profile > payments", () => views.viewAccount("payments"));
 await check("profile > privacy", () => views.viewAccount("privacy"));
 await check("profile > legacy history", () => views.viewAccount("history"));
@@ -897,8 +906,9 @@ for (const [section, sub, title] of [
   ["bookings", undefined, "Bookings"],
   ["bookings", "attended", "Bookings"],
   ["details", undefined, "Membership Details"],
+  ["details", "edit", "Membership Details"],
+  ["donor", undefined, "Membership Details"],
   ["indemnity", undefined, "Health &amp; Liability Indemnity"],
-  ["donor", undefined, "Donor Profile"],
   ["payments", undefined, "Payments &amp; Receipts"],
   ["privacy", undefined, "Privacy &amp; Notifications"],
   ["history", undefined, "Bookings"],
@@ -909,6 +919,10 @@ for (const [section, sub, title] of [
   if (!profileSectionHtml.includes(heading) || profileSectionHtml.includes(headingWithPeriod)) {
     failures++;
     console.error(`FAIL profile > ${section} heading should read "${title}" without a trailing period`);
+  }
+  if (/<div class="kicker mt16">Profile ·/.test(profileSectionHtml)) {
+    failures++;
+    console.error(`FAIL profile > ${section} should not repeat the page title in a subtitle`);
   }
 }
 console.log("ok  sub-page headings title-cased");
@@ -947,6 +961,17 @@ if (!emptyBookingsPage.includes("Your bookings will appear here")) {
   failures++;
   console.error("FAIL empty Bookings page should explain where bookings will appear");
 } else console.log("ok  empty Bookings page has a clear state");
+const emptyDetailsPage = await views.viewAccount("details");
+const emptyDetailsEditPage = await views.viewAccount("details", "edit");
+if (!emptyDetailsPage.includes("Donor ID") || !emptyDetailsEditPage.includes('name="donorId"')) {
+  failures++;
+  console.error("FAIL Membership Details should show and edit Donor ID");
+} else console.log("ok  Membership Details shows and edits Donor ID");
+const legacyDonorPage = await views.viewAccount("donor");
+if (!legacyDonorPage.includes("Membership Details") || legacyDonorPage.includes("Donor Profile")) {
+  failures++;
+  console.error("FAIL legacy Donor Profile route should map to Membership Details");
+} else console.log("ok  legacy Donor Profile route maps to Membership Details");
 await check("checkout (member)", () => views.viewCheckout(paid.id));
 // --- HYROX payment system: reserve -> mark -> collector confirm (Task 2) ---
 const bftSession = allUpcoming.find(
@@ -1092,17 +1117,18 @@ if (!legacyHistoryPage.includes("Bookings") || !legacyHistoryPage.includes(booki
 } else console.log("ok  legacy History route maps to Bookings");
 
 // donor ID skipped at signup ("Not applicable" above) can be added later;
-// it lives inside the Donor Profile sub-page, not on the card face
+// it now lives inside Membership Details, not on the Profile card face.
 store.updateDonorId(signIn.user.id, "IECC-99999");
 if (store.currentUser().donorId !== "IECC-99999") throw new Error("donor ID not saved");
 if ((await views.viewAccount()).includes("IECC-99999")) {
   failures++;
   console.error("FAIL donor ID should not appear on the Profile card face");
 } else console.log("ok  Profile card face carries no donor details");
-if (!(await views.viewAccount("donor")).includes("IECC-99999")) {
+if (!(await views.viewAccount("details")).includes("IECC-99999")
+    || !(await views.viewAccount("details", "edit")).includes('value="IECC-99999"')) {
   failures++;
-  console.error("FAIL donor ID missing from Donor Profile sub-page");
-} else console.log("ok  donor ID shows on Donor Profile sub-page");
+  console.error("FAIL donor ID should show in Membership Details summary and edit form");
+} else console.log("ok  donor ID shows in Membership Details");
 store.updateDonorId(signIn.user.id, "wong 1234");
 if (store.currentUser().donorId !== "WONG-1234") {
   failures++;
@@ -1126,10 +1152,10 @@ installLocalFixtures(); store.signIn("member@example.test");
 await check("account (seeded member)", () => views.viewAccount());
 const memberAcct = await views.viewAccount();
 // fixture-member has donorId TEST-1234
-if (!(await views.viewAccount("donor")).includes("TEST-1234")) {
+if (!(await views.viewAccount("details")).includes("TEST-1234")) {
   failures++;
-  console.error("FAIL seeded member donor ID not shown in Donor Profile");
-} else console.log("ok  seeded member donor ID shown in Donor Profile");
+  console.error("FAIL seeded member donor ID not shown in Membership Details");
+} else console.log("ok  seeded member donor ID shown in Membership Details");
 if (memberAcct.includes("TEST-1234")) {
   failures++;
   console.error("FAIL donor ID should not appear on the Profile card face");

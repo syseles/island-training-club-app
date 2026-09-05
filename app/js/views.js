@@ -943,12 +943,12 @@ export async function viewAccount(section, sub) {
         if (!app) {
           const sectionTitle = {
             details: "Membership Details",
+            donor: "Membership Details",
             indemnity: "Indemnity",
             privacy: "Privacy &amp; Notifications",
           }[section] || "Profile";
           return `
             <a class="back-link" href="#/home">← Home</a>
-            <div class="kicker mt16">Profile · ${sectionTitle}</div>
             <h1 class="display sm">${sectionTitle}</h1>
             <div class="card mt16"><div class="card-body">
               <h3>Application details unavailable</h3>
@@ -972,7 +972,7 @@ export async function viewAccount(section, sub) {
     case "indemnity":
       return await accountIndemnity(user);
     case "donor":
-      return accountDonor(user, isLive() ? await store.fetchApplicationForUser(user) : null);
+      return await accountDetails(user);
     case "payments":
       return accountPayments(user);
     case "privacy":
@@ -1001,6 +1001,7 @@ async function hydrateLiveUser(user) {
       emergencyPhone: app.emergency_phone ?? user.emergencyPhone ?? "",
       preferredName: (Object.prototype.hasOwnProperty.call(app, "preferred_name")) ? (app.preferred_name || "") : user.preferredName,
       heard: app.heard_source ?? user.heard ?? "",
+      donorId: app.donor_id ?? user.donorId ?? null,
       isMinor: app.is_minor !== undefined ? !!app.is_minor : user.isMinor,
       guardianName: app.guardian_name ?? user.guardianName ?? "",
       guardianPhone: app.guardian_phone ?? user.guardianPhone ?? "",
@@ -1132,7 +1133,7 @@ async function accountMember(user) {
 
     <div class="profile-rows">
       ${isAdmin ? profileRow("#/admin", ICONS.shield, "Admin Tools", "Approvals, activities and members") : ""}
-      ${profileRow("#/account/details", ICONS.user, "Membership Details", "Contact and emergency information")}
+      ${profileRow("#/account/details", ICONS.user, "Membership Details", "Contact, emergency and donor information")}
       ${profileRow(
         "#/account/indemnity",
         ICONS.check,
@@ -1140,7 +1141,6 @@ async function accountMember(user) {
         hydrated.indemnityAcceptedAt ? `Indemnity confirmed on ${fmtDay(hydrated.indemnityAcceptedAt)}` : "To be accepted",
         { cls: hydrated.indemnityAcceptedAt ? "ok" : "todo" }
       )}
-      ${profileRow("#/account/donor", ICONS.heart, "Donor Profile", "Donor ID and e-receipt details")}
       ${profileRow("#/account/payments", ICONS.dollar, "Payments & Receipts", "Bookings, donations and orders")}
       ${profileRow("#/account/privacy", ICONS.bell, "Privacy & Notifications", "Consent and communication choices")}
     </div>
@@ -1168,11 +1168,16 @@ async function accountDetailsEdit(user) {
   const hydrated = await hydrateLiveUser(user);
   return `
     <a class="back-link" href="#/account/details">← Membership Details</a>
-    <div class="kicker mt16">Profile · Membership Details · Edit</div>
     <h1 class="display sm">Membership Details</h1>
     <form id="form-membership-details" data-form="membership-details" class="card mt16"><div class="card-body">
       <div class="line"><span>Full name</span><strong>${esc(user.fullName)}</strong></div>
       <div class="line"><span>Email</span><strong>${esc(user.email)}</strong></div>
+      <div class="field">
+        <label for="md-donorId">Donor ID</label>
+        <input id="md-donorId" name="donorId" value="${esc(hydrated.donorId || "")}" placeholder="e.g. CHUI-08879" autocomplete="off">
+        <div class="hint">Optional. Use the Donor ID from your IECC donor record so leaders can match your giving.</div>
+      </div>
+      <div id="membership-details-error"></div>
       <div class="field">
         <label for="md-preferred_name">Preferred name</label>
         <input id="md-preferred_name" name="preferred_name" value="${esc(hydrated.preferredName || "")}">
@@ -1214,13 +1219,13 @@ async function accountDetails(user) {
   const ageStatus = hydrated.isMinor ? "Under 18" : "18 or over";
   return `
     <a class="back-link" href="#/account">← Profile</a>
-    <div class="kicker mt16">Profile · Membership Details</div>
     <h1 class="display sm">Membership Details</h1>
     <div class="card mt16"><div class="card-body">
       <div class="receipt-lines" style="margin-top:0;border-top:0">
         <div class="line"><span>Full name</span><strong>${esc(user.fullName)}</strong></div>
         <div class="line"><span>Preferred name</span><strong>${hydrated.preferredName ? esc(hydrated.preferredName) : "Not provided"}</strong></div>
         <div class="line"><span>Email</span><strong>${esc(user.email)}</strong></div>
+        <div class="line"><span>Donor ID</span><strong>${hydrated.donorId ? esc(hydrated.donorId) : "Not provided"}</strong></div>
         <div class="line"><span>Member since</span><strong>${fmtDay(hydrated.appliedAt)}</strong></div>
         <div class="line"><span>Mobile / WhatsApp number</span><strong>${esc(hydrated.phone)}</strong></div>
         <div class="line"><span>Age status</span><strong>${ageStatus}</strong></div>
@@ -1258,7 +1263,6 @@ async function accountIndemnity(user) {
   const at = hydrated.indemnityAcceptedAt;
   return `
     <a class="back-link" href="#/account">← Profile</a>
-    <div class="kicker mt16">Profile · Indemnity</div>
     <h1 class="display sm">Health &amp; Liability Indemnity</h1>
     ${
       at
@@ -1297,57 +1301,10 @@ async function accountIndemnity(user) {
     <p class="muted small mt16">Draft wording — the final indemnity will be confirmed with ITC leadership before launch.</p>`;
 }
 
-function accountDonor(user, application) {
-  const donorId = application?.donor_id || user.donorId || null;
-  const gifts = store.donationsForUser(user.id);
-  const totalGiven = gifts.reduce((sum, d) => sum + d.amount, 0);
-  return `
-    <a class="back-link" href="#/account">← Profile</a>
-    <div class="kicker mt16">Profile · Donor Profile</div>
-    <h1 class="display sm">Donor Profile</h1>
-    <div class="card mt16"><div class="card-body">
-      <div class="receipt-lines" style="margin-top:0;border-top:0">
-        <div class="line"><span>Donor ID</span><strong>${donorId ? esc(donorId) : "Not provided"}</strong></div>
-        ${
-          gifts.length
-            ? `
-          <div class="line"><span>Total given</span><strong>${fmtMoney(totalGiven)}</strong></div>
-          <div class="line"><span>Gifts</span><strong>${gifts.length}</strong></div>
-          <div class="line"><span>Latest gift</span><strong>${new Date(gifts[0].createdAt).toLocaleDateString("en-HK", { day: "numeric", month: "short" })}</strong></div>`
-            : ""
-        }
-      </div>
-      ${
-        donorId
-          ? ""
-          : `
-        <form id="form-donor-id" class="mt16" novalidate>
-          <div class="field">
-            <label for="donor-id">Add your Donor ID</label>
-            <input id="donor-id" name="donorId" placeholder="e.g. CHUI-08879" autocomplete="off">
-            <div class="hint">Format: your last name, a hyphen, then the 4- or 5-digit number from your IECC donor record (e.g. CHUI-08879 or CHUI-8879). Left this blank at sign-up? Add it here any time — leaders use it to match your giving to your donor record.</div>
-          </div>
-          <div id="donor-error"></div>
-          <button class="btn ghost sm" type="submit">Save Donor ID</button>
-        </form>`
-      }
-      ${
-        gifts.length
-          ? `
-        <p class="muted small mt16">FPS gifts stay pending until a leader reconciles them against the club account. Full history lives on the Giving tab.</p>
-        <a class="btn ghost sm mt16" href="#/giving">Open Giving &amp; Fundraising →</a>`
-          : `
-        <p class="hero-meta mt16">No gifts yet — every step can give back. Support the current campaign via FPS.</p>
-        <a class="btn ghost sm mt16" href="#/giving">Give via FPS →</a>`
-      }
-    </div></div>`;
-}
-
 function accountPayments(user) {
   const receipts = store.receiptsForUser(user.id);
   return `
     <a class="back-link" href="#/account">← Profile</a>
-    <div class="kicker mt16">Profile · Payments &amp; Receipts</div>
     <h1 class="display sm">Payments &amp; Receipts</h1>
     ${
       receipts.length
@@ -1371,7 +1328,6 @@ async function accountPrivacyEdit(user) {
   const hydrated = await hydrateLiveUser(user);
   return `
     <a class="back-link" href="#/account/privacy">← Privacy &amp; Notifications</a>
-    <div class="kicker mt16">Profile · Privacy &amp; Notifications · Edit</div>
     <h1 class="display sm">Privacy &amp; Notifications</h1>
     <form id="form-privacy" data-form="privacy-preferences" class="card mt16"><div class="card-body">
       <div class="line"><span>Privacy policy accepted</span><strong>${hydrated.privacyAcceptedAt ? fmtDay(hydrated.privacyAcceptedAt) : "To be accepted"}</strong></div>
@@ -1391,7 +1347,6 @@ async function accountPrivacy(user) {
   const onOff = (v) => (v ? "On" : "Off");
   return `
     <a class="back-link" href="#/account">← Profile</a>
-    <div class="kicker mt16">Profile · Privacy &amp; Notifications</div>
     <h1 class="display sm">Privacy &amp; Notifications</h1>
     <div class="card mt16"><div class="card-body">
       <div class="receipt-lines" style="margin-top:0;border-top:0">
@@ -1481,7 +1436,6 @@ function accountBookings(user, filter = "all") {
   const hasRecords = upcoming.length || ended.length || cancelled.length;
   return `
     <a class="back-link" href="#/account">← Profile</a>
-    <div class="kicker mt16">Profile · Bookings</div>
     <h1 class="display sm">Bookings</h1>
     <div class="chip-row mt16" aria-label="Booking filter">
       <a class="chip ${filter === "all" ? "active" : ""}" href="#/account/bookings">All bookings</a>
