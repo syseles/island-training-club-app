@@ -1172,7 +1172,7 @@ export async function viewAccount(section, sub) {
           return `
             <a class="back-link" href="#/home">← Home</a>
             <div class="kicker mt16">Profile · ${sectionTitle}</div>
-            <h1 class="display sm">${sectionTitle}.</h1>
+            <h1 class="display sm">${sectionTitle}</h1>
             <div class="card mt16"><div class="card-body">
               <h3>Application details unavailable</h3>
               <p class="muted small">Your membership application isn't linked to this profile yet. ITC leaders will sync the records and the data will appear here within a working day.</p>
@@ -1427,7 +1427,7 @@ async function accountDetailsEdit(user) {
   return `
     <a class="back-link" href="#/account/details">← Membership Details</a>
     <div class="kicker mt16">Profile · Membership Details · Edit</div>
-    <h1 class="display sm">Membership Details.</h1>
+    <h1 class="display sm">Membership Details</h1>
     <form id="form-membership-details" data-form="membership-details" class="card mt16"><div class="card-body">
       <div class="line"><span>Full name</span><strong>${esc(user.fullName)}</strong></div>
       <div class="line"><span>Email</span><strong>${esc(user.email)}</strong></div>
@@ -1477,7 +1477,7 @@ async function accountDetails(user) {
   return `
     <a class="back-link" href="#/account">← Profile</a>
     <div class="kicker mt16">Profile · Membership Details</div>
-    <h1 class="display sm">Membership Details.</h1>
+    <h1 class="display sm">Membership Details</h1>
     <div class="card mt16"><div class="card-body">
       <div class="receipt-lines" style="margin-top:0;border-top:0">
         <div class="line"><span>Full name</span><strong>${esc(user.fullName)}</strong></div>
@@ -1521,7 +1521,7 @@ async function accountIndemnity(user) {
   return `
     <a class="back-link" href="#/account">← Profile</a>
     <div class="kicker mt16">Profile · Indemnity</div>
-    <h1 class="display sm">Indemnity.</h1>
+    <h1 class="display sm">Indemnity</h1>
     ${current ? `
       <div class="banner mt16">
         <span class="kicker">Indemnity confirmed on ${fmtDay(hydrated.indemnityAcceptedAt)}</span>
@@ -1569,7 +1569,7 @@ function accountDonor(user, application) {
   return `
     <a class="back-link" href="#/account">← Profile</a>
     <div class="kicker mt16">Profile · Donor Profile</div>
-    <h1 class="display sm">Donor Profile.</h1>
+    <h1 class="display sm">Donor Profile</h1>
     <div class="card mt16"><div class="card-body">
       <div class="receipt-lines" style="margin-top:0;border-top:0">
         <div class="line"><span>Donor ID</span><strong>${donorId ? esc(donorId) : "Not provided"}</strong></div>
@@ -1615,7 +1615,7 @@ function accountPayments(user) {
   return `
     <a class="back-link" href="#/account">← Profile</a>
     <div class="kicker mt16">Profile · Payments &amp; Receipts</div>
-    <h1 class="display sm">Payments &amp; Receipts.</h1>
+    <h1 class="display sm">Payments &amp; Receipts</h1>
     ${pooledBookings.length ? `<div class="session-list">${pooledBookings.map((booking) => pooledBookingRow(booking)).join("")}</div>` : ""}
     ${
       receipts.length
@@ -1640,7 +1640,7 @@ async function accountPrivacyEdit(user) {
   return `
     <a class="back-link" href="#/account/privacy">← Privacy &amp; Notifications</a>
     <div class="kicker mt16">Profile · Privacy &amp; Notifications · Edit</div>
-    <h1 class="display sm">Privacy &amp; Notifications.</h1>
+    <h1 class="display sm">Privacy &amp; Notifications</h1>
     <form id="form-privacy" data-form="privacy-preferences" class="card mt16"><div class="card-body">
       <div class="line"><span>Privacy policy accepted</span><strong>${hydrated.privacyAcceptedAt ? fmtDay(hydrated.privacyAcceptedAt) : "To be accepted"}</strong></div>
       <label class="check"><input type="checkbox" name="photo_consent" ${hydrated.mediaConsent ? "checked" : ""}> Photos and video at sessions</label>
@@ -1660,7 +1660,7 @@ async function accountPrivacy(user) {
   return `
     <a class="back-link" href="#/account">← Profile</a>
     <div class="kicker mt16">Profile · Privacy &amp; Notifications</div>
-    <h1 class="display sm">Privacy &amp; Notifications.</h1>
+    <h1 class="display sm">Privacy &amp; Notifications</h1>
     <div class="card mt16"><div class="card-body">
       <div class="receipt-lines" style="margin-top:0;border-top:0">
         <div class="line"><span>Photo/video consent</span><strong>${hydrated.mediaConsent ? "Allowed" : "Not allowed"}</strong></div>
@@ -1764,7 +1764,7 @@ function accountHistory(user) {
   return `
     <a class="back-link" href="#/account">← Profile</a>
     <div class="kicker mt16">Profile · History</div>
-    <h1 class="display sm">History.</h1>
+    <h1 class="display sm">History</h1>
     ${history.length ? history.map(bookingCard).join("") : `<div class="empty">Past sessions will appear here.</div>`}`;
 }
 

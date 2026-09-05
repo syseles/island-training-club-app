@@ -2056,16 +2056,19 @@ if (!membershipDetailsEditHtml.includes('name="emergency_relationship"')) {
 
 // sub-page headings are title-cased to match the row titles
 for (const [section, title] of [
-  ["details", "Membership Details."],
-  ["indemnity", "Indemnity."],
-  ["donor", "Donor Profile."],
-  ["payments", "Payments &amp; Receipts."],
-  ["privacy", "Privacy &amp; Notifications."],
-  ["history", "History."],
+  ["details", "Membership Details"],
+  ["indemnity", "Indemnity"],
+  ["donor", "Donor Profile"],
+  ["payments", "Payments &amp; Receipts"],
+  ["privacy", "Privacy &amp; Notifications"],
+  ["history", "History"],
 ]) {
-  if (!(await views.viewAccount(section)).includes(title)) {
+  const profileSectionHtml = await views.viewAccount(section);
+  const heading = `<h1 class="display sm">${title}</h1>`;
+  const headingWithPeriod = `<h1 class="display sm">${title}.</h1>`;
+  if (!profileSectionHtml.includes(heading) || profileSectionHtml.includes(headingWithPeriod)) {
     failures++;
-    console.error(`FAIL profile > ${section} heading should read "${title}"`);
+    console.error(`FAIL profile > ${section} heading should read "${title}" without a trailing period`);
   }
 }
 console.log("ok  sub-page headings title-cased");
