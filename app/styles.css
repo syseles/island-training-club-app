@@ -475,8 +475,19 @@ a.link-card > .card-body > svg {
   border-top: 1px solid rgba(5, 7, 4, .22);
 }
 
-.ph-stats > div { flex: 1; text-align: center; }
+.ph-stats > .ph-stat {
+  flex: 1;
+  display: block;
+  padding: 2px 8px;
+  color: inherit;
+  text-align: center;
+  text-decoration: none;
+  border-radius: 10px;
+}
 
+.ph-stats > .ph-stat + .ph-stat { border-left: 1px solid rgba(5, 7, 4, .22); border-radius: 0 10px 10px 0; }
+.ph-stats > .ph-stat:hover { background: rgba(5, 7, 4, .08); }
+.ph-stats > .ph-stat:focus-visible { outline: 2px solid var(--accent-ink); outline-offset: 2px; }
 .ph-stats strong { display: block; font-size: 20px; font-weight: 900; }
 
 .ph-stats span { font-size: 11px; color: rgba(5, 7, 4, .62); }
@@ -895,6 +906,7 @@ a.profile-row:hover .pr-text strong { color: var(--accent); }
 
 /* ---- Bookings & receipts ---------------------------------------------- */
 
+.booking-group + .booking-group { margin-top: 24px; }
 .booking-card { margin-top: 12px; }
 
 .booking-card header {

@@ -979,8 +979,10 @@ export async function viewAccount(section, sub) {
       return await accountPrivacy(user);
     case "privacy/edit":
       return await accountPrivacyEdit(user);
+    case "bookings":
+      return accountBookings(user, sub === "attended" ? "attended" : "all");
     case "history":
-      return accountHistory(user);
+      return accountBookings(user, "all");
     default:
       return viewNotFound();
   }
@@ -1103,7 +1105,7 @@ async function accountMember(user) {
     superadmin: "Super admin",
   }[normalized];
 
-  const bookings = store.bookingsForUser(user.id).filter((b) => b.status !== "cancelled");
+  const bookings = store.bookingsForUser(user.id);
   const attended = bookings.filter((b) => b.status === "attended").length;
 
   return `
@@ -1119,8 +1121,12 @@ async function accountMember(user) {
         </div>
       </div>
       <div class="ph-stats">
-        <div><strong>${bookings.length}</strong><span>Bookings</span></div>
-        <div><strong>${attended}</strong><span>Attended</span></div>
+        <a class="ph-stat" href="#/account/bookings" aria-label="View all bookings">
+          <strong>${bookings.length}</strong><span>Bookings</span>
+        </a>
+        <a class="ph-stat" href="#/account/bookings/attended" aria-label="View attended bookings">
+          <strong>${attended}</strong><span>Attended</span>
+        </a>
       </div>
     </div>
 
@@ -1137,7 +1143,6 @@ async function accountMember(user) {
       ${profileRow("#/account/donor", ICONS.heart, "Donor Profile", "Donor ID and e-receipt details")}
       ${profileRow("#/account/payments", ICONS.dollar, "Payments & Receipts", "Bookings, donations and orders")}
       ${profileRow("#/account/privacy", ICONS.bell, "Privacy & Notifications", "Consent and communication choices")}
-      ${profileRow("#/account/history", ICONS.clock, "History", "Activity history")}
     </div>
 
     <div class="btn-row">
@@ -1401,15 +1406,40 @@ async function accountPrivacy(user) {
     </div></div>`;
 }
 
+function bookingSnapshot(b) {
+  const snapshot = b.snapshot || b;
+  return {
+    ...snapshot,
+    time: snapshot.time || snapshot.startTime || "00:00",
+  };
+}
+
+function bookingSortKey(b) {
+  const s = bookingSnapshot(b);
+  return `${s.dateISO || ""}T${s.time || ""}`;
+}
+
+function sortBookings(list, direction = "asc") {
+  return list.slice().sort((a, b) => {
+    const result = bookingSortKey(a).localeCompare(bookingSortKey(b));
+    return direction === "desc" ? -result : result;
+  });
+}
+
 function bookingCard(b) {
-  const s = b.snapshot;
-  const live = b.status === "confirmed" && !sessionStarted(s);
+  const s = bookingSnapshot(b);
+  const started = sessionStarted(s);
+  const live = b.status === "confirmed" && !started;
   const status =
     b.status === "cancelled"
       ? '<span class="badge danger">Cancelled</span>'
       : b.status === "attended"
         ? '<span class="badge neutral">Attended</span>'
-        : '<span class="badge free">Booked</span>';
+        : b.status === "reserved"
+          ? '<span class="badge warn">Awaiting payment</span>'
+          : started
+            ? '<span class="badge neutral">Ended</span>'
+            : '<span class="badge free">Confirmed</span>';
   return `
     <div class="card booking-card"><div class="card-body">
       <header>
@@ -1426,15 +1456,40 @@ function bookingCard(b) {
     </div></div>`;
 }
 
-function accountHistory(user) {
-  const history = store
-    .bookingsForUser(user.id)
-    .filter((b) => !(b.status === "confirmed" && !sessionStarted(b.snapshot)));
+function bookingGroup(title, bookings) {
+  return bookings.length
+    ? `<section class="booking-group"><div class="section-head"><h2>${title}</h2></div>${bookings.map(bookingCard).join("")}</section>`
+    : "";
+}
+
+function accountBookings(user, filter = "all") {
+  const records = store.bookingsForUser(user.id);
+  const filtered = filter === "attended"
+    ? records.filter((b) => b.status === "attended")
+    : records;
+  const upcoming = sortBookings(
+    filtered.filter((b) => b.status !== "cancelled" && !sessionStarted(bookingSnapshot(b)))
+  );
+  const ended = sortBookings(
+    filtered.filter((b) => b.status !== "cancelled" && sessionStarted(bookingSnapshot(b))),
+    "desc"
+  );
+  const cancelled = sortBookings(
+    filtered.filter((b) => b.status === "cancelled"),
+    "desc"
+  );
+  const hasRecords = upcoming.length || ended.length || cancelled.length;
   return `
     <a class="back-link" href="#/account">← Profile</a>
-    <div class="kicker mt16">Profile · History</div>
-    <h1 class="display sm">History</h1>
-    ${history.length ? history.map(bookingCard).join("") : `<div class="empty">Past sessions will appear here.</div>`}`;
+    <div class="kicker mt16">Profile · Bookings</div>
+    <h1 class="display sm">Bookings</h1>
+    <div class="chip-row mt16" aria-label="Booking filter">
+      <a class="chip ${filter === "all" ? "active" : ""}" href="#/account/bookings">All bookings</a>
+      <a class="chip ${filter === "attended" ? "active" : ""}" href="#/account/bookings/attended">Attended</a>
+    </div>
+    ${hasRecords
+      ? `${bookingGroup("Upcoming", upcoming)}${bookingGroup("Past", ended)}${bookingGroup("Cancelled", cancelled)}`
+      : `<div class="empty mt16">${filter === "attended" ? "Attended sessions will appear here." : "Your bookings will appear here."}</div>`}`;
 }
 
 // --- Apply ---------------------------------------------------------------------------------

@@ -848,12 +848,13 @@ if (!approvedCommunity.includes("Connect and grow with us.")) {
 const newMemberAcct = await views.viewAccount();
 let cardsOk = true;
 for (const link of [
+  "#/account/bookings",
+  "#/account/bookings/attended",
   "#/account/details",
   "#/account/indemnity",
   "#/account/donor",
   "#/account/payments",
   "#/account/privacy",
-  "#/account/history",
 ]) {
   if (!newMemberAcct.includes(`href="${link}"`)) {
     failures++;
@@ -861,7 +862,7 @@ for (const link of [
     console.error(`FAIL Profile missing ${link} row`);
   }
 }
-if (cardsOk) console.log("ok  Profile shows the six section rows");
+if (cardsOk) console.log("ok  Profile shows interactive booking stats and five section rows");
 if (newMemberAcct.includes("#/account/about")) {
   failures++;
   console.error("FAIL About card should have moved to the Community tab");
@@ -871,7 +872,6 @@ for (const sub of [
   "Donor ID and e-receipt details",
   "Bookings, donations and orders",
   "Consent and communication choices",
-  "Activity history",
 ]) {
   if (!newMemberAcct.includes(sub)) {
     failures++;
@@ -883,19 +883,27 @@ await check("profile > details", () => views.viewAccount("details"));
 await check("profile > indemnity", () => views.viewAccount("indemnity"));
 await check("profile > donor", () => views.viewAccount("donor"));
 await check("profile > payments", () => views.viewAccount("payments"));
+await check("profile > bookings", () => views.viewAccount("bookings"));
+await check("profile > attended bookings", () => views.viewAccount("bookings", "attended"));
+await check("profile > details", () => views.viewAccount("details"));
+await check("profile > indemnity", () => views.viewAccount("indemnity"));
+await check("profile > donor", () => views.viewAccount("donor"));
+await check("profile > payments", () => views.viewAccount("payments"));
 await check("profile > privacy", () => views.viewAccount("privacy"));
-await check("profile > history", () => views.viewAccount("history"));
+await check("profile > legacy history", () => views.viewAccount("history"));
 
 // sub-page headings are title-cased to match the row titles
-for (const [section, title] of [
-  ["details", "Membership Details"],
-  ["indemnity", "Health &amp; Liability Indemnity"],
-  ["donor", "Donor Profile"],
-  ["payments", "Payments &amp; Receipts"],
-  ["privacy", "Privacy &amp; Notifications"],
-  ["history", "History"],
+for (const [section, sub, title] of [
+  ["bookings", undefined, "Bookings"],
+  ["bookings", "attended", "Bookings"],
+  ["details", undefined, "Membership Details"],
+  ["indemnity", undefined, "Health &amp; Liability Indemnity"],
+  ["donor", undefined, "Donor Profile"],
+  ["payments", undefined, "Payments &amp; Receipts"],
+  ["privacy", undefined, "Privacy &amp; Notifications"],
+  ["history", undefined, "Bookings"],
 ]) {
-  const profileSectionHtml = await views.viewAccount(section);
+  const profileSectionHtml = await views.viewAccount(section, sub);
   const heading = `<h1 class="display sm">${title}</h1>`;
   const headingWithPeriod = `<h1 class="display sm">${title}.</h1>`;
   if (!profileSectionHtml.includes(heading) || profileSectionHtml.includes(headingWithPeriod)) {
@@ -934,6 +942,11 @@ if (!views.viewHome().includes("Nothing booked this week")) {
   failures++;
   console.error('FAIL "My week" should prompt when the member has no bookings');
 } else console.log('ok  "My week" empty state prompts to book');
+const emptyBookingsPage = await views.viewAccount("bookings");
+if (!emptyBookingsPage.includes("Your bookings will appear here")) {
+  failures++;
+  console.error("FAIL empty Bookings page should explain where bookings will appear");
+} else console.log("ok  empty Bookings page has a clear state");
 await check("checkout (member)", () => views.viewCheckout(paid.id));
 // --- HYROX payment system: reserve -> mark -> collector confirm (Task 2) ---
 const bftSession = allUpcoming.find(
@@ -1031,6 +1044,52 @@ if ((await views.viewAccount()).includes(">Upcoming<")) {
   failures++;
   console.error("FAIL Profile still repeats the upcoming bookings list");
 } else console.log("ok  Profile drops redundant upcoming list");
+const bookingStatsProfile = await views.viewAccount();
+if (!bookingStatsProfile.includes('href="#/account/bookings"')
+    || !bookingStatsProfile.includes('href="#/account/bookings/attended"')) {
+  failures++;
+  console.error("FAIL Profile booking and attended stats should link to their filtered views");
+} else console.log("ok  Profile booking stats link to all and attended views");
+const activeBookingsPage = await views.viewAccount("bookings");
+if (!activeBookingsPage.includes(booking.snapshot.name)
+    || !activeBookingsPage.includes("Upcoming")) {
+  failures++;
+  console.error("FAIL Bookings page should show active confirmed bookings");
+} else console.log("ok  Bookings page shows active confirmed bookings");
+const originalBookingStatus = booking.status;
+const originalBookingDateISO = booking.snapshot.dateISO;
+try {
+  booking.status = "confirmed";
+  booking.snapshot.dateISO = "2000-01-01";
+  const endedBookingsPage = await views.viewAccount("bookings");
+  if (!endedBookingsPage.includes("Ended") || !endedBookingsPage.includes(booking.snapshot.name)) {
+    failures++;
+    console.error("FAIL Bookings page should show ended bookings with an Ended status");
+  } else console.log("ok  Bookings page shows ended bookings");
+  booking.status = "attended";
+  const attendedBookingsPage = await views.viewAccount("bookings", "attended");
+  if (!attendedBookingsPage.includes(booking.snapshot.name)
+      || !attendedBookingsPage.includes("Attended")) {
+    failures++;
+    console.error("FAIL Attended view should show attended bookings");
+  } else console.log("ok  Attended view shows attended bookings");
+  booking.status = "cancelled";
+  booking.snapshot.dateISO = originalBookingDateISO;
+  const cancelledBookingsPage = await views.viewAccount("bookings");
+  if (!cancelledBookingsPage.includes(booking.snapshot.name)
+      || !cancelledBookingsPage.includes("Cancelled")) {
+    failures++;
+    console.error("FAIL Bookings page should show cancelled bookings");
+  } else console.log("ok  Bookings page shows cancelled bookings");
+} finally {
+  booking.status = originalBookingStatus;
+  booking.snapshot.dateISO = originalBookingDateISO;
+}
+const legacyHistoryPage = await views.viewAccount("history");
+if (!legacyHistoryPage.includes("Bookings") || !legacyHistoryPage.includes(booking.snapshot.name)) {
+  failures++;
+  console.error("FAIL legacy History route should preserve access to Bookings");
+} else console.log("ok  legacy History route maps to Bookings");
 
 // donor ID skipped at signup ("Not applicable" above) can be added later;
 // it lives inside the Donor Profile sub-page, not on the card face
@@ -1050,17 +1109,17 @@ if (store.currentUser().donorId !== "WONG-1234") {
   console.error("FAIL donor ID should be stored uppercase with a hyphen");
 } else console.log("ok  donor ID stored uppercase with hyphen");
 
-// the member's only booking is an upcoming confirmed session, so History
-// is empty — past bookings live behind the History card, not inline on Profile
+// The Profile face keeps booking cards out of the overview; the Bookings
+// destination now includes active confirmed sessions as well as history.
 if ((await views.viewAccount()).includes("booking-card")) {
   failures++;
-  console.error("FAIL Profile should not list history inline");
-} else console.log("ok  Profile keeps history behind the card");
+  console.error("FAIL Profile should not list bookings inline");
+} else console.log("ok  Profile keeps bookings behind the stats card");
 const histHtml = await views.viewAccount("history");
-if (histHtml.includes("booking-card") || !histHtml.includes("Past sessions will appear here")) {
+if (!histHtml.includes("booking-card") || !histHtml.includes(booking.snapshot.name)) {
   failures++;
-  console.error("FAIL History sub-page should hide upcoming confirmed bookings");
-} else console.log("ok  History sub-page hides upcoming bookings");
+  console.error("FAIL legacy History route should include active confirmed bookings");
+} else console.log("ok  legacy History route includes active bookings");
 
 // --- Seeded member view ---
 installLocalFixtures(); store.signIn("member@example.test");
