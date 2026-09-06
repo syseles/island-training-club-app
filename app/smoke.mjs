@@ -816,6 +816,11 @@ console.log("ok  integration source-tip provenance is explicit");
 
 const integratedViewSource = readFileSync(resolve(__dirnameSmoke, "js/views.js"), "utf8");
 const integratedAppSource = readFileSync(resolve(__dirnameSmoke, "js/app.js"), "utf8");
+assert.match(integratedViewSource, /function adminHyroxWeeklyBookingSetup\(\)[\s\S]*?HYROX weekly booking setup/);
+assert.doesNotMatch(integratedViewSource, /function adminHyroxProvisioningInfo/);
+assert.match(integratedViewSource, /function venueDisplayName\(session\)/);
+assert.match(integratedViewSource, /Mark confirmed with \$\{esc\(venueName\)\}/);
+assert.match(integratedViewSource, /function adminVenueStatusMetrics\(session\)/);
 assert.equal(typeof store.attendeeCountFor, "function",
   "store must export attendeeCountFor for identity-independent RSVP counts");
 assert.equal((integratedViewSource.match(/store\.attendeeCountFor\(s\)/g) || []).length, 4,
@@ -1786,12 +1791,13 @@ for (const tab of ["approvals", "members", "activities", "giving", "payments"]) 
 }
 console.log("ok  every Admin route exposes exactly one active tab");
 const adminScheduleHtml = await views.viewAdmin("payments");
-if (!adminScheduleHtml.includes("HYROX weekly setup")
-    || !adminScheduleHtml.includes("created automatically")
+if (!adminScheduleHtml.includes("HYROX weekly booking setup")
+    || adminScheduleHtml.includes("created automatically")
+    || adminScheduleHtml.includes("BFT + Midtown parent cards")
     || adminScheduleHtml.includes("form-hyrox-cycle-schedule")) {
-  throw new Error("Admin Payments must explain automatic HYROX cycle provisioning");
+  throw new Error("Admin Payments must use the collapsed HYROX weekly booking setup section without redundant provisioning copy");
 }
-console.log("ok  Admin Payments explains automatic HYROX cycle provisioning");
+console.log("ok  Admin Payments uses the collapsed HYROX weekly booking setup section");
 
 // --- Admin Giving (local mode) ---
 // Empty local state still surfaces an actionable Create campaign link.
@@ -3474,6 +3480,9 @@ store.signIn("member@example.test");
 // --- HYROX payment system: admin ops (Task 10) ---
 store.resetLocalData();
 installLocalFixtures();
+const opsCycleDate = data.isoDate(data.addDays(data.saturdayOnOrAfter(data.todayLocal()), 7));
+const opsCycle = store.scheduleHyroxCycle(opsCycleDate);
+store.sweepHyroxCycleDeadlines(opsCycle.registrationOpensAt);
 store.signIn("member@example.test");
 {
   const sess = store.upcomingSessions(14).find(
@@ -3495,11 +3504,30 @@ store.signIn("member@example.test");
   if (!ops.includes('data-action="confirm-payment"'))
     throw new Error("pending payments need a confirm action");
   console.log("ok  ops lists pending payments for the collector");
-  if (!ops.includes("HYROX booking &amp; payment") || !ops.includes("wa.me"))
+  if (!ops.includes("HYROX weekly booking setup") || !ops.includes("Venue handoff") || !ops.includes("wa.me"))
     throw new Error("ops should include the HYROX booking and payment card with a WhatsApp link");
+  const islandEccCard = ops.indexOf("ITC HYROX - Island ECC");
+  if (!ops.includes("admin-hyrox-count-link") || !ops.includes("admin-status-anchor")
+      || !ops.includes(`hyrox-status-${opsCycle.id}-confirmed`)
+      || !ops.includes(`hyrox-status-${opsCycle.id}-claims`)
+      || !/hyrox-venue-[a-z0-9-]+-confirmed/.test(ops)
+      || !/hyrox-venue-[a-z0-9-]+-claims/.test(ops)) {
+    throw new Error("Admin HYROX status counts (parent + venue) should be drill-down links with anchored targets");
+  }
+  const parentCycleEnd = ops.indexOf('id="form-cancel-hyrox-cycle"');
+  if (islandEccCard === -1 || !ops.includes("hyrox-island-ecc-card")
+      || !ops.includes("Payment reconciliation")
+      || !ops.includes("<p class=\"muted small mt8\">Registration:")
+      || ops.includes("Venue: <strong>Island ECC</strong>")
+      || islandEccCard < parentCycleEnd) {
+    throw new Error("Island ECC reconciliation should follow its parent HYROX card without redundant venue copy");
+  }
   if (!ops.toLowerCase().includes("duty"))
     throw new Error("ops should include the duty card");
   console.log("ok  ops has finalize-with-gym (WhatsApp) + duty cards");
+  if (!ops.includes('class="admin-tabs') || !ops.includes("admin-tabs-scroll")) {
+    throw new Error("Admin tabs should support horizontal overflow on small viewports");
+  }
   const conf = store.confirmBookingPayment(b.id);
   if (!conf) throw new Error("collector confirm failed from ops flow");
   console.log("ok  collector confirms payment from ops");
@@ -4407,6 +4435,12 @@ console.log("ok  reset");
       || !lockedDetail.includes("Sign up opens Monday at 6 PM HKT")) {
     throw new Error("HYROX detail should expose both venues and the locked opening checkpoint");
   }
+  if (lockedDetail.includes('class="hyrox-pool-card card"')) {
+    throw new Error("HYROX pool card should not be wrapped in an outer card");
+  }
+  if (!lockedDetail.includes('class="hyrox-pool-card"')) {
+    throw new Error("HYROX pool card should render as a flat container");
+  }
   store.sweepHyroxCycleDeadlines(cycle.registrationOpensAt);
   const registration = views.viewHyroxRegistration(cycle.id);
   for (const marker of [
@@ -4474,8 +4508,10 @@ console.log("ok  reset");
   store.signIn("admin@example.test");
   const adminHtml = await views.viewAdmin("payments");
   if (!adminHtml.includes("<h2>ITC HYROX<br><span>Payment reconciliation</span></h2>")
-      || !adminHtml.includes('class="admin-hyrox-count"><strong>1</strong><span>Confirmed paid</span></div>')
-      || !adminHtml.includes('class="admin-hyrox-count"><strong>0</strong><span>Payment claims to review</span></div>')
+      || !adminHtml.includes('<summary><h2>HYROX weekly booking setup</h2></summary>')
+      || adminHtml.includes("BFT + Midtown parent cards are created automatically")
+      || !/admin-hyrox-count-link[\s\S]*?<strong>1<\/strong><span>Confirmed paid/.test(adminHtml)
+      || !/admin-hyrox-count-link[\s\S]*?<strong>0<\/strong><span>Payment claims to review/.test(adminHtml)
       || !adminHtml.includes("form-cancel-hyrox-cycle")) {
     throw new Error("pooled Admin should show one authoritative cycle card with payment reconciliation");
   }
