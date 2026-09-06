@@ -17,7 +17,6 @@ import {
   sessionStarted,
   sessionsInRange,
   parseISO,
-  mondayOf,
   sundayOf,
   addDays,
   todayLocal,
@@ -207,7 +206,8 @@ export function viewHome() {
   // Same 14-day window bookings are made in — a confirmed booking can never
   // fall out of "My week" (e.g. next Saturday's booking seen on Sat evening).
   const upcoming = store.upcomingSessions(14);
-  const weekStart = mondayOf(todayLocal());
+  // Home weeks run Sunday through Saturday, matching Schedule.
+  const weekStart = sundayOf(todayLocal());
   const weekEnd = addDays(weekStart, 6);
   const inThisWeek = (s) => {
     const iso = s.dateISO || (s.snapshot && s.snapshot.dateISO);
