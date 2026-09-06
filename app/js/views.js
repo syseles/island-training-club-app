@@ -231,7 +231,7 @@ export function viewHome() {
   } else {
     const bookedIds = new Set(
       store.bookingsForUser(user.id)
-        .filter((booking) => booking.status === "confirmed" && !sessionStarted(booking.snapshot))
+        .filter((booking) => booking.status === "confirmed" && !sessionStarted(bookingStartSnapshot(booking)))
         .map((booking) => booking.sessionId)
     );
     rows = upcoming.filter((session) => bookedIds.has(session.id));
@@ -1373,6 +1373,15 @@ function bookingSnapshot(b) {
     durationMin: event?.durationMin ?? snapshot.durationMin,
     price: event?.price ?? snapshot.price,
     kind: event?.kind ?? snapshot.kind,
+  };
+}
+
+function bookingStartSnapshot(b) {
+  const snapshot = b.snapshot || {};
+  const event = b.sessionId ? store.getSession(b.sessionId) : null;
+  return {
+    dateISO: snapshot.dateISO ?? event?.dateISO,
+    time: snapshot.time || snapshot.startTime || event?.time || event?.startTime || "00:00",
   };
 }
 

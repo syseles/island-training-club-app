@@ -1064,6 +1064,24 @@ if (homeBooked.includes("Midtown 28") || homeBooked.includes("Just show up")) {
   failures++;
   console.error('FAIL home "My week" shows sessions the member has not booked');
 } else console.log('ok  home "My week" hides unbooked sessions');
+const snapshotTimeBeforeHomeFallback = booking.snapshot.time;
+const snapshotStartTimeBeforeHomeFallback = booking.snapshot.startTime;
+delete booking.snapshot.time;
+delete booking.snapshot.startTime;
+try {
+  const homeWithLegacyBookingSnapshot = views.viewHome();
+  if (!homeWithLegacyBookingSnapshot.includes(booking.snapshot.name)) {
+    failures++;
+    console.error("FAIL Home should render a booking whose legacy snapshot has no time");
+  } else console.log("ok  Home renders legacy booking snapshots without time");
+} catch (err) {
+  failures++;
+  console.error(`FAIL Home should render a booking whose legacy snapshot has no time: ${err.message}`);
+} finally {
+  booking.snapshot.time = snapshotTimeBeforeHomeFallback;
+  if (snapshotStartTimeBeforeHomeFallback === undefined) delete booking.snapshot.startTime;
+  else booking.snapshot.startTime = snapshotStartTimeBeforeHomeFallback;
+}
 const WEEK_MS = 7 * 24 * 3600 * 1000;
 views.scheduleState.weekOffset = Math.round(
   (data.sundayOf(data.parseISO(paid.dateISO)) - data.sundayOf(data.todayLocal())) / WEEK_MS
