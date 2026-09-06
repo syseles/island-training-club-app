@@ -1106,7 +1106,7 @@ async function accountMember(user) {
     superadmin: "Super admin",
   }[normalized];
 
-  const bookings = dedupeBookings(store.bookingsForUser(user.id));
+  const bookings = visibleBookingsForUser(user.id);
   const attended = bookings.filter((b) => b.status === "attended").length;
 
   return `
@@ -1401,6 +1401,13 @@ function bookingSortKey(b) {
   return `${s.dateISO || ""}T${s.time || ""}`;
 }
 
+function visibleBookingsForUser(userId) {
+  return dedupeBookings(store.bookingsForUser(userId)).filter((booking) => {
+    const inactiveRsvp = booking.status === "cancelled" || booking.status === "withdrawn";
+    return !(inactiveRsvp && bookingSnapshot(booking).kind === "rsvp");
+  });
+}
+
 function sortBookings(list, direction = "asc") {
   return list.slice().sort((a, b) => {
     const result = bookingSortKey(a).localeCompare(bookingSortKey(b));
@@ -1447,7 +1454,7 @@ function bookingGroup(title, bookings) {
 }
 
 function accountBookings(user, filter = "all") {
-  const records = dedupeBookings(store.bookingsForUser(user.id));
+  const records = visibleBookingsForUser(user.id);
   const filtered = filter === "attended"
     ? records.filter((b) => b.status === "attended")
     : records;
