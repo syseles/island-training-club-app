@@ -821,6 +821,9 @@ assert.doesNotMatch(integratedViewSource, /function adminHyroxProvisioningInfo/)
 assert.match(integratedViewSource, /function venueDisplayName\(session\)/);
 assert.match(integratedViewSource, /Mark confirmed with \$\{esc\(venueName\)\}/);
 assert.match(integratedViewSource, /function adminVenueStatusMetrics\(session\)/);
+assert.match(readFileSync(resolve(__dirnameSmoke, "js/app.js"), "utf8"),
+  /closest\("a\[href\^='#'\][^"]*"\)/,
+  "App click delegate must intercept hash-only anchor links before the router runs");
 assert.equal(typeof store.attendeeCountFor, "function",
   "store must export attendeeCountFor for identity-independent RSVP counts");
 assert.equal((integratedViewSource.match(/store\.attendeeCountFor\(s\)/g) || []).length, 4,
