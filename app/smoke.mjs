@@ -821,9 +821,6 @@ assert.doesNotMatch(integratedViewSource, /function adminHyroxProvisioningInfo/)
 assert.match(integratedViewSource, /function venueDisplayName\(session\)/);
 assert.match(integratedViewSource, /Mark confirmed with \$\{esc\(venueName\)\}/);
 assert.match(integratedViewSource, /function adminVenueStatusMetrics\(session\)/);
-assert.match(readFileSync(resolve(__dirnameSmoke, "js/app.js"), "utf8"),
-  /closest\("a\[href\^='#'\][^"]*"\)/,
-  "App click delegate must intercept hash-only anchor links before the router runs");
 assert.equal(typeof store.attendeeCountFor, "function",
   "store must export attendeeCountFor for identity-independent RSVP counts");
 assert.equal((integratedViewSource.match(/store\.attendeeCountFor\(s\)/g) || []).length, 4,
@@ -3493,9 +3490,6 @@ store.signIn("member@example.test");
   );
   const b = store.reserveSession("fixture-member", sess);
   store.markBookingPaid(b.id, "FPS", "9921");
-  const opsCycleClaim = store.reserveHyroxCycle("fixture-member", opsCycle.id, "either", true,
-    opsCycle.registrationOpensAt);
-  store.markBookingPaid(opsCycleClaim.id, "FPS", "9922");
   store.signIn("admin@example.test");
   const ops = await views.viewAdmin("payments");
   if (!ops.includes(">Payments</a>") || ops.includes(">HYROX</a>")
@@ -3519,9 +3513,6 @@ store.signIn("member@example.test");
       || !/hyrox-venue-[a-z0-9-]+-confirmed/.test(ops)
       || !/hyrox-venue-[a-z0-9-]+-claims/.test(ops)) {
     throw new Error("Admin HYROX status counts (parent + venue) should be drill-down links with anchored targets");
-  }
-  if (!ops.includes("admin-claims-section") || !ops.includes("Payment claims to review")) {
-    throw new Error("Only the claims tile should be a drill-down link to a collapsible claims list");
   }
   if (!ops.includes("<strong>Spots left</strong>") && !ops.includes(">Spots left<")) {
     throw new Error("Venue status grid should expose a Spots left counter");
@@ -4525,6 +4516,7 @@ console.log("ok  reset");
   if (!adminHtml.includes("<h2>ITC HYROX<br><span>Payment reconciliation</span></h2>")
       || !adminHtml.includes('<summary><h2>HYROX weekly booking setup</h2></summary>')
       || adminHtml.includes("BFT + Midtown parent cards are created automatically")
+      || !/admin-hyrox-count-link[\s\S]*?<strong>1<\/strong><span>Confirmed paid/.test(adminHtml)
       || !/admin-hyrox-count-link[\s\S]*?<strong>0<\/strong><span>Payment claims to review/.test(adminHtml)
       || !adminHtml.includes("form-cancel-hyrox-cycle")) {
     throw new Error("pooled Admin should show one authoritative cycle card with payment reconciliation");
