@@ -423,6 +423,24 @@ function downloadICS(session) {
 // --- Click delegation -----------------------------------------------------------------
 
 document.addEventListener("click", async (e) => {
+  // Drill-down anchor links (e.g. Admin HYROX status counts) point at in-page
+  // element IDs without changing the route. The router treats any hash as a
+  // full navigation, which would land on the not-found page; intercepting
+  // the click keeps the user on Admin/Payments and just scrolls the target
+  // into view.
+  const anchor = e.target.closest && e.target.closest("a[href^='#']:not([href='#'])");
+  if (anchor && !anchor.dataset.action && !e.defaultPrevented) {
+    const href = anchor.getAttribute("href") || "";
+    const target = document.querySelector(href);
+    if (target && href.startsWith("#") && href.length > 1) {
+      e.preventDefault();
+      target.scrollIntoView({ behavior: "smooth", block: "start" });
+      target.setAttribute("tabindex", "-1");
+      target.focus({ preventScroll: true });
+      history.replaceState(null, "", `${location.pathname}${location.search}${href}`);
+      return;
+    }
+  }
   const el = e.target.closest("[data-action]");
   if (!el) return;
   const { action } = el.dataset;
