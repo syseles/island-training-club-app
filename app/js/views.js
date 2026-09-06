@@ -2359,7 +2359,7 @@ function adminVenueStatusMetrics(session) {
       <div class="member-row"><div class="who"><strong>${esc(booking.snapshot?.name || "Member")}</strong><span>${esc(booking.paymentRef || "No reference")}</span></div>
         <button class="btn sm" type="button" data-action="confirm-payment" data-booking="${esc(booking.id)}">Confirm received</button></div>
       <form id="form-hyrox-payment-reject" class="mt8" data-booking="${esc(booking.id)}"><div class="field"><label>Reject reason</label><input name="reason" required placeholder="e.g. Reference not found"></div><button class="btn danger ghost sm" type="submit">Reject claim</button></form>`).join("")}
-  </details>` : "";
+  </details>` : `<p id="hyrox-venue-${safeId}-claims" class="admin-status-anchor muted small">No pending payment claims.</p>`;
   return `<div class="admin-hyrox-counts venue-counts" aria-label="${esc(venueDisplayName(session))} booking status">
     <div class="admin-hyrox-count"><strong>${confirmed}</strong><span>Confirmed paid</span></div>
     <div class="admin-hyrox-count"><strong>${claimsCount}</strong><span>Payment claims to review</span></div>
@@ -2450,7 +2450,7 @@ function adminHyroxCycleCards() {
       ${claims.length ? `<details id="hyrox-status-${esc(cycle.id)}-claims" class="admin-claims-section admin-status-anchor" open>
         <summary><span class="kicker dim">Payment claims to review</span><span class="badge warn">${claims.length}</span></summary>
         ${pendingClaims}
-      </details>` : ""}
+      </details>` : `<p id="hyrox-status-${esc(cycle.id)}-claims" class="admin-status-anchor muted small">No pending payment claims.</p>`}
       <div id="hyrox-status-${esc(cycle.id)}-confirmed" class="admin-status-anchor"></div>
       <div id="hyrox-status-${esc(cycle.id)}-unpaid" class="admin-status-anchor"></div>
       <div id="hyrox-status-${esc(cycle.id)}-active" class="admin-status-anchor"></div>
