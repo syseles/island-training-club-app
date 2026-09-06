@@ -3537,6 +3537,9 @@ store.signIn("member@example.test");
       || islandEccCard < parentCycleEnd) {
     throw new Error("Island ECC reconciliation should follow its parent HYROX card without redundant venue copy");
   }
+  if (ops.includes("admin-hyrox-count-link") && !ops.includes("data-claims-anchor")) {
+    throw new Error("Only the parent cycle Payment claims tile should be a drill-down link");
+  }
   if (!ops.toLowerCase().includes("duty"))
     throw new Error("ops should include the duty card");
   console.log("ok  ops has finalize-with-gym (WhatsApp) + duty cards");

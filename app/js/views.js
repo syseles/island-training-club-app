@@ -2347,28 +2347,28 @@ function venueDisplayName(session) {
 function adminVenueStatusMetrics(session) {
   const held = store.heldBookingsForSession(session.id);
   const confirmed = held.filter((booking) => booking.status === "confirmed").length;
-  const claims = held.filter((booking) => booking.status === "reserved" && booking.paymentMarkedAt).length;
+  const claims = held.filter((booking) => booking.status === "reserved" && booking.paymentMarkedAt);
+  const claimsCount = claims.length;
   const unpaid = held.filter((booking) => booking.status === "reserved" && !booking.paymentMarkedAt).length;
   const capacity = Number(session.capacity);
   const spotsLeft = Number.isFinite(capacity) ? Math.max(0, capacity - held.length) : null;
   const safeId = esc(session.id);
+  const claimsList = claimsCount ? `<details id="hyrox-venue-${safeId}-claims" class="admin-claims-section admin-status-anchor" open>
+    <summary><span class="kicker dim">Payment claims to review</span><span class="badge warn">${claimsCount}</span></summary>
+    ${claims.map((booking) => `
+      <div class="member-row"><div class="who"><strong>${esc(booking.snapshot?.name || "Member")}</strong><span>${esc(booking.paymentRef || "No reference")}</span></div>
+        <button class="btn sm" type="button" data-action="confirm-payment" data-booking="${esc(booking.id)}">Confirm received</button></div>
+      <form id="form-hyrox-payment-reject" class="mt8" data-booking="${esc(booking.id)}"><div class="field"><label>Reject reason</label><input name="reason" required placeholder="e.g. Reference not found"></div><button class="btn danger ghost sm" type="submit">Reject claim</button></form>`).join("")}
+  </details>` : `<p id="hyrox-venue-${safeId}-claims" class="admin-status-anchor muted small">No pending payment claims.</p>`;
   return `<div class="admin-hyrox-counts venue-counts" aria-label="${esc(venueDisplayName(session))} booking status">
-    <a class="admin-hyrox-count admin-hyrox-count-link" href="#hyrox-venue-${safeId}-confirmed">
-      <strong>${confirmed}</strong><span>Confirmed paid</span>
-    </a>
-    <a class="admin-hyrox-count admin-hyrox-count-link" href="#hyrox-venue-${safeId}-claims">
-      <strong>${claims}</strong><span>Payment claims</span>
-    </a>
-    <a class="admin-hyrox-count admin-hyrox-count-link" href="#hyrox-venue-${safeId}-unpaid">
-      <strong>${unpaid}</strong><span>Unpaid holds</span>
-    </a>
-    <a class="admin-hyrox-count admin-hyrox-count-link" href="#hyrox-venue-${safeId}-active">
-      <strong>${held.length}</strong><span>Active places</span>
-    </a>
+    <div class="admin-hyrox-count"><strong>${confirmed}</strong><span>Confirmed paid</span></div>
+    <div class="admin-hyrox-count"><strong>${claimsCount}</strong><span>Payment claims to review</span></div>
+    <div class="admin-hyrox-count"><strong>${unpaid}</strong><span>Unpaid holds</span></div>
+    <div class="admin-hyrox-count"><strong>${held.length}</strong><span>Active places</span></div>
     <div class="admin-hyrox-count"><strong>${spotsLeft ?? "∞"}</strong><span>Spots left</span></div>
   </div>
+  ${claimsList}
   <div id="hyrox-venue-${safeId}-confirmed" class="admin-status-anchor"></div>
-  <div id="hyrox-venue-${safeId}-claims" class="admin-status-anchor"></div>
   <div id="hyrox-venue-${safeId}-unpaid" class="admin-status-anchor"></div>
   <div id="hyrox-venue-${safeId}-active" class="admin-status-anchor"></div>`;
 }
