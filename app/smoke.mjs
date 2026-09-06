@@ -862,7 +862,15 @@ const manifestSource = readFileSync(resolve(__dirnameSmoke, "manifest.webmanifes
 const faviconPath = "../assets/itc/logo-favicon.png";
 const faviconAbsolutePath = resolve(__dirnameSmoke, faviconPath);
 const faviconBytes = existsSync(faviconAbsolutePath) ? readFileSync(faviconAbsolutePath) : null;
-if (!appIndexSource.includes(`<link rel="icon" href="${faviconPath}">`)
+const browserFaviconPath = "../assets/itc/favicon-48.png";
+const browserFaviconAbsolutePath = resolve(__dirnameSmoke, browserFaviconPath);
+const browserFaviconBytes = existsSync(browserFaviconAbsolutePath)
+  ? readFileSync(browserFaviconAbsolutePath) : null;
+if (!appIndexSource.includes(`<link rel="icon" type="image/png" sizes="48x48" href="${browserFaviconPath}">`)
+    || !browserFaviconBytes
+    || browserFaviconBytes.toString("ascii", 12, 16) !== "IHDR"
+    || browserFaviconBytes.readUInt32BE(16) !== 48
+    || browserFaviconBytes.readUInt32BE(20) !== 48
     || !manifestSource.includes(`"src": "${faviconPath}"`)
     || !manifestSource.includes('"type": "image/png"')
     || !faviconBytes
@@ -2570,6 +2578,24 @@ if (homeBooked.includes("Midtown28 Fitness") || homeBooked.includes("Just show u
   failures++;
   console.error('FAIL home "My week" shows sessions the member has not booked');
 } else console.log('ok  home "My week" hides unbooked sessions');
+const snapshotTimeBeforeHomeFallback = booking.snapshot.time;
+const snapshotStartTimeBeforeHomeFallback = booking.snapshot.startTime;
+delete booking.snapshot.time;
+delete booking.snapshot.startTime;
+try {
+  const homeWithLegacyBookingSnapshot = views.viewHome();
+  if (!homeWithLegacyBookingSnapshot.includes(booking.snapshot.name)) {
+    failures++;
+    console.error("FAIL Home should render a booking whose legacy snapshot has no time");
+  } else console.log("ok  Home renders legacy booking snapshots without time");
+} catch (err) {
+  failures++;
+  console.error(`FAIL Home should render a booking whose legacy snapshot has no time: ${err.message}`);
+} finally {
+  booking.snapshot.time = snapshotTimeBeforeHomeFallback;
+  if (snapshotStartTimeBeforeHomeFallback === undefined) delete booking.snapshot.startTime;
+  else booking.snapshot.startTime = snapshotStartTimeBeforeHomeFallback;
+}
 const WEEK_MS = 7 * 24 * 3600 * 1000;
 views.scheduleState.weekOffset = Math.round(
   (data.sundayOf(data.parseISO(paid.dateISO)) - data.sundayOf(data.todayLocal())) / WEEK_MS
@@ -2657,6 +2683,16 @@ bookingCardFixtureState.bookings.push({
     durationMin: 45, location: "Community Hall", price: 0,
   },
 });
+bookingCardFixtureState.bookings.push({
+  id: "cancelled-rsvp-record",
+  userId: booking.userId,
+  sessionId: "rsvp-session-cancelled-2099-01-02",
+  status: "cancelled",
+  snapshot: {
+    kind: "rsvp", name: "Cancelled RSVP", dateISO: "2099-01-02", time: "10:00",
+    durationMin: 45, location: "Community Hall", price: 0,
+  },
+});
 mem.set("itc.prototype.v1", JSON.stringify(bookingCardFixtureState));
 store.load();
 store.signIn(signIn.user.email);
@@ -2677,6 +2713,14 @@ if (!relatedCardsPage.includes("Community RSVP")
   failures++;
   console.error("FAIL RSVP booking should show RSVP instead of paid HK$0");
 } else console.log("ok  RSVP booking shows RSVP details");
+const profileWithCancelledRsvp = await views.viewAccount();
+const visibleBookingStat = profileWithCancelledRsvp.match(/<strong>(\d+)<\/strong><span>Bookings<\/span>/)?.[1];
+if (visibleBookingStat !== "2"
+    || relatedCardsPage.includes("Cancelled RSVP")
+    || (relatedCardsPage.match(/class="card booking-card"/g) || []).length !== 2) {
+  failures++;
+  console.error("FAIL Profile and Bookings must count the same deduplicated records while excluding cancelled RSVPs");
+} else console.log("ok  Profile and Bookings align on deduplicated non-cancelled-RSVP records");
 try {
   const cancelledBookingPage = views.viewBooking("duplicate-booking-record");
   if (!cancelledBookingPage.includes("Booking cancelled")) {

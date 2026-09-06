@@ -812,13 +812,15 @@ document.addEventListener("click", async (e) => {
     case "ics-booking": {
       const b = store.getBooking(el.dataset.booking);
       if (b) {
+        const session = b.sessionId ? store.getSession(b.sessionId) : null;
+        const snapshot = b.snapshot || {};
         downloadICS({
           id: b.sessionId,
-          name: b.snapshot.name,
-          dateISO: b.snapshot.dateISO,
-          time: b.snapshot.time,
-          durationMin: b.snapshot.durationMin,
-          location: b.snapshot.location,
+          name: session?.name ?? snapshot.name,
+          dateISO: session?.dateISO ?? snapshot.dateISO,
+          time: session?.time || session?.startTime || snapshot.time || snapshot.startTime || "00:00",
+          durationMin: session?.durationMin ?? snapshot.durationMin,
+          location: session?.location ?? snapshot.location,
           blurb: "",
         });
       }

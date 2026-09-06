@@ -308,7 +308,7 @@ export function viewHome() {
     const pooledSessionIds = new Set(pooledBookings.map((booking) => booking.sessionId).filter(Boolean));
     const bookedIds = new Set(
       bookings
-        .filter((booking) => booking.status === "confirmed" && !booking.cycleId && !sessionStarted(booking.snapshot))
+        .filter((booking) => booking.status === "confirmed" && !booking.cycleId && !sessionStarted(bookingStartSnapshot(booking)))
         .map((booking) => booking.sessionId)
     );
     rows = [...upcoming.filter((session) => bookedIds.has(session.id) && !pooledSessionIds.has(session.id)), ...pooledBookings];
@@ -1369,7 +1369,7 @@ async function accountMember(user) {
     superadmin: "Super admin",
   }[normalized];
 
-  const bookings = dedupeBookings(store.bookingsForUser(user.id));
+  const bookings = visibleBookingsForUser(user.id);
   const attended = bookings.filter((b) => b.status === "attended").length;
 
   return `
@@ -1659,6 +1659,15 @@ function pooledBookingRow(b, { highlight = false } = {}) {
   </a>`;
 }
 
+function bookingStartSnapshot(b) {
+  const snapshot = b.snapshot || {};
+  const event = b.sessionId ? store.getSession(b.sessionId) : null;
+  return {
+    dateISO: snapshot.dateISO ?? event?.dateISO,
+    time: snapshot.time || snapshot.startTime || event?.time || event?.startTime || "00:00",
+  };
+}
+
 function bookingPriority(b) {
   return { confirmed: 4, reserved: 3, attended: 2, cancelled: 1 }[b.status] || 0;
 }
@@ -1682,6 +1691,13 @@ function dedupeBookings(records) {
 function bookingSortKey(b) {
   const s = bookingDisplaySnapshot(b);
   return `${s.dateISO || ""}T${s.time || ""}`;
+}
+
+function visibleBookingsForUser(userId) {
+  return dedupeBookings(store.bookingsForUser(userId)).filter((booking) => {
+    const inactiveRsvp = booking.status === "cancelled" || booking.status === "withdrawn";
+    return !(inactiveRsvp && bookingDisplaySnapshot(booking).kind === "rsvp");
+  });
 }
 
 function sortBookings(list, direction = "asc") {
@@ -1735,8 +1751,7 @@ function bookingGroup(title, bookings) {
 }
 
 function accountBookings(user, filter = "all") {
-  const records = dedupeBookings(store.bookingsForUser(user.id))
-    .filter((booking) => !(booking.status === "cancelled" && bookingDisplaySnapshot(booking).kind === "rsvp"));
+  const records = visibleBookingsForUser(user.id);
   const filtered = filter === "attended"
     ? records.filter((b) => b.status === "attended")
     : records;
