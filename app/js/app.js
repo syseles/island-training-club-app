@@ -1186,7 +1186,7 @@ document.addEventListener("click", async (e) => {
     case "copy-gym":
       if (navigator.clipboard?.writeText) {
         await navigator.clipboard.writeText(el.dataset.msg);
-        toast("Gym message copied");
+        toast(`Message to ${el.dataset.venueLabel || "Gym"} copied`);
       } else {
         toast("Copy unsupported on this device");
       }

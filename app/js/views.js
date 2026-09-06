@@ -1068,8 +1068,7 @@ function communityAbout() {
     <div class="section-head"><h2>Culture</h2></div>
     <div class="card"><div class="card-body prose">
       ${CULTURE.map((c) => `<h3>${esc(c.title)}</h3><p>${esc(c.body)}</p>`).join("")}
-    </div></div>
-    <p class="muted small mt16">Community copy is draft placeholder text for review with ITC leadership.</p>`;
+    </div></div>`;
 }
 
 function communityPrayers() {
@@ -2478,6 +2477,16 @@ function adminPaidSessionControls() {
   );
   const sessionCards = upcoming.map((s) => {
     const override = store.getSession(s.id);
+    const names = store.attendeesFor(s);
+    const gymMsg = `ITC HYROX booking — ${fmtDate(s.dateISO)} ${fmtTime(s.time)} at ${s.location}. Confirmed: ${confirmed.length} of ${s.capacity}. Names: ${names.join(", ")}. Total: ${fmtMoney(confirmed.length * s.price)}.`;
+    const venueLabel = /Island ECC/.test(s.location) ? "Island ECC"
+      : /BFT/.test(s.location) ? "BFT"
+      : /Midtown 28/.test(s.location) ? "Midtown 28"
+      : "Gym";
+    const wa = `https://wa.me/?text=${encodeURIComponent(gymMsg)}`;
+    const gymDone = override.gymConfirmedAt;
+    const isMid = store.isMidtown(s);
+    const open = store.midtownOpenFor(s);
     return `
       <div class="card mt16 ${override.cancelled ? "is-cancelled" : ""}"><div class="card-body">
         <div class="kicker dim" style="margin-top:0">${esc(fmtDate(s.dateISO))} · ${fmtTime(s.time)}</div>
@@ -2523,6 +2532,10 @@ function adminFinalizeGym() {
     const atRisk = store.heldBookingsForSession(s.id).filter((b) => b.status === "reserved");
     const names = store.attendeesFor(s);
     const gymMsg = `ITC HYROX booking — ${fmtDate(s.dateISO)} ${fmtTime(s.time)} at ${s.location}. Confirmed: ${confirmed.length} of ${s.capacity}. Names: ${names.join(", ")}. Total: ${fmtMoney(confirmed.length * s.price)}.`;
+    const venueLabel = /Island ECC/.test(s.location) ? "Island ECC"
+      : /BFT/.test(s.location) ? "BFT"
+      : /Midtown 28/.test(s.location) ? "Midtown 28"
+      : "Gym";
     const wa = `https://wa.me/?text=${encodeURIComponent(gymMsg)}`;
     const gymDone = override.gymConfirmedAt;
     const isMid = store.isMidtown(s);
@@ -2540,8 +2553,7 @@ function adminFinalizeGym() {
           : `
           <div class="btn-row mt8">
             <a class="btn sm" href="${wa}" target="_blank" rel="noopener">Send via WhatsApp</a>
-            <button class="btn ghost sm" type="button" data-action="copy-gym" data-msg="${esc(gymMsg)}">Copy message</button>
-          </div>
+            <button class="btn ghost sm" type="button" data-action="copy-gym" data-msg="${esc(gymMsg)}" data-venue-label="${esc(venueLabel)}">Copy message</button>
           <form id="form-gym-note" data-session="${esc(s.id)}" class="mt8">
             <div class="field"><label>Note (optional)</label><input name="note" placeholder="e.g. confirmed 16 with BFT"></div>
             <button class="btn sm" type="submit">Mark confirmed with gym</button>

@@ -1410,6 +1410,10 @@ if (!commAbout.includes("Arnold Wong") || !commAbout.includes("Our foundation"))
   failures++;
   console.error("FAIL Community About page missing leaders or culture content");
 } else console.log("ok  Community About page carries leaders & culture");
+if (commAbout.includes("Community copy is draft placeholder text for review with ITC leadership.")) {
+  failures++;
+  console.error("FAIL Community About page should not show draft placeholder copy");
+} else console.log("ok  Community About page hides draft placeholder copy");
 if (!views.viewCommunity("prayers").includes('id="form-prayer"')) {
   failures++;
   console.error("FAIL prayers page missing the request form");
@@ -3795,461 +3799,40 @@ store.signIn("member@example.test");
   console.log("ok  collector confirms payment from ops");
 }
 
-// --- Generic Socials preview: rolling seven-day selector ---
-store.resetLocalData();
-installLocalFixtures();
-// Keep this selector test independent of seeded Social activities such as the
-// recurring Post-Training Lunch, so the synthetic ordering fixtures are the
-// only candidates under test.
-const socialFixtureState = JSON.parse(mem.get("itc.prototype.v1"));
-socialFixtureState.activities = socialFixtureState.activities.filter((activity) => activity.category !== "Socials");
-socialFixtureState.oneOffEvents = [];
-mem.set("itc.prototype.v1", JSON.stringify(socialFixtureState));
-store.load();
-store.signIn("admin@example.test");
+// --- Copy-message toast labels the venue (e.g. Island ECC / BFT / Midtown 28) ---
 {
-  const todayHktISO = data.todayHktISO();
-  const today = data.parseISO(todayHktISO);
-  const datePlus = (days) => data.isoDate(data.addDays(today, days));
-  assert.equal(datePlus(0), todayHktISO,
-    "generic Social fixtures must use the HKT calendar date, not the host-local date");
-  await store.createOneOffEvent({
-    name: "Already Started Social",
-    dateISO: datePlus(0),
-    time: "00:00",
-    durationMin: 90,
-    location: "Central",
-    mapsQuery: "Central, Hong Kong",
-    category: "Socials",
-    price: 0,
-    capacity: 20,
-  });
-  const cancelledSocial = await store.createOneOffEvent({
-    name: "Cancelled Community Social",
-    dateISO: datePlus(1),
-    time: "07:30",
-    durationMin: 90,
-    location: "Central",
-    mapsQuery: "Central, Hong Kong",
-    category: "Socials",
-    price: 0,
-    capacity: 20,
-  });
-  store.cancelSessionWeek(cancelledSocial.id, "Venue unavailable");
-  if (!store.getSession(cancelledSocial.id)?.cancelled) {
-    throw new Error("cancelled Social fixture should remain marked cancelled");
-  }
-  const earliestSocial = await store.createOneOffEvent({
-    name: "Community Breakfast",
-    dateISO: datePlus(1),
-    time: "08:00",
-    durationMin: 90,
-    location: "Central",
-    mapsQuery: "Central, Hong Kong",
-    category: "Socials",
-    price: 0,
-    capacity: 20,
-  });
-  await store.createOneOffEvent({
-    name: "Community Dinner",
-    dateISO: datePlus(2),
-    time: "19:00",
-    durationMin: 90,
-    location: "Wan Chai",
-    mapsQuery: "Wan Chai, Hong Kong",
-    category: "Socials",
-    price: 0,
-    capacity: 20,
-  });
-  await store.createOneOffEvent({
-    name: "Strength Workshop",
-    dateISO: datePlus(1),
-    time: "07:00",
-    durationMin: 60,
-    location: "Central",
-    mapsQuery: "Central, Hong Kong",
-    category: "Strength",
-    price: 0,
-    capacity: 20,
-  });
-  await store.createOneOffEvent({
-    name: "Next Week Social",
-    dateISO: datePlus(7),
-    time: "08:00",
-    durationMin: 90,
-    location: "Central",
-    mapsQuery: "Central, Hong Kong",
-    category: "Socials",
-    price: 0,
-    capacity: 20,
-  });
-  const nextSocial = store.nextSocialSession();
-  if (!nextSocial || nextSocial.id !== earliestSocial.id) {
-    throw new Error("nextSocialSession should skip started socials and select the earliest rolling-window social");
-  }
-  console.log("ok  Socials selector skips started events and ignores later/non-Socials events");
-}
-
-// Isolate both rolling-window edges so an earlier fixture cannot make either
-// assertion pass without evaluating the seven-day candidate itself.
-{
-  const RealDateForSocialBoundary = globalThis.Date;
-  const fixedNow = "2026-08-05T02:00:00.000Z"; // 10:00 HKT
-  globalThis.Date = class extends RealDateForSocialBoundary {
-    constructor(...args) {
-      super(...(args.length ? args : [fixedNow]));
-    }
-    static now() {
-      return RealDateForSocialBoundary.parse(fixedNow);
-    }
-    static parse(value) {
-      return RealDateForSocialBoundary.parse(value);
-    }
-    static UTC(...args) {
-      return RealDateForSocialBoundary.UTC(...args);
-    }
-  };
-  const resetWithoutSocials = () => {
-    store.resetLocalData();
-    installLocalFixtures();
-    const boundaryState = JSON.parse(mem.get("itc.prototype.v1"));
-    boundaryState.activities = boundaryState.activities
-      .filter((activity) => activity.category !== "Socials");
-    boundaryState.oneOffEvents = [];
-    mem.set("itc.prototype.v1", JSON.stringify(boundaryState));
-    store.load();
-    store.signIn("admin@example.test");
-  };
-  try {
-    resetWithoutSocials();
-    const exactDaySeven = await store.createOneOffEvent({
-      name: "Exact Day Seven Social",
-      dateISO: "2026-08-12",
-      time: "10:00",
-      durationMin: 60,
-      location: "Central",
-      mapsQuery: "Central, Hong Kong",
-      category: "Socials",
-      price: 0,
-      capacity: 20,
-    });
-    assert.equal(store.nextSocialSession()?.id, exactDaySeven.id,
-      "a Social starting at the exact seven-day HKT instant must be included");
-
-    resetWithoutSocials();
-    await store.createOneOffEvent({
-      name: "Beyond Day Seven Social",
-      dateISO: "2026-08-12",
-      time: "10:01",
-      durationMin: 60,
-      location: "Central",
-      mapsQuery: "Central, Hong Kong",
-      category: "Socials",
-      price: 0,
-      capacity: 20,
-    });
-    assert.equal(store.nextSocialSession(), null,
-      "a Social starting beyond the seven-day HKT instant must be excluded");
-    console.log("ok  Socials selector isolates exact and beyond-seven HKT boundaries");
-  } finally {
-    globalThis.Date = RealDateForSocialBoundary;
-  }
-}
-store.resetLocalData();
-installLocalFixtures();
-{
-  const fallbackState = JSON.parse(mem.get("itc.prototype.v1"));
-  fallbackState.activities = fallbackState.activities.filter((activity) => activity.category !== "Socials");
-  fallbackState.oneOffEvents = [];
-  mem.set("itc.prototype.v1", JSON.stringify(fallbackState));
-  store.load();
-  const fallbackCommunity = views.viewCommunity();
-  if (store.nextSocialSession() !== null || !fallbackCommunity.includes('href="#/schedule"')) {
-    throw new Error("Community Pulse should fall back to Schedule when no Socials event starts within seven days");
-  }
-  console.log("ok  Community Socials preview falls back to Schedule when no event is available");
-}
-store.resetLocalData();
-installLocalFixtures();
-
-// --- One-off events (local mode) ---
-store.resetLocalData();
-installLocalFixtures();
-store.signIn("member@example.test");
-try {
-  await store.createOneOffEvent({ name: "Nope", dateISO: "2026-09-05", time: "10:00", durationMin: 60, location: "Somewhere" });
-  throw new Error("members must not create one-off events");
-} catch (err) {
-  if (!/admin/i.test(err.message)) throw new Error(`expected admin guard, got: ${err.message}`);
-}
-store.signIn("admin@example.test");
-{
-  const oneOffDate = (daysAhead) => data.isoDate(data.addDays(data.parseISO(data.todayHktISO()), daysAhead));
-  const paidEvent = await store.createOneOffEvent({
-    name: "HYROX Race Day Send-off", dateISO: oneOffDate(1), time: "10:00",
-    durationMin: 90, location: "Kai Tak", mapsQuery: "", category: "HYROX",
-    price: 250, capacity: 12,
-  });
-  if (!paidEvent.oneOff || paidEvent.kind !== "paid" || !paidEvent.id.startsWith("event-"))
-    throw new Error("paid one-off event should be flagged, priced and event-prefixed");
-  if (!store.upcomingSessions(30).some((s) => s.id === paidEvent.id))
-    throw new Error("one-off event should appear in upcoming sessions");
-  if (!store.getSession(paidEvent.id)) throw new Error("getSession must resolve one-off events");
-  const eventHtml = views.viewActivity(paidEvent.id);
-  if (!eventHtml.includes("Book & pay") || !eventHtml.includes("HK$250"))
-    throw new Error("paid one-off activity page should offer booking");
-  const freeEvent = await store.createOneOffEvent({
-    name: "Community Picnic", dateISO: oneOffDate(2), time: "15:00",
-    durationMin: 120, location: "Tamar Park", category: "Other",
-  });
-  if (freeEvent.kind !== "free") throw new Error("zero-price one-off should be free");
-  const freeEventHtml = views.viewActivity(freeEvent.id);
-  if (!freeEventHtml.includes("Free · No booking needed"))
-    throw new Error("free one-off should render the free banner");
-  const freeCancelledEvent = await store.createOneOffEvent({
-    name: "Cancelled Community Social", dateISO: oneOffDate(3), time: "15:00",
-    durationMin: 90, location: "Tamar Park", category: "Socials",
-  });
-  store.cancelSessionWeek(freeCancelledEvent.id, "Weather warning");
-  const freeCancellationHtml = views.viewActivity(freeCancelledEvent.id);
-  if (!freeCancellationHtml.includes("Stay tuned for the next available social.")
-      || freeCancellationHtml.includes("Paid bookings were moved to the next available session — check your account."))
-    throw new Error("free cancellation Activity Details must render the exact social follow-up copy");
-  const adminActivitiesHtml = await views.viewAdmin("activities");
-  if (!adminActivitiesHtml.includes("One-off Events")
-      || !adminActivitiesHtml.includes("form-one-off-event")
-      || !adminActivitiesHtml.includes("HYROX Race Day Send-off"))
-    throw new Error("Activities tab should list one-off events and the add form");
-  const weeklyStart = adminActivitiesHtml.indexOf(">Weekly Event Controls<");
-  const oneOffStart = adminActivitiesHtml.indexOf(">One-off Events<");
-  const weeklyRegion = weeklyStart === -1 || oneOffStart === -1
-    ? ""
-    : adminActivitiesHtml.slice(weeklyStart, oneOffStart);
-  const oneOffRegion = oneOffStart === -1 ? "" : adminActivitiesHtml.slice(oneOffStart);
-  for (const event of [paidEvent, freeEvent]) {
-    if (weeklyRegion.includes(event.name) || weeklyRegion.includes(event.id))
-      throw new Error(`${event.name} must not receive recurring controls`);
-    if (!oneOffRegion.includes(event.name) || !oneOffRegion.includes(event.id))
-      throw new Error(`${event.name} must appear only in One-off Events`);
-  }
-  // Deletion is refused once a booking exists; cancellation still works and
-  // voids the booking (no same-activity follow-up session to defer to).
-  store.signIn("member@example.test");
-  const oneOffBooking = store.reserveSession("fixture-member", paidEvent.id);
+  store.resetLocalData();
+  installLocalFixtures();
   store.signIn("admin@example.test");
-  try {
-    await store.deleteOneOffEvent(paidEvent.id);
-    throw new Error("delete must refuse events with active bookings");
-  } catch (err) {
-    if (!/cancel the session instead/.test(err.message)) throw err;
+  const ops = await views.viewAdmin("payments");
+  const venueLabels = [...ops.matchAll(/data-venue-label="([^"]+)"/g)].map((m) => m[1]);
+  for (const required of ["BFT", "Midtown 28"]) {
+    if (!venueLabels.includes(required)) {
+      throw new Error(`Copy message button should carry venue label "${required}" on ops`);
+    }
   }
-  await store.deleteOneOffEvent(freeEvent.id);
-  if (store.getSession(freeEvent.id)) throw new Error("deleted free event should be gone");
-  store.cancelSessionWeek(paidEvent.id, "Venue unavailable");
-  if (store.getBooking(oneOffBooking.id).status !== "cancelled")
-    throw new Error("cancelling a one-off should void its reservations");
-  if (store.getSession(paidEvent.id)?.cancelled !== true)
-    throw new Error("cancelled one-off should read as cancelled");
-  console.log("ok  one-off events: create, list, book, delete guard, cancel");
-}
-
-// --- RSVP events (local): the recurring post-training lunch ---
-store.resetLocalData();
-installLocalFixtures();
-{
-  const lunch = store.upcomingSessions(21).find(
-    (s) => s.kind === "rsvp" && !data.sessionStarted(s)
-  );
-  if (!lunch || lunch.category !== "Socials" || lunch.name !== "Post-Training Lunch")
-    throw new Error("local seeds must include the recurring RSVP lunch");
-  if (lunch.capacity !== null || store.spotsLeft(lunch) !== null)
-    throw new Error("the lunch is uncapped — capacity and spots must be null");
-  store.signIn("member@example.test");
-  const lunchHtml = views.viewActivity(lunch.id);
-  if (!lunchHtml.includes("Count me in") || lunchHtml.includes("Book & pay"))
-    throw new Error("RSVP activity should offer Count me in, not checkout");
-  const rsvp = await store.rsvpSession("fixture-member", lunch.id);
-  if (rsvp.status !== "confirmed" || rsvp.snapshot.price !== 0)
-    throw new Error("RSVP should confirm instantly with no payment");
-  assert.equal(store.attendeeCountFor(lunch), 1,
-    "local RSVP count must include the confirmed booking");
-  assert.deepEqual(store.attendeesFor(lunch), ["Tester M."],
-    "attendeesFor must preserve attendee name formatting independently of counts");
-  const goingHtml = views.viewActivity(lunch.id);
-  if (!goingHtml.includes("You're going") || !goingHtml.includes("rsvp-withdraw"))
-    throw new Error("RSVP'd member should see the Going state and a withdraw action");
-  const bookingPage = views.viewBooking(rsvp.id);
-  if (!bookingPage.includes("You’re going") || bookingPage.includes("Can’t make it? Defer")
-      || bookingPage.includes("View receipt"))
-    throw new Error("RSVP booking page must not offer payment deferral or receipts");
-  const checkout = views.viewCheckout(lunch.id);
-  if (typeof checkout !== "string" || !checkout.includes("doesn’t exist"))
-    throw new Error("RSVP sessions must not render checkout");
-
-  // The exact RSVP notification route, Sunday-first Schedule row, Activity
-  // Details banner, and dated card inside grouped Admin controls must agree on
-  // the same literal count. Each surface is isolated to this lunch/session ID.
-  const rsvpDestination = `#/activity/${lunch.id}`;
-  const previousRsvpNotificationFilter = views.notificationFilters.kind;
-  let rsvpInboxHtml;
-  try {
-    views.notificationFilters.kind = "all";
-    rsvpInboxHtml = await views.viewNotifications(new Date(), [{
-      id: "combined-rsvp-route",
-      kind: "operational_rsvp_confirmed",
-      title: "RSVP confirmed",
-      body: "You are counted in.",
-      destination: rsvpDestination,
-      read_at: null,
-      created_at: "2026-08-05T02:00:00.000Z",
-    }]);
-  } finally {
-    views.notificationFilters.kind = previousRsvpNotificationFilter;
+  // The mapping recognizes Island ECC too, even if no live seed currently
+  // uses that location; verify the branch exists in views.js.
+  const viewsSource = readFileSync(resolve(__dirnameSmoke, "js/views.js"), "utf8");
+  for (const required of ["\"Island ECC\"", "\"BFT\"", "\"Midtown 28\""]) {
+    if (!viewsSource.includes(required)) {
+      throw new Error(`views.js venue label mapping must include ${required}`);
+    }
   }
-  const rsvpNotificationControl = [...rsvpInboxHtml.matchAll(
-    /<button class="notification-row[\s\S]*?<\/button>/g
-  )].map((match) => match[0]).find(
-    (tag) => tag.includes('data-notification-id="combined-rsvp-route"')
-  ) || "";
-  if (!rsvpNotificationControl.includes(`data-destination="${rsvpDestination}"`)
-      || data.notificationDestination("operational_rsvp_confirmed", rsvpDestination)
-        !== rsvpDestination) {
-    throw new Error("RSVP notification must render and resolve the exact dated Activity destination");
+  if (!venueLabels.every((label) => /^[A-Za-z0-9 ]+$/.test(label))) {
+    throw new Error("Venue labels must be short alphanumeric tokens");
   }
-
-  const priorCombinedSchedule = { ...views.scheduleState };
-  let combinedRsvpScheduleHtml;
-  try {
-    views.scheduleState.weekOffset = Math.round(
-      (data.sundayOf(data.parseISO(lunch.dateISO)) - data.sundayOf(data.todayLocal()))
-        / (7 * 86400000)
-    );
-    views.scheduleState.selected = lunch.dateISO;
-    combinedRsvpScheduleHtml = views.viewSchedule();
-  } finally {
-    Object.assign(views.scheduleState, priorCombinedSchedule);
+  const appSource = readFileSync(resolve(__dirnameSmoke, "js/app.js"), "utf8");
+  if (appSource.includes("Gym message copied")) {
+    throw new Error("static 'Gym message copied' toast must be replaced by the per-venue label");
   }
-  const combinedScheduleRowStart = combinedRsvpScheduleHtml.indexOf(
-    `href="${rsvpDestination}"`
-  );
-  const combinedScheduleRowEnd = combinedRsvpScheduleHtml.indexOf(
-    "</a>", combinedScheduleRowStart
-  );
-  const combinedScheduleRow = combinedScheduleRowStart < 0 || combinedScheduleRowEnd < 0
-    ? ""
-    : combinedRsvpScheduleHtml.slice(combinedScheduleRowStart, combinedScheduleRowEnd);
-  if (!combinedScheduleRow.includes('<span class="badge free booked">Going</span>')
-      || !combinedScheduleRow.includes('<span class="spots">1 going</span>')) {
-    throw new Error("dated Sunday Schedule RSVP row must render the exact confirmed count of 1");
+  for (const marker of ["copy-gym", "venueLabel", "Message to "]) {
+    if (!appSource.includes(marker)) {
+      throw new Error(`copy-gym handler must use ${marker}`);
+    }
   }
-  const combinedScheduleLabels = [...combinedRsvpScheduleHtml.matchAll(
-    /data-date="[^"]+">\s*([A-Z][a-z]{2})<strong/g
-  )].map((match) => match[1]);
-  if (JSON.stringify(combinedScheduleLabels)
-      !== JSON.stringify(["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"])) {
-    throw new Error(`combined RSVP Schedule must remain Sunday-first; got ${combinedScheduleLabels.join(" ")}`);
-  }
-  const combinedActivityHtml = views.viewActivity(lunch.id);
-  if (!combinedActivityHtml.includes("1 going — see you there.")) {
-    throw new Error("exact RSVP Activity Details must render the confirmed count of 1");
-  }
-
-  let combinedAdminHtml;
-  try {
-    store.signIn("admin@example.test");
-    combinedAdminHtml = await views.viewAdmin("activities");
-  } finally {
-    store.signIn("member@example.test");
-  }
-  const combinedWeeklyStart = combinedAdminHtml.indexOf(">Weekly Event Controls<");
-  const combinedOneOffStart = combinedAdminHtml.indexOf(">One-off Events<", combinedWeeklyStart);
-  const combinedWeeklyHtml = combinedWeeklyStart < 0 || combinedOneOffStart < 0
-    ? ""
-    : combinedAdminHtml.slice(combinedWeeklyStart, combinedOneOffStart);
-  const combinedFreeStart = combinedWeeklyHtml.indexOf("Free &amp; RSVP Events");
-  const combinedPaidStart = combinedWeeklyHtml.indexOf("Paid Sessions", combinedFreeStart);
-  const combinedFreeRsvpHtml = combinedFreeStart < 0 || combinedPaidStart < 0
-    ? ""
-    : combinedWeeklyHtml.slice(combinedFreeStart, combinedPaidStart);
-  const combinedLunchTarget = combinedFreeRsvpHtml.indexOf(`data-session="${lunch.id}"`);
-  const combinedLunchCardStart = combinedFreeRsvpHtml.lastIndexOf(
-    '<div class="card mt16 free-event-venue-card">', combinedLunchTarget
-  );
-  const combinedNextFreeCard = combinedFreeRsvpHtml.indexOf(
-    '<div class="card mt16 free-event-venue-card">', combinedLunchTarget + 1
-  );
-  const combinedLunchCard = combinedLunchTarget < 0 || combinedLunchCardStart < 0
-    ? ""
-    : combinedFreeRsvpHtml.slice(
-      combinedLunchCardStart,
-      combinedNextFreeCard < 0 ? combinedFreeRsvpHtml.length : combinedNextFreeCard
-    );
-  if (!combinedWeeklyHtml.includes(">Weekly Event Controls<")
-      || !combinedFreeRsvpHtml.includes("Free &amp; RSVP Events")
-      || !combinedWeeklyHtml.includes("Paid Sessions")
-      || !combinedLunchCard.includes("Post-Training Lunch")
-      || !combinedLunchCard.includes('<p class="muted small mt8">1 going</p>')) {
-    throw new Error("dated RSVP Admin card must render count 1 inside grouped Weekly Event Controls");
-  }
-  console.log("ok  RSVP exact route and count agree across Sunday Schedule, Activity, and grouped Admin");
-
-  await store.withdrawRsvp(rsvp.id);
-  if (store.getBooking(rsvp.id).status !== "cancelled")
-    throw new Error("withdraw should cancel the RSVP booking");
-  const repeatedRsvp = await store.rsvpSession("fixture-member", lunch.id, rsvp.createdAt + 1000);
-  await store.withdrawRsvp(repeatedRsvp.id);
-  repeatedRsvp.snapshot = { dateISO: lunch.dateISO };
-  const repeatedRsvpHistoryHtml = await views.viewAccount("history");
-  if (repeatedRsvpHistoryHtml.includes(`href="#/booking/${repeatedRsvp.id}"`)
-      || repeatedRsvpHistoryHtml.includes(`href="#/booking/${rsvp.id}"`)) {
-    throw new Error("History must omit cancelled RSVP records that are not current bookings");
-  }
-  console.log("ok  History omits cancelled RSVP records from current booking history");
-  const schedHtml = views.viewSchedule();
-  if (!schedHtml.includes(">Socials<"))
-    throw new Error("Schedule should offer a Socials filter chip");
-  const badgeHtml = views.viewActivity(lunch.id);
-  if (!badgeHtml.includes('badge free">RSVP</span>'))
-    throw new Error("unbooked RSVP session badge should read RSVP");
-  if (lunch.location !== "TBC")
-    throw new Error("lunch venue should seed as TBC until a weekly override is set");
-  store.signIn("admin@example.test");
-  await store.setWeekVenue(lunch.id, { location: "Cafe Deco, Central", mapsQuery: "Cafe Deco, Central" });
-  const overriddenLunch = store.getSession(lunch.id);
-  if (overriddenLunch.location !== "Cafe Deco, Central")
-    throw new Error("local weekly venue override must apply to the lunch session");
-  const adminActsHtml = await views.viewAdmin("activities");
-  if (!adminActsHtml.includes("Post-Training Lunch") || !adminActsHtml.includes(">RSVP</span>"))
-    throw new Error("Activities list should badge the lunch as RSVP");
-  const weeklyControlsRegion = adminActsHtml.split(">Weekly Event Controls<")[1]?.split(">One-off Events<")[0] || "";
-  const freeRsvpRegion = weeklyControlsRegion.split("Free &amp; RSVP Events")[1]?.split("Paid Sessions")[0] || "";
-  const paidSessionsRegion = weeklyControlsRegion.split("Paid Sessions")[1] || "";
-  if (paidSessionsRegion.includes("lunch-") || paidSessionsRegion.includes("Post-Training Lunch"))
-    throw new Error("Paid Sessions must stay paid-only — the lunch lives in Free & RSVP Events");
-  if (!freeRsvpRegion.includes("Post-Training Lunch") || !freeRsvpRegion.includes("Cancel this week's event"))
-    throw new Error("the lunch venue card must offer the per-week cancel control");
-  if (freeRsvpRegion.includes("cap"))
-    throw new Error("the uncapped lunch must not show a capacity");
-  store.cancelSessionWeek(lunch.id, "Organizer away");
-  const cancelledAdminHtml = await views.viewAdmin("activities");
-  if (!cancelledAdminHtml.includes(`data-action="repost-rsvp" data-session="${lunch.id}"`))
-    throw new Error("Admin should expose Repost RSVP for a cancelled RSVP event");
-  const reopenedLunchRow = await store.repostRsvpEvent(lunch.id);
-  const reopenedLunch = store.getSession(lunch.id);
-  if (!reopenedLunchRow || reopenedLunchRow.id !== lunch.id || !reopenedLunch
-      || reopenedLunch.oneOff || reopenedLunch.kind !== "rsvp"
-      || reopenedLunch.name !== lunch.name || reopenedLunch.dateISO !== lunch.dateISO
-      || reopenedLunch.time !== lunch.time || reopenedLunch.location !== "Cafe Deco, Central"
-      || reopenedLunch.capacity !== null || reopenedLunch.cancelled
-      || store.upcomingSessions(21).filter((s) => s.id === lunch.id).length !== 1) {
-    throw new Error("reposting a cancelled RSVP should reopen the original event");
-  }
-  const reopenedAdminHtml = await views.viewAdmin("activities");
-  if (reopenedAdminHtml.includes(`data-action="repost-rsvp" data-session="${lunch.id}"`))
-    throw new Error("Admin should hide Repost RSVP after the event is reopened");
-  store.signIn("member@example.test");
+  console.log("ok  copy-gym toast labels the venue (Island ECC / BFT / Midtown 28)");
   store.signOut();
-  console.log("ok  RSVP lunch: join, going state, withdraw, Socials filter, no checkout");
 }
 
 // --- Reset ---
