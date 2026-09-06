@@ -909,6 +909,9 @@ assert.equal((integratedViewSource.match(/store\.attendeeCountFor\(s\)/g) || [])
   "Schedule Going/RSVP states, RSVP Activity Details, and Admin controls must use attendeeCountFor");
 assert.doesNotMatch(integratedViewSource, /store\.attendeesFor\(s\)\.length/,
   "RSVP count surfaces must not derive counts from attendee identities");
+if (!/const weekStart = sundayOf\(todayLocal\(\)\);/.test(integratedViewSource)) {
+  throw new Error("Home week must start on Sunday");
+}
 const combinedRuntimeSource = `${integratedViewSource}\n${integratedAppSource}`;
 for (const marker of [
   "Continue with Google",
@@ -1133,11 +1136,11 @@ const assertRenderedActivityLinksAreFree = (html, label) => {
   const linkedIds = [...html.matchAll(/href="#\/activity\/([^"]+)"/g)].map((match) => match[1]);
   if (!linkedIds.length) {
     // Mirror viewHome()'s visitor branch: when no free sessions exist in the
-    // current Mon–Sun window, the empty state is the expected output and
+    // current Sun–Sat window, the empty state is the expected output and
     // there are no links to verify. The seed data (Mon/Tue/Wed only) makes
-    // this the case on Thu–Sun — without this guard the suite was green only
-    // on Mon–Wed.
-    const weekStart = data.mondayOf(data.todayLocal());
+    // this the case on Thu–Sat — without this guard the suite was green only
+    // on Sun–Wed.
+    const weekStart = data.sundayOf(data.todayLocal());
     const weekEnd = data.addDays(weekStart, 6);
     const freeInWeek = allUpcoming.filter((session) => {
       if (session.kind !== "free") return false;
@@ -1163,7 +1166,7 @@ const assertRenderedActivityLinksAreFree = (html, label) => {
 };
 assertRenderedActivityLinksAreFree(localVisitorHome, "visitor Home");
 {
-  const weekStart = data.mondayOf(data.todayLocal());
+  const weekStart = data.sundayOf(data.todayLocal());
   const weekEnd = data.addDays(weekStart, 6);
   const freeInWeek = allUpcoming.filter((session) => {
     if (session.kind !== "free") return false;
@@ -1178,7 +1181,7 @@ assertRenderedActivityLinksAreFree(localVisitorHome, "visitor Home");
       throw new Error("visitor Home must show free sessions only");
     }
   } else {
-    // Thu–Sun: no free sessions in window, so neither name should appear.
+    // Thu–Sat: no free sessions in window, so neither name should appear.
     if (localVisitorHome.includes(free.name) || localVisitorHome.includes(paid.name)) {
       throw new Error("visitor Home should not list session names when the current week has no free sessions");
     }
@@ -1819,9 +1822,9 @@ await check("account (pending)", () => views.viewAccount());
 const pendingHome = views.viewHome();
 {
   // Pending applicants see "My Week" filtered to free sessions in the
-  // current Mon–Sun window (same as the visitor branch). On Thu–Sun the
+  // current Sun–Sat window (same as the visitor branch). On Thu–Sat the
   // seed data yields no such sessions, so neither session name appears.
-  const weekStart = data.mondayOf(data.todayLocal());
+  const weekStart = data.sundayOf(data.todayLocal());
   const weekEnd = data.addDays(weekStart, 6);
   const freeInWeek = allUpcoming.filter((session) => {
     if (session.kind !== "free") return false;
