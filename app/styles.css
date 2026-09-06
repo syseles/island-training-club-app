@@ -39,7 +39,7 @@
 
 * { box-sizing: border-box; }
 
-html { color-scheme: dark; }
+html { color-scheme: dark; scroll-behavior: smooth; }
 
 body {
   margin: 0;
@@ -265,6 +265,134 @@ input, select, textarea { font: inherit; }
 
 .section-head a { font-size: 12px; color: var(--muted); }
 
+/* Collapsible Admin sub-sections — headers reveal their content on click */
+
+.admin-section > summary {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 30px 0 12px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.admin-section > summary::-webkit-details-marker { display: none; }
+
+.admin-section > summary h2 {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: 20px;
+  font-weight: 900;
+  letter-spacing: -.02em;
+}
+
+.admin-section > summary::after {
+  content: "";
+  width: 10px;
+  height: 10px;
+  border-right: 2px solid var(--muted);
+  border-bottom: 2px solid var(--muted);
+  transform: rotate(45deg);
+  transition: transform .15s ease;
+  flex: none;
+  align-self: center;
+}
+
+.admin-section[open] > summary::after { transform: rotate(-135deg); }
+
+.admin-hyrox-counts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(112px, 1fr));
+  gap: 8px;
+  margin: 14px 0;
+}
+
+.admin-hyrox-count {
+  display: grid;
+  gap: 4px;
+  padding: 10px;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+}
+
+.admin-hyrox-count strong {
+  font-family: var(--font-display);
+  font-size: 22px;
+  line-height: 1;
+}
+
+.admin-hyrox-count span {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 800;
+  line-height: 1.25;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+}
+
+a.admin-hyrox-count-link {
+  display: grid;
+  gap: 4px;
+  padding: 10px;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  color: inherit;
+  text-decoration: none;
+  transition: border-color .15s ease, transform .15s ease;
+}
+
+a.admin-hyrox-count-link:hover,
+a.admin-hyrox-count-link:focus-visible {
+  border-color: var(--accent);
+  transform: translateY(-1px);
+  outline: none;
+}
+
+a.admin-hyrox-count-link:focus-visible {
+  box-shadow: 0 0 0 2px var(--accent);
+}
+
+.admin-status-anchor {
+  scroll-margin-top: 80px;
+}
+
+.admin-claims-section {
+  margin: 16px 0 0;
+  padding: 12px 14px;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+}
+
+.admin-claims-section > summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.admin-claims-section > summary::-webkit-details-marker { display: none; }
+
+.admin-claims-section > summary::after {
+  content: "";
+  width: 9px;
+  height: 9px;
+  border-right: 2px solid var(--muted);
+  border-bottom: 2px solid var(--muted);
+  transform: rotate(45deg);
+  transition: transform .15s ease;
+}
+
+.admin-claims-section[open] > summary::after { transform: rotate(-135deg); }
+
+.admin-claims-section > .member-row,
+.admin-claims-section > form { margin-top: 10px; }
+
 /* ---- Badges ----------------------------------------------------------- */
 
 .badge {
@@ -475,19 +603,8 @@ a.link-card > .card-body > svg {
   border-top: 1px solid rgba(5, 7, 4, .22);
 }
 
-.ph-stats > .ph-stat {
-  flex: 1;
-  display: block;
-  padding: 2px 8px;
-  color: inherit;
-  text-align: center;
-  text-decoration: none;
-  border-radius: 10px;
-}
+.ph-stats > div { flex: 1; text-align: center; }
 
-.ph-stats > .ph-stat + .ph-stat { border-left: 1px solid rgba(5, 7, 4, .22); border-radius: 0 10px 10px 0; }
-.ph-stats > .ph-stat:hover { background: rgba(5, 7, 4, .08); }
-.ph-stats > .ph-stat:focus-visible { outline: 2px solid var(--accent-ink); outline-offset: 2px; }
 .ph-stats strong { display: block; font-size: 20px; font-weight: 900; }
 
 .ph-stats span { font-size: 11px; color: rgba(5, 7, 4, .62); }
@@ -557,25 +674,6 @@ a.profile-row:hover .pr-text strong { color: var(--accent); }
   border-bottom: 1px solid var(--line-soft);
   text-decoration: none;
   color: inherit;
-}
-
-.session-row.hyrox-cycle-row {
-  grid-template-columns: 56px minmax(0, 1fr) auto;
-  align-items: start;
-  padding: 16px 4px;
-}
-
-.session-row.hyrox-cycle-row h3 {
-  font-size: 13px;
-  line-height: 1.25;
-  white-space: normal;
-  overflow-wrap: anywhere;
-}
-
-.session-row.hyrox-cycle-row p {
-  font-size: 11.5px;
-  line-height: 1.4;
-  overflow-wrap: anywhere;
 }
 
 .session-row time {
@@ -649,16 +747,6 @@ a.profile-row:hover .pr-text strong { color: var(--accent); }
 .chip-row { display: flex; flex-wrap: wrap; gap: 7px; }
 .chip { font-family: var(--font-display); font-size: 12px; font-weight: 800; letter-spacing: .04em; padding: 8px 12px; border: 1px solid var(--line); border-radius: 999px; background: var(--surface-2); color: var(--ink); cursor: pointer; }
 .chip.active { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
-
-/* Mock FPS QR placeholder — real version generated server-side. */
-.fps-qr {
-  width: 148px; height: 148px; margin-top: 12px;
-  display: grid; place-items: center; text-align: center;
-  border: 1px dashed var(--line, #3a3f3a); border-radius: 12px;
-  color: var(--muted, #9aa39a); font-size: 12px;
-  background:
-    repeating-linear-gradient(45deg, transparent 0 6px, rgba(255,255,255,0.04) 6px 12px);
-}
 
 /* The next upcoming session on Home, highlighted in the club's neon accent. */
 .session-row.next {
@@ -851,6 +939,8 @@ a.profile-row:hover .pr-text strong { color: var(--accent); }
 
 /* ---- Forms ------------------------------------------------------------ */
 
+.form-fieldset { border: 0; margin: 0; padding: 0; min-width: 0; }
+
 .field { margin-top: 14px; }
 
 .field label {
@@ -925,7 +1015,6 @@ a.profile-row:hover .pr-text strong { color: var(--accent); }
 
 /* ---- Bookings & receipts ---------------------------------------------- */
 
-.booking-group + .booking-group { margin-top: 24px; }
 .booking-card { margin-top: 12px; }
 
 .booking-card header {
@@ -962,16 +1051,26 @@ a.profile-row:hover .pr-text strong { color: var(--accent); }
 
 .admin-tabs {
   display: flex;
+  flex-wrap: nowrap;
   gap: 6px;
   margin-top: 18px;
   padding: 4px;
   border: 1px solid var(--line);
   border-radius: 12px;
   background: var(--surface);
+  overflow-x: auto;
+  scroll-snap-type: x mandatory;
+  scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior-inline: contain;
 }
 
+.admin-tabs::-webkit-scrollbar { display: none; }
+
 .admin-tabs a {
-  flex: 1;
+  flex: 0 0 auto;
+  min-width: 84px;
+  scroll-snap-align: start;
   text-align: center;
   padding: 9px 6px;
   border-radius: 8px;
@@ -997,7 +1096,6 @@ a.profile-row:hover .pr-text strong { color: var(--accent); }
 .applicant dd { margin: 0; color: var(--ink); }
 
 .approval-group .card + .card { margin-top: 10px; }
-.member-approvals { margin-top: 28px; }
 
 .applicant-awaiting {
   background: transparent;
@@ -1480,4 +1578,235 @@ a.profile-row:hover .pr-text strong { color: var(--accent); }
 @keyframes toast-in {
   from { opacity: 0; transform: translateY(8px); }
   to { opacity: 1; transform: translateY(0); }
+}
+
+/* ---- Modal: read-and-accept document ------------------------------ */
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  background: rgba(3, 5, 4, .72);
+  backdrop-filter: blur(6px);
+  display: grid;
+  place-items: center;
+  padding: 16px;
+  animation: backdrop-in .18s ease-out;
+}
+
+.modal-dialog {
+  width: min(640px, 100%);
+  max-height: 85vh;
+  background: var(--surface-3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: 0 24px 64px rgba(0, 0, 0, .55);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  color: var(--ink);
+}
+
+.modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--line);
+}
+
+.modal-header .display { margin: 0; }
+
+.modal-close {
+  background: none;
+  border: 0;
+  color: var(--muted);
+  font-size: 22px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: var(--radius-sm);
+}
+.modal-close:hover { color: var(--accent); }
+
+.modal-doc {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
+.modal-doc-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 24px 28px;
+  background: #fafaf7;
+  color: #15181a;
+  line-height: 1.55;
+  font-size: 14.5px;
+  position: relative;
+  overscroll-behavior: contain;
+}
+
+.modal-doc-body.doc-provisional::after {
+  content: "Draft — pending ITC leadership review";
+  position: sticky;
+  display: block;
+  bottom: 8px;
+  left: 0;
+  right: 0;
+  text-align: center;
+  font-size: 10.5px;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  color: rgba(0, 0, 0, .25);
+  pointer-events: none;
+  margin-top: 24px;
+}
+
+.modal-doc-body .doc-content h3 {
+  font-size: 14px;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+  margin: 18px 0 6px;
+  color: #15181a;
+}
+.modal-doc-body .doc-content h3:first-child { margin-top: 0; }
+.modal-doc-body .doc-content p { margin: 0 0 12px; }
+
+.doc-content .doc-clauses,
+.doc-content .doc-subclauses {
+  padding-left: 1.4rem;
+}
+.doc-content .doc-clauses > li,
+.doc-content .doc-subclauses > li {
+  margin: 0 0 12px;
+  padding-left: 4px;
+}
+.doc-content .doc-subclauses {
+  margin-top: 12px;
+  list-style: none;
+  counter-reset: doc-subclause;
+}
+.doc-content .doc-subclauses > li {
+  position: relative;
+  counter-increment: doc-subclause;
+}
+.doc-content .doc-subclauses > li::before {
+  content: "(" counter(doc-subclause, lower-alpha) ")";
+  position: absolute;
+  right: calc(100% + 6px);
+}
+
+.modal-doc-ack {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 14px 20px;
+  border-top: 1px solid var(--line);
+  background: var(--surface-3);
+}
+.modal-doc-ack .btn { align-self: flex-end; }
+.modal-doc-ack .btn[disabled] { opacity: .45; cursor: not-allowed; }
+.modal-doc-ack [data-modal-hint] { margin: 0; }
+
+@keyframes backdrop-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+/* ---- Underlined link inside checkbox labels ----------------------- */
+
+.modal-link {
+  color: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  text-decoration-thickness: 1px;
+}
+.modal-link:hover { color: var(--accent); }
+
+/* ---- Disabled checkbox with hint ---------------------------------- */
+
+.check input[disabled] + span { opacity: .55; }
+.check input[disabled] + span .modal-link { opacity: 1; }
+
+/* ---- Pooled HYROX registration ---------------------------------------- */
+.hyrox-pool-card { display: grid; gap: 18px; padding: 4px; }
+.hyrox-cycle-row h3 { margin-bottom: 4px; }
+.hyrox-venue-options { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; padding: 0; }
+.hyrox-venue-options .hyrox-venue-card { padding: 18px 18px 20px; }
+.hyrox-venue-card { border: 1px solid var(--line-soft); margin: 0; }
+.hyrox-island-ecc-card { margin-top: 32px; }
+.hyrox-venue-card h3 { overflow-wrap: anywhere; }
+.hyrox-preference-grid { display: grid; gap: 10px; border: 0; padding: 0; margin: 0 0 18px; }
+.hyrox-preference-grid legend { font-weight: 700; margin-bottom: 8px; }
+.hyrox-preference-grid label,
+.hyrox-pool-card .check-row { min-height: 44px; display: flex; align-items: center; gap: 10px; }
+.hyrox-preference-grid input,
+.hyrox-pool-card .check-row input { width: 20px; height: 20px; flex: 0 0 auto; }
+.hyrox-threshold-rule { display: grid; grid-template-columns: auto 1fr; gap: 6px 14px; padding: 14px; border: 1px solid var(--line-soft); border-radius: var(--radius-sm); background: var(--surface-3); }
+.hyrox-queue-state { padding: 12px 14px; border-left: 3px solid var(--accent); background: var(--surface-3); }
+.hyrox-gym-controls { display: grid; gap: 10px; margin-top: 16px; }
+.hyrox-gym-controls form { display: flex; gap: 8px; align-items: center; }
+.hyrox-gym-controls form input { min-height: 40px; width: 150px; }
+.hyrox-threshold-rule p { grid-column: 1 / -1; margin: 0; }
+.hyrox-threshold-rule strong { white-space: nowrap; }
+.hyrox-pool-card .banner { margin: 0; }
+@media (max-width: 600px) {
+  .hyrox-venue-options { grid-template-columns: 1fr; }
+  .hyrox-threshold-rule { grid-template-columns: 1fr; gap: 3px; }
+  .hyrox-pool-card { padding: 0 4px; }
+  .hyrox-pool-card .display { font-size: 32px; line-height: 1; word-break: keep-all; }
+  .hyrox-venue-options .hyrox-venue-card { padding: 20px 18px; }
+}
+
+/* ---- Free-event venue override + activity map ----------------------- */
+.activity-map-section { margin-top: 16px; }
+.venue-guide { margin-right: 0; margin-bottom: 0; margin-left: 0; }
+.venue-guide-image {
+  display: block;
+  width: 100%;
+  height: auto;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius);
+  background: #fff;
+}
+.venue-guide figcaption {
+  margin-top: 8px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+.activity-map {
+  min-height: 260px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface-3);
+}
+.activity-map > [role="status"],
+.activity-map-fallback {
+  min-height: 260px;
+  display: grid;
+  place-items: center;
+  margin: 0;
+  padding: 24px;
+  text-align: center;
+}
+.activity-map:focus-within { outline: 2px solid var(--accent); outline-offset: 2px; }
+.activity-map .leaflet-control-attribution { color: #111; background: rgba(255,255,255,.85); }
+.activity-map .leaflet-popup-content { color: #111; }
+.free-event-venue-card { border: 1px solid var(--line-soft); }
+.venue-picker-shell { margin-top: 14px; }
+.venue-picker {
+  height: 240px;
+  overflow: hidden;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+}
+.venue-picker:focus-within { outline: 2px solid var(--accent); outline-offset: 2px; }
+@media (max-width: 560px) {
+  .free-event-venue-card .field-row { grid-template-columns: 1fr; }
 }
