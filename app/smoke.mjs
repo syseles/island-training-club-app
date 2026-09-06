@@ -572,6 +572,10 @@ if (!commAbout.includes("Arnold Wong") || !commAbout.includes("Our foundation"))
   failures++;
   console.error("FAIL Community About page missing leaders or culture content");
 } else console.log("ok  Community About page carries leaders & culture");
+if (commAbout.includes("Community copy is draft placeholder text for review with ITC leadership.")) {
+  failures++;
+  console.error("FAIL Community About page should not show draft placeholder copy");
+} else console.log("ok  Community About page hides draft placeholder copy");
 if (!views.viewCommunity("prayers").includes('id="form-prayer"')) {
   failures++;
   console.error("FAIL prayers page missing the request form");
@@ -1726,6 +1730,42 @@ store.signIn("member@example.test");
   const conf = store.confirmBookingPayment(b.id);
   if (!conf) throw new Error("collector confirm failed from ops flow");
   console.log("ok  collector confirms payment from ops");
+}
+
+// --- Copy-message toast labels the venue (e.g. Island ECC / BFT / Midtown 28) ---
+{
+  store.resetLocalData();
+  installLocalFixtures();
+  store.signIn("admin@example.test");
+  const ops = await views.viewAdmin("payments");
+  const venueLabels = [...ops.matchAll(/data-venue-label="([^"]+)"/g)].map((m) => m[1]);
+  for (const required of ["BFT", "Midtown 28"]) {
+    if (!venueLabels.includes(required)) {
+      throw new Error(`Copy message button should carry venue label "${required}" on ops`);
+    }
+  }
+  // The mapping recognizes Island ECC too, even if no live seed currently
+  // uses that location; verify the branch exists in views.js.
+  const viewsSource = readFileSync(resolve(__dirnameSmoke, "js/views.js"), "utf8");
+  for (const required of ["\"Island ECC\"", "\"BFT\"", "\"Midtown 28\""]) {
+    if (!viewsSource.includes(required)) {
+      throw new Error(`views.js venue label mapping must include ${required}`);
+    }
+  }
+  if (!venueLabels.every((label) => /^[A-Za-z0-9 ]+$/.test(label))) {
+    throw new Error("Venue labels must be short alphanumeric tokens");
+  }
+  const appSource = readFileSync(resolve(__dirnameSmoke, "js/app.js"), "utf8");
+  if (appSource.includes("Gym message copied")) {
+    throw new Error("static 'Gym message copied' toast must be replaced by the per-venue label");
+  }
+  for (const marker of ["copy-gym", "venueLabel", "Message to "]) {
+    if (!appSource.includes(marker)) {
+      throw new Error(`copy-gym handler must use ${marker}`);
+    }
+  }
+  console.log("ok  copy-gym toast labels the venue (Island ECC / BFT / Midtown 28)");
+  store.signOut();
 }
 
 // --- Reset ---

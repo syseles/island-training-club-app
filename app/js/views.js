@@ -830,8 +830,7 @@ function communityAbout() {
     <div class="section-head"><h2>Culture</h2></div>
     <div class="card"><div class="card-body prose">
       ${CULTURE.map((c) => `<h3>${esc(c.title)}</h3><p>${esc(c.body)}</p>`).join("")}
-    </div></div>
-    <p class="muted small mt16">Community copy is draft placeholder text for review with ITC leadership.</p>`;
+    </div></div>`;
 }
 
 function communityPrayers() {
@@ -1982,6 +1981,10 @@ function adminOps(viewer, memberUsers) {
     const override = store.getSession(s.id);
     const names = store.attendeesFor(s);
     const gymMsg = `ITC HYROX booking — ${fmtDate(s.dateISO)} ${fmtTime(s.time)} at ${s.location}. Confirmed: ${confirmed.length} of ${s.capacity}. Names: ${names.join(", ")}. Total: ${fmtMoney(confirmed.length * s.price)}.`;
+    const venueLabel = /Island ECC/.test(s.location) ? "Island ECC"
+      : /BFT/.test(s.location) ? "BFT"
+      : /Midtown 28/.test(s.location) ? "Midtown 28"
+      : "Gym";
     const wa = `https://wa.me/?text=${encodeURIComponent(gymMsg)}`;
     const gymDone = override.gymConfirmedAt;
     const isMid = store.isMidtown(s);
@@ -2020,7 +2023,7 @@ function adminOps(viewer, memberUsers) {
           <p class="muted small">Send Friday after the 2 PM checkpoint. The app number is what’s sent.</p>
           <div class="btn-row">
             <a class="btn sm" href="${wa}" target="_blank" rel="noopener">Send via WhatsApp</a>
-            <button class="btn ghost sm" type="button" data-action="copy-gym" data-msg="${esc(gymMsg)}">Copy message</button>
+            <button class="btn ghost sm" type="button" data-action="copy-gym" data-msg="${esc(gymMsg)}" data-venue-label="${esc(venueLabel)}">Copy message</button>
           </div>
           <form id="form-gym-note" data-session="${esc(s.id)}" class="mt8">
             <div class="field"><label>Note (optional)</label><input name="note" placeholder="e.g. confirmed 16 with BFT"></div>
