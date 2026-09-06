@@ -2349,6 +2349,8 @@ function adminVenueStatusMetrics(session) {
   const confirmed = held.filter((booking) => booking.status === "confirmed").length;
   const claims = held.filter((booking) => booking.status === "reserved" && booking.paymentMarkedAt).length;
   const unpaid = held.filter((booking) => booking.status === "reserved" && !booking.paymentMarkedAt).length;
+  const capacity = Number(session.capacity);
+  const spotsLeft = Number.isFinite(capacity) ? Math.max(0, capacity - held.length) : null;
   const safeId = esc(session.id);
   return `<div class="admin-hyrox-counts venue-counts" aria-label="${esc(venueDisplayName(session))} booking status">
     <a class="admin-hyrox-count admin-hyrox-count-link" href="#hyrox-venue-${safeId}-confirmed">
@@ -2363,7 +2365,7 @@ function adminVenueStatusMetrics(session) {
     <a class="admin-hyrox-count admin-hyrox-count-link" href="#hyrox-venue-${safeId}-active">
       <strong>${held.length}</strong><span>Active places</span>
     </a>
-    <div class="admin-hyrox-count"><strong>${session.capacity ?? "∞"}</strong><span>Capacity</span></div>
+    <div class="admin-hyrox-count"><strong>${spotsLeft ?? "∞"}</strong><span>Spots left</span></div>
   </div>
   <div id="hyrox-venue-${safeId}-confirmed" class="admin-status-anchor"></div>
   <div id="hyrox-venue-${safeId}-claims" class="admin-status-anchor"></div>
