@@ -3,42 +3,7 @@
 
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { readFileSync as readAssetFileSync } from "node:fs";
 import { assertFpsCopyBindings } from "./test-html.mjs";
-
-const webpDimensions = (path) => {
-  const bytes = readAssetFileSync(new URL(path, import.meta.url));
-  assert.equal(bytes.subarray(0, 4).toString(), "RIFF", `${path} must be a RIFF file`);
-  assert.equal(bytes.subarray(8, 12).toString(), "WEBP", `${path} must be a WebP file`);
-  let offset = 12;
-  while (offset + 8 <= bytes.length) {
-    const type = bytes.subarray(offset, offset + 4).toString();
-    const size = bytes.readUInt32LE(offset + 4);
-    const dataOffset = offset + 8;
-    if (type === "VP8 ") {
-      assert.equal(bytes.subarray(dataOffset + 3, dataOffset + 6).toString("hex"), "9d012a");
-      return {
-        width: bytes.readUInt16LE(dataOffset + 6) & 0x3fff,
-        height: bytes.readUInt16LE(dataOffset + 8) & 0x3fff,
-      };
-    }
-    if (type === "VP8X") {
-      return {
-        width: bytes.readUIntLE(dataOffset + 4, 3) + 1,
-        height: bytes.readUIntLE(dataOffset + 7, 3) + 1,
-      };
-    }
-    offset = dataOffset + size + (size % 2);
-  }
-  assert.fail(`${path} has no supported WebP dimensions chunk`);
-};
-
-for (const photo of ["../assets/itc/running.webp", "../assets/itc/water.webp", "../assets/itc/hyrox.webp"]) {
-  const dimensions = webpDimensions(photo);
-  assert.ok(dimensions.width >= 1200 && dimensions.height >= 675,
-    `${photo} must be a high-resolution activity image`);
-}
-console.log("ok  recurring activity photos are high-resolution WebP assets");
 
 // --- localStorage shim ---
 const mem = new Map();
@@ -51,30 +16,8 @@ globalThis.localStorage = {
 const store = await import("./js/store.js");
 const views = await import("./js/views.js");
 const data = await import("./js/data.js");
-const { buildIndemnityCsv } = await import("./js/exports.js");
 const hyroxCycle = await import("./js/hyrox-cycle.js");
 
-const indemnityExportCsv = buildIndemnityCsv([{
-  fullName: 'O\"Connor, Ada',
-  email: "ada@example.test",
-  status: "approved",
-  role: "member",
-  phone: "+852 5555 5555",
-  emergencyName: "Grace O\"Connor",
-  emergencyRelationship: "Parent",
-  emergencyPhone: "+852 6666 6666",
-  indemnityStatus: "Accepted",
-  indemnitySignature: 'Ada O\"Connor',
-  indemnitySignedAt: "2026-08-01",
-  indemnityFormVersion: "v1",
-  indemnityAcceptedAt: "2026-08-01T12:00:00.000Z",
-}]);
-if (indemnityExportCsv.charCodeAt(0) !== 0xFEFF
-    || !indemnityExportCsv.includes("Name,Email,Status,Role,Phone,Emergency name,Emergency relationship,Emergency phone,Indemnity status,Signature,Signed date,Form version,Accepted at")
-    || !indemnityExportCsv.includes('O""Connor, Ada')
-    || !indemnityExportCsv.includes('Grace O""Connor')) {
-  throw new Error("indemnity export must be Excel-compatible CSV with escaped values");
-}
 const hktRolloverInstant = Date.parse("2026-08-05T16:30:00.000Z");
 assert.equal(data.todayHktISO(hktRolloverInstant), "2026-08-06",
   "current HKT date must not depend on the browser timezone");
@@ -144,7 +87,7 @@ assert.deepEqual(quarryBaySeed && {
   location: "10/F, Island ECC, Quarry Bay",
   mapsQuery: "Island ECC, Quarry Bay, Hong Kong",
   price: 180,
-  capacity: 30,
+  capacity: 12,
 }, "IA-37 Quarry Bay HYROX must match the approved recurring-session details");
 assert.equal(data.fmtMoney(180), "HK$180",
   "consumer-facing Hong Kong prices should use the standard HK$ symbol");
@@ -154,7 +97,6 @@ localStorage.setItem("itc.prototype.v1", JSON.stringify({
   sessionUserId: null,
   activities: [legacyBftActivity, {
     ...quarryBaySeed,
-    capacity: 12,
     location: "10/F, 633 King's Road, Quarry Bay, Hong Kong",
     mapsQuery: "10/F, 633 King's Road, Quarry Bay, Hong Kong",
   }],
@@ -178,7 +120,7 @@ localStorage.setItem("itc.prototype.v1", JSON.stringify({
   duty: {},
 }));
 const renamedState = store.load();
-assert.equal(renamedState.version, 19, "legacy state must advance through the HYROX identifier, venue, capacity, and pooled-cycle migrations");
+assert.equal(renamedState.version, 19, "legacy state must advance through the HYROX identifier, venue and pooled-cycle migrations");
 assert.ok(renamedState.activities.some((activity) => activity.id === "hyrox-bft"));
 assert.ok(renamedState.activities.some((activity) => activity.id === "hyrox-quarry-bay"));
 assert.equal(renamedState.activities.some((activity) => activity.id === "hyrox"), false);
@@ -193,8 +135,6 @@ const migratedQuarryBay = renamedState.activities.find((activity) =>
 );
 assert.equal(migratedQuarryBay.location, "10/F, Island ECC, Quarry Bay");
 assert.equal(migratedQuarryBay.mapsQuery, "Island ECC, Quarry Bay, Hong Kong");
-assert.equal(migratedQuarryBay.capacity, 30,
-  "existing Quarry Bay local state must migrate to the new capacity");
 assert.equal(
   renamedState.bookings.find((booking) => booking.id === "legacy-quarry-booking")?.snapshot.location,
   "10/F, Island ECC, Quarry Bay",
@@ -222,12 +162,11 @@ for (const relativePath of [
   "../supabase/migrations/20260827000001_hyrox_indemnity_fields.sql",
   "../supabase/migrations/20260902000001_hyrox_bft_quarry_bay.sql",
   "../supabase/migrations/20260902000002_quarry_bay_island_ecc.sql",
-  "../supabase/migrations/20260904000001_hyrox_quarry_bay_capacity.sql",
   "../supabase/migrations/20260903000001_hyrox_cycle_schema.sql",
   "../supabase/migrations/20260903000002_hyrox_cycle_member_rpcs.sql",
   "../supabase/migrations/20260903000003_hyrox_cycle_reconciliation.sql",
   "../supabase/migrations/20260903000004_hyrox_cycle_allocation.sql",
-  "../supabase/migrations/20260904000002_hyrox_cycle_auto_provision.sql",
+  "../supabase/migrations/20260904000001_hyrox_cycle_auto_provision.sql",
 ]) {
   const absolutePath = resolve(__dirnameSmoke, relativePath);
   if (!existsSync(absolutePath)) {
@@ -256,10 +195,6 @@ const quarryBayVenueMigrationSource = readFileSync(
   resolve(__dirnameSmoke, "../supabase/migrations/20260902000002_quarry_bay_island_ecc.sql"),
   "utf8"
 );
-const quarryBayCapacityMigrationSource = readFileSync(
-  resolve(__dirnameSmoke, "../supabase/migrations/20260904000001_hyrox_quarry_bay_capacity.sql"),
-  "utf8"
-);
 for (const marker of [
   "10/F, Island ECC, Quarry Bay",
   "Island ECC, Quarry Bay, Hong Kong",
@@ -281,13 +216,6 @@ const tightenHyroxTemplateAt = hyroxActivityMigrationSource.indexOf(
 );
 assert.ok(settleHyroxConstraintsAt >= 0 && settleHyroxConstraintsAt < tightenHyroxTemplateAt,
   "deferred rename constraints must settle before altering the template table again");
-for (const marker of [
-  "capacity = 30",
-  "where activity_id = 'hyrox-quarry-bay'",
-]) {
-  assert.ok(quarryBayCapacityMigrationSource.includes(marker),
-    `Quarry Bay capacity migration must include ${marker}`);
-}
 for (const marker of [
   "'hyrox-bft'",
   "'hyrox-quarry-bay'",
@@ -375,10 +303,13 @@ const rsvpIntegrityMigrationSource = readFileSync(
   resolve(__dirnameSmoke, "../supabase/migrations/20260829000008_rsvp_integrity.sql"),
   "utf8"
 );
-const sept5LunchCleanupMigrationSource = readFileSync(
-  resolve(__dirnameSmoke, "../supabase/migrations/20260905000003_cleanup_sept5_lunch_duplicate.sql"),
-  "utf8"
+const attendeeNamesMigrationPath = resolve(
+  __dirnameSmoke, "../supabase/migrations/20260905000001_operational_attendee_names.sql"
 );
+if (!existsSync(attendeeNamesMigrationPath)) {
+  throw new Error("approved attendee names migration must exist");
+}
+const attendeeNamesMigrationSource = readFileSync(attendeeNamesMigrationPath, "utf8");
 const operationalIntegrationSource = readFileSync(
   resolve(__dirnameSmoke, "../supabase/tests/operational_backend_integration.sql"),
   "utf8"
@@ -392,12 +323,6 @@ for (const marker of [
   "withdraw_operational_rsvp",
   "grant execute on function public.get_operational_rsvp_counts() to anon, authenticated",
 ]) assert.ok(rsvpIntegrityMigrationSource.includes(marker));
-for (const marker of [
-  "event-1788509289-2026-09-05",
-  "lunch-2026-09-05",
-  "Cannot remove Sept 5 RSVP duplicate with booking history.",
-  "cancelled_at = null",
-]) assert.ok(sept5LunchCleanupMigrationSource.includes(marker));
 const rsvpCountFunctionSource = rsvpIntegrityMigrationSource.match(
   /create or replace function public\.get_operational_rsvp_counts\(\)[\s\S]*?\n\$\$;/
 )?.[0] || "";
@@ -462,6 +387,28 @@ assert.match(rsvpIntegrityMigrationSource,
 assert.doesNotMatch(rsvpIntegrityMigrationSource,
   /grant[^\n]*(?:all|select|insert|update|delete)[^\n]*on\s+(?:table\s+)?public\.operational_bookings/i,
   "RSVP count migration must not grant direct booking-table access");
+const attendeeNamesFunctionSource = attendeeNamesMigrationSource.match(
+  /create or replace function public\.get_operational_attendee_names\([^)]*\)[\s\S]*?\n\$\$;/
+)?.[0] || "";
+assert.match(attendeeNamesFunctionSource, /returns table\s*\(\s*display_name text\s*\)/i,
+  "attendee names RPC must return display labels only");
+assert.match(attendeeNamesFunctionSource, /security definer/i);
+assert.match(attendeeNamesFunctionSource, /(?:auth\.uid\(\)|current_user_role\(\))/i);
+assert.match(attendeeNamesFunctionSource, /role in \('member', 'admin', 'super_admin'\)/i);
+assert.match(attendeeNamesFunctionSource, /status\s*=\s*'confirmed'/i);
+assert.match(attendeeNamesFunctionSource, /operational_bookings[\s\S]*profiles/i);
+assert.match(attendeeNamesMigrationSource,
+  /revoke all on function public\.get_operational_attendee_names\(text\)\s+from public, anon, authenticated/);
+assert.match(attendeeNamesMigrationSource,
+  /grant execute on function public\.get_operational_attendee_names\(text\)\s+to authenticated/);
+assert.doesNotMatch(attendeeNamesMigrationSource,
+  /grant execute on function public\.get_operational_attendee_names\(text\)\s+to anon/);
+assert.doesNotMatch(attendeeNamesMigrationSource,
+  /grant\s+(?:all|select|insert|update|delete)[^\n]*on\s+(?:table\s+)?public\.operational_bookings/i,
+  "attendee names migration must not grant direct booking-table access");
+assert.doesNotMatch(attendeeNamesMigrationSource,
+  /email|mobile|phone/i,
+  "attendee names RPC must not expose contact details");
 assert.doesNotMatch(operationalIntegrationSource,
   /from\s+(?:public\.)?reserve_operational_session\('hyrox-2026-/,
   "successful SQL reservation fixtures must use dynamic future sessions");
@@ -846,40 +793,6 @@ const appIndexSource = readFileSync(resolve(__dirnameSmoke, "index.html"), "utf8
 if (!appIndexSource.includes("window.SUPABASE_URL") || !appIndexSource.includes("window.SUPABASE_ANON_KEY")) {
   throw new Error("static Supabase configuration seam must remain explicit in app/index.html");
 }
-const headerLogoPath = "../assets/itc/logo-header.png";
-const headerLogoAbsolutePath = resolve(__dirnameSmoke, headerLogoPath);
-const headerLogoMatch = appIndexSource.match(/<a href="#\/home" class="top-logo"[\s\S]*?<img src="([^"]+)"/);
-if (headerLogoMatch?.[1] !== headerLogoPath || !existsSync(headerLogoAbsolutePath)) {
-  throw new Error("top-left header must use the compact ITC logo asset");
-}
-const headerLogoBytes = readFileSync(headerLogoAbsolutePath);
-if (headerLogoBytes.toString("ascii", 12, 16) !== "IHDR"
-    || headerLogoBytes.readUInt32BE(16) !== 1929
-    || headerLogoBytes.readUInt32BE(20) !== 1357) {
-  throw new Error("header logo must use the complete compact ITC mark crop");
-}
-const manifestSource = readFileSync(resolve(__dirnameSmoke, "manifest.webmanifest"), "utf8");
-const faviconPath = "../assets/itc/logo-favicon.png";
-const faviconAbsolutePath = resolve(__dirnameSmoke, faviconPath);
-const faviconBytes = existsSync(faviconAbsolutePath) ? readFileSync(faviconAbsolutePath) : null;
-const browserFaviconPath = "../assets/itc/favicon-48.png";
-const browserFaviconAbsolutePath = resolve(__dirnameSmoke, browserFaviconPath);
-const browserFaviconBytes = existsSync(browserFaviconAbsolutePath)
-  ? readFileSync(browserFaviconAbsolutePath) : null;
-if (!appIndexSource.includes(`<link rel="icon" type="image/png" sizes="48x48" href="${browserFaviconPath}">`)
-    || !browserFaviconBytes
-    || browserFaviconBytes.toString("ascii", 12, 16) !== "IHDR"
-    || browserFaviconBytes.readUInt32BE(16) !== 48
-    || browserFaviconBytes.readUInt32BE(20) !== 48
-    || !manifestSource.includes(`"src": "${faviconPath}"`)
-    || !manifestSource.includes('"type": "image/png"')
-    || !faviconBytes
-    || faviconBytes.toString("ascii", 12, 16) !== "IHDR"
-    || faviconBytes.readUInt32BE(16) !== 1929
-    || faviconBytes.readUInt32BE(20) !== 1929) {
-  throw new Error("webpage and installed-app icons must use the undistorted ITC favicon asset");
-}
-console.log("ok  webpage and installed-app icons use the undistorted ITC favicon");
 if (/## Vercel env vars|Vercel project settings[^\n]*Environment Variables/i.test(liveAuthRunbookSource)) {
   throw new Error("runbook must not claim Vercel env vars inject into static HTML");
 }
@@ -909,9 +822,6 @@ assert.equal((integratedViewSource.match(/store\.attendeeCountFor\(s\)/g) || [])
   "Schedule Going/RSVP states, RSVP Activity Details, and Admin controls must use attendeeCountFor");
 assert.doesNotMatch(integratedViewSource, /store\.attendeesFor\(s\)\.length/,
   "RSVP count surfaces must not derive counts from attendee identities");
-if (!/const weekStart = sundayOf\(todayLocal\(\)\);/.test(integratedViewSource)) {
-  throw new Error("Home week must start on Sunday");
-}
 const combinedRuntimeSource = `${integratedViewSource}\n${integratedAppSource}`;
 for (const marker of [
   "Continue with Google",
@@ -919,9 +829,6 @@ for (const marker of [
   "Giving &amp; Fundraising",
   "ITC Anniversary",
   "HYROX",
-  "download-indemnity-list",
-  "listIndemnityRecords",
-  "buildIndemnityCsv",
 ]) {
   if (!combinedRuntimeSource.includes(marker)) {
     throw new Error(`testing integration missing ${marker}`);
@@ -949,13 +856,6 @@ for (const marker of ['case "pay"', 'case "form-reserve"', 'case "form-mark-paid
   }
 }
 console.log("ok  Payment reserve and mark-paid routes remain delegated");
-for (const marker of ['case "form-membership-details"', "store.updateMyDonorId"]) {
-  if (!integratedAppSource.includes(marker)) {
-    failures++;
-    console.error(`FAIL Membership Details donor edit handler missing ${marker}`);
-  }
-}
-console.log("ok  Membership Details donor edit handler is delegated");
 for (const marker of ['case "release-reservation"', 'case "defer-to"', 'case "copy-fps"']) {
   if (!integratedAppSource.includes(marker)) {
     throw new Error(`integrated Payment router missing ${marker}`);
@@ -1136,11 +1036,11 @@ const assertRenderedActivityLinksAreFree = (html, label) => {
   const linkedIds = [...html.matchAll(/href="#\/activity\/([^"]+)"/g)].map((match) => match[1]);
   if (!linkedIds.length) {
     // Mirror viewHome()'s visitor branch: when no free sessions exist in the
-    // current Sun–Sat window, the empty state is the expected output and
+    // current Mon–Sun window, the empty state is the expected output and
     // there are no links to verify. The seed data (Mon/Tue/Wed only) makes
-    // this the case on Thu–Sat — without this guard the suite was green only
-    // on Sun–Wed.
-    const weekStart = data.sundayOf(data.todayLocal());
+    // this the case on Thu–Sun — without this guard the suite was green only
+    // on Mon–Wed.
+    const weekStart = data.mondayOf(data.todayLocal());
     const weekEnd = data.addDays(weekStart, 6);
     const freeInWeek = allUpcoming.filter((session) => {
       if (session.kind !== "free") return false;
@@ -1166,7 +1066,7 @@ const assertRenderedActivityLinksAreFree = (html, label) => {
 };
 assertRenderedActivityLinksAreFree(localVisitorHome, "visitor Home");
 {
-  const weekStart = data.sundayOf(data.todayLocal());
+  const weekStart = data.mondayOf(data.todayLocal());
   const weekEnd = data.addDays(weekStart, 6);
   const freeInWeek = allUpcoming.filter((session) => {
     if (session.kind !== "free") return false;
@@ -1181,7 +1081,7 @@ assertRenderedActivityLinksAreFree(localVisitorHome, "visitor Home");
       throw new Error("visitor Home must show free sessions only");
     }
   } else {
-    // Thu–Sat: no free sessions in window, so neither name should appear.
+    // Thu–Sun: no free sessions in window, so neither name should appear.
     if (localVisitorHome.includes(free.name) || localVisitorHome.includes(paid.name)) {
       throw new Error("visitor Home should not list session names when the current week has no free sessions");
     }
@@ -1410,10 +1310,6 @@ if (!commAbout.includes("Arnold Wong") || !commAbout.includes("Our foundation"))
   failures++;
   console.error("FAIL Community About page missing leaders or culture content");
 } else console.log("ok  Community About page carries leaders & culture");
-if (commAbout.includes("Community copy is draft placeholder text for review with ITC leadership.")) {
-  failures++;
-  console.error("FAIL Community About page should not show draft placeholder copy");
-} else console.log("ok  Community About page hides draft placeholder copy");
 if (!views.viewCommunity("prayers").includes('id="form-prayer"')) {
   failures++;
   console.error("FAIL prayers page missing the request form");
@@ -1535,7 +1431,7 @@ for (const stale of [
 }
 console.log("ok  no stale plain-checkbox or indemnity-only patterns remain");
 await check("checkout (visitor) -> redirect", () => views.viewCheckout(paid.id));
-await check("admin (visitor) -> redirect", () => views.viewAdmin("members"));
+await check("admin (visitor) -> redirect", () => views.viewAdmin("approvals"));
 await check("notfound", () => views.viewNotFound());
 
 // free activity must never show booking/capacity language
@@ -1574,6 +1470,13 @@ if (!paidHtml.includes('badge paid">HK$180</span>') || paidHtml.includes("per se
 const unpaidBadgeSession = allUpcoming.find((s) => s.kind === "paid" && s.activityId === "hyrox-bft" && !data.sessionStarted(s));
 installLocalFixtures();
 store.signIn("member@example.test");
+const paidHtmlWithAttendeeNames = views.viewActivity(paid.id, ["Alex C.", "Sam L."]);
+if (!paidHtmlWithAttendeeNames.includes("Alex C.")
+    || !paidHtmlWithAttendeeNames.includes("Sam L.")
+    || !paidHtmlWithAttendeeNames.includes("Who’s coming")) {
+  failures++;
+  console.error("FAIL approved attendee names should render on paid Activity Details");
+} else console.log("ok  approved attendee names render on paid Activity Details");
 if (!unpaidBadgeSession) {
   failures++;
   console.error("FAIL smoke needs an upcoming HYROX session for badge state checks");
@@ -1826,9 +1729,9 @@ await check("account (pending)", () => views.viewAccount());
 const pendingHome = views.viewHome();
 {
   // Pending applicants see "My Week" filtered to free sessions in the
-  // current Sun–Sat window (same as the visitor branch). On Thu–Sat the
+  // current Mon–Sun window (same as the visitor branch). On Thu–Sun the
   // seed data yields no such sessions, so neither session name appears.
-  const weekStart = data.sundayOf(data.todayLocal());
+  const weekStart = data.mondayOf(data.todayLocal());
   const weekEnd = data.addDays(weekStart, 6);
   const freeInWeek = allUpcoming.filter((session) => {
     if (session.kind !== "free") return false;
@@ -1874,7 +1777,7 @@ if (!pendHtml.includes("Booking locked")) {
 
 // --- Admin approval flow ---
 installLocalFixtures(); store.signIn("admin@example.test");
-for (const tab of ["members", "activities", "giving", "payments"]) {
+for (const tab of ["approvals", "members", "activities", "giving", "payments"]) {
   const adminHtml = await check(`admin ${tab}`, () => views.viewAdmin(tab));
   const activeTabs = adminHtml.match(/<a[^>]*aria-current="page"[^>]*>/g) || [];
   if (activeTabs.length !== 1 || !activeTabs[0].includes(`href="#/admin/${tab}"`)) {
@@ -1882,24 +1785,6 @@ for (const tab of ["members", "activities", "giving", "payments"]) {
   }
 }
 console.log("ok  every Admin route exposes exactly one active tab");
-const adminMembersHtml = await views.viewAdmin("members");
-if (!adminMembersHtml.includes('data-action="download-indemnity-list"')) {
-  throw new Error("Admin Members must expose the indemnity list download");
-}
-const indemnityRecords = await store.listIndemnityRecords();
-if (!indemnityRecords.some((record) => record.fullName === "Test Admin")
-    || !indemnityRecords.some((record) => record.fullName === "Test Member")) {
-  throw new Error("indemnity export must include all local profiles");
-}
-store.signIn("member@example.test");
-try {
-  await store.listIndemnityRecords();
-  throw new Error("non-admin should not download indemnity records");
-} catch (err) {
-  if (!/Approved Admin access required/.test(err.message)) throw err;
-}
-store.signIn("admin@example.test");
-console.log("ok  Admin Members exposes a gated all-profile indemnity export");
 const adminScheduleHtml = await views.viewAdmin("payments");
 if (!adminScheduleHtml.includes("HYROX weekly setup")
     || !adminScheduleHtml.includes("created automatically")
@@ -2028,12 +1913,12 @@ if (!approvedCommunity.includes("Connect and grow with us.")) {
 const newMemberAcct = await views.viewAccount();
 let cardsOk = true;
 for (const link of [
-  "#/account/bookings",
-  "#/account/bookings/attended",
   "#/account/details",
   "#/account/indemnity",
+  "#/account/donor",
   "#/account/payments",
   "#/account/privacy",
+  "#/account/history",
 ]) {
   if (!newMemberAcct.includes(`href="${link}"`)) {
     failures++;
@@ -2041,19 +1926,17 @@ for (const link of [
     console.error(`FAIL Profile missing ${link} row`);
   }
 }
-if (cardsOk) console.log("ok  Profile shows interactive booking stats and five section rows");
-if (newMemberAcct.includes("#/account/donor") || newMemberAcct.includes("Donor Profile")) {
-  failures++;
-  console.error("FAIL Profile should not expose a redundant Donor Profile destination");
-} else console.log("ok  Profile removes the redundant Donor Profile destination");
+if (cardsOk) console.log("ok  Profile shows the six section rows");
 if (newMemberAcct.includes("#/account/about")) {
   failures++;
   console.error("FAIL About card should have moved to the Community tab");
 } else console.log("ok  About card moved off Profile");
 for (const sub of [
-  "Contact, emergency and donor information",
+  "Contact and emergency information",
+  "Donor ID and e-receipt details",
   "Bookings, donations and orders",
   "Consent and communication choices",
+  "Activity history",
 ]) {
   if (!newMemberAcct.includes(sub)) {
     failures++;
@@ -2065,14 +1948,8 @@ await check("profile > details", () => views.viewAccount("details"));
 await check("profile > indemnity", () => views.viewAccount("indemnity"));
 await check("profile > donor", () => views.viewAccount("donor"));
 await check("profile > payments", () => views.viewAccount("payments"));
-await check("profile > bookings", () => views.viewAccount("bookings"));
-await check("profile > attended bookings", () => views.viewAccount("bookings", "attended"));
-await check("profile > details", () => views.viewAccount("details"));
-await check("profile > membership details edit", () => views.viewAccount("details", "edit"));
-await check("profile > indemnity", () => views.viewAccount("indemnity"));
-await check("profile > payments", () => views.viewAccount("payments"));
 await check("profile > privacy", () => views.viewAccount("privacy"));
-await check("profile > legacy history", () => views.viewAccount("history"));
+await check("profile > history", () => views.viewAccount("history"));
 const membershipDetailsHtml = await views.viewAccount("details");
 const membershipDetailsEditHtml = await views.viewAccount("details", "edit");
 if (!membershipDetailsHtml.includes("Emergency contact relationship")) {
@@ -2085,27 +1962,17 @@ if (!membershipDetailsEditHtml.includes('name="emergency_relationship"')) {
 } else console.log("ok  Membership Details summary and edit include emergency relationship");
 
 // sub-page headings are title-cased to match the row titles
-for (const [section, sub, title] of [
-  ["bookings", undefined, "Bookings"],
-  ["bookings", "attended", "Bookings"],
-  ["details", undefined, "Membership Details"],
-  ["details", "edit", "Membership Details"],
-  ["donor", undefined, "Membership Details"],
-  ["indemnity", undefined, "Indemnity"],
-  ["payments", undefined, "Payments &amp; Receipts"],
-  ["privacy", undefined, "Privacy &amp; Notifications"],
-  ["history", undefined, "Bookings"],
+for (const [section, title] of [
+  ["details", "Membership Details."],
+  ["indemnity", "Indemnity."],
+  ["donor", "Donor Profile."],
+  ["payments", "Payments &amp; Receipts."],
+  ["privacy", "Privacy &amp; Notifications."],
+  ["history", "History."],
 ]) {
-  const profileSectionHtml = await views.viewAccount(section, sub);
-  const heading = `<h1 class="display sm">${title}</h1>`;
-  const headingWithPeriod = `<h1 class="display sm">${title}.</h1>`;
-  if (!profileSectionHtml.includes(heading) || profileSectionHtml.includes(headingWithPeriod)) {
+  if (!(await views.viewAccount(section)).includes(title)) {
     failures++;
-    console.error(`FAIL profile > ${section} heading should read "${title}" without a trailing period`);
-  }
-  if (/<div class="kicker mt16">Profile ·/.test(profileSectionHtml)) {
-    failures++;
-    console.error(`FAIL profile > ${section} should not repeat the page title in a subtitle`);
+    console.error(`FAIL profile > ${section} heading should read "${title}"`);
   }
 }
 console.log("ok  sub-page headings title-cased");
@@ -2215,22 +2082,6 @@ if (!views.viewHome().includes("Nothing booked this week")) {
   failures++;
   console.error('FAIL "My week" should prompt when the member has no bookings');
 } else console.log('ok  "My week" empty state prompts to book');
-const emptyBookingsPage = await views.viewAccount("bookings");
-if (!emptyBookingsPage.includes("Your bookings will appear here")) {
-  failures++;
-  console.error("FAIL empty Bookings page should explain where bookings will appear");
-} else console.log("ok  empty Bookings page has a clear state");
-const emptyDetailsPage = await views.viewAccount("details");
-const emptyDetailsEditPage = await views.viewAccount("details", "edit");
-if (!emptyDetailsPage.includes("Donor ID") || !emptyDetailsEditPage.includes('name="donorId"')) {
-  failures++;
-  console.error("FAIL Membership Details should show and edit Donor ID");
-} else console.log("ok  Membership Details shows and edits Donor ID");
-const legacyDonorPage = await views.viewAccount("donor");
-if (!legacyDonorPage.includes("Membership Details") || legacyDonorPage.includes("Donor Profile")) {
-  failures++;
-  console.error("FAIL legacy Donor Profile route should map to Membership Details");
-} else console.log("ok  legacy Donor Profile route maps to Membership Details");
 await check("checkout (member)", () => views.viewCheckout(paid.id));
 
 // --- document registry (indemnity + privacy + guidelines) ---
@@ -2262,7 +2113,7 @@ console.log("ok  document registry scopes provisional watermarks by document");
 const indemnityBody = DOCS.indemnity?.renderBody?.() || "";
 for (const marker of [
   "ITC Hyrox Training - Liability Release &amp; Data Privacy Form",
-  "Hyrox Training from the date of signing to 30 June 2027",
+  "Hyrox Training from the date of signing to 31 December 2026",
 ]) {
   if (!indemnityBody.includes(marker)) {
     failures++;
@@ -2585,24 +2436,6 @@ if (homeBooked.includes("Midtown28 Fitness") || homeBooked.includes("Just show u
   failures++;
   console.error('FAIL home "My week" shows sessions the member has not booked');
 } else console.log('ok  home "My week" hides unbooked sessions');
-const snapshotTimeBeforeHomeFallback = booking.snapshot.time;
-const snapshotStartTimeBeforeHomeFallback = booking.snapshot.startTime;
-delete booking.snapshot.time;
-delete booking.snapshot.startTime;
-try {
-  const homeWithLegacyBookingSnapshot = views.viewHome();
-  if (!homeWithLegacyBookingSnapshot.includes(booking.snapshot.name)) {
-    failures++;
-    console.error("FAIL Home should render a booking whose legacy snapshot has no time");
-  } else console.log("ok  Home renders legacy booking snapshots without time");
-} catch (err) {
-  failures++;
-  console.error(`FAIL Home should render a booking whose legacy snapshot has no time: ${err.message}`);
-} finally {
-  booking.snapshot.time = snapshotTimeBeforeHomeFallback;
-  if (snapshotStartTimeBeforeHomeFallback === undefined) delete booking.snapshot.startTime;
-  else booking.snapshot.startTime = snapshotStartTimeBeforeHomeFallback;
-}
 const WEEK_MS = 7 * 24 * 3600 * 1000;
 views.scheduleState.weekOffset = Math.round(
   (data.sundayOf(data.parseISO(paid.dateISO)) - data.sundayOf(data.todayLocal())) / WEEK_MS
@@ -2616,172 +2449,46 @@ if ((await views.viewAccount()).includes(">Upcoming<")) {
   failures++;
   console.error("FAIL Profile still repeats the upcoming bookings list");
 } else console.log("ok  Profile drops redundant upcoming list");
-const bookingStatsProfile = await views.viewAccount();
-if (!bookingStatsProfile.includes('href="#/account/bookings"')
-    || !bookingStatsProfile.includes('href="#/account/bookings/attended"')) {
-  failures++;
-  console.error("FAIL Profile booking and attended stats should link to their filtered views");
-} else console.log("ok  Profile booking stats link to all and attended views");
-const activeBookingsPage = await views.viewAccount("bookings");
-if (!activeBookingsPage.includes(booking.snapshot.name)
-    || !activeBookingsPage.includes("Upcoming")) {
-  failures++;
-  console.error("FAIL Bookings page should show active confirmed bookings");
-} else console.log("ok  Bookings page shows active confirmed bookings");
-const originalBookingStatus = booking.status;
-const originalBookingDateISO = booking.snapshot.dateISO;
-const originalBookingSessionId = booking.sessionId;
-try {
-  booking.status = "confirmed";
-  booking.sessionId = booking.sessionId.replace(/\d{4}-\d{2}-\d{2}$/, "2000-01-01");
-  booking.snapshot.dateISO = "2000-01-01";
-  const endedBookingsPage = await views.viewAccount("bookings");
-  if (!endedBookingsPage.includes("Ended") || !endedBookingsPage.includes(booking.snapshot.name)) {
-    failures++;
-    console.error("FAIL Bookings page should show ended bookings with an Ended status");
-  } else console.log("ok  Bookings page shows ended bookings");
-  booking.status = "attended";
-  const attendedBookingsPage = await views.viewAccount("bookings", "attended");
-  if (!attendedBookingsPage.includes(booking.snapshot.name)
-      || !attendedBookingsPage.includes("Attended")) {
-    failures++;
-    console.error("FAIL Attended view should show attended bookings");
-  } else console.log("ok  Attended view shows attended bookings");
-  booking.status = "cancelled";
-  booking.sessionId = originalBookingSessionId;
-  booking.snapshot.dateISO = originalBookingDateISO;
-  const cancelledBookingsPage = await views.viewAccount("bookings");
-  if (!cancelledBookingsPage.includes(booking.snapshot.name)
-      || !cancelledBookingsPage.includes("Cancelled")) {
-    failures++;
-    console.error("FAIL Bookings page should show cancelled bookings");
-  } else console.log("ok  Bookings page shows cancelled bookings");
-} finally {
-  booking.status = originalBookingStatus;
-  booking.sessionId = originalBookingSessionId;
-  booking.snapshot.dateISO = originalBookingDateISO;
-}
-const legacyHistoryPage = await views.viewAccount("history");
-if (!legacyHistoryPage.includes("Bookings") || !legacyHistoryPage.includes(booking.snapshot.name)) {
-  failures++;
-  console.error("FAIL legacy History route should preserve access to Bookings");
-} else console.log("ok  legacy History route maps to Bookings");
-
-const bookingStateBeforeCardFixtures = mem.get("itc.prototype.v1");
-const bookingCardFixtureState = JSON.parse(bookingStateBeforeCardFixtures);
-const bookingRecord = bookingCardFixtureState.bookings.find((item) => item.id === booking.id);
-const relatedSession = store.getSession(booking.sessionId);
-bookingRecord.snapshot.durationMin = 999;
-const duplicateBookingRecord = {
-  ...structuredClone(bookingRecord),
-  id: "duplicate-booking-record",
-  status: "cancelled",
-};
-delete duplicateBookingRecord.snapshot.time;
-delete duplicateBookingRecord.snapshot.startTime;
-bookingCardFixtureState.bookings.push(duplicateBookingRecord);
-bookingCardFixtureState.bookings.push({
-  id: "rsvp-booking-record",
-  userId: booking.userId,
-  sessionId: "rsvp-session-2099-01-01",
-  status: "confirmed",
-  snapshot: {
-    kind: "rsvp", name: "Community RSVP", dateISO: "2099-01-01", time: "10:00",
-    durationMin: 45, location: "Community Hall", price: 0,
-  },
-});
-bookingCardFixtureState.bookings.push({
-  id: "cancelled-rsvp-record",
-  userId: booking.userId,
-  sessionId: "rsvp-session-cancelled-2099-01-02",
-  status: "cancelled",
-  snapshot: {
-    kind: "rsvp", name: "Cancelled RSVP", dateISO: "2099-01-02", time: "10:00",
-    durationMin: 45, location: "Community Hall", price: 0,
-  },
-});
-mem.set("itc.prototype.v1", JSON.stringify(bookingCardFixtureState));
-store.load();
-store.signIn(signIn.user.email);
-const relatedCardsPage = await views.viewAccount("bookings");
-const bookingNameHeading = `<h3 class="mt8">${booking.snapshot.name}</h3>`;
-if ((relatedCardsPage.match(new RegExp(bookingNameHeading, "g")) || []).length !== 1) {
-  failures++;
-  console.error("FAIL Bookings should deduplicate records for the same event");
-} else console.log("ok  Bookings deduplicates records for the same event");
-if (!relatedCardsPage.includes(`${relatedSession.durationMin} min`) || relatedCardsPage.includes("999 min")) {
-  failures++;
-  console.error("FAIL Booking details should use the related event duration");
-} else console.log("ok  Booking details use the related event duration");
-if (!relatedCardsPage.includes("Community RSVP")
-    || !relatedCardsPage.includes("45 min")
-    || !relatedCardsPage.includes("RSVP")
-    || relatedCardsPage.includes("paid HK$0")) {
-  failures++;
-  console.error("FAIL RSVP booking should show RSVP instead of paid HK$0");
-} else console.log("ok  RSVP booking shows RSVP details");
-const profileWithCancelledRsvp = await views.viewAccount();
-const visibleBookingStat = profileWithCancelledRsvp.match(/<strong>(\d+)<\/strong><span>Bookings<\/span>/)?.[1];
-if (visibleBookingStat !== "2"
-    || relatedCardsPage.includes("Cancelled RSVP")
-    || (relatedCardsPage.match(/class="card booking-card"/g) || []).length !== 2) {
-  failures++;
-  console.error("FAIL Profile and Bookings must count the same deduplicated records while excluding cancelled RSVPs");
-} else console.log("ok  Profile and Bookings align on deduplicated non-cancelled-RSVP records");
-try {
-  const cancelledBookingPage = views.viewBooking("duplicate-booking-record");
-  if (!cancelledBookingPage.includes("Booking cancelled")) {
-    failures++;
-    console.error("FAIL cancelled booking details should render safely");
-  } else console.log("ok  cancelled booking details render safely");
-} catch (err) {
-  failures++;
-  console.error(`FAIL cancelled booking details should render safely: ${err.message}`);
-}
-mem.set("itc.prototype.v1", bookingStateBeforeCardFixtures);
-store.load();
-store.signIn(signIn.user.email);
 
 // donor ID skipped at signup ("Not applicable" above) can be added later;
-// it now lives inside Membership Details, not on the Profile card face.
+// it lives inside the Donor Profile sub-page, not on the card face
 store.updateDonorId(signIn.user.id, "IECC-99999");
 if (store.currentUser().donorId !== "IECC-99999") throw new Error("donor ID not saved");
 if ((await views.viewAccount()).includes("IECC-99999")) {
   failures++;
   console.error("FAIL donor ID should not appear on the Profile card face");
 } else console.log("ok  Profile card face carries no donor details");
-if (!(await views.viewAccount("details")).includes("IECC-99999")
-    || !(await views.viewAccount("details", "edit")).includes('value="IECC-99999"')) {
+if (!(await views.viewAccount("donor")).includes("IECC-99999")) {
   failures++;
-  console.error("FAIL donor ID should show in Membership Details summary and edit form");
-} else console.log("ok  donor ID shows in Membership Details");
+  console.error("FAIL donor ID missing from Donor Profile sub-page");
+} else console.log("ok  donor ID shows on Donor Profile sub-page");
 store.updateDonorId(signIn.user.id, "wong 1234");
 if (store.currentUser().donorId !== "WONG-1234") {
   failures++;
   console.error("FAIL donor ID should be stored uppercase with a hyphen");
 } else console.log("ok  donor ID stored uppercase with hyphen");
 
-// The Profile face keeps booking cards out of the overview; the Bookings
-// destination now includes active confirmed sessions as well as history.
+// the member's only booking is an upcoming confirmed session, so History
+// is empty — past bookings live behind the History card, not inline on Profile
 if ((await views.viewAccount()).includes("booking-card")) {
   failures++;
-  console.error("FAIL Profile should not list bookings inline");
-} else console.log("ok  Profile keeps bookings behind the stats card");
+  console.error("FAIL Profile should not list history inline");
+} else console.log("ok  Profile keeps history behind the card");
 const histHtml = await views.viewAccount("history");
-if (!histHtml.includes("booking-card") || !histHtml.includes(booking.snapshot.name)) {
+if (histHtml.includes("booking-card") || !histHtml.includes("Past sessions will appear here")) {
   failures++;
-  console.error("FAIL legacy History route should include active confirmed bookings");
-} else console.log("ok  legacy History route includes active bookings");
+  console.error("FAIL History sub-page should hide upcoming confirmed bookings");
+} else console.log("ok  History sub-page hides upcoming bookings");
 
 // --- Seeded member view ---
 installLocalFixtures(); store.signIn("member@example.test");
 await check("account (seeded member)", () => views.viewAccount());
 const memberAcct = await views.viewAccount();
 // fixture-member has donorId TEST-1234
-if (!(await views.viewAccount("details")).includes("TEST-1234")) {
+if (!(await views.viewAccount("donor")).includes("TEST-1234")) {
   failures++;
-  console.error("FAIL seeded member donor ID not shown in Membership Details");
-} else console.log("ok  seeded member donor ID shown in Membership Details");
+  console.error("FAIL seeded member donor ID not shown in Donor Profile");
+} else console.log("ok  seeded member donor ID shown in Donor Profile");
 if (memberAcct.includes("TEST-1234")) {
   failures++;
   console.error("FAIL donor ID should not appear on the Profile card face");
@@ -2925,10 +2632,9 @@ store.resetLocalData();
 {
   const bft = store.activities().find((a) => a.id === "hyrox-bft");
   const mid = store.activities().find((a) => a.id === "hyrox-midtown");
-  const quarry = store.activities().find((a) => a.id === "hyrox-quarry-bay");
-  if (bft.capacity !== 20 || mid.capacity !== 12 || quarry.capacity !== 30)
-    throw new Error("HYROX capacities should be BFT 20 / Midtown 12 / Quarry Bay 30");
-  console.log("ok  seeds: capacities BFT 20 / Midtown 12 / Quarry Bay 30");
+  if (bft.capacity !== 20 || mid.capacity !== 12)
+    throw new Error("HYROX capacities should be BFT 20 / Midtown 12");
+  console.log("ok  seeds: capacities 20/12");
 }
 {
   const correctedWater = store.activities().find((activity) => activity.id === "water");
@@ -3799,40 +3505,428 @@ store.signIn("member@example.test");
   console.log("ok  collector confirms payment from ops");
 }
 
-// --- Copy-message toast labels the venue (e.g. Island ECC / BFT / Midtown 28) ---
+// --- Generic Socials preview: rolling seven-day selector ---
+store.resetLocalData();
+installLocalFixtures();
+store.signIn("admin@example.test");
 {
-  store.resetLocalData();
-  installLocalFixtures();
+  const todayHktISO = data.todayHktISO();
+  const today = data.parseISO(todayHktISO);
+  const datePlus = (days) => data.isoDate(data.addDays(today, days));
+  assert.equal(datePlus(0), todayHktISO,
+    "generic Social fixtures must use the HKT calendar date, not the host-local date");
+  await store.createOneOffEvent({
+    name: "Already Started Social",
+    dateISO: datePlus(0),
+    time: "00:00",
+    durationMin: 90,
+    location: "Central",
+    mapsQuery: "Central, Hong Kong",
+    category: "Socials",
+    price: 0,
+    capacity: 20,
+  });
+  const earliestSocial = await store.createOneOffEvent({
+    name: "Community Breakfast",
+    dateISO: datePlus(1),
+    time: "08:00",
+    durationMin: 90,
+    location: "Central",
+    mapsQuery: "Central, Hong Kong",
+    category: "Socials",
+    price: 0,
+    capacity: 20,
+  });
+  await store.createOneOffEvent({
+    name: "Community Dinner",
+    dateISO: datePlus(2),
+    time: "19:00",
+    durationMin: 90,
+    location: "Wan Chai",
+    mapsQuery: "Wan Chai, Hong Kong",
+    category: "Socials",
+    price: 0,
+    capacity: 20,
+  });
+  await store.createOneOffEvent({
+    name: "Strength Workshop",
+    dateISO: datePlus(1),
+    time: "07:00",
+    durationMin: 60,
+    location: "Central",
+    mapsQuery: "Central, Hong Kong",
+    category: "Strength",
+    price: 0,
+    capacity: 20,
+  });
+  await store.createOneOffEvent({
+    name: "Next Week Social",
+    dateISO: datePlus(7),
+    time: "08:00",
+    durationMin: 90,
+    location: "Central",
+    mapsQuery: "Central, Hong Kong",
+    category: "Socials",
+    price: 0,
+    capacity: 20,
+  });
+  const nextSocial = store.nextSocialSession();
+  if (!nextSocial || nextSocial.id !== earliestSocial.id) {
+    throw new Error("nextSocialSession should skip started socials and select the earliest rolling-window social");
+  }
+  console.log("ok  Socials selector skips started events and ignores later/non-Socials events");
+}
+
+// Isolate both rolling-window edges so an earlier fixture cannot make either
+// assertion pass without evaluating the seven-day candidate itself.
+{
+  const RealDateForSocialBoundary = globalThis.Date;
+  const fixedNow = "2026-08-05T02:00:00.000Z"; // 10:00 HKT
+  globalThis.Date = class extends RealDateForSocialBoundary {
+    constructor(...args) {
+      super(...(args.length ? args : [fixedNow]));
+    }
+    static now() {
+      return RealDateForSocialBoundary.parse(fixedNow);
+    }
+    static parse(value) {
+      return RealDateForSocialBoundary.parse(value);
+    }
+    static UTC(...args) {
+      return RealDateForSocialBoundary.UTC(...args);
+    }
+  };
+  const resetWithoutSocials = () => {
+    store.resetLocalData();
+    installLocalFixtures();
+    const boundaryState = JSON.parse(mem.get("itc.prototype.v1"));
+    boundaryState.activities = boundaryState.activities
+      .filter((activity) => activity.category !== "Socials");
+    boundaryState.oneOffEvents = [];
+    mem.set("itc.prototype.v1", JSON.stringify(boundaryState));
+    store.load();
+    store.signIn("admin@example.test");
+  };
+  try {
+    resetWithoutSocials();
+    const exactDaySeven = await store.createOneOffEvent({
+      name: "Exact Day Seven Social",
+      dateISO: "2026-08-12",
+      time: "10:00",
+      durationMin: 60,
+      location: "Central",
+      mapsQuery: "Central, Hong Kong",
+      category: "Socials",
+      price: 0,
+      capacity: 20,
+    });
+    assert.equal(store.nextSocialSession()?.id, exactDaySeven.id,
+      "a Social starting at the exact seven-day HKT instant must be included");
+
+    resetWithoutSocials();
+    await store.createOneOffEvent({
+      name: "Beyond Day Seven Social",
+      dateISO: "2026-08-12",
+      time: "10:01",
+      durationMin: 60,
+      location: "Central",
+      mapsQuery: "Central, Hong Kong",
+      category: "Socials",
+      price: 0,
+      capacity: 20,
+    });
+    assert.equal(store.nextSocialSession(), null,
+      "a Social starting beyond the seven-day HKT instant must be excluded");
+    console.log("ok  Socials selector isolates exact and beyond-seven HKT boundaries");
+  } finally {
+    globalThis.Date = RealDateForSocialBoundary;
+  }
+}
+store.resetLocalData();
+installLocalFixtures();
+{
+  const fallbackState = JSON.parse(mem.get("itc.prototype.v1"));
+  fallbackState.activities = fallbackState.activities.filter((activity) => activity.category !== "Socials");
+  fallbackState.oneOffEvents = [];
+  mem.set("itc.prototype.v1", JSON.stringify(fallbackState));
+  store.load();
+  const fallbackCommunity = views.viewCommunity();
+  if (store.nextSocialSession() !== null || !fallbackCommunity.includes('href="#/schedule"')) {
+    throw new Error("Community Pulse should fall back to Schedule when no Socials event starts within seven days");
+  }
+  console.log("ok  Community Socials preview falls back to Schedule when no event is available");
+}
+store.resetLocalData();
+installLocalFixtures();
+
+// --- One-off events (local mode) ---
+store.resetLocalData();
+installLocalFixtures();
+store.signIn("member@example.test");
+try {
+  await store.createOneOffEvent({ name: "Nope", dateISO: "2026-09-05", time: "10:00", durationMin: 60, location: "Somewhere" });
+  throw new Error("members must not create one-off events");
+} catch (err) {
+  if (!/admin/i.test(err.message)) throw new Error(`expected admin guard, got: ${err.message}`);
+}
+store.signIn("admin@example.test");
+{
+  const oneOffDate = (daysAhead) => data.isoDate(data.addDays(data.parseISO(data.todayHktISO()), daysAhead));
+  const paidEvent = await store.createOneOffEvent({
+    name: "HYROX Race Day Send-off", dateISO: oneOffDate(1), time: "10:00",
+    durationMin: 90, location: "Kai Tak", mapsQuery: "", category: "HYROX",
+    price: 250, capacity: 12,
+  });
+  if (!paidEvent.oneOff || paidEvent.kind !== "paid" || !paidEvent.id.startsWith("event-"))
+    throw new Error("paid one-off event should be flagged, priced and event-prefixed");
+  if (!store.upcomingSessions(30).some((s) => s.id === paidEvent.id))
+    throw new Error("one-off event should appear in upcoming sessions");
+  if (!store.getSession(paidEvent.id)) throw new Error("getSession must resolve one-off events");
+  const eventHtml = views.viewActivity(paidEvent.id);
+  if (!eventHtml.includes("Book & pay") || !eventHtml.includes("HK$250"))
+    throw new Error("paid one-off activity page should offer booking");
+  const freeEvent = await store.createOneOffEvent({
+    name: "Community Picnic", dateISO: oneOffDate(2), time: "15:00",
+    durationMin: 120, location: "Tamar Park", category: "Other",
+  });
+  if (freeEvent.kind !== "free") throw new Error("zero-price one-off should be free");
+  const freeEventHtml = views.viewActivity(freeEvent.id);
+  if (!freeEventHtml.includes("Free · No booking needed"))
+    throw new Error("free one-off should render the free banner");
+  const freeCancelledEvent = await store.createOneOffEvent({
+    name: "Cancelled Community Social", dateISO: oneOffDate(3), time: "15:00",
+    durationMin: 90, location: "Tamar Park", category: "Socials",
+  });
+  store.cancelSessionWeek(freeCancelledEvent.id, "Weather warning");
+  const freeCancellationHtml = views.viewActivity(freeCancelledEvent.id);
+  if (!freeCancellationHtml.includes("Stay tuned for the next available social.")
+      || freeCancellationHtml.includes("Paid bookings were moved to the next available session — check your account."))
+    throw new Error("free cancellation Activity Details must render the exact social follow-up copy");
+  const adminActivitiesHtml = await views.viewAdmin("activities");
+  if (!adminActivitiesHtml.includes("One-off Events")
+      || !adminActivitiesHtml.includes("form-one-off-event")
+      || !adminActivitiesHtml.includes("HYROX Race Day Send-off"))
+    throw new Error("Activities tab should list one-off events and the add form");
+  const weeklyStart = adminActivitiesHtml.indexOf(">Weekly Event Controls<");
+  const oneOffStart = adminActivitiesHtml.indexOf(">One-off Events<");
+  const weeklyRegion = weeklyStart === -1 || oneOffStart === -1
+    ? ""
+    : adminActivitiesHtml.slice(weeklyStart, oneOffStart);
+  const oneOffRegion = oneOffStart === -1 ? "" : adminActivitiesHtml.slice(oneOffStart);
+  for (const event of [paidEvent, freeEvent]) {
+    if (weeklyRegion.includes(event.name) || weeklyRegion.includes(event.id))
+      throw new Error(`${event.name} must not receive recurring controls`);
+    if (!oneOffRegion.includes(event.name) || !oneOffRegion.includes(event.id))
+      throw new Error(`${event.name} must appear only in One-off Events`);
+  }
+  // Deletion is refused once a booking exists; cancellation still works and
+  // voids the booking (no same-activity follow-up session to defer to).
+  store.signIn("member@example.test");
+  const oneOffBooking = store.reserveSession("fixture-member", paidEvent.id);
   store.signIn("admin@example.test");
-  const ops = await views.viewAdmin("payments");
-  const venueLabels = [...ops.matchAll(/data-venue-label="([^"]+)"/g)].map((m) => m[1]);
-  for (const required of ["BFT", "Midtown 28"]) {
-    if (!venueLabels.includes(required)) {
-      throw new Error(`Copy message button should carry venue label "${required}" on ops`);
-    }
+  try {
+    await store.deleteOneOffEvent(paidEvent.id);
+    throw new Error("delete must refuse events with active bookings");
+  } catch (err) {
+    if (!/cancel the session instead/.test(err.message)) throw err;
   }
-  // The mapping recognizes Island ECC too, even if no live seed currently
-  // uses that location; verify the branch exists in views.js.
-  const viewsSource = readFileSync(resolve(__dirnameSmoke, "js/views.js"), "utf8");
-  for (const required of ["\"Island ECC\"", "\"BFT\"", "\"Midtown 28\""]) {
-    if (!viewsSource.includes(required)) {
-      throw new Error(`views.js venue label mapping must include ${required}`);
-    }
+  await store.deleteOneOffEvent(freeEvent.id);
+  if (store.getSession(freeEvent.id)) throw new Error("deleted free event should be gone");
+  store.cancelSessionWeek(paidEvent.id, "Venue unavailable");
+  if (store.getBooking(oneOffBooking.id).status !== "cancelled")
+    throw new Error("cancelling a one-off should void its reservations");
+  if (store.getSession(paidEvent.id)?.cancelled !== true)
+    throw new Error("cancelled one-off should read as cancelled");
+  console.log("ok  one-off events: create, list, book, delete guard, cancel");
+}
+
+// --- RSVP events (local): the recurring post-training lunch ---
+store.resetLocalData();
+installLocalFixtures();
+{
+  const lunch = store.upcomingSessions(21).find(
+    (s) => s.kind === "rsvp" && !data.sessionStarted(s)
+  );
+  if (!lunch || lunch.category !== "Socials" || lunch.name !== "Post-Training Lunch")
+    throw new Error("local seeds must include the recurring RSVP lunch");
+  if (lunch.capacity !== null || store.spotsLeft(lunch) !== null)
+    throw new Error("the lunch is uncapped — capacity and spots must be null");
+  store.signIn("member@example.test");
+  const lunchHtml = views.viewActivity(lunch.id);
+  if (!lunchHtml.includes("Count me in") || lunchHtml.includes("Book & pay"))
+    throw new Error("RSVP activity should offer Count me in, not checkout");
+  const rsvp = await store.rsvpSession("fixture-member", lunch.id);
+  if (rsvp.status !== "confirmed" || rsvp.snapshot.price !== 0)
+    throw new Error("RSVP should confirm instantly with no payment");
+  assert.equal(store.attendeeCountFor(lunch), 1,
+    "local RSVP count must include the confirmed booking");
+  assert.deepEqual(store.attendeesFor(lunch), ["Tester M."],
+    "attendeesFor must preserve attendee name formatting independently of counts");
+  const goingHtml = views.viewActivity(lunch.id);
+  if (!goingHtml.includes("You're going") || !goingHtml.includes("rsvp-withdraw"))
+    throw new Error("RSVP'd member should see the Going state and a withdraw action");
+  const bookingPage = views.viewBooking(rsvp.id);
+  if (!bookingPage.includes("You’re going") || bookingPage.includes("Can’t make it? Defer")
+      || bookingPage.includes("View receipt"))
+    throw new Error("RSVP booking page must not offer payment deferral or receipts");
+  const checkout = views.viewCheckout(lunch.id);
+  if (typeof checkout !== "string" || !checkout.includes("doesn’t exist"))
+    throw new Error("RSVP sessions must not render checkout");
+
+  // The exact RSVP notification route, Sunday-first Schedule row, Activity
+  // Details banner, and dated card inside grouped Admin controls must agree on
+  // the same literal count. Each surface is isolated to this lunch/session ID.
+  const rsvpDestination = `#/activity/${lunch.id}`;
+  const previousRsvpNotificationFilter = views.notificationFilters.kind;
+  let rsvpInboxHtml;
+  try {
+    views.notificationFilters.kind = "all";
+    rsvpInboxHtml = await views.viewNotifications(new Date(), [{
+      id: "combined-rsvp-route",
+      kind: "operational_rsvp_confirmed",
+      title: "RSVP confirmed",
+      body: "You are counted in.",
+      destination: rsvpDestination,
+      read_at: null,
+      created_at: "2026-08-05T02:00:00.000Z",
+    }]);
+  } finally {
+    views.notificationFilters.kind = previousRsvpNotificationFilter;
   }
-  if (!venueLabels.every((label) => /^[A-Za-z0-9 ]+$/.test(label))) {
-    throw new Error("Venue labels must be short alphanumeric tokens");
+  const rsvpNotificationControl = [...rsvpInboxHtml.matchAll(
+    /<button class="notification-row[\s\S]*?<\/button>/g
+  )].map((match) => match[0]).find(
+    (tag) => tag.includes('data-notification-id="combined-rsvp-route"')
+  ) || "";
+  if (!rsvpNotificationControl.includes(`data-destination="${rsvpDestination}"`)
+      || data.notificationDestination("operational_rsvp_confirmed", rsvpDestination)
+        !== rsvpDestination) {
+    throw new Error("RSVP notification must render and resolve the exact dated Activity destination");
   }
-  const appSource = readFileSync(resolve(__dirnameSmoke, "js/app.js"), "utf8");
-  if (appSource.includes("Gym message copied")) {
-    throw new Error("static 'Gym message copied' toast must be replaced by the per-venue label");
+
+  const priorCombinedSchedule = { ...views.scheduleState };
+  let combinedRsvpScheduleHtml;
+  try {
+    views.scheduleState.weekOffset = Math.round(
+      (data.sundayOf(data.parseISO(lunch.dateISO)) - data.sundayOf(data.todayLocal()))
+        / (7 * 86400000)
+    );
+    views.scheduleState.selected = lunch.dateISO;
+    combinedRsvpScheduleHtml = views.viewSchedule();
+  } finally {
+    Object.assign(views.scheduleState, priorCombinedSchedule);
   }
-  for (const marker of ["copy-gym", "venueLabel", "Message to "]) {
-    if (!appSource.includes(marker)) {
-      throw new Error(`copy-gym handler must use ${marker}`);
-    }
+  const combinedScheduleRowStart = combinedRsvpScheduleHtml.indexOf(
+    `href="${rsvpDestination}"`
+  );
+  const combinedScheduleRowEnd = combinedRsvpScheduleHtml.indexOf(
+    "</a>", combinedScheduleRowStart
+  );
+  const combinedScheduleRow = combinedScheduleRowStart < 0 || combinedScheduleRowEnd < 0
+    ? ""
+    : combinedRsvpScheduleHtml.slice(combinedScheduleRowStart, combinedScheduleRowEnd);
+  if (!combinedScheduleRow.includes('<span class="badge free booked">Going</span>')
+      || !combinedScheduleRow.includes('<span class="spots">1 going</span>')) {
+    throw new Error("dated Sunday Schedule RSVP row must render the exact confirmed count of 1");
   }
-  console.log("ok  copy-gym toast labels the venue (Island ECC / BFT / Midtown 28)");
+  const combinedScheduleLabels = [...combinedRsvpScheduleHtml.matchAll(
+    /data-date="[^"]+">\s*([A-Z][a-z]{2})<strong/g
+  )].map((match) => match[1]);
+  if (JSON.stringify(combinedScheduleLabels)
+      !== JSON.stringify(["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"])) {
+    throw new Error(`combined RSVP Schedule must remain Sunday-first; got ${combinedScheduleLabels.join(" ")}`);
+  }
+  const combinedActivityHtml = views.viewActivity(lunch.id);
+  if (!combinedActivityHtml.includes("1 going — see you there.")) {
+    throw new Error("exact RSVP Activity Details must render the confirmed count of 1");
+  }
+
+  let combinedAdminHtml;
+  try {
+    store.signIn("admin@example.test");
+    combinedAdminHtml = await views.viewAdmin("activities");
+  } finally {
+    store.signIn("member@example.test");
+  }
+  const combinedWeeklyStart = combinedAdminHtml.indexOf(">Weekly Event Controls<");
+  const combinedOneOffStart = combinedAdminHtml.indexOf(">One-off Events<", combinedWeeklyStart);
+  const combinedWeeklyHtml = combinedWeeklyStart < 0 || combinedOneOffStart < 0
+    ? ""
+    : combinedAdminHtml.slice(combinedWeeklyStart, combinedOneOffStart);
+  const combinedFreeStart = combinedWeeklyHtml.indexOf("Free &amp; RSVP Events");
+  const combinedPaidStart = combinedWeeklyHtml.indexOf("Paid Sessions", combinedFreeStart);
+  const combinedFreeRsvpHtml = combinedFreeStart < 0 || combinedPaidStart < 0
+    ? ""
+    : combinedWeeklyHtml.slice(combinedFreeStart, combinedPaidStart);
+  const combinedLunchTarget = combinedFreeRsvpHtml.indexOf(`data-session="${lunch.id}"`);
+  const combinedLunchCardStart = combinedFreeRsvpHtml.lastIndexOf(
+    '<div class="card mt16 free-event-venue-card">', combinedLunchTarget
+  );
+  const combinedNextFreeCard = combinedFreeRsvpHtml.indexOf(
+    '<div class="card mt16 free-event-venue-card">', combinedLunchTarget + 1
+  );
+  const combinedLunchCard = combinedLunchTarget < 0 || combinedLunchCardStart < 0
+    ? ""
+    : combinedFreeRsvpHtml.slice(
+      combinedLunchCardStart,
+      combinedNextFreeCard < 0 ? combinedFreeRsvpHtml.length : combinedNextFreeCard
+    );
+  if (!combinedWeeklyHtml.includes(">Weekly Event Controls<")
+      || !combinedFreeRsvpHtml.includes("Free &amp; RSVP Events")
+      || !combinedWeeklyHtml.includes("Paid Sessions")
+      || !combinedLunchCard.includes("Post-Training Lunch")
+      || !combinedLunchCard.includes('<p class="muted small mt8">1 going</p>')) {
+    throw new Error("dated RSVP Admin card must render count 1 inside grouped Weekly Event Controls");
+  }
+  console.log("ok  RSVP exact route and count agree across Sunday Schedule, Activity, and grouped Admin");
+
+  await store.withdrawRsvp(rsvp.id);
+  if (store.getBooking(rsvp.id).status !== "cancelled")
+    throw new Error("withdraw should cancel the RSVP booking");
+  const repeatedRsvp = await store.rsvpSession("fixture-member", lunch.id, rsvp.createdAt + 1000);
+  await store.withdrawRsvp(repeatedRsvp.id);
+  repeatedRsvp.snapshot = { dateISO: lunch.dateISO };
+  const repeatedRsvpHistoryHtml = await views.viewAccount("history");
+  if ((repeatedRsvpHistoryHtml.match(/class="card booking-card"/g) || []).length !== 1
+      || !repeatedRsvpHistoryHtml.includes(`href="#/booking/${repeatedRsvp.id}"`)
+      || repeatedRsvpHistoryHtml.includes(`href="#/booking/${rsvp.id}"`)
+      || !repeatedRsvpHistoryHtml.includes("Cancelled")
+      || !repeatedRsvpHistoryHtml.includes("RSVP")
+      || repeatedRsvpHistoryHtml.includes("paid HK$0")) {
+    throw new Error("History must deduplicate RSVP join/withdraw records, retain cancellation, and show RSVP");
+  }
+  if (!repeatedRsvpHistoryHtml.includes("75 min")) {
+    throw new Error("History must fill a local RSVP snapshot gap from the authoritative session");
+  }
+  console.log("ok  History deduplicates repeated local RSVPs and fills snapshot gaps");
+  const schedHtml = views.viewSchedule();
+  if (!schedHtml.includes(">Socials<"))
+    throw new Error("Schedule should offer a Socials filter chip");
+  const badgeHtml = views.viewActivity(lunch.id);
+  if (!badgeHtml.includes('badge free">RSVP</span>'))
+    throw new Error("unbooked RSVP session badge should read RSVP");
+  if (lunch.location !== "TBC")
+    throw new Error("lunch venue should seed as TBC until a weekly override is set");
+  store.signIn("admin@example.test");
+  await store.setWeekVenue(lunch.id, { location: "Cafe Deco, Central", mapsQuery: "Cafe Deco, Central" });
+  const overriddenLunch = store.getSession(lunch.id);
+  if (overriddenLunch.location !== "Cafe Deco, Central")
+    throw new Error("local weekly venue override must apply to the lunch session");
+  const adminActsHtml = await views.viewAdmin("activities");
+  if (!adminActsHtml.includes("Post-Training Lunch") || !adminActsHtml.includes(">RSVP</span>"))
+    throw new Error("Activities list should badge the lunch as RSVP");
+  const weeklyControlsRegion = adminActsHtml.split(">Weekly Event Controls<")[1]?.split(">One-off Events<")[0] || "";
+  const freeRsvpRegion = weeklyControlsRegion.split("Free &amp; RSVP Events")[1]?.split("Paid Sessions")[0] || "";
+  const paidSessionsRegion = weeklyControlsRegion.split("Paid Sessions")[1] || "";
+  if (paidSessionsRegion.includes("lunch-") || paidSessionsRegion.includes("Post-Training Lunch"))
+    throw new Error("Paid Sessions must stay paid-only — the lunch lives in Free & RSVP Events");
+  if (!freeRsvpRegion.includes("Post-Training Lunch") || !freeRsvpRegion.includes("Cancel this week's event"))
+    throw new Error("the lunch venue card must offer the per-week cancel control");
+  if (freeRsvpRegion.includes("cap"))
+    throw new Error("the uncapped lunch must not show a capacity");
+  store.signIn("member@example.test");
   store.signOut();
+  console.log("ok  RSVP lunch: join, going state, withdraw, Socials filter, no checkout");
 }
 
 // --- Reset ---

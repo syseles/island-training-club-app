@@ -555,7 +555,7 @@ function venuePresentationHTML(presentation) {
   return "";
 }
 
-export function viewActivity(sessionId) {
+export function viewActivity(sessionId, attendeeNames) {
   const s = store.getSession(sessionId);
   if (!s) return viewNotFound("That session doesn’t exist.");
 
@@ -705,9 +705,15 @@ export function viewActivity(sessionId) {
   const attendees =
     s.kind === "paid"
       ? isMember
-        ? `
-      <div class="section-head"><h2>Who’s coming</h2></div>
-      <div class="attendees">${store.attendeesFor(s).map((n) => `<span>${esc(n)}</span>`).join("")}</div>`
+        ? (() => {
+            const names = attendeeNames === undefined ? store.attendeesFor(s) : attendeeNames;
+            const attendeeCopy = attendeeNames === null
+              ? `<p class="muted small">Attendee names are temporarily unavailable. Try again shortly.</p>`
+              : names.length
+                ? `<div class="attendees">${names.map((n) => `<span>${esc(n)}</span>`).join("")}</div>`
+                : `<p class="muted small">No confirmed bookings yet.</p>`;
+            return `<div class="section-head"><h2>Who’s coming</h2></div>${attendeeCopy}`;
+          })()
         : `<div class="section-head"><h2>Who’s coming</h2></div>${memberOnlyNote("Member-only: the attendee list is visible after approval.")}`
       : "";
 

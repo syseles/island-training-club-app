@@ -412,9 +412,20 @@ async function render(generation = renderGeneration) {
     case "schedule":
       out = views.viewSchedule();
       break;
-    case "activity":
-      out = views.viewActivity(arg);
+    case "activity": {
+      let attendeeNames;
+      const viewer = store.currentUser();
+      if (viewer?.status === "approved") {
+        try {
+          attendeeNames = await store.attendeeNamesFor(arg);
+        } catch (err) {
+          console.warn("Unable to load attendee names", err);
+          attendeeNames = null;
+        }
+      }
+      out = views.viewActivity(arg, attendeeNames);
       break;
+    }
     case "hyrox":
       out = arg2 === "register" ? views.viewHyroxRegistration(arg) : views.viewHyroxCycle(arg);
       break;

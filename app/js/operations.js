@@ -770,6 +770,17 @@ export function liveRsvpCountFor(sessionId) {
     : null;
 }
 
+export async function liveAttendeeNamesForSession(sessionId) {
+  if (!isLive() || !supabase) return null;
+  const { data, error } = await supabase.rpc("get_operational_attendee_names", {
+    p_session_id: sessionId,
+  });
+  if (error) throw operationalProblem(error);
+  return (data || [])
+    .map((row) => String(row.display_name || "").trim())
+    .filter(Boolean);
+}
+
 export function liveQueueForSession(sessionId) {
   const waitlist = liveCache.queues
     .filter((q) => q.sessionId === sessionId && q.status === "active" && q.kind === "waitlist")
