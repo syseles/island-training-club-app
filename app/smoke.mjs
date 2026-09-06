@@ -87,7 +87,7 @@ assert.deepEqual(quarryBaySeed && {
   location: "10/F, Island ECC, Quarry Bay",
   mapsQuery: "Island ECC, Quarry Bay, Hong Kong",
   price: 180,
-  capacity: 12,
+  capacity: 30,
 }, "IA-37 Quarry Bay HYROX must match the approved recurring-session details");
 assert.equal(data.fmtMoney(180), "HK$180",
   "consumer-facing Hong Kong prices should use the standard HK$ symbol");
