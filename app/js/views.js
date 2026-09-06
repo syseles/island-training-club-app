@@ -2349,8 +2349,6 @@ function adminVenueStatusMetrics(session) {
   const confirmed = held.filter((booking) => booking.status === "confirmed").length;
   const claims = held.filter((booking) => booking.status === "reserved" && booking.paymentMarkedAt).length;
   const unpaid = held.filter((booking) => booking.status === "reserved" && !booking.paymentMarkedAt).length;
-  const capacity = Number(session.capacity);
-  const spotsLeft = Number.isFinite(capacity) ? Math.max(0, capacity - held.length) : null;
   const safeId = esc(session.id);
   return `<div class="admin-hyrox-counts venue-counts" aria-label="${esc(venueDisplayName(session))} booking status">
     <a class="admin-hyrox-count admin-hyrox-count-link" href="#hyrox-venue-${safeId}-confirmed">
@@ -2365,7 +2363,7 @@ function adminVenueStatusMetrics(session) {
     <a class="admin-hyrox-count admin-hyrox-count-link" href="#hyrox-venue-${safeId}-active">
       <strong>${held.length}</strong><span>Active places</span>
     </a>
-    <div class="admin-hyrox-count"><strong>${spotsLeft ?? "∞"}</strong><span>Spots left</span></div>
+    <div class="admin-hyrox-count"><strong>${session.capacity ?? "∞"}</strong><span>Capacity</span></div>
   </div>
   <div id="hyrox-venue-${safeId}-confirmed" class="admin-status-anchor"></div>
   <div id="hyrox-venue-${safeId}-claims" class="admin-status-anchor"></div>
@@ -2439,24 +2437,29 @@ function adminHyroxCycleCards() {
       <div class="section-head"><div><span class="kicker">${esc(fmtDate(cycle.dateISO))}</span><h2>ITC HYROX<br><span>Payment reconciliation</span></h2></div><span class="badge ${locked ? "neutral" : "warn"}">${locked ? "Locked" : esc(cycle.registrationState)}</span></div>
       <p class="muted small">${locked ? "Registration opens Monday at 6 PM HKT." : afterPromotion ? "Final reconciliation summary after Thursday 8 PM HKT." : "Payment review runs Thursday at 6 PM HKT."}</p>
       <div class="admin-hyrox-counts" aria-label="HYROX registration status">
-        <div class="admin-hyrox-count"><strong>${confirmed.length}</strong><span>Confirmed paid</span></div>
-        <a class="admin-hyrox-count admin-hyrox-count-link" href="#hyrox-status-${esc(cycle.id)}-claims" data-claims-anchor>
+        <a class="admin-hyrox-count admin-hyrox-count-link" href="#hyrox-status-${esc(cycle.id)}-confirmed">
+          <strong>${confirmed.length}</strong><span>Confirmed paid</span>
+        </a>
+        <a class="admin-hyrox-count admin-hyrox-count-link" href="#hyrox-status-${esc(cycle.id)}-claims">
           <strong>${claims.length}</strong><span>Payment claims to review</span>
         </a>
-        <div class="admin-hyrox-count"><strong>${unpaid.length}</strong><span>Unpaid reservations</span></div>
-        <div class="admin-hyrox-count"><strong>${active.length}</strong><span>Active places</span></div>
-        <div class="admin-hyrox-count"><strong>${queues.weeklyWaitlist.length}</strong><span>Weekly waitlist</span></div>
+        <a class="admin-hyrox-count admin-hyrox-count-link" href="#hyrox-status-${esc(cycle.id)}-unpaid">
+          <strong>${unpaid.length}</strong><span>Unpaid reservations</span>
+        </a>
+        <a class="admin-hyrox-count admin-hyrox-count-link" href="#hyrox-status-${esc(cycle.id)}-active">
+          <strong>${active.length}</strong><span>Active places</span>
+        </a>
+        <a class="admin-hyrox-count admin-hyrox-count-link" href="#hyrox-status-${esc(cycle.id)}-waitlist">
+          <strong>${queues.weeklyWaitlist.length}</strong><span>Weekly waitlist</span>
+        </a>
       </div>
-      ${claims.length ? `<details id="hyrox-status-${esc(cycle.id)}-claims" class="admin-claims-section admin-status-anchor" open>
-        <summary><span class="kicker dim">Payment claims to review</span><span class="badge warn">${claims.length}</span></summary>
-        ${pendingClaims}
-      </details>` : `<p id="hyrox-status-${esc(cycle.id)}-claims" class="admin-status-anchor muted small">No pending payment claims.</p>`}
+      ${claims.length ? `<p id="hyrox-status-${esc(cycle.id)}-claims" class="banner warn admin-status-anchor">Review ${claims.length} pending payment claims before the venue plan can be confirmed automatically.</p>` : `<p id="hyrox-status-${esc(cycle.id)}-claims" class="admin-status-anchor muted small">No pending payment claims.</p>`}
+      <div class="actions">${retry}${close}</div>${pendingClaims}${adminHyroxGymControls(cycle)}
+      <form id="form-cancel-hyrox-cycle" class="mt16" data-cycle="${esc(cycle.id)}"><div class="field"><label>Cancel this HYROX cycle — reason</label><input name="reason" required placeholder="e.g. Gym unavailable"></div><button class="btn danger ghost sm" type="submit">Cancel HYROX cycle</button></form>
       <div id="hyrox-status-${esc(cycle.id)}-confirmed" class="admin-status-anchor"></div>
       <div id="hyrox-status-${esc(cycle.id)}-unpaid" class="admin-status-anchor"></div>
       <div id="hyrox-status-${esc(cycle.id)}-active" class="admin-status-anchor"></div>
       <div id="hyrox-status-${esc(cycle.id)}-waitlist" class="admin-status-anchor"></div>
-      <div class="actions">${retry}${close}</div>${adminHyroxGymControls(cycle)}
-      <form id="form-cancel-hyrox-cycle" class="mt16" data-cycle="${esc(cycle.id)}"><div class="field"><label>Cancel this HYROX cycle — reason</label><input name="reason" required placeholder="e.g. Gym unavailable"></div><button class="btn danger ghost sm" type="submit">Cancel HYROX cycle</button></form>
     </div></section>${adminIslandEccHandoff(cycle)}`;
   }).join("");
 }

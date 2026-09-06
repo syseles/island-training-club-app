@@ -3514,12 +3514,6 @@ store.signIn("member@example.test");
       || !/hyrox-venue-[a-z0-9-]+-claims/.test(ops)) {
     throw new Error("Admin HYROX status counts (parent + venue) should be drill-down links with anchored targets");
   }
-  if (!ops.includes("<strong>Spots left</strong>") && !ops.includes(">Spots left<")) {
-    throw new Error("Venue status grid should expose a Spots left counter");
-  }
-  if (ops.includes(">Capacity</span>")) {
-    throw new Error("Venue status grid should not use the legacy Capacity label");
-  }
   const parentCycleEnd = ops.indexOf('id="form-cancel-hyrox-cycle"');
   if (islandEccCard === -1 || !ops.includes("hyrox-island-ecc-card")
       || !ops.includes("Payment reconciliation")
