@@ -686,6 +686,13 @@ export function attendeesFor(session) {
   return names;
 }
 
+export async function attendeeNamesFor(sessionId) {
+  if (!sessionId) return [];
+  if (isLive()) return liveOps.liveAttendeeNamesForSession(sessionId);
+  const session = getSession(sessionId);
+  return session ? attendeesFor(session) : [];
+}
+
 // --- Booking & payment ------------------------------------------------------------
 // Exported mutation policy at this backend seam:
 // - Member self-service (or Admin on the owner's behalf): reserve, mark paid,
