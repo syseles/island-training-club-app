@@ -315,7 +315,7 @@ async function render(generation = renderGeneration) {
           ? await views.viewAdminCampaign(arg2)
           : arg === "users"
             ? { redirect: "#/admin/members" }
-            : await views.viewAdmin(arg || "approvals");
+            : await views.viewAdmin(arg || "members");
       break;
     default:
       out = views.viewNotFound();
