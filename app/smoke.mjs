@@ -4616,6 +4616,21 @@ console.log("ok  reset");
   ]) {
     if (!registration.includes(marker)) throw new Error(`HYROX registration missing ${marker}`);
   }
+  // Lock the agreed no-deferral disclaimer copy on the registration page.
+  assert.match(registration, /Once paid, this booking is final/,
+    "HYROX registration must include the agreed no-refund, no-deferral disclaimer opener");
+  assert.match(registration, /no refund and no deferral/,
+    "HYROX registration must include the agreed no-refund, no-deferral clause");
+  assert.match(registration, /swap the spot with your fellow ITC friend/,
+    "HYROX registration must invite the member to swap with another ITC friend");
+  assert.doesNotMatch(registration, /credit.followup|credit for the missed|sort your credit|follow up about your credit/i,
+    "HYROX registration must not promise any credit follow-up");
+  // Lock the registration page horizontal padding so the left margin never
+  // regresses back to flush-with-edge. Enforced at the CSS layer because
+  // the rendered HTML doesn't carry the padding values.
+  const registrationCss = readFileSync(resolve(__dirnameSmoke, "styles.css"), "utf8");
+  assert.match(registrationCss, /\.hyrox-registration\s*\{[^{}]*padding(?:-inline)?:\s*[^;]*\b(?:4px|6px|8px|10px|12px|14px|16px|18px|20px|24px)\b/,
+    "HYROX registration block must declare explicit non-zero horizontal padding so the page never flushes against the left edge");
   console.log("ok  pooled HYROX Schedule and registration views explain the automatic venue plan");
 }
 {

@@ -1736,6 +1736,36 @@ a.profile-row:hover .pr-text strong { color: var(--accent); }
 .check input[disabled] + span .modal-link { opacity: 1; }
 
 /* ---- Pooled HYROX registration ---------------------------------------- */
+.hyrox-registration {
+  /* Explicit horizontal padding so the headline, lede, and form never flush
+     against the left edge of the app shell. Mirrors the .view padding so
+     the page reads as a single composed block on every viewport. */
+  padding: 0 6px;
+  display: grid;
+  gap: 18px;
+}
+.hyrox-no-deferral {
+  display: grid;
+  grid-template-columns: 18px 1fr;
+  align-items: start;
+  gap: 10px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: rgba(202, 255, 49, 0.04);
+  color: var(--ink);
+}
+.hyrox-no-deferral p { margin: 0; font-size: 13px; line-height: 1.45; color: var(--ink); }
+.hyrox-no-deferral strong { color: var(--accent); font-weight: 800; }
+.hyrox-no-deferral-icon {
+  width: 18px;
+  height: 18px;
+  color: var(--accent);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.hyrox-no-deferral-icon svg { width: 100%; height: 100%; }
 .hyrox-pool-card { display: grid; gap: 18px; padding: 4px; }
 .hyrox-cycle-row h3 { margin-bottom: 4px; }
 .hyrox-venue-options { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; padding: 0; }

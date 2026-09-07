@@ -521,8 +521,14 @@ export function viewHyroxRegistration(cycleId) {
   const open = (cycle.registrationState === "open" || Date.now() >= cycle.registrationOpensAt)
     && Date.now() < cycle.paymentDeadlineAt;
   if (!open) return viewHyroxCycle(cycleId);
-  return `<div class="kicker">HYROX registration</div><h1 class="display">Choose how we plan your place</h1>
+  return `<div class="hyrox-registration">
+    <div class="kicker">HYROX registration</div>
+    <h1 class="display">Choose how we plan your place</h1>
     <p class="lede">Your preference helps us plan. It does not reserve a particular gym.</p>
+    <aside class="hyrox-no-deferral" aria-label="Booking policy">
+      <span class="hyrox-no-deferral-icon" aria-hidden="true">${ICONS.shield}</span>
+      <p><strong>Once paid, this booking is final</strong> — no refund and no deferral. If you can’t attend, you may swap the spot with your fellow ITC friend.</p>
+    </aside>
     <form id="form-hyrox-reserve" class="card" data-cycle="${esc(cycle.id)}">
       <fieldset class="hyrox-preference-grid"><legend>Venue preference</legend>
         <label><input type="radio" name="preference" value="bft" required> BFT Causeway Bay</label>
@@ -532,7 +538,8 @@ export function viewHyroxRegistration(cycleId) {
       <label class="check-row"><input type="checkbox" name="fallbackAcknowledged" required> I understand that my booking will be at BFT at 11:15 if only BFT opens.</label>
       <div class="hyrox-threshold-rule"><p>If 20 or fewer people have paid, we’ll only book BFT CwB.</p><p>If more than 20 people have paid, we’ll book both gyms.</p><p>Mark payment by Thursday 6 PM. Venue changes close Friday 9 PM.</p></div>
       <button class="btn" type="submit">Reserve &amp; continue to pay</button>
-    </form>`;
+    </form>
+  </div>`;
 }
 
 function venuePresentationHTML(presentation) {
