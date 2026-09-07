@@ -2959,22 +2959,9 @@ installLocalFixtures(); store.signIn("member@example.test");
   if (store.getBooking(b.id).status !== "confirmed")
     throw new Error("rejected cross-activity deferral must preserve the confirmed booking");
   const confirmedView = views.viewBooking(b.id);
-  if (!confirmedView.includes("Defer to this session") || confirmedView.includes(">Move here</button>"))
-    throw new Error("confirmed paid bookings should present explicit same-session-type defer actions");
-  const moved = store.deferBooking(b.id, targets[0].id);
-  if (moved.status !== "confirmed") throw new Error("paid deferral should stay confirmed");
-  if (store.getBooking(b.id).status !== "deferred") throw new Error("original should read deferred");
-  if (store.receiptForBooking(moved.id)?.bookingId !== moved.id)
-    throw new Error("receipt should follow the deferred booking");
-  if (!store.notificationsFor("fixture-admin").some((n) => n.kind === "defer"))
-    throw new Error("collector should be notified of the deferral");
-  const movedView = views.viewBooking(moved.id);
-  if (!movedView.includes("Booking moved.")
-      || !movedView.includes("Previous spot released")
-      || !movedView.includes("payment has carried over")) {
-    throw new Error("deferred booking should confirm the released old spot and carried payment");
-  }
-  console.log("ok  paid deferral moves booking + receipt, releases the old spot, and notifies collector");
+  assert.doesNotMatch(confirmedView, /Defer to this session|data-action="defer-to"|Can.t make it\? Defer/,
+    "confirmed paid bookings must not surface defer actions under the no-deferral policy");
+  console.log("ok  paid bookings honour the no-deferral policy on the booking detail screen");
 }
 {
   const sess = store.upcomingSessions(14).find(
@@ -3489,11 +3476,36 @@ store.signIn("member@example.test");
   store.confirmBookingPayment(b.id);
   store.signIn("member@example.test");
   const conf = views.viewBooking(b.id);
-  if (!conf.includes('data-action="defer-to"'))
-    throw new Error("confirmed booking should offer defer targets");
+  assert.doesNotMatch(conf, /data-action="defer-to"|Can.t make it\? Defer|Defer to this session/,
+    "confirmed bookings must not offer deferral under the no-deferral policy");
   if (conf.includes("Cancel & refund"))
     throw new Error("member refund flow should be gone");
-  console.log("ok  confirmed booking offers defer, no member refund");
+  console.log("ok  confirmed booking honours no-deferral policy, no member refund");
+}
+
+// --- No-deferral policy --------------------------------------------------
+// Confirmed paid bookings must not surface deferral UI or store-level
+// deferral entry points. The store keeps `deferBooking` callable for
+// store-level callers, but the booking detail screen and the click
+// delegate must hide every defer path.
+{
+  store.resetLocalData();
+  installLocalFixtures();
+  const paid = store.upcomingSessions(14).find(
+    (s) => s.kind === "paid" && !store.isMidtown(s) && !data.sessionStarted(s),
+  );
+  store.signIn("member@example.test");
+  const b = store.reserveSession("fixture-member", paid);
+  store.markBookingPaid(b.id, "PayMe", "");
+  store.signIn("admin@example.test");
+  store.confirmBookingPayment(b.id);
+  store.signIn("member@example.test");
+  const html = views.viewBooking(b.id);
+  assert.doesNotMatch(html, /data-action="defer-to"/, "no-deferral: defer-to action must not render");
+  assert.doesNotMatch(html, /Can.t make it\? Defer/, "no-deferral: defer card heading must not render");
+  assert.equal(typeof store.deferTargetsFor, "function", "store must keep deferTargetsFor for store-level callers");
+  assert.equal(typeof store.deferBooking, "function", "store must keep deferBooking for store-level callers");
+  console.log("ok  no-deferral policy hides defer UI while keeping store hooks");
 }
 
 // --- HYROX payment system: admin ops (Task 10) ---

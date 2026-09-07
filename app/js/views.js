@@ -2010,7 +2010,7 @@ export function viewCheckout(sessionId) {
     </div>
     <form id="form-reserve" class="mt16" data-session="${s.id}">
       <button class="btn" type="submit">Reserve spot · pay later</button>
-      <p class="muted small mt8 center">Can’t make it? Defer to a future session anytime before it starts — no refunds.</p>
+      <p class="muted small mt8 center">Once confirmed, this week is final. If you can’t attend, message the collector — ITC will follow up about credit for the missed session.</p>
     </form>`;
 }
 
@@ -2188,15 +2188,16 @@ export function viewBooking(bookingId) {
       </div></div>`;
     }
     if (targets.length) {
+      // No-deferral policy: confirmed paid bookings do not offer self-service
+      // deferral. Members who can't attend should contact ITC so the
+      // collector can adjust headcount and arrange credit follow-up. The
+      // store still exposes `deferBooking` for store-level callers (Admin
+      // cycle cancellation uses it), but the booking detail screen no
+      // longer surfaces the action.
       actions += `
       <div class="card mt16"><div class="card-body">
-        <h3>Can’t make it? Defer — no refunds</h3>
-        <p class="muted small">Move your paid spot to a future ${esc(s.name)} session with availability. Payment carries over.</p>
-        ${targets.map((t) => `
-          <div class="member-row">
-            <div class="who"><strong>${esc(fmtDate(t.dateISO))} · ${fmtTime(t.time)}</strong><span>${esc(t.location)} · ${store.spotsLeft(t)} spots left</span></div>
-            <button class="btn ghost sm" type="button" data-action="defer-to" data-booking="${b.id}" data-session="${t.id}">Defer to this session</button>
-          </div>`).join("")}
+        <h3>Can’t make it?</h3>
+        <p class="muted small">This week is final once payment is confirmed. If you can’t attend, message the collector — ITC will adjust headcount and follow up about credit for the missed session.</p>
       </div></div>`;
     }
   } else {
