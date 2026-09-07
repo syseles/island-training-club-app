@@ -2274,16 +2274,18 @@ function adminGivingSetupRequired() {
     </div></div>`;
 }
 
-export async function viewAdmin(tab = "approvals") {
+export async function viewAdmin(tab = "members") {
   const user = store.currentUser();
   if (!user || !isAdminRole(user.role)) {
     return { redirect: "#/account" };
   }
-  const canonicalTab = tab === "ops" ? "payments" : tab;
+  const requestedTab = tab === "ops" ? "payments" : tab;
+  const canonicalTab = ["members", "activities", "giving", "payments"].includes(requestedTab)
+    ? requestedTab
+    : "members";
   const tabs = `
     <nav class="admin-tabs admin-tabs-scroll">
       ${[
-        ["approvals", "Approvals"],
         ["members", "Members"],
         ["activities", "Activities"],
         ["giving", "Giving"],
@@ -2296,21 +2298,23 @@ export async function viewAdmin(tab = "approvals") {
   // Live mode reads real data (Supabase applications + profiles); local
   // mode keeps the local prototype lists.
   let memberUsers = null;
-  if (["members", "payments", "ops"].includes(tab)) {
+  if (["members", "payments"].includes(canonicalTab)) {
     memberUsers = (await store.listPaymentUsers())
       .sort((a, b) => a.fullName.localeCompare(b.fullName));
   }
   let body;
-  if (tab === "activities") body = adminActivities();
-  else if (tab === "members") body = adminMembers(user, memberUsers);
-  else if (tab === "giving") {
+  if (canonicalTab === "activities") body = adminActivities();
+  else if (canonicalTab === "members") {
+    const pendingApplicants = await store.listApprovalCandidates();
+    body = adminMembers(user, memberUsers, pendingApplicants);
+  } else if (canonicalTab === "giving") {
     try {
       body = adminGiving(await store.listGivingCampaigns());
     } catch (error) {
       if (!isGivingSchemaMissing(error)) throw error;
       body = adminGivingSetupRequired();
     }
-  } else if (["payments", "ops"].includes(tab)) {
+  } else {
     let profilePhone = String(user.phone || "").trim();
     try {
       const application = await store.getMyApplication();
@@ -2319,7 +2323,7 @@ export async function viewAdmin(tab = "approvals") {
       console.warn("Unable to load Membership Details phone for payout form", error);
     }
     body = adminOps(user, memberUsers, profilePhone);
-  } else body = adminApprovals(await store.listApprovalCandidates());
+  }
 
   return `
     <div class="kicker">Admin</div>
@@ -2940,7 +2944,7 @@ function adminActivities() {
     ${adminOneOffEvents()}`;
 }
 
-function adminMembers(viewer, users) {
+function adminMembers(viewer, users = [], pendingApplicants = []) {
   const canEdit = isSuperRole(viewer.role);
   const query = adminMemberFilters.query.trim().toLocaleLowerCase();
   const filtered = users.filter((u) => {
@@ -2949,6 +2953,9 @@ function adminMembers(viewer, users) {
     const matchesRole = adminMemberFilters.role === "all" || normalizedRole(u.role) === adminMemberFilters.role;
     return matchesQuery && matchesStatus && matchesRole;
   });
+  const approvalsSection = pendingApplicants.length
+    ? adminApprovals(pendingApplicants)
+    : "";
   const option = (value, label, selected) =>
     `<option value="${value}" ${selected === value ? "selected" : ""}>${label}</option>`;
   const filterChip = (key, value, label) =>
@@ -3001,7 +3008,8 @@ function adminMembers(viewer, users) {
       </fieldset>
       ${hasActiveFilters ? '<button class="admin-filters-clear" type="button" data-action="admin-member-filters-clear">Clear filters</button>' : ""}
     </div>
-    <div class="member-results">${rows || `<div class="empty">No members match${activeFilters ? ` ${activeFilters}` : " these filters"}.</div>`}</div>`;
+    <div class="member-results">${rows || `<div class="empty">No members match${activeFilters ? ` ${activeFilters}` : " these filters"}.</div>`}</div>
+    ${approvalsSection ? `<div class="member-approvals">${approvalsSection}</div>` : ""}`;
 }
 
 export function viewAdminActivity(id) {

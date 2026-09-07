@@ -816,6 +816,15 @@ console.log("ok  integration source-tip provenance is explicit");
 
 const integratedViewSource = readFileSync(resolve(__dirnameSmoke, "js/views.js"), "utf8");
 const integratedAppSource = readFileSync(resolve(__dirnameSmoke, "js/app.js"), "utf8");
+const integratedStyleSource = readFileSync(resolve(__dirnameSmoke, "styles.css"), "utf8");
+assert.match(integratedViewSource, /export async function viewAdmin\(tab = "members"\)/,
+  "Admin must default to Members");
+assert.doesNotMatch(integratedViewSource, /\["approvals", "Approvals"\]/,
+  "Approvals must be merged into Members instead of remaining a separate tab");
+assert.match(integratedStyleSource, /\.session-row\.hyrox-cycle-row\s*\{[\s\S]*?grid-template-columns:\s*56px minmax\(0, 1fr\) auto;/,
+  "HYROX cycle rows must keep the mobile-safe three-column layout");
+assert.match(integratedStyleSource, /\.session-row\.hyrox-cycle-row h3\s*\{[\s\S]*?overflow-wrap:\s*anywhere;/,
+  "HYROX cycle titles must wrap instead of squishing on mobile");
 assert.match(integratedViewSource, /function adminHyroxWeeklyBookingSetup\(\)[\s\S]*?HYROX weekly booking setup/);
 assert.doesNotMatch(integratedViewSource, /function adminHyroxProvisioningInfo/);
 assert.match(integratedViewSource, /function venueDisplayName\(session\)/);
@@ -847,7 +856,6 @@ for (const marker of [
   "Continue with Google",
   "Membership Details",
   "Privacy &amp; Notifications",
-  "Approvals",
   "Members",
   "HYROX",
   "Duty",
@@ -1439,7 +1447,7 @@ for (const stale of [
 }
 console.log("ok  no stale plain-checkbox or indemnity-only patterns remain");
 await check("checkout (visitor) -> redirect", () => views.viewCheckout(paid.id));
-await check("admin (visitor) -> redirect", () => views.viewAdmin("approvals"));
+await check("admin (visitor) -> redirect", () => views.viewAdmin("members"));
 await check("notfound", () => views.viewNotFound());
 
 // free activity must never show booking/capacity language
@@ -1785,7 +1793,13 @@ if (!pendHtml.includes("Booking locked")) {
 
 // --- Admin approval flow ---
 installLocalFixtures(); store.signIn("admin@example.test");
-for (const tab of ["approvals", "members", "activities", "giving", "payments"]) {
+const defaultAdminHtml = await views.viewAdmin();
+if (!defaultAdminHtml.includes('href="#/admin/members" class="active"')
+    || defaultAdminHtml.includes('href="#/admin/approvals"')
+    || !defaultAdminHtml.includes("Test Person")) {
+  throw new Error("Admin must default to Members and show pending applicants there without an Approvals tab");
+}
+for (const tab of ["members", "activities", "giving", "payments"]) {
   const adminHtml = await check(`admin ${tab}`, () => views.viewAdmin(tab));
   const activeTabs = adminHtml.match(/<a[^>]*aria-current="page"[^>]*>/g) || [];
   if (activeTabs.length !== 1 || !activeTabs[0].includes(`href="#/admin/${tab}"`)) {
