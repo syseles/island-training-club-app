@@ -2280,7 +2280,7 @@ function adminGivingSetupRequired() {
     </div></div>`;
 }
 
-export async function viewAdmin(tab = "approvals") {
+export async function viewAdmin(tab = "members") {
   const user = store.currentUser();
   if (!user || !isAdminRole(user.role)) {
     return { redirect: "#/account" };
@@ -2289,7 +2289,6 @@ export async function viewAdmin(tab = "approvals") {
   const tabs = `
     <nav class="admin-tabs">
       ${[
-        ["approvals", "Approvals"],
         ["members", "Members"],
         ["activities", "Activities"],
         ["giving", "Giving"],
@@ -2307,8 +2306,12 @@ export async function viewAdmin(tab = "approvals") {
       .sort((a, b) => a.fullName.localeCompare(b.fullName));
   }
   let body;
+  let pendingApplicants = null;
   if (tab === "activities") body = adminActivities();
-  else if (tab === "members") body = adminMembers(user, memberUsers);
+  else if (tab === "members") {
+    pendingApplicants = await store.listApprovalCandidates();
+    body = adminMembers(user, memberUsers, pendingApplicants);
+  }
   else if (tab === "giving") {
     try {
       body = adminGiving(await store.listGivingCampaigns());
@@ -2325,7 +2328,7 @@ export async function viewAdmin(tab = "approvals") {
       console.warn("Unable to load Membership Details phone for payout form", error);
     }
     body = adminOps(user, memberUsers, profilePhone);
-  } else body = adminApprovals(await store.listApprovalCandidates());
+  } else body = adminMembers(user, memberUsers || [], []);
 
   return `
     <div class="kicker">Admin</div>
@@ -2888,7 +2891,7 @@ function adminActivities() {
     ${adminOneOffEvents()}`;
 }
 
-function adminMembers(viewer, users) {
+function adminMembers(viewer, users, pendingApplicants) {
   const canEdit = isSuperRole(viewer.role);
   const query = adminMemberFilters.query.trim().toLocaleLowerCase();
   const filtered = users.filter((u) => {
@@ -2897,6 +2900,9 @@ function adminMembers(viewer, users) {
     const matchesRole = adminMemberFilters.role === "all" || normalizedRole(u.role) === adminMemberFilters.role;
     return matchesQuery && matchesStatus && matchesRole;
   });
+  const approvalsSection = pendingApplicants && pendingApplicants.length
+    ? adminApprovals(pendingApplicants)
+    : "";
   const option = (value, label, selected) =>
     `<option value="${value}" ${selected === value ? "selected" : ""}>${label}</option>`;
   const filterChip = (key, value, label) =>
@@ -2954,7 +2960,8 @@ function adminMembers(viewer, users) {
       </fieldset>
       ${hasActiveFilters ? '<button class="admin-filters-clear" type="button" data-action="admin-member-filters-clear">Clear filters</button>' : ""}
     </div>
-    <div class="member-results">${rows || `<div class="empty">No members match${activeFilters ? ` ${activeFilters}` : " these filters"}.</div>`}</div>`;
+    <div class="member-results">${rows || `<div class="empty">No members match${activeFilters ? ` ${activeFilters}` : " these filters"}.</div>`}</div>
+    ${approvalsSection ? `<div class="member-approvals">${approvalsSection}</div>` : ""}`;
 }
 
 export function viewAdminActivity(id) {
