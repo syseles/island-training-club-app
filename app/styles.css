@@ -1774,25 +1774,55 @@ a.profile-row:hover .pr-text strong { color: var(--accent); }
 }
 .hyrox-no-deferral-icon svg { width: 100%; height: 100%; }
 .hyrox-reserve-card { padding: 18px 16px 20px; }
-.hyrox-radio { display: block; cursor: pointer; }
-.hyrox-radio input { position: absolute; opacity: 0; pointer-events: none; }
+.hyrox-radio {
+  /* The label is the entire row click target. The radio input itself is
+     visually hidden but accessible. */
+  display: block;
+  cursor: pointer;
+  position: relative;
+}
+.hyrox-radio input {
+  /* Hide the native radio control but keep it accessible and focusable. */
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+  z-index: 1;
+}
 .hyrox-radio-card {
-  /* Energy-mood: each option is a tappable card with a bold name and lime
-     border + tinted background when selected. */
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  padding: 14px 14px 12px;
+  display: grid;
+  grid-template-columns: 18px 1fr;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 14px 14px;
   border: 1px solid var(--line);
   border-radius: var(--radius-sm);
   background: var(--surface-2);
   transition: border-color 0.15s ease, background 0.15s ease;
 }
+.hyrox-radio-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .hyrox-radio-card .hyrox-radio-name { font-weight: 800; font-size: 14px; }
 .hyrox-radio-card .hyrox-radio-meta { color: var(--muted); font-size: 12px; }
+.hyrox-radio-dot {
+  /* Visible radio dot inside the card so the option reads as a radio. */
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: 2px solid #5a5e54;
+  background: transparent;
+  transition: border-color 0.15s ease, background 0.15s ease;
+  flex: 0 0 auto;
+}
 .hyrox-radio input:checked + .hyrox-radio-card {
   border-color: var(--accent);
   background: rgba(202, 255, 49, 0.06);
+}
+.hyrox-radio input:checked + .hyrox-radio-card .hyrox-radio-dot {
+  border-color: var(--accent);
+  background: radial-gradient(circle, var(--accent) 0 4px, transparent 5px);
 }
 .hyrox-radio input:focus-visible + .hyrox-radio-card {
   outline: 2px solid var(--accent);
@@ -1817,13 +1847,28 @@ section.hyrox-admin-cycle + .hyrox-island-ecc-card { margin-top: 12px; }
 .hyrox-pool-card .check-row { min-height: 44px; display: flex; align-items: center; gap: 10px; }
 .hyrox-preference-grid .hyrox-radio input,
 .hyrox-pool-card .check-row input { width: 20px; height: 20px; flex: 0 0 auto; position: static; opacity: 1; pointer-events: auto; }
-.hyrox-threshold-rule { display: grid; grid-template-columns: auto 1fr; gap: 6px 14px; padding: 14px; border: 1px solid var(--line-soft); border-radius: var(--radius-sm); background: var(--surface-3); }
+.hyrox-reserve-card .check-row { margin-bottom: 18px; }
+.hyrox-reserve-card .hyrox-preference-grid { margin-bottom: 18px; }
+.hyrox-threshold-rule {
+  /* Cleaner summary panel below the preference choices. Each rule sits in
+     its own row so the rhythm is easier to scan. */
+  display: grid;
+  gap: 8px;
+  padding: 16px 16px 14px;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-sm);
+  background: var(--surface-3);
+  margin-bottom: 18px;
+}
+.hyrox-threshold-rule p {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.45;
+}
 .hyrox-queue-state { padding: 12px 14px; border-left: 3px solid var(--accent); background: var(--surface-3); }
 .hyrox-gym-controls { display: grid; gap: 10px; margin-top: 16px; }
 .hyrox-gym-controls form { display: flex; gap: 8px; align-items: center; }
 .hyrox-gym-controls form input { min-height: 40px; width: 150px; }
-.hyrox-threshold-rule p { grid-column: 1 / -1; margin: 0; }
-.hyrox-threshold-rule strong { white-space: nowrap; }
 .hyrox-pool-card .banner { margin: 0; }
 @media (max-width: 600px) {
   .session-row.hyrox-cycle-row {

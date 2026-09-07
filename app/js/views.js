@@ -538,17 +538,30 @@ export function viewHyroxRegistration(cycleId) {
     <form id="form-hyrox-reserve" class="card hyrox-reserve-card" data-cycle="${esc(cycle.id)}">
       <fieldset class="hyrox-preference-grid"><legend>Venue preference</legend>
         <label class="hyrox-radio"><input type="radio" name="preference" value="bft" required>
-          <span class="hyrox-radio-card"><span class="hyrox-radio-name">BFT Causeway Bay</span><span class="hyrox-radio-meta">11:15am · 20 spots</span></span>
+          <span class="hyrox-radio-card">
+            <span class="hyrox-radio-dot" aria-hidden="true"></span>
+            <span class="hyrox-radio-text"><span class="hyrox-radio-name">BFT Causeway Bay</span><span class="hyrox-radio-meta">11:15am · 20 spots</span></span>
+          </span>
         </label>
         <label class="hyrox-radio"><input type="radio" name="preference" value="midtown">
-          <span class="hyrox-radio-card"><span class="hyrox-radio-name">Midtown 28</span><span class="hyrox-radio-meta">11:00am · 12 spots</span></span>
+          <span class="hyrox-radio-card">
+            <span class="hyrox-radio-dot" aria-hidden="true"></span>
+            <span class="hyrox-radio-text"><span class="hyrox-radio-name">Midtown 28</span><span class="hyrox-radio-meta">11:00am · 12 spots</span></span>
+          </span>
         </label>
         <label class="hyrox-radio"><input type="radio" name="preference" value="either">
-          <span class="hyrox-radio-card"><span class="hyrox-radio-name">Either venue</span><span class="hyrox-radio-meta">Auto-allocate to your nearest gym</span></span>
+          <span class="hyrox-radio-card">
+            <span class="hyrox-radio-dot" aria-hidden="true"></span>
+            <span class="hyrox-radio-text"><span class="hyrox-radio-name">Either venue</span><span class="hyrox-radio-meta">Auto-allocate to your nearest gym</span></span>
+          </span>
         </label>
       </fieldset>
       <label class="check-row"><input type="checkbox" name="fallbackAcknowledged" required> I understand that my booking will be at BFT at 11:15am if only BFT opens.</label>
-      <div class="hyrox-threshold-rule"><p>If 20 or fewer people have paid, we’ll only book BFT CwB.</p><p>If more than 20 people have paid, we’ll book both gyms.</p><p>Mark payment by Thursday 6 PM. Venue changes close Friday 9 PM.</p></div>
+      <div class="hyrox-threshold-rule">
+        <p>20 or fewer paid → BFT only.</p>
+        <p>More than 20 paid → both gyms.</p>
+        <p>Pay by Thursday 6 PM. Venue changes close Friday 9 PM.</p>
+      </div>
       <button class="btn hyrox-cta" type="submit">Reserve my spot →</button>
     </form>
   </div>`;

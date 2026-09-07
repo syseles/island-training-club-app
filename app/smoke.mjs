@@ -4488,11 +4488,12 @@ console.log("ok  reset");
     "Once paid, this booking is final",
     'value="bft"', 'value="midtown"', 'value="either"',
     "11:15am", "11:00am",
-    "If 20 or fewer people have paid", "If more than 20 people have paid",
+    "20 or fewer paid", "More than 20 paid",
     "Thursday 6 PM", "Friday 9 PM", 'name="fallbackAcknowledged"',
     "I understand that my booking will be at BFT at 11:15am if only BFT opens.",
     "Reserve my spot",
     "hyrox-no-deferral",
+    "hyrox-radio-dot",
   ]) {
     if (!registration.includes(marker)) throw new Error(`HYROX registration missing ${marker}`);
   }
