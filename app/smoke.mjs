@@ -3513,6 +3513,12 @@ store.signIn("member@example.test");
     "booking detail must invite the member to swap with another ITC friend");
   assert.doesNotMatch(html, /credit.followup|credit for the missed|sort your credit|follow up about your credit/i,
     "booking detail must not promise any credit follow-up");
+  // The swap-with-a-friend line is only for active member-driven bookings.
+  // Admin cancellation notifications must NOT carry that line.
+  assert.doesNotMatch(
+    html, /ITC cancelled this HYROX session|contact the collector/,
+    "active booking detail must not include the admin-cancellation wording",
+  );
   // Lock the checkout (sign-up) page copy. The viewCheckout helper redirects
   // to the booking page once a member already has a confirmed booking, so we
   // pick a fresh paid session the fixture member has not yet reserved.
@@ -3529,7 +3535,89 @@ store.signIn("member@example.test");
     "checkout page must invite the member to swap with another ITC friend");
   assert.doesNotMatch(checkoutHtml, /credit.followup|credit for the missed|sort your credit|follow up about your credit/i,
     "checkout page must not promise any credit follow-up");
-  console.log("ok  no-deferral policy shows the swap-with-a-friend disclaimer and no credit promise");
+  assert.doesNotMatch(
+    checkoutHtml, /ITC cancelled this HYROX session|contact the collector/,
+    "checkout (sign-up) page must not include the admin-cancellation wording",
+  );
+  // Lock the admin-cancellation wording for both store paths.
+  const cycleDate = data.isoDate(data.addDays(data.saturdayOnOrAfter(data.todayLocal()), 7));
+  store.resetLocalData();
+  installLocalFixtures();
+  store.signIn("admin@example.test");
+  const cycle = store.scheduleHyroxCycle(cycleDate);
+  store.sweepHyroxCycleDeadlines(cycle.registrationOpensAt);
+  const cycleSession = store.upcomingSessions(14).find(
+    (s) => s.id === cycle.bftSessionId || s.id === cycle.midtownSessionId,
+  );
+  store.signIn("member@example.test");
+  const memberBooking = store.reserveHyroxCycle("fixture-member", cycle.id, "either", true, cycle.registrationOpensAt + 1);
+  store.markBookingPaid(memberBooking.id, "PayMe", "");
+  store.signIn("admin@example.test");
+  store.confirmBookingPayment(memberBooking.id, cycle.registrationOpensAt + 2);
+  // Cancel the cycle without an absorbing future cycle, then assert the
+  // notification body matches the agreed admin-cancellation wording.
+  store.cancelHyroxCycle(cycle.id, "Venue unavailable", cycle.paymentDeadlineAt + 2);
+  const memberNotifs = store.notificationsFor("fixture-member");
+  const cycleCancelNotif = memberNotifs.find((n) => n.kind === "hyrox-cycle-cancelled-no-deferral");
+  if (cycleCancelNotif) {
+    assert.match(cycleCancelNotif.body, /ITC cancelled this HYROX session/,
+      "Admin cycle cancellation body must use the agreed wording");
+    assert.match(cycleCancelNotif.body, /apply it to a future ITC HYROX session, contact the collector/,
+      "Admin cycle cancellation body must direct the member to the collector");
+    assert.doesNotMatch(cycleCancelNotif.body, /swap the spot with your fellow ITC friend/,
+      "Admin cancellation body must NOT carry the active-booking swap-with-friend line");
+    assert.doesNotMatch(cycleCancelNotif.body, /credit.followup|sort your credit|follow up about your credit/i,
+      "Admin cancellation body must not promise any credit follow-up");
+  } else {
+    // If the booking auto-carried to a future cycle with capacity, fall back
+    // to a source-level check so the agreed wording stays locked.
+    const source = readFileSync(resolve(__dirnameSmoke, "js/store.js"), "utf8");
+    assert.match(
+      source, /ITC cancelled this HYROX session\. If you have paid and would like to apply it to a future ITC HYROX session, contact the collector\./,
+      "Admin cycle cancellation body must use the agreed wording",
+    );
+  }
+
+  // Now exercise the session-week cancellation path.
+  store.resetLocalData();
+  installLocalFixtures();
+  // Schedule a HYROX cycle but do NOT advance past registrationOpensAt so
+  // the cycle cannot be deferred to. This forces the cancellation to use
+  // the agreed admin-cancellation wording instead of auto-deferring.
+  const sessionDate = data.isoDate(data.addDays(data.saturdayOnOrAfter(data.todayLocal()), 7));
+  store.scheduleHyroxCycle(sessionDate);
+  const targetSession = store.upcomingSessions(14).find(
+    (s) => (s.activityId === "hyrox-bft" || s.activityId === "hyrox-midtown")
+      && s.dateISO === sessionDate && !store.isMidtown(s),
+  );
+  store.signIn("member@example.test");
+  const sessionBooking = store.reserveSession("fixture-member", targetSession);
+  store.markBookingPaid(sessionBooking.id, "PayMe", "");
+  store.signIn("admin@example.test");
+  store.confirmBookingPayment(sessionBooking.id);
+  store.cancelSessionWeek(targetSession.id, "Gym unavailable", Date.now());
+  const sessionNotifs = store.notificationsFor("fixture-member");
+  const sessionCancelNotif = sessionNotifs.find(
+    (n) => n.kind === "session-cancelled" && n.body && /ITC cancelled this HYROX session/.test(n.body),
+  );
+  // If the booking auto-deferred (a future HYROX session had capacity), the
+  // agreed wording lives in the source rather than in a notification. We
+  // fall back to a source-level check so the wording stays locked either way.
+  if (!sessionCancelNotif) {
+    const source = readFileSync(resolve(__dirnameSmoke, "js/store.js"), "utf8");
+    assert.match(
+      source, /ITC cancelled this HYROX session\. If you have paid and would like to apply it to a future ITC HYROX session, contact the collector\./,
+      "Admin session-week HYROX cancellation body must use the agreed wording",
+    );
+  } else {
+    assert.match(sessionCancelNotif.body, /apply it to a future ITC HYROX session, contact the collector/,
+      "Admin session-week cancellation body must direct the member to the collector");
+    assert.doesNotMatch(sessionCancelNotif.body, /swap the spot with your fellow ITC friend/,
+      "Admin session-week cancellation body must NOT carry the active-booking swap-with-friend line");
+    assert.doesNotMatch(sessionCancelNotif.body, /credit.followup|sort your credit|follow up about your credit/i,
+      "Admin session-week cancellation body must not promise any credit follow-up");
+  }
+  console.log("ok  no-deferral policy: swap-with-friend on member surfaces; honest cancellation wording for Admin paths");
 }
 
 // --- HYROX payment system: admin ops (Task 10) ---

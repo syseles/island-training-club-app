@@ -1929,7 +1929,7 @@ export function cancelHyroxCycle(cycleId, reason, now = Date.now()) {
     .sort((a, b) => a.dateISO.localeCompare(b.dateISO))[0];
   for (const booking of state.bookings.filter((item) => item.cycleId === cycleId && item.status === "confirmed")) {
     if (!target) {
-      notify(booking.userId, "hyrox-cycle-cancelled-no-deferral", "ITC cancelled this HYROX cycle. No refund and no deferral. If you can’t attend a future week, you may swap the spot with a fellow ITC friend.", "#/schedule");
+      notify(booking.userId, "hyrox-cycle-cancelled-no-deferral", "ITC cancelled this HYROX session. If you have paid and would like to apply it to a future ITC HYROX session, contact the collector.", "#/schedule");
       continue;
     }
     const moved = {
@@ -2693,9 +2693,15 @@ export function cancelSessionWeek(sessionId, reason, now = Date.now()) {
         deferBooking(b.id, target.id, now);
       } else {
         b.status = "cancelled";
-        notify(b.userId, "session-cancelled",
-          `${cancellationCopy}. ${b.snapshot.name} · ${fmtDate(b.snapshot.dateISO)} had no future slot available. No refund and no deferral — you may swap the spot with a fellow ITC friend.`,
-          cancellationLink);
+        if (session.category === "HYROX") {
+          notify(b.userId, "session-cancelled",
+            `ITC cancelled this HYROX session. If you have paid and would like to apply it to a future ITC HYROX session, contact the collector.`,
+            cancellationLink);
+        } else {
+          notify(b.userId, "session-cancelled",
+            `${cancellationCopy}. ${b.snapshot.name} · ${fmtDate(b.snapshot.dateISO)} had no future slot available — a leader will sort your credit.`,
+            cancellationLink);
+        }
       }
     } else if (b.status === "reserved") {
       b.status = "cancelled";
