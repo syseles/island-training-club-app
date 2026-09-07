@@ -4483,15 +4483,21 @@ console.log("ok  reset");
   store.sweepHyroxCycleDeadlines(cycle.registrationOpensAt);
   const registration = views.viewHyroxRegistration(cycle.id);
   for (const marker of [
-    "Your preference helps us plan. It does not reserve a particular gym.",
+    "Pick your home gym",
+    "Two gyms. One epic Saturday",
+    "Once paid, this booking is final",
     'value="bft"', 'value="midtown"', 'value="either"',
+    "11:15am", "11:00am",
     "If 20 or fewer people have paid", "If more than 20 people have paid",
     "Thursday 6 PM", "Friday 9 PM", 'name="fallbackAcknowledged"',
-    "I understand that my booking will be at BFT at 11:15 if only BFT opens.",
-    "Reserve &amp; continue to pay",
+    "I understand that my booking will be at BFT at 11:15am if only BFT opens.",
+    "Reserve my spot",
+    "hyrox-no-deferral",
   ]) {
     if (!registration.includes(marker)) throw new Error(`HYROX registration missing ${marker}`);
   }
+  assert.doesNotMatch(registration, /\b11:15\b/,
+    "registration copy must use the readable '11:15am' form, not the bare '11:15' form");
   console.log("ok  pooled HYROX Schedule and registration views explain the automatic venue plan");
 }
 {
@@ -4528,6 +4534,12 @@ console.log("ok  reset");
       || confirmedHtml.includes("release-reservation")) {
     throw new Error("unallocated pooled booking should show a confirmed weekly place without deferral or cancellation");
   }
+  // Lock the agreed copy on the venue preference on the booking detail screen.
+  // Members should be able to see what they chose on the registration page.
+  assert.match(confirmedHtml, /Venue preference/i,
+    "booking detail should surface the member's chosen venue preference");
+  assert.match(confirmedHtml, /Either venue/i,
+    "booking detail should render the readable preference label, not just the raw key");
   const homeHtml = views.viewHome();
   const historyHtml = await views.viewAccount("history");
   const paymentsHtml = await views.viewAccount("payments");

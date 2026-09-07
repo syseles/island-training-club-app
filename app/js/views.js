@@ -111,6 +111,12 @@ function hyroxCycleVenues(cycle) {
   return [cycle.bftSessionId, cycle.midtownSessionId].map((id) => store.getSession(id)).filter(Boolean);
 }
 
+function hyroxVenuePreferenceLabel(preference) {
+  if (preference === "bft") return "BFT Causeway Bay";
+  if (preference === "midtown") return "Midtown 28";
+  return "Either venue";
+}
+
 function hyroxCycleStatus(cycle) {
   const now = Date.now();
   if (cycle.registrationState === "cancelled") return { label: "Cancelled", className: "danger" };
@@ -521,18 +527,31 @@ export function viewHyroxRegistration(cycleId) {
   const open = (cycle.registrationState === "open" || Date.now() >= cycle.registrationOpensAt)
     && Date.now() < cycle.paymentDeadlineAt;
   if (!open) return viewHyroxCycle(cycleId);
-  return `<div class="kicker">HYROX registration</div><h1 class="display">Choose how we plan your place</h1>
-    <p class="lede">Your preference helps us plan. It does not reserve a particular gym.</p>
-    <form id="form-hyrox-reserve" class="card" data-cycle="${esc(cycle.id)}">
+  return `<div class="hyrox-registration">
+    <span class="kicker hyrox-kicker">You’re in. · Sat ${esc(fmtDate(cycle.dateISO))}</span>
+    <h1 class="display">Pick your home gym.</h1>
+    <p class="lede">Two gyms. One epic Saturday. Tell us which one feels right and we’ll do the rest.</p>
+    <aside class="hyrox-no-deferral" aria-label="Booking policy">
+      <span class="hyrox-no-deferral-icon" aria-hidden="true">${ICONS.shield}</span>
+      <p><strong>Once paid, this booking is final</strong> — no refund and no deferral. If you can’t attend, you may swap the spot with your fellow ITC friend.</p>
+    </aside>
+    <form id="form-hyrox-reserve" class="card hyrox-reserve-card" data-cycle="${esc(cycle.id)}">
       <fieldset class="hyrox-preference-grid"><legend>Venue preference</legend>
-        <label><input type="radio" name="preference" value="bft" required> BFT Causeway Bay</label>
-        <label><input type="radio" name="preference" value="midtown"> Midtown 28</label>
-        <label><input type="radio" name="preference" value="either"> Either venue</label>
+        <label class="hyrox-radio"><input type="radio" name="preference" value="bft" required>
+          <span class="hyrox-radio-card"><span class="hyrox-radio-name">BFT Causeway Bay</span><span class="hyrox-radio-meta">11:15am · 20 spots</span></span>
+        </label>
+        <label class="hyrox-radio"><input type="radio" name="preference" value="midtown">
+          <span class="hyrox-radio-card"><span class="hyrox-radio-name">Midtown 28</span><span class="hyrox-radio-meta">11:00am · 12 spots</span></span>
+        </label>
+        <label class="hyrox-radio"><input type="radio" name="preference" value="either">
+          <span class="hyrox-radio-card"><span class="hyrox-radio-name">Either venue</span><span class="hyrox-radio-meta">Auto-allocate to your nearest gym</span></span>
+        </label>
       </fieldset>
-      <label class="check-row"><input type="checkbox" name="fallbackAcknowledged" required> I understand that my booking will be at BFT at 11:15 if only BFT opens.</label>
+      <label class="check-row"><input type="checkbox" name="fallbackAcknowledged" required> I understand that my booking will be at BFT at 11:15am if only BFT opens.</label>
       <div class="hyrox-threshold-rule"><p>If 20 or fewer people have paid, we’ll only book BFT CwB.</p><p>If more than 20 people have paid, we’ll book both gyms.</p><p>Mark payment by Thursday 6 PM. Venue changes close Friday 9 PM.</p></div>
-      <button class="btn" type="submit">Reserve &amp; continue to pay</button>
-    </form>`;
+      <button class="btn hyrox-cta" type="submit">Reserve my spot →</button>
+    </form>
+  </div>`;
 }
 
 function venuePresentationHTML(presentation) {
@@ -2173,7 +2192,8 @@ export function viewBooking(bookingId) {
     actions = `
       ${movedFrom ? `<div class="card mt16"><div class="card-body"><strong>Previous spot released</strong><p class="muted small mt8">${esc(fmtDate(movedFrom.snapshot.dateISO))} · ${fmtTime(movedFrom.snapshot.time)}</p></div></div>` : ""}
       <button class="btn ghost" type="button" data-action="ics-booking" data-booking="${b.id}">Add to calendar</button>
-      ${receipt ? `<a class="btn ghost" href="#/receipt/${receipt.id}">View receipt · ${esc(receipt.number)}</a>` : ""}`;
+      ${receipt ? `<a class="btn ghost" href="#/receipt/${receipt.id}">View receipt · ${esc(receipt.number)}</a>` : ""}
+      ${cycle && b.venuePreference ? `<div class="card mt16"><div class="card-body"><p class="muted small">Venue preference</p><p><strong>${esc(hyroxVenuePreferenceLabel(b.venuePreference))}</strong>${assignedSession?.location ? ` · assigned to <strong>${esc(assignedSession.location)}</strong>` : ""}</p></div></div>` : ""}`;
     if (cycle && mine && cycle.venuePlan === "both" && b.allocationState === "provisional" && b.sessionId) {
       const target = hyroxCycleVenues(cycle).find((venue) => venue.id !== b.sessionId);
       const switchEntry = store.hyroxCycleQueues(cycle.id).venueSwitches
