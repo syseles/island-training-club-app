@@ -1929,7 +1929,7 @@ export function cancelHyroxCycle(cycleId, reason, now = Date.now()) {
     .sort((a, b) => a.dateISO.localeCompare(b.dateISO))[0];
   for (const booking of state.bookings.filter((item) => item.cycleId === cycleId && item.status === "confirmed")) {
     if (!target) {
-      notify(booking.userId, "hyrox-cycle-credit-followup", "Your paid HYROX place was cancelled; ITC will follow up about your credit.", "#/schedule");
+      notify(booking.userId, "hyrox-cycle-cancelled-no-deferral", "ITC cancelled this HYROX cycle. No refund and no deferral. If you can’t attend a future week, you may swap the spot with a fellow ITC friend.", "#/schedule");
       continue;
     }
     const moved = {
@@ -2694,7 +2694,7 @@ export function cancelSessionWeek(sessionId, reason, now = Date.now()) {
       } else {
         b.status = "cancelled";
         notify(b.userId, "session-cancelled",
-          `${cancellationCopy}. ${b.snapshot.name} · ${fmtDate(b.snapshot.dateISO)} had no future slot available — a leader will sort your credit.`,
+          `${cancellationCopy}. ${b.snapshot.name} · ${fmtDate(b.snapshot.dateISO)} had no future slot available. No refund and no deferral — you may swap the spot with a fellow ITC friend.`,
           cancellationLink);
       }
     } else if (b.status === "reserved") {

@@ -2010,7 +2010,7 @@ export function viewCheckout(sessionId) {
     </div>
     <form id="form-reserve" class="mt16" data-session="${s.id}">
       <button class="btn" type="submit">Reserve spot · pay later</button>
-      <p class="muted small mt8 center">Once confirmed, this week is final. If you can’t attend, message the collector — ITC will follow up about credit for the missed session.</p>
+      <p class="muted small mt8 center">Once paid, this booking is final — no refund and no deferral. If you can’t attend, you may swap the spot with your fellow ITC friend.</p>
     </form>`;
 }
 
@@ -2189,15 +2189,14 @@ export function viewBooking(bookingId) {
     }
     if (targets.length) {
       // No-deferral policy: confirmed paid bookings do not offer self-service
-      // deferral. Members who can't attend should contact ITC so the
-      // collector can adjust headcount and arrange credit follow-up. The
-      // store still exposes `deferBooking` for store-level callers (Admin
+      // deferral. Members who can't attend can swap with another ITC friend.
+      // The store still exposes `deferBooking` for store-level callers (Admin
       // cycle cancellation uses it), but the booking detail screen no
       // longer surfaces the action.
       actions += `
       <div class="card mt16"><div class="card-body">
         <h3>Can’t make it?</h3>
-        <p class="muted small">This week is final once payment is confirmed. If you can’t attend, message the collector — ITC will adjust headcount and follow up about credit for the missed session.</p>
+        <p class="muted small">Once paid, this booking is final — no refund and no deferral. If you can’t attend, you may swap the spot with your fellow ITC friend.</p>
       </div></div>`;
     }
   } else {

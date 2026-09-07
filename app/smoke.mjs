@@ -3505,7 +3505,31 @@ store.signIn("member@example.test");
   assert.doesNotMatch(html, /Can.t make it\? Defer/, "no-deferral: defer card heading must not render");
   assert.equal(typeof store.deferTargetsFor, "function", "store must keep deferTargetsFor for store-level callers");
   assert.equal(typeof store.deferBooking, "function", "store must keep deferBooking for store-level callers");
-  console.log("ok  no-deferral policy hides defer UI while keeping store hooks");
+  // Lock the exact booking-detail disclaimer copy. Any wording change must
+  // update this test so documentation, leadership review, and code stay in sync.
+  assert.match(html, /Once paid, this booking is final — no refund and no deferral/,
+    "booking detail must show the agreed no-refund, no-deferral disclaimer");
+  assert.match(html, /swap the spot with your fellow ITC friend/,
+    "booking detail must invite the member to swap with another ITC friend");
+  assert.doesNotMatch(html, /credit.followup|credit for the missed|sort your credit|follow up about your credit/i,
+    "booking detail must not promise any credit follow-up");
+  // Lock the checkout (sign-up) page copy. The viewCheckout helper redirects
+  // to the booking page once a member already has a confirmed booking, so we
+  // pick a fresh paid session the fixture member has not yet reserved.
+  store.signOut();
+  const checkoutPaid = store.upcomingSessions(14).find(
+    (s) => s.kind === "paid" && s.id !== paid.id && !store.isMidtown(s) && !data.sessionStarted(s),
+  );
+  store.signIn("member@example.test");
+  const checkoutHtml = views.viewCheckout(checkoutPaid.id);
+  assert.equal(typeof checkoutHtml, "string", "checkout page must render a string when the member has no prior reservation");
+  assert.match(checkoutHtml, /Once paid, this booking is final — no refund and no deferral/,
+    "checkout page must show the agreed no-refund, no-deferral disclaimer");
+  assert.match(checkoutHtml, /swap the spot with your fellow ITC friend/,
+    "checkout page must invite the member to swap with another ITC friend");
+  assert.doesNotMatch(checkoutHtml, /credit.followup|credit for the missed|sort your credit|follow up about your credit/i,
+    "checkout page must not promise any credit follow-up");
+  console.log("ok  no-deferral policy shows the swap-with-a-friend disclaimer and no credit promise");
 }
 
 // --- HYROX payment system: admin ops (Task 10) ---

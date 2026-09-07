@@ -366,9 +366,9 @@ begin
   else
     insert into public.notifications
       (profile_id, kind, title, body, destination)
-    select b.profile_id, 'operational_hyrox_cycle_credit_followup',
-           'HYROX booking requires follow-up',
-           'Your paid HYROX place was cancelled; ITC will follow up about your credit.',
+    select b.profile_id, 'operational_hyrox_cycle_cancelled_no_deferral',
+           'HYROX cycle cancelled',
+           'ITC cancelled this HYROX cycle. No refund and no deferral. If you can’t attend a future week, you may swap the spot with a fellow ITC friend.',
            '#/schedule'
       from public.operational_bookings b
      where b.hyrox_cycle_id = v_cycle.id and b.status = 'confirmed';
