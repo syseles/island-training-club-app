@@ -5,27 +5,33 @@ identity, notifications, Giving, Admin, and approval workflows.
 
 ## Candidate ownership and surfaces
 
-- **Supabase owns:** identity, roles, applications, notifications, Giving
-  campaigns, donor profiles, and the full HYROX operational workflow:
-  activity templates, weekly sessions, bookings, queue entries, receipts,
-  collector duty, payout profiles, and the gym finalization record. All
-  operational mutations route through SECURITY DEFINER RPCs and are
-  synchronized across devices via Realtime.
-- **`localStorage` owns:** the device-local Community prototype interactions
-  (prayer requests, draft applications) and the UUID-keyed collector payout
-  profile that the on-duty admin edits locally. Operations state is never
-  stored in `localStorage` once live mode is enabled.
+- **Supabase owns in configured live mode:** identity, roles, applications,
+  notifications, Giving campaigns, donor profiles, and the full operational
+  workflow: activity templates, dated sessions, paid/RSVP bookings, queue
+  entries, receipts, collector duty, payout profiles, and gym finalization.
+  Browser mutations route through scoped SECURITY DEFINER RPCs. Realtime
+  invalidates authorized rows and identity-free RSVP totals; an assigned
+  collector's foreign payout row is refreshed through its narrow RPC on
+  Payment route entry and tab restore because payout-table RLS can suppress
+  that Realtime event.
+- **`localStorage` owns:** local-mode prototype state plus device-local
+  Community interactions and application drafts. Live payout saves may cache
+  the UUID-keyed handoff details on that device only after Supabase settles;
+  forced operational hydration remains authoritative.
 - **Navigation:** Notification bell plus a signed-in-only Giving tab.
-- **Admin tabs:** Approvals, Members, Activities, Giving, and Payments / Ops.
-  Each Admin route exposes exactly one active tab.
-- **State compatibility:** the current local state is v13; v9, v10, v11, and
-  v12 persisted snapshots are accepted and migrated while preserving genuine
+- **Admin tabs:** Approvals, Members, Activities, Giving, and Payments.
+  Dated controls appear under **Activities → Weekly Event Controls**, split
+  into Free & RSVP Events and Paid Sessions. Each Admin route exposes exactly
+  one active tab.
+- **State compatibility:** the current local state is v16; v9 through v15
+  persisted snapshots are accepted and migrated while preserving genuine
   records.
 
 Pending and declined profiles can browse public surfaces but cannot render or
 invoke Payment reservation, queue, or pay controls, and cannot use Giving
-transfer controls. Signing out clears the Supabase session but preserves the
-UUID-owned device-local Payment records.
+transfer controls. Signing out clears the Supabase session while leaving only
+prototype-local drafts/interactions and any post-settlement payout handoff
+cache on the device; authoritative live operational rows remain in Supabase.
 
 ## Static Vercel configuration
 
@@ -105,8 +111,9 @@ remains reachable. This does not make donations functional.
 To enable Giving:
 
 1. Apply the ordered migration chain, including
-   `20260805000011_giving_campaigns.sql` and `20260806000001_donor_id.sql`, to
-   the intended Supabase project.
+   `20260805000011_giving_campaigns.sql`, `20260806000001_donor_id.sql`, and
+   `20260827000001_hyrox_indemnity_fields.sql`, to the intended Supabase
+   project.
 2. Sign in as an approved Admin or Super Admin and use **Admin Tools → Giving**
    to create and publish a real campaign.
 3. Verify the published campaign as an approved member.
@@ -132,6 +139,69 @@ migrations with:
 bash supabase/tests/verify_giving_campaigns.sh --safety-check-only
 bash supabase/tests/verify_giving_campaigns_safety.sh
 ```
+
+## Free-event venue overrides
+
+Dated free/RSVP venues (`wnt`, `run`, `water`, `lunch`) live in
+`operational_session_venue_overrides` and use
+`set_session_venue(p_session_id text, p_location text, p_maps_query text,
+p_was_tbc boolean, p_meeting_lat double precision, p_meeting_lng double
+precision)`. The four-argument compatibility wrapper remains available. The
+RPC is the only mutation path. Paid HYROX sessions are rejected with
+`Activity venue is fixed.`. Members see the first confirmation per session;
+Admins see an audit notification on every actual save/reset, excluding the
+actor.
+
+The Admin UI exposes these dated controls at **Admin Tools → Activities →
+Weekly Event Controls → Free & RSVP Events**. Paid time, venue-status, notice,
+and cancellation controls are in the adjacent **Paid Sessions** group.
+
+Recurring Swimming and lunch may remain `TBC` in their activity templates.
+Only dated overrides are shared through `set_session_venue`.
+
+Mapping privacy: Nominatim receives the venue text submitted for geocoding and
+the browser's IP address. The browser cache is device-local and stores only
+venue coordinates; it does not contain member or attendance data.
+
+Deploy the location updates after the operational backend chain in this order:
+
+1. `20260813000001_free_event_venue_overrides.sql`
+2. `20260813000002_midtown28_fitness.sql`
+
+Then verify against a fresh disposable database:
+
+```bash
+export ITC_OPERATIONS_TEST_DATABASE_URL='postgresql://...disposable database...'
+export ITC_ALLOW_DATABASE_RESET=1
+bash supabase/tests/verify_operational_backend.sh
+```
+
+If `set_session_venue` returns `Could not find 'public.operational_session_venue_overrides' in the schema cache` even though the migration was applied, reload PostgREST's schema cache for the calling role:
+
+```sql
+notify pgrst, 'reload schema';
+```
+
+Run it once per Supabase role (`anon`, `authenticated`, `service_role`) the
+client uses. After this the new table is visible to the PostgREST query path.
+Run it via the Supabase SQL editor or `psql` against the live database URL.
+
+Browser-level acceptance on the deployed environment:
+
+1. As an Admin, sign in and open **Admin Tools → Activities → Weekly Event
+   Controls → Free & RSVP Events**. Save a dated display location and geocode
+   query.
+2. Open the dated activity page with `localStorage.removeItem("itc.geocode.v1")`.
+   Confirm the Leaflet marker, attribution, and external Get directions link.
+3. Confirm an approved member receives **Venue confirmed** and another Admin
+   receives **Session venue updated**. The actor must not receive a duplicate
+   notification.
+4. Edit and then reset the venue; members are not notified again.
+5. Block `unpkg.com` and `nominatim.openstreetmap.org` separately. Both
+   failure paths must settle on the fallback copy without breaking the
+   external Get directions link.
+6. Open both HYROX activity pages. Get directions must appear without a
+   weekly venue form.
 
 Applying the migrations to the real remote target remains a manual deployment
 operation; confirm the selected project and backups before running
@@ -292,11 +362,35 @@ All schema lives in `supabase/migrations/` and is replayed in order by
 `supabase db push`. Never edit a migration after it has been applied to
 a shared environment — add a new one instead.
 
+`20260827000001_hyrox_indemnity_fields.sql` is additive: it adds
+`waiver_signature_text`, `waiver_signed_at`, `waiver_form_version`, and
+`emergency_relationship` to `public.applications` without backfilling or
+adding `not null` constraints. Apply it before deploying any UI revision
+that writes the versioned indemnity fields so live application submits and
+Profile > Indemnity updates do not fail on missing columns.
+
+The latest operational corrections are forward migrations and must remain in
+this order after `20260829000008_rsvp_integrity.sql`:
+
+1. `20260830000001_rsvp_count_trigger_locking.sql` narrows RSVP count triggers
+   to confirmed contribution changes and serializes exact RSVP recounts with
+   per-session advisory transaction locks.
+2. `20260830000002_release_operational_reservation.sql` adds the owner/Admin
+   RPC for releasing only unmarked paid reservations. It does not perform a
+   client-side or fake live waitlist promotion.
+3. `20260830000003_notification_event_destinations.sql` corrects notification
+   routes for zero-price/RSVP events and preserves the Schedule fallback for
+   paid cancellation rows.
+
+`verify_operational_backend.sh` replays the ordered chain and then runs a
+bounded concurrency harness. It still requires a fresh, explicitly
+acknowledged disposable Supabase-compatible database; a source-only safety
+run does not verify PostgreSQL execution.
+
 ## ⏳ Awaiting ITC leadership workshop
 
-The following copy is placeholdered until the workshop lands:
+The supplied Hyrox indemnity source is already implemented. The following copy is still placeholdered until the workshop lands:
 
-- Waiver acceptance text.
 - Privacy policy text.
 - Community guidelines text.
 - Welcome notification body.

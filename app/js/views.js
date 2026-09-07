@@ -114,7 +114,11 @@ function hyroxCycleVenues(cycle) {
 function hyroxCycleStatus(cycle) {
   const now = Date.now();
   if (cycle.registrationState === "cancelled") return { label: "Cancelled", className: "danger" };
-  if (now < cycle.registrationOpensAt) return { label: "Sign up opens Monday at 6 PM HKT", className: "neutral" };
+  if (now < cycle.registrationOpensAt) return {
+    label: "Sign up opens Monday at 6 PM HKT",
+    compactLabel: "Opens Mon · 6 PM",
+    className: "neutral",
+  };
   if (cycle.venuePlan === "bft_only") return { label: "BFT only", className: "free" };
   if (cycle.venuePlan === "both") return { label: cycle.allocationClosedAt ? "Both gyms confirmed" : "Both gyms open", className: "free" };
   if (cycle.registrationState === "reconciling") return { label: "Payment review", className: "warn" };
@@ -133,12 +137,15 @@ function hyroxCycleRow(cycle) {
   const booking = hyroxCycleBookingForUser(cycle);
   const action = booking
     ? `<span class="badge free">${booking.status === "confirmed" ? "Booked" : "Payment due"}</span>`
-    : `<span class="badge ${status.className}">${esc(status.label)}</span>`;
+    : `<span class="badge ${status.className}">${esc(status.compactLabel || status.label)}</span>`;
   const venues = hyroxCycleVenues(cycle)
-    .map((venue) => `${esc(venue.location)} · ${esc(fmtTime(venue.time))}`).join(" · ");
+    .sort((a, b) => a.time.localeCompare(b.time));
+  const venueDetails = venues
+    .map((venue) => `<span>${esc(venue.location)} · ${esc(fmtTime(venue.time))}</span>`)
+    .join("");
   return `<a class="session-row hyrox-cycle-row" href="#/hyrox/${esc(cycle.id)}">
-    <time>${esc(fmtTime(hyroxCycleVenues(cycle)[0]?.time || "00:00"))}</time>
-    <div><h3>ITC HYROX<br><span>BFT + Midtown Pool</span></h3><p>${venues}</p></div>
+    <time>${esc(fmtTime(venues[0]?.time || "00:00"))}</time>
+    <div class="hyrox-cycle-content"><h3>ITC HYROX<br><span>BFT + Midtown Pool</span></h3><p class="hyrox-cycle-venues">${venueDetails}</p></div>
     <div class="row-end">${action}</div>
   </a>`;
 }
@@ -2003,7 +2010,7 @@ export function viewCheckout(sessionId) {
     </div>
     <form id="form-reserve" class="mt16" data-session="${s.id}">
       <button class="btn" type="submit">Reserve spot · pay later</button>
-      <p class="muted small mt8 center">Can’t make it? Defer to a future session anytime before it starts — no refunds.</p>
+      <p class="muted small mt8 center">Once confirmed, this week is final. If you can’t attend, message the collector — ITC will follow up about credit for the missed session.</p>
     </form>`;
 }
 
@@ -2181,15 +2188,16 @@ export function viewBooking(bookingId) {
       </div></div>`;
     }
     if (targets.length) {
+      // No-deferral policy: confirmed paid bookings do not offer self-service
+      // deferral. Members who can't attend should contact ITC so the
+      // collector can adjust headcount and arrange credit follow-up. The
+      // store still exposes `deferBooking` for store-level callers (Admin
+      // cycle cancellation uses it), but the booking detail screen no
+      // longer surfaces the action.
       actions += `
       <div class="card mt16"><div class="card-body">
-        <h3>Can’t make it? Defer — no refunds</h3>
-        <p class="muted small">Move your paid spot to a future ${esc(s.name)} session with availability. Payment carries over.</p>
-        ${targets.map((t) => `
-          <div class="member-row">
-            <div class="who"><strong>${esc(fmtDate(t.dateISO))} · ${fmtTime(t.time)}</strong><span>${esc(t.location)} · ${store.spotsLeft(t)} spots left</span></div>
-            <button class="btn ghost sm" type="button" data-action="defer-to" data-booking="${b.id}" data-session="${t.id}">Defer to this session</button>
-          </div>`).join("")}
+        <h3>Can’t make it?</h3>
+        <p class="muted small">This week is final once payment is confirmed. If you can’t attend, message the collector — ITC will adjust headcount and follow up about credit for the missed session.</p>
       </div></div>`;
     }
   } else {
@@ -2274,16 +2282,18 @@ function adminGivingSetupRequired() {
     </div></div>`;
 }
 
-export async function viewAdmin(tab = "approvals") {
+export async function viewAdmin(tab = "members") {
   const user = store.currentUser();
   if (!user || !isAdminRole(user.role)) {
     return { redirect: "#/account" };
   }
-  const canonicalTab = tab === "ops" ? "payments" : tab;
+  const requestedTab = tab === "ops" ? "payments" : tab;
+  const canonicalTab = ["members", "activities", "giving", "payments"].includes(requestedTab)
+    ? requestedTab
+    : "members";
   const tabs = `
     <nav class="admin-tabs admin-tabs-scroll">
       ${[
-        ["approvals", "Approvals"],
         ["members", "Members"],
         ["activities", "Activities"],
         ["giving", "Giving"],
@@ -2296,21 +2306,23 @@ export async function viewAdmin(tab = "approvals") {
   // Live mode reads real data (Supabase applications + profiles); local
   // mode keeps the local prototype lists.
   let memberUsers = null;
-  if (["members", "payments", "ops"].includes(tab)) {
+  if (["members", "payments"].includes(canonicalTab)) {
     memberUsers = (await store.listPaymentUsers())
       .sort((a, b) => a.fullName.localeCompare(b.fullName));
   }
   let body;
-  if (tab === "activities") body = adminActivities();
-  else if (tab === "members") body = adminMembers(user, memberUsers);
-  else if (tab === "giving") {
+  if (canonicalTab === "activities") body = adminActivities();
+  else if (canonicalTab === "members") {
+    const pendingApplicants = await store.listApprovalCandidates();
+    body = adminMembers(user, memberUsers, pendingApplicants);
+  } else if (canonicalTab === "giving") {
     try {
       body = adminGiving(await store.listGivingCampaigns());
     } catch (error) {
       if (!isGivingSchemaMissing(error)) throw error;
       body = adminGivingSetupRequired();
     }
-  } else if (["payments", "ops"].includes(tab)) {
+  } else {
     let profilePhone = String(user.phone || "").trim();
     try {
       const application = await store.getMyApplication();
@@ -2319,7 +2331,7 @@ export async function viewAdmin(tab = "approvals") {
       console.warn("Unable to load Membership Details phone for payout form", error);
     }
     body = adminOps(user, memberUsers, profilePhone);
-  } else body = adminApprovals(await store.listApprovalCandidates());
+  }
 
   return `
     <div class="kicker">Admin</div>
@@ -2940,7 +2952,7 @@ function adminActivities() {
     ${adminOneOffEvents()}`;
 }
 
-function adminMembers(viewer, users) {
+function adminMembers(viewer, users = [], pendingApplicants = []) {
   const canEdit = isSuperRole(viewer.role);
   const query = adminMemberFilters.query.trim().toLocaleLowerCase();
   const filtered = users.filter((u) => {
@@ -2949,6 +2961,9 @@ function adminMembers(viewer, users) {
     const matchesRole = adminMemberFilters.role === "all" || normalizedRole(u.role) === adminMemberFilters.role;
     return matchesQuery && matchesStatus && matchesRole;
   });
+  const approvalsSection = pendingApplicants.length
+    ? adminApprovals(pendingApplicants)
+    : "";
   const option = (value, label, selected) =>
     `<option value="${value}" ${selected === value ? "selected" : ""}>${label}</option>`;
   const filterChip = (key, value, label) =>
@@ -3001,7 +3016,8 @@ function adminMembers(viewer, users) {
       </fieldset>
       ${hasActiveFilters ? '<button class="admin-filters-clear" type="button" data-action="admin-member-filters-clear">Clear filters</button>' : ""}
     </div>
-    <div class="member-results">${rows || `<div class="empty">No members match${activeFilters ? ` ${activeFilters}` : " these filters"}.</div>`}</div>`;
+    <div class="member-results">${rows || `<div class="empty">No members match${activeFilters ? ` ${activeFilters}` : " these filters"}.</div>`}</div>
+    ${approvalsSection ? `<div class="member-approvals">${approvalsSection}</div>` : ""}`;
 }
 
 export function viewAdminActivity(id) {

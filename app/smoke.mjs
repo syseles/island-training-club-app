@@ -816,11 +816,25 @@ console.log("ok  integration source-tip provenance is explicit");
 
 const integratedViewSource = readFileSync(resolve(__dirnameSmoke, "js/views.js"), "utf8");
 const integratedAppSource = readFileSync(resolve(__dirnameSmoke, "js/app.js"), "utf8");
+const integratedStyleSource = readFileSync(resolve(__dirnameSmoke, "styles.css"), "utf8");
+assert.match(integratedViewSource, /export async function viewAdmin\(tab = "members"\)/,
+  "Admin must default to Members");
+assert.doesNotMatch(integratedViewSource, /\["approvals", "Approvals"\]/,
+  "Approvals must be merged into Members instead of remaining a separate tab");
+assert.match(integratedStyleSource, /@media \(max-width: 600px\)[\s\S]*?\.session-row\.hyrox-cycle-row\s*\{[\s\S]*?grid-template-columns:\s*44px minmax\(0, 1fr\);/,
+  "HYROX cycle rows must switch to two columns on mobile");
+assert.match(integratedStyleSource, /@media \(max-width: 600px\)[\s\S]*?\.hyrox-cycle-row \.row-end\s*\{[\s\S]*?grid-column:\s*2;/,
+  "HYROX cycle status must move below the details on mobile");
+assert.match(integratedViewSource, /class="hyrox-cycle-content"[\s\S]*?class="hyrox-cycle-venues"/,
+  "HYROX cycle rows must expose stable hooks for readable mobile details");
 assert.match(integratedViewSource, /function adminHyroxWeeklyBookingSetup\(\)[\s\S]*?HYROX weekly booking setup/);
 assert.doesNotMatch(integratedViewSource, /function adminHyroxProvisioningInfo/);
 assert.match(integratedViewSource, /function venueDisplayName\(session\)/);
 assert.match(integratedViewSource, /Mark confirmed with \$\{esc\(venueName\)\}/);
 assert.match(integratedViewSource, /function adminVenueStatusMetrics\(session\)/);
+assert.match(readFileSync(resolve(__dirnameSmoke, "js/app.js"), "utf8"),
+  /closest\("a\[href\^='#'\][^"]*"\)/,
+  "App click delegate must intercept hash-only anchor links before the router runs");
 assert.equal(typeof store.attendeeCountFor, "function",
   "store must export attendeeCountFor for identity-independent RSVP counts");
 assert.equal((integratedViewSource.match(/store\.attendeeCountFor\(s\)/g) || []).length, 4,
@@ -844,7 +858,6 @@ for (const marker of [
   "Continue with Google",
   "Membership Details",
   "Privacy &amp; Notifications",
-  "Approvals",
   "Members",
   "HYROX",
   "Duty",
@@ -1436,7 +1449,7 @@ for (const stale of [
 }
 console.log("ok  no stale plain-checkbox or indemnity-only patterns remain");
 await check("checkout (visitor) -> redirect", () => views.viewCheckout(paid.id));
-await check("admin (visitor) -> redirect", () => views.viewAdmin("approvals"));
+await check("admin (visitor) -> redirect", () => views.viewAdmin("members"));
 await check("notfound", () => views.viewNotFound());
 
 // free activity must never show booking/capacity language
@@ -1782,7 +1795,13 @@ if (!pendHtml.includes("Booking locked")) {
 
 // --- Admin approval flow ---
 installLocalFixtures(); store.signIn("admin@example.test");
-for (const tab of ["approvals", "members", "activities", "giving", "payments"]) {
+const defaultAdminHtml = await views.viewAdmin();
+if (!defaultAdminHtml.includes('href="#/admin/members" class="active"')
+    || defaultAdminHtml.includes('href="#/admin/approvals"')
+    || !defaultAdminHtml.includes("Test Person")) {
+  throw new Error("Admin must default to Members and show pending applicants there without an Approvals tab");
+}
+for (const tab of ["members", "activities", "giving", "payments"]) {
   const adminHtml = await check(`admin ${tab}`, () => views.viewAdmin(tab));
   const activeTabs = adminHtml.match(/<a[^>]*aria-current="page"[^>]*>/g) || [];
   if (activeTabs.length !== 1 || !activeTabs[0].includes(`href="#/admin/${tab}"`)) {
@@ -2940,22 +2959,9 @@ installLocalFixtures(); store.signIn("member@example.test");
   if (store.getBooking(b.id).status !== "confirmed")
     throw new Error("rejected cross-activity deferral must preserve the confirmed booking");
   const confirmedView = views.viewBooking(b.id);
-  if (!confirmedView.includes("Defer to this session") || confirmedView.includes(">Move here</button>"))
-    throw new Error("confirmed paid bookings should present explicit same-session-type defer actions");
-  const moved = store.deferBooking(b.id, targets[0].id);
-  if (moved.status !== "confirmed") throw new Error("paid deferral should stay confirmed");
-  if (store.getBooking(b.id).status !== "deferred") throw new Error("original should read deferred");
-  if (store.receiptForBooking(moved.id)?.bookingId !== moved.id)
-    throw new Error("receipt should follow the deferred booking");
-  if (!store.notificationsFor("fixture-admin").some((n) => n.kind === "defer"))
-    throw new Error("collector should be notified of the deferral");
-  const movedView = views.viewBooking(moved.id);
-  if (!movedView.includes("Booking moved.")
-      || !movedView.includes("Previous spot released")
-      || !movedView.includes("payment has carried over")) {
-    throw new Error("deferred booking should confirm the released old spot and carried payment");
-  }
-  console.log("ok  paid deferral moves booking + receipt, releases the old spot, and notifies collector");
+  assert.doesNotMatch(confirmedView, /Defer to this session|data-action="defer-to"|Can.t make it\? Defer/,
+    "confirmed paid bookings must not surface defer actions under the no-deferral policy");
+  console.log("ok  paid bookings honour the no-deferral policy on the booking detail screen");
 }
 {
   const sess = store.upcomingSessions(14).find(
@@ -3470,11 +3476,36 @@ store.signIn("member@example.test");
   store.confirmBookingPayment(b.id);
   store.signIn("member@example.test");
   const conf = views.viewBooking(b.id);
-  if (!conf.includes('data-action="defer-to"'))
-    throw new Error("confirmed booking should offer defer targets");
+  assert.doesNotMatch(conf, /data-action="defer-to"|Can.t make it\? Defer|Defer to this session/,
+    "confirmed bookings must not offer deferral under the no-deferral policy");
   if (conf.includes("Cancel & refund"))
     throw new Error("member refund flow should be gone");
-  console.log("ok  confirmed booking offers defer, no member refund");
+  console.log("ok  confirmed booking honours no-deferral policy, no member refund");
+}
+
+// --- No-deferral policy --------------------------------------------------
+// Confirmed paid bookings must not surface deferral UI or store-level
+// deferral entry points. The store keeps `deferBooking` callable for
+// store-level callers, but the booking detail screen and the click
+// delegate must hide every defer path.
+{
+  store.resetLocalData();
+  installLocalFixtures();
+  const paid = store.upcomingSessions(14).find(
+    (s) => s.kind === "paid" && !store.isMidtown(s) && !data.sessionStarted(s),
+  );
+  store.signIn("member@example.test");
+  const b = store.reserveSession("fixture-member", paid);
+  store.markBookingPaid(b.id, "PayMe", "");
+  store.signIn("admin@example.test");
+  store.confirmBookingPayment(b.id);
+  store.signIn("member@example.test");
+  const html = views.viewBooking(b.id);
+  assert.doesNotMatch(html, /data-action="defer-to"/, "no-deferral: defer-to action must not render");
+  assert.doesNotMatch(html, /Can.t make it\? Defer/, "no-deferral: defer card heading must not render");
+  assert.equal(typeof store.deferTargetsFor, "function", "store must keep deferTargetsFor for store-level callers");
+  assert.equal(typeof store.deferBooking, "function", "store must keep deferBooking for store-level callers");
+  console.log("ok  no-deferral policy hides defer UI while keeping store hooks");
 }
 
 // --- HYROX payment system: admin ops (Task 10) ---
@@ -3490,6 +3521,9 @@ store.signIn("member@example.test");
   );
   const b = store.reserveSession("fixture-member", sess);
   store.markBookingPaid(b.id, "FPS", "9921");
+  const opsCycleClaim = store.reserveHyroxCycle("fixture-member", opsCycle.id, "either", true,
+    opsCycle.registrationOpensAt);
+  store.markBookingPaid(opsCycleClaim.id, "FPS", "9922");
   store.signIn("admin@example.test");
   const ops = await views.viewAdmin("payments");
   if (!ops.includes(">Payments</a>") || ops.includes(">HYROX</a>")
@@ -3514,6 +3548,15 @@ store.signIn("member@example.test");
       || !/hyrox-venue-[a-z0-9-]+-claims/.test(ops)) {
     throw new Error("Admin HYROX status counts (parent + venue) should be drill-down links with anchored targets");
   }
+  if (!ops.includes("admin-claims-section") || !ops.includes("Payment claims to review")) {
+    throw new Error("Only the claims tile should be a drill-down link to a collapsible claims list");
+  }
+  if (!ops.includes("<strong>Spots left</strong>") && !ops.includes(">Spots left<")) {
+    throw new Error("Venue status grid should expose a Spots left counter");
+  }
+  if (ops.includes(">Capacity</span>")) {
+    throw new Error("Venue status grid should not use the legacy Capacity label");
+  }
   const parentCycleEnd = ops.indexOf('id="form-cancel-hyrox-cycle"');
   if (islandEccCard === -1 || !ops.includes("hyrox-island-ecc-card")
       || !ops.includes("Payment reconciliation")
@@ -3521,6 +3564,9 @@ store.signIn("member@example.test");
       || ops.includes("Venue: <strong>Island ECC</strong>")
       || islandEccCard < parentCycleEnd) {
     throw new Error("Island ECC reconciliation should follow its parent HYROX card without redundant venue copy");
+  }
+  if (ops.includes("admin-hyrox-count-link") && !ops.includes("data-claims-anchor")) {
+    throw new Error("Only the parent cycle Payment claims tile should be a drill-down link");
   }
   if (!ops.toLowerCase().includes("duty"))
     throw new Error("ops should include the duty card");
@@ -4424,7 +4470,12 @@ console.log("ok  reset");
   const lockedSchedule = views.viewSchedule();
   if ((lockedSchedule.match(new RegExp(`href=\\"#/hyrox/${cycle.id}\\"`, "g")) || []).length !== 1
       || !lockedSchedule.includes("ITC HYROX<br><span>BFT + Midtown Pool</span>")
-      || !lockedSchedule.includes("Sign up opens Monday at 6 PM HKT")
+      || !lockedSchedule.includes("<time>11 AM</time>")
+      || !lockedSchedule.includes("Midtown28 Fitness · 11 AM")
+      || !lockedSchedule.includes("BFT Causeway Bay · 11:15 AM")
+      || !lockedSchedule.includes("Opens Mon · 6 PM")
+      || lockedSchedule.includes("2 starts")
+      || lockedSchedule.indexOf("Midtown28 Fitness · 11 AM") > lockedSchedule.indexOf("BFT Causeway Bay · 11:15 AM")
       || lockedSchedule.includes(`href=\"#/activity/${cycle.bftSessionId}\"`)
       || lockedSchedule.includes(`href=\"#/activity/${cycle.midtownSessionId}\"`)
       || !lockedSchedule.includes("Quarry Bay")) {
@@ -4510,7 +4561,6 @@ console.log("ok  reset");
   if (!adminHtml.includes("<h2>ITC HYROX<br><span>Payment reconciliation</span></h2>")
       || !adminHtml.includes('<summary><h2>HYROX weekly booking setup</h2></summary>')
       || adminHtml.includes("BFT + Midtown parent cards are created automatically")
-      || !/admin-hyrox-count-link[\s\S]*?<strong>1<\/strong><span>Confirmed paid/.test(adminHtml)
       || !/admin-hyrox-count-link[\s\S]*?<strong>0<\/strong><span>Payment claims to review/.test(adminHtml)
       || !adminHtml.includes("form-cancel-hyrox-cycle")) {
     throw new Error("pooled Admin should show one authoritative cycle card with payment reconciliation");

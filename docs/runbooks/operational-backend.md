@@ -1,21 +1,26 @@
 # Operational Backend Deployment Runbook
 
-This runbook covers applying the shared HYROX operational backend
-migrations to the production Supabase project, verifying the result, and
-executing the Admin two-browser acceptance test before merging to
-`testing`.
+This runbook covers applying the shared-pool HYROX operational backend
+migrations to the disposable/staging or production Supabase project,
+verifying the result, and executing the Admin two-browser acceptance test
+before merging to `testing`. Live Supabase remains the source of truth;
+the local v19 engine is prototype parity only.
 
 ## What lives in Supabase
 
 From this branch onward, the Supabase project owns the full HYROX
 operational workflow:
 
-- `operational_activity_templates` — `hyrox` (BFT) and `hyrox-midtown`
-  recurring definitions.
+- `operational_activity_templates` — `hyrox-bft`, `hyrox-midtown`, and
+  `hyrox-quarry-bay` recurring definitions.
 - `operational_sessions` — one row per venue per scheduled Saturday.
 - `operational_bookings` — reservation, confirmation, payment approval,
   cancellation, and deferral records.
-- `operational_queue_entries` — waitlist and Midtown interest lists.
+- `operational_queue_entries` — legacy waitlist/interest lists.
+- `operational_hyrox_cycles` — one weekly 32-place BFT/Midtown pool with
+  HKT checkpoints and derived venue plan.
+- `operational_hyrox_queue_entries` — weekly waitlist and venue-switch
+  queues.
 - `operational_receipts` — payment-confirmation receipts with sequence
   numbers `ITC-YYYY-NNNN`.
 - `collector_assignments` — one row per Saturday.
@@ -30,32 +35,70 @@ All mutations are routed through `SECURITY DEFINER` RPCs:
   `set_operational_session_time`, `set_operational_venue_tbc`,
   `set_operational_notice`, `set_operational_midtown_open`,
   `finalize_operational_gym`, `set_collector_assignment`,
-  `update_collector_payout_profile`, `sweep_operational_deadlines`.
-- Both: `ensure_operational_sessions` (idempotent rolling window).
+  `update_collector_payout_profile`, `sweep_operational_deadlines`, plus
+  `schedule_hyrox_cycle`, `sweep_hyrox_cycle_deadlines`,
+  `finalize_hyrox_venue_plan`, `reject_hyrox_cycle_payment`,
+  `close_hyrox_venue_allocation`, and `cancel_hyrox_cycle`.
+- Pooled member RPCs: `reserve_hyrox_cycle`,
+  `join_hyrox_cycle_waitlist`, `leave_hyrox_cycle_queue`,
+  `select_hyrox_cycle_venue`, `join_hyrox_venue_switch_queue`, and
+  `leave_hyrox_venue_switch_queue`.
+- Both: `ensure_operational_sessions` (idempotent rolling window) and
+  `ensure_hyrox_cycles` (idempotent parent-cycle provisioning for clean future
+  BFT + Midtown Saturdays).
 
 ## Apply the migrations
 
-The deployment is intentionally manual. Apply the four operational
-migrations in this order, in the Supabase SQL Editor (or via `supabase db
-push` from a trusted workstation):
+The deployment is intentionally manual. First apply the repository’s
+pre-existing migrations through `20260902000001_hyrox_bft_quarry_bay.sql`.
+Then apply these five pooled-HYROX migrations in this exact order, in the
+Supabase SQL Editor (or via `supabase db push` from a trusted workstation):
 
-1. `20260808000001_operational_schema.sql` — tables, RLS, trigger, seed.
-2. `20260808000002_operational_member_rpcs.sql` — member RPCs.
-3. `20260808000003_operational_admin_rpcs.sql` — admin RPCs.
-4. `20260808000004_operational_realtime_seed.sql` — Realtime publication
-   and the 15 August 2026 seed.
+1. Apply the pre-existing operational migrations in filename order:
+   `20260808000001_operational_schema.sql`,
+   `20260808000002_operational_member_rpcs.sql`,
+   `20260808000003_operational_admin_rpcs.sql`, and
+   `20260808000004_operational_realtime_seed.sql`.
+2. Apply the later operational migrations in filename order, including
+   `20260902000001_hyrox_bft_quarry_bay.sql` and
+   `20260902000002_quarry_bay_island_ecc.sql` for the canonical BFT and
+   separate Quarry Bay session.
+3. Apply the pooled-HYROX migrations in this exact order:
+   `20260903000001_hyrox_cycle_schema.sql` — cycle/queue columns, RLS and
+   pooled constraints;
+   `20260903000002_hyrox_cycle_member_rpcs.sql` — pooled member actions;
+   `20260903000003_hyrox_cycle_reconciliation.sql` — payment checkpoints,
+   automatic allocation and receipts;
+   `20260903000004_hyrox_cycle_allocation.sql` — venue switches, closure
+   and cancellation carry-forward;
+   `20260904000001_hyrox_quarry_bay_capacity.sql` — Quarry Bay’s 30-place
+   capacity; and
+   `20260904000002_hyrox_cycle_auto_provision.sql` — automatic recurring
+   parent-cycle provisioning.
 
 Apply each migration on its own. Resolve any error before moving to the
 next migration. The verified `feature/shared-operations` branch uses
 `origin/testing` as its base; the same migrations must be applied to
 the same database that the App's anon key reaches.
 
+## Automatic recurring provisioning
+
+The app calls `ensure_operational_sessions` and `ensure_hyrox_cycles` during
+live boot. Clean future Saturdays receive a draft parent cycle automatically;
+the parent card is visible immediately and registration opens at Monday 6 PM
+HKT. No collector scheduling click is required.
+
+A week with active legacy BFT/Midtown bookings or queues is intentionally
+skipped. It remains on the legacy presentation until those records are resolved
+or explicitly migrated; this prevents orphaning member reservations.
+
 ## Post-deployment verification
 
 Run the following read-only checks in the SQL Editor to confirm a clean
 deployment. Compare the output of each query against the expected shape.
 
-Verify the seven operational tables exist with RLS enabled:
+Verify the operational tables exist with RLS enabled, including the two
+pooled HYROX tables:
 
 ```sql
 select c.relname, c.relrowsecurity
@@ -69,14 +112,16 @@ select c.relname, c.relrowsecurity
      'operational_queue_entries',
      'operational_receipts',
      'collector_assignments',
-     'collector_payout_profiles'
+     'collector_payout_profiles',
+     'operational_hyrox_cycles',
+     'operational_hyrox_queue_entries'
    )
  order by c.relname;
 ```
 
 Expected: every row has `relrowsecurity = true`.
 
-Verify the six operational tables are in the Realtime publication:
+Verify the operational live tables are in the Realtime publication:
 
 ```sql
 select tablename
@@ -89,12 +134,33 @@ select tablename
      'operational_queue_entries',
      'operational_receipts',
      'collector_assignments',
-     'collector_payout_profiles'
+     'collector_payout_profiles',
+     'operational_hyrox_cycles',
+     'operational_hyrox_queue_entries'
    )
  order by tablename;
 ```
 
-Expected: six rows.
+Expected: eight rows, including `operational_hyrox_cycles` and
+`operational_hyrox_queue_entries`.
+
+Verify the pooled RPCs are executable only through their intended role grants:
+
+```sql
+select routine_name, grantee, privilege_type
+  from information_schema.routine_privileges
+ where routine_schema = 'public'
+   and routine_name in (
+     'reserve_hyrox_cycle', 'join_hyrox_cycle_waitlist',
+     'finalize_hyrox_venue_plan', 'reject_hyrox_cycle_payment',
+     'select_hyrox_cycle_venue', 'join_hyrox_venue_switch_queue',
+     'cancel_hyrox_cycle'
+   )
+ order by routine_name, grantee;
+```
+
+Expected: only the documented authenticated role grants appear; internal
+locked helpers are not executable by `public`, `anon`, or `authenticated`.
 
 Verify the 15 August 2026 sessions are seeded as cancelled with the
 required reason:
@@ -102,7 +168,7 @@ required reason:
 ```sql
 select id, cancelled_source, cancelled_by, cancel_reason
   from public.operational_sessions
- where id in ('hyrox-2026-08-15', 'hyrox-midtown-2026-08-15');
+ where id in ('hyrox-bft-2026-08-15', 'hyrox-midtown-2026-08-15');
 ```
 
 Expected: both rows have `cancel_reason = 'HYROX race weekend'`,
@@ -116,15 +182,17 @@ select activity_id, venue, capacity, price_hkd
  order by activity_id;
 ```
 
-Expected: `hyrox` (BFT Causeway Bay, 20, 180) and `hyrox-midtown`
-(Midtown 28, 12, 180).
+Expected: `hyrox-bft` (BFT Causeway Bay, 20, 180), `hyrox-midtown`
+(Midtown28 Fitness, 12, 180), and `hyrox-quarry-bay` (10/F, Island ECC,
+Quarry Bay; Saturday 11:00; 60 minutes; capacity 30; HK$180; open by
+default; directions query `Island ECC, Quarry Bay, Hong Kong`).
 
 Confirm the rejected registrations, gym confirmation, and cancellation
 gates are enforced:
 
 ```sql
 -- Anonymous reservation must be rejected.
-select reserve_operational_session('hyrox-2026-08-22');
+select reserve_operational_session('hyrox-bft-2026-08-22');
 -- Error: "Authentication required."
 ```
 
@@ -174,14 +242,14 @@ two separate browsers signed in as different administrators.
 2. Navigate to **Schedule**. Both browsers show the 15 August 2026 row
    labelled `Session cancelled by ITC — HYROX race weekend`. The Midtown
    variant shows the same cancellation.
-3. Navigate to **Activity** for `hyrox-2026-08-15`. Both admins see the
+3. Navigate to **Activity** for `hyrox-bft-2026-08-15`. Both admins see the
    canonical cancellation banner; no `Reserve`, `Mark paid`,
    `Confirm received`, or `Mark confirmed with gym` controls appear.
 4. As **Admin A**, open the next active HYROX session (e.g. the
    following Saturday). As a member signed in on a third browser, tap
    **Reserve**, **Mark paid**, and notify Admin A.
 5. As **Admin A**, confirm the payment. Verify the booking moves to
-   `confirmed` and a receipt appears in **Admin → Payments / Ops**.
+   `confirmed` and a receipt appears in **Admin → HYROX**.
 6. **Admin B** sees the same confirmed status without reloading. The
    booking's snapshot is preserved.
 7. As **Admin A**, record the gym confirmation. **Admin B** sees the
@@ -191,7 +259,7 @@ two separate browsers signed in as different administrators.
    matches Admin A's view (Realtime refresh).
 9. As **Admin A**, cancel the session with a custom reason. **Admin B**
    sees the cancellation immediately; the receipts and bookings
-   disappear from the Payments / Ops queue.
+   disappear from the HYROX queue.
 10. Confirm a paid booking was deferred to the next available session
     and the corresponding queued notification appeared for the member.
 
@@ -204,21 +272,18 @@ If any of the above fail, do not merge. The likely causes are:
 
 ## Rollback
 
-Application rollback is safe: shipping the previous `testing` build
-restores the localStorage-only flow. The first live hydration of the
-shared cache writes `itc.live.operations.backend.v1 = "supabase"` into
-the browser's local storage; the rollback build does not read this
-marker, so the prototype returns to the local-only flow without
-mutating the new Supabase tables.
-
 Database migrations are forward-only. Do not attempt to drop the
-operational tables in production. If a schema fix is required, write a
-new migration that adjusts the table.
+operational or pooled HYROX tables in production. If a schema fix is
+required, write a new migration that adjusts the table. Before the first
+pooled reservation, a code rollback may return to the legacy child-session
+flow only if no pooled live data exists. After the first pooled reservation,
+rollback must remain pooled-booking compatible and must continue reading
+live Supabase; never fall back to local state.
 
 ## Pre-deployment checklist
 
-- [ ] Disposable database verifier passes.
-- [ ] All four ordered migrations applied to the production Supabase project.
+- [ ] Disposable database verifier passes on an explicitly acknowledged disposable database.
+- [ ] All four pooled migrations applied in order after the pre-existing operational migrations.
 - [ ] Post-deployment SQL checks executed and match the expected output.
 - [ ] 15 August 2026 sessions render with the canonical cancellation copy
       in two separate browsers.

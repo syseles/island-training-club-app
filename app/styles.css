@@ -676,6 +676,9 @@ a.profile-row:hover .pr-text strong { color: var(--accent); }
   color: inherit;
 }
 
+.hyrox-cycle-content { min-width: 0; }
+.hyrox-cycle-venues span { display: block; }
+
 .session-row time {
   font-size: 11px;
   font-weight: 900;
@@ -1096,6 +1099,7 @@ a.profile-row:hover .pr-text strong { color: var(--accent); }
 .applicant dd { margin: 0; color: var(--ink); }
 
 .approval-group .card + .card { margin-top: 10px; }
+.member-approvals { margin-top: 28px; }
 
 .applicant-awaiting {
   background: transparent;
@@ -1756,6 +1760,26 @@ section.hyrox-admin-cycle + .hyrox-island-ecc-card { margin-top: 12px; }
 .hyrox-threshold-rule strong { white-space: nowrap; }
 .hyrox-pool-card .banner { margin: 0; }
 @media (max-width: 600px) {
+  .session-row.hyrox-cycle-row {
+    grid-template-columns: 44px minmax(0, 1fr);
+    align-items: start;
+    gap: 7px 10px;
+    padding: 16px 4px;
+  }
+  .hyrox-cycle-row > time {
+    grid-column: 1;
+    grid-row: 1 / span 2;
+    padding-top: 2px;
+  }
+  .hyrox-cycle-row .hyrox-cycle-content { grid-column: 2; }
+  .hyrox-cycle-row .row-end {
+    grid-column: 2;
+    align-items: flex-start;
+    justify-self: start;
+    text-align: left;
+  }
+  .hyrox-cycle-row h3 { line-height: 1.25; white-space: normal; }
+  .hyrox-cycle-row p { line-height: 1.4; }
   .hyrox-venue-options { grid-template-columns: 1fr; }
   .hyrox-threshold-rule { grid-template-columns: 1fr; gap: 3px; }
   .hyrox-pool-card { padding: 0 4px; }

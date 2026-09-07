@@ -53,8 +53,8 @@ export const SEED_ACTIVITIES = [
     weekday: 2, // Tuesday
     time: "19:30",
     durationMin: 90,
-    location: "Victoria Park",
-    mapsQuery: "Victoria Park, Hong Kong",
+    location: "TBC",
+    mapsQuery: "",
     photo: PH + "water.webp",
     blurb:
       "Community water session — skills, games and a good workout. Kit is provided, just bring a towel.",
@@ -69,8 +69,8 @@ export const SEED_ACTIVITIES = [
     weekday: 6, // Saturday
     time: "11:00",
     durationMin: 75,
-    location: "Midtown 28",
-    mapsQuery: "Midtown 28, Hong Kong",
+    location: "Midtown28 Fitness",
+    mapsQuery: "Midtown28 Fitness, Hong Kong",
     photo: PH + "hyrox.webp",
     blurb:
       "Weekly hybrid race training: ski, sled, burpees and running intervals. Every session is purchased separately at one fixed price.",
@@ -80,7 +80,7 @@ export const SEED_ACTIVITIES = [
     published: true,
   },
   {
-    id: "hyrox",
+    id: "hyrox-bft",
     name: "ITC HYROX",
     kind: "paid",
     category: "HYROX",
@@ -95,6 +95,42 @@ export const SEED_ACTIVITIES = [
     memberNote: "Gym entry fee is included in the session price.",
     price: 180, // HKD
     capacity: 20,
+    published: true,
+  },
+  {
+    id: "hyrox-quarry-bay",
+    name: "ITC HYROX",
+    kind: "paid",
+    category: "HYROX",
+    weekday: 6, // Saturday
+    time: "11:00",
+    durationMin: 60,
+    location: "10/F, Island ECC, Quarry Bay",
+    mapsQuery: "Island ECC, Quarry Bay, Hong Kong",
+    photo: PH + "hyrox.webp",
+    blurb:
+      "Weekly hybrid race training: ski, sled, burpees and running intervals. Every session is purchased separately at one fixed price.",
+    memberNote: "Gym entry fee is included in the session price.",
+    price: 180, // HKD
+    capacity: 30,
+    published: true,
+  },
+  {
+    id: "lunch",
+    name: "Post-Training Lunch",
+    kind: "rsvp",
+    category: "Socials",
+    weekday: 6, // Saturday — follows the morning HYROX sessions
+    time: "12:45",
+    durationMin: 75,
+    location: "TBC",
+    mapsQuery: "", // venue set per week by admins (weekly venue override)
+    photo: PH + "community.webp",
+    blurb:
+      "The other half of Saturday: refuel together after training. Everyone pays their own bill — tap Count me in so the organizer can book a table.",
+    memberNote: "Venue is posted in the session note once the table is booked.",
+    price: 0,
+    capacity: null, // unlimited — the organizer books a table from the RSVP list
     published: true,
   },
 ];
@@ -176,6 +212,21 @@ const MONTH_NAMES = [
 
 function pad(n) {
   return String(n).padStart(2, "0");
+}
+
+const HKT_OFFSET_MS = 8 * 60 * 60 * 1000;
+
+export function todayHktISO(now = Date.now()) {
+  const instant = now instanceof Date ? now.getTime() : Number(now);
+  return new Date(instant + HKT_OFFSET_MS).toISOString().slice(0, 10);
+}
+
+export function hktEventStartMs(dateISO, time) {
+  const wallTime = String(time || "").trim();
+  const normalizedTime = /^\d{2}:\d{2}$/.test(wallTime)
+    ? `${wallTime}:00`
+    : wallTime;
+  return Date.parse(`${dateISO}T${normalizedTime}+08:00`);
 }
 
 export function todayLocal() {
@@ -316,10 +367,7 @@ export function sessionsInRange(activities, fromDate, days) {
 // check would keep this morning's session "upcoming" (and bookable) all day.
 // Works for live sessions and booking snapshots (both carry dateISO + time).
 export function sessionStarted(s) {
-  const [h, m] = s.time.split(":").map(Number);
-  const start = parseISO(s.dateISO);
-  start.setHours(h, m, 0, 0);
-  return start.getTime() <= Date.now();
+  return hktEventStartMs(s.dateISO, s.time) <= Date.now();
 }
 
 export function findSession(activities, sessionId) {
@@ -414,6 +462,7 @@ const NOTIFICATION_CATEGORIES = new Map([
   // specific role kinds were introduced.
   ["admin_role_changed", "role"],
   ["giving_campaign_published", "club"],
+  ["operational_session_venue_updated", "club"],
 ]);
 
 export function notificationCategory(kind) {
@@ -450,12 +499,30 @@ export function notificationHktTime(value) {
   return `${formatted.replace(/\b(am|pm)\b/i, (period) => period.toUpperCase())} HKT`;
 }
 
-export function notificationDestination(kind) {
-  const normalizedKind = notificationKind(kind);
-  if (normalizedKind === "admin_application_submitted") return "#/admin/approvals";
-  if (normalizedKind.startsWith("admin_")) return "#/admin/members";
-  if (normalizedKind === "giving_campaign_published") return "#/giving";
-  return "#/account";
+const NOTIFICATION_DESTINATIONS = new Map([
+  ["operational_booking_reserved", "#/account/payments"],
+  ["operational_rsvp_confirmed", "#/schedule"],
+  ["operational_payment_approved", "#/account/payments"],
+  ["operational_session_deferred", "#/account/payments"],
+  ["operational_session_cancelled_no_defer", "#/schedule"],
+  ["operational_payment_marked", "#/admin/payments"],
+  ["operational_gym_finalized", "#/admin/payments"],
+  ["operational_session_cancelled", "#/schedule"],
+  ["operational_session_venue_updated", "#/schedule"],
+  ["admin_application_submitted", "#/admin/approvals"],
+  ["admin_application_approved", "#/admin/members"],
+  ["admin_application_declined", "#/admin/members"],
+  ["admin_role_promoted", "#/admin/members"],
+  ["admin_role_demoted", "#/admin/members"],
+  ["admin_membership_revoked", "#/admin/members"],
+  ["admin_role_changed", "#/admin/members"],
+  ["giving_campaign_published", "#/giving"],
+  ["welcome", "#/account"],
+]);
+
+export function notificationDestination(kind, destination = null) {
+  if (typeof destination === "string" && destination.startsWith("#/")) return destination;
+  return NOTIFICATION_DESTINATIONS.get(notificationKind(kind)) || "#/account";
 }
 
 // --- Weekly encouragement verse ------------------------------------------

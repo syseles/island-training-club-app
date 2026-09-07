@@ -43,12 +43,16 @@ const applicationRows = new Map([
       guardian_name: null,
       guardian_phone: null,
       emergency_name: "Taylor Coach",
+      emergency_relationship: "Coach",
       emergency_phone: "+852 6777 8888",
       heard_source: "instagram",
       heard_detail: "Coach post",
       preferred_name: "Riley",
       photo_consent: true,
       waiver_accepted_at: "2026-08-05T01:00:00.000Z",
+      waiver_signature_text: "Riley Runner",
+      waiver_signed_at: "2026-08-05",
+      waiver_form_version: "v1",
       privacy_accepted_at: "2026-08-05T01:05:00.000Z",
       guidelines_accepted_at: "2026-08-05T01:10:00.000Z",
       submitted_at: "2026-08-05T01:15:00.000Z",
@@ -133,6 +137,11 @@ const declinedProfiles = [
     created_at: "2026-08-05T05:00:00.000Z",
   },
 ];
+function operationalRoleFor(profileId) {
+  if (profileId === profile.id) return profile.role;
+  return [...approvedProfiles, ...pendingProfiles, ...declinedProfiles]
+    .find((item) => item.id === profileId)?.role || null;
+}
 applicationRows.set("pending-submitted", {
   ...structuredClone(applicationRows.get(authUser.id)),
   profile_id: "pending-submitted",
@@ -162,19 +171,109 @@ let givingCampaignListError = null;
 let givingCampaignRows = [];
 let operationalRpcHandler = null;
 let operationalAuthSubOverride = null;
+let operationalVenueOverrideReadError = null;
+let operationalRsvpCountError = null;
+let operationalRsvpCountRowsOverride = null;
 const operationalRpcCalls = [];
+const operationalPayoutDirectReads = [];
+const operationalSessionQueries = [];
 const operationalSubscriptions = [];
+const fixtureMember = { id: "approved-member" };
 const operationalTableRows = {
   operational_sessions: [],
+  operational_hyrox_cycles: [{
+    id: "hyrox-pool-2099-01-03",
+    session_date: "2099-01-03",
+    bft_session_id: "hyrox-bft-2099-01-03",
+    midtown_session_id: "hyrox-midtown-2099-01-03",
+    registration_state: "open",
+    venue_plan: "pending",
+    registration_capacity: 32,
+    registration_opens_at: "2098-12-29T10:00:00.000Z",
+    payment_deadline_at: "2099-01-01T10:00:00.000Z",
+    holder_grace_deadline_at: "2099-01-01T11:00:00.000Z",
+    promoted_payment_deadline_at: "2099-01-01T12:00:00.000Z",
+    venue_choice_deadline_at: "2099-01-02T13:00:00.000Z",
+    capacity_warning_sent_at: null,
+    payment_reminder_sent_at: null,
+    holder_grace_started_at: null,
+    waitlist_promoted_at: null,
+    reconciliation_started_at: null,
+    opened_at: "2098-12-29T10:00:00.000Z",
+    plan_confirmed_at: null,
+    plan_confirmed_by: null,
+    plan_confirmed_source: null,
+    allocation_closed_at: null,
+    cancelled_at: null,
+    cancel_reason: null,
+  }],
+  operational_hyrox_queue_entries: [{
+    id: "hyrox-queue-1",
+    cycle_id: "hyrox-pool-2099-01-03",
+    profile_id: fixtureMember.id,
+    kind: "weekly_waitlist",
+    target_session_id: null,
+    venue_preference: "midtown",
+    fallback_acknowledged_at: "2098-12-29T10:01:00.000Z",
+    status: "active",
+    joined_at: "2098-12-29T10:02:00.000Z",
+    resolved_at: null,
+  }],
   operational_activity_templates: [
-    { activity_id: "hyrox", name: "ITC HYROX", venue: "BFT Causeway Bay", weekday: 6, start_time: "11:15:00", duration_minutes: 60, capacity: 20, price_hkd: 180, default_open: true, active: true },
-    { activity_id: "hyrox-midtown", name: "ITC HYROX", venue: "Midtown 28", weekday: 6, start_time: "11:00:00", duration_minutes: 60, capacity: 12, price_hkd: 180, default_open: false, active: true },
+    { activity_id: "hyrox-bft", name: "ITC HYROX", venue: "BFT Causeway Bay", weekday: 6, start_time: "11:15:00", duration_minutes: 60, capacity: 20, price_hkd: 180, default_open: true, active: true, category: "HYROX", maps_query: null, requires_rsvp: false },
+    { activity_id: "hyrox-midtown", name: "ITC HYROX", venue: "Midtown 28", weekday: 6, start_time: "11:00:00", duration_minutes: 60, capacity: 12, price_hkd: 180, default_open: false, active: true, category: "HYROX", maps_query: null, requires_rsvp: false },
+    { activity_id: "hyrox-quarry-bay", name: "ITC HYROX", venue: "10/F, Island ECC, Quarry Bay", weekday: 6, start_time: "11:00:00", duration_minutes: 60, capacity: 30, price_hkd: 180, default_open: true, active: true, category: "HYROX", maps_query: "Island ECC, Quarry Bay, Hong Kong", requires_rsvp: false },
+    { activity_id: "lunch", name: "Post-Training Lunch", venue: "TBC", weekday: 6, start_time: "12:45:00", duration_minutes: 75, capacity: null, price_hkd: 0, default_open: true, active: true, category: "Socials", maps_query: null, requires_rsvp: true },
   ],
-  operational_bookings: [],
+  operational_bookings: [{
+    id: "pooled-booking",
+    profile_id: fixtureMember.id,
+    session_id: null,
+    hyrox_cycle_id: "hyrox-pool-2099-01-03",
+    status: "reserved",
+    reserved_at: "2098-12-29T10:03:00.000Z",
+    pay_deadline_at: "2099-01-01T11:00:00.000Z",
+    payment_marked_at: null,
+    payment_method: null,
+    payment_reference: null,
+    paid_at: null,
+    confirmed_by: null,
+    deferred_from_booking_id: null,
+    deferred_to_booking_id: null,
+    venue_preference: "midtown",
+    fallback_acknowledged_at: "2098-12-29T10:03:00.000Z",
+    promoted_from_waitlist_at: null,
+    allocation_state: null,
+    allocation_source: null,
+    allocated_at: null,
+    allocation_snapshot: null,
+    payment_rejected_at: null,
+    payment_rejected_by: null,
+    payment_rejection_reason: null,
+    snapshot: {
+      name: "ITC HYROX",
+      booking_mode: "weekly_pool",
+      session_date: "2099-01-03",
+      price_hkd: 180,
+    },
+    created_at: "2098-12-29T10:03:00.000Z",
+    updated_at: "2098-12-29T10:03:00.000Z",
+  }],
   operational_queue_entries: [],
   operational_receipts: [],
   collector_assignments: [],
   collector_payout_profiles: [],
+  operational_session_venue_overrides: [{
+    session_id: "wnt-2026-08-26",
+    activity_id: "wnt",
+    location: "Tamar Park",
+    maps_query: "Tamar Park",
+    meeting_lat: 22.2825,
+    meeting_lng: 114.1659,
+    set_by: "live-admin",
+    set_at: "2026-08-05T02:00:00.000Z",
+    member_notified_at: "2026-08-05T02:00:00.000Z",
+  }],
 };
 let authStateChangeHandler = null;
 let authCallbackLocked = false;
@@ -184,6 +283,7 @@ let releaseOAuth = null;
 let signOutCalls = 0;
 let releaseSignOut = null;
 const deferredAuthTasks = [];
+const LIVE_TABLES_COUNT = 10;
 const fixedIso = "2026-08-05T02:00:00.000Z";
 const RealDate = Date;
 globalThis.Date = class extends RealDate {
@@ -201,6 +301,14 @@ globalThis.Date = class extends RealDate {
   }
 };
 
+let liveSession = {
+  access_token: "test-access-token",
+  token_type: "bearer",
+  expires_in: 3600,
+  expires_at: 9999999999,
+  refresh_token: "test-refresh-token",
+  user: authUser,
+};
 const fakeSupabase = {
   auth: {
     getSession: () => {
@@ -209,14 +317,7 @@ const fakeSupabase = {
       }
       return Promise.resolve({
         data: {
-          session: {
-            access_token: "test-access-token",
-            token_type: "bearer",
-            expires_in: 3600,
-            expires_at: 9999999999,
-            refresh_token: "test-refresh-token",
-            user: authUser,
-          },
+          session: liveSession,
         },
         error: null,
       });
@@ -440,18 +541,67 @@ const fakeSupabase = {
     }
     if (table in operationalTableRows) {
       const rows = operationalTableRows[table];
-      const thenable = () => Promise.resolve({ data: rows.slice(), error: null });
+      const sessionFilters = { since: null, ids: null };
+      const result = () => {
+        const error = table === "operational_session_venue_overrides"
+          ? operationalVenueOverrideReadError
+          : table === "operational_hyrox_queue_entries" && !liveSession
+            ? { message: "permission denied for table operational_hyrox_queue_entries" }
+            : null;
+        if (table === "operational_session_venue_overrides") {
+          operationalVenueOverrideReadError = null;
+        }
+        const role = operationalRoleFor(authUser.id);
+        let visibleRows = rows;
+        if (table === "operational_bookings"
+            && !["admin", "super_admin"].includes(role)) {
+          visibleRows = visibleRows.filter((row) => row.profile_id === authUser.id);
+        }
+        if (table === "operational_sessions") {
+          if (sessionFilters.since) {
+            visibleRows = visibleRows.filter((row) => row.session_date >= sessionFilters.since);
+          }
+          if (sessionFilters.ids) {
+            const ids = new Set(sessionFilters.ids);
+            visibleRows = visibleRows.filter((row) => ids.has(row.id));
+          }
+          operationalSessionQueries.push({ ...sessionFilters, ids: sessionFilters.ids?.slice() || null });
+        }
+        if (table === "collector_payout_profiles") {
+          visibleRows = ["admin", "super_admin"].includes(role)
+            ? visibleRows
+            : visibleRows.filter((row) => row.profile_id === authUser.id);
+          operationalPayoutDirectReads.push({
+            profileId: authUser.id,
+            profileIds: visibleRows.map((row) => row.profile_id),
+          });
+        }
+        return { data: error ? null : visibleRows.slice(), error };
+      };
+      const thenable = () => Promise.resolve(result());
       const chain = {
         order: thenable,
-        gte: () => chain,
+        gte(column, value) {
+          if (table !== "operational_sessions" || column !== "session_date") {
+            throw new Error("Only operational session date queries may use gte");
+          }
+          sessionFilters.since = value;
+          return chain;
+        },
         or: () => chain,
         eq: () => chain,
         neq: () => chain,
-        in: () => chain,
+        in(column, values) {
+          if (table !== "operational_sessions" || column !== "id") {
+            throw new Error("Only operational session ID queries may use in");
+          }
+          sessionFilters.ids = values;
+          return chain;
+        },
         is: () => chain,
         match: () => chain,
         then(resolve, reject) {
-          return Promise.resolve({ data: rows.slice(), error: null }).then(resolve, reject);
+          return Promise.resolve(result()).then(resolve, reject);
         },
       };
       return { select: () => chain };
@@ -466,7 +616,10 @@ const fakeSupabase = {
     const channel = {
       name,
       handlers: [],
-      on(_event, _filter, handler) { channel.handlers.push(handler); return channel; },
+      on(event, filter, handler) {
+        channel.handlers.push({ event, filter, handler });
+        return channel;
+      },
       subscribe() { operationalSubscriptions.push(channel); return channel; },
     };
     return channel;
@@ -487,19 +640,72 @@ globalThis.window = {
 // Seed operational fake tables with at least one upcoming paid session so
 // scheduled live-mode views can render.
 const today = new Date();
-const seededCancelled = new Set(["hyrox-2026-08-15", "hyrox-midtown-2026-08-15"]);
-for (let i = 0; i < 4; i++) {
-  const d = new Date(today.getTime() + (7 + i * 7) * 24 * 60 * 60 * 1000);
+const fixedHktTodayIso = "2026-08-05";
+const aug15Iso = "2026-08-15";
+const seededCancelled = new Set(["hyrox-bft-2026-08-15", "hyrox-midtown-2026-08-15"]);
+const normalWeeklyFixtureDates = [];
+const firstNormalSaturday = new RealDate(`${fixedHktTodayIso}T00:00:00.000Z`);
+const daysUntilNextSaturday = ((6 - firstNormalSaturday.getUTCDay() + 7) % 7) || 7;
+firstNormalSaturday.setUTCDate(firstNormalSaturday.getUTCDate() + daysUntilNextSaturday);
+for (let week = 0; normalWeeklyFixtureDates.length < 4; week += 1) {
+  const d = new RealDate(firstNormalSaturday);
+  d.setUTCDate(firstNormalSaturday.getUTCDate() + week * 7);
   const iso = d.toISOString().slice(0, 10);
+  if (iso === aug15Iso) continue;
+  normalWeeklyFixtureDates.push(iso);
   operationalTableRows.operational_sessions.push({
-    id: `hyrox-${iso}`,
-    activity_id: "hyrox",
+    id: `hyrox-bft-${iso}`,
+    activity_id: "hyrox-bft",
     session_date: iso,
     start_time: "11:15:00",
     duration_minutes: 60,
     venue: "BFT Causeway Bay",
     capacity: 20,
     price_hkd: 180,
+    is_open: true,
+    venue_tbc: false,
+    notice: null,
+    cancelled_at: null,
+    cancelled_by: null,
+    cancelled_source: null,
+    cancel_reason: null,
+    gym_confirmed_at: null,
+    gym_confirmed_by: null,
+    gym_note: null,
+    created_at: today.toISOString(),
+    updated_at: today.toISOString(),
+  });
+  operationalTableRows.operational_sessions.push({
+    id: `hyrox-quarry-bay-${iso}`,
+    activity_id: "hyrox-quarry-bay",
+    session_date: iso,
+    start_time: "11:00:00",
+    duration_minutes: 60,
+    venue: "10/F, Island ECC, Quarry Bay",
+    capacity: 30,
+    price_hkd: 180,
+    is_open: true,
+    venue_tbc: false,
+    notice: null,
+    cancelled_at: null,
+    cancelled_by: null,
+    cancelled_source: null,
+    cancel_reason: null,
+    gym_confirmed_at: null,
+    gym_confirmed_by: null,
+    gym_note: null,
+    created_at: today.toISOString(),
+    updated_at: today.toISOString(),
+  });
+  operationalTableRows.operational_sessions.push({
+    id: `lunch-${iso}`,
+    activity_id: "lunch",
+    session_date: iso,
+    start_time: "12:45:00",
+    duration_minutes: 75,
+    venue: "TBC",
+    capacity: null,
+    price_hkd: 0,
     is_open: true,
     venue_tbc: false,
     notice: null,
@@ -538,10 +744,9 @@ for (let i = 0; i < 4; i++) {
 }
 
 // Seed the 15 August 2026 cancelled sessions with system provenance.
-const aug15Iso = "2026-08-15";
 operationalTableRows.operational_sessions.push({
-  id: "hyrox-2026-08-15",
-  activity_id: "hyrox",
+  id: "hyrox-bft-2026-08-15",
+  activity_id: "hyrox-bft",
   session_date: aug15Iso,
   start_time: "11:15:00",
   duration_minutes: 60,
@@ -584,36 +789,254 @@ operationalTableRows.operational_sessions.push({
   updated_at: today.toISOString(),
 });
 
+assert.equal(normalWeeklyFixtureDates.length, 4, "live smoke needs four normal weekly fixtures");
+assert.ok(!normalWeeklyFixtureDates.includes(aug15Iso), "normal weekly fixtures must skip the cancelled race weekend");
+assert.ok(
+  normalWeeklyFixtureDates.every((iso) => new RealDate(`${iso}T00:00:00Z`).getUTCDay() === 6),
+  "normal weekly fixture dates must all be Saturdays",
+);
+const operationalSessionIds = operationalTableRows.operational_sessions.map((row) => row.id);
+assert.equal(
+  new Set(operationalSessionIds).size,
+  operationalSessionIds.length,
+  "live operational fixture IDs must be unique",
+);
+
+const seededRsvpLunchId = `lunch-${normalWeeklyFixtureDates[0]}`;
+const seededRsvpSnapshot = {
+  name: "Post-Training Lunch",
+  session_date: normalWeeklyFixtureDates[0],
+  start_time: "12:45:00",
+  venue: "TBC",
+  price_hkd: 0,
+};
+operationalTableRows.operational_bookings.push(
+  {
+    id: "rsvp-other-confirmed",
+    profile_id: "rsvp-other-member",
+    session_id: seededRsvpLunchId,
+    status: "confirmed",
+    reserved_at: fixedIso,
+    pay_deadline_at: fixedIso,
+    payment_marked_at: null,
+    payment_method: null,
+    payment_reference: null,
+    paid_at: fixedIso,
+    confirmed_by: null,
+    deferred_from_booking_id: null,
+    deferred_to_booking_id: null,
+    snapshot: structuredClone(seededRsvpSnapshot),
+    created_at: fixedIso,
+    updated_at: fixedIso,
+  },
+  ...["reserved", "cancelled", "deferred"].map((status) => ({
+    id: `rsvp-noise-${status}`,
+    profile_id: `rsvp-noise-member-${status}`,
+    session_id: seededRsvpLunchId,
+    status,
+    reserved_at: fixedIso,
+    pay_deadline_at: fixedIso,
+    payment_marked_at: null,
+    payment_method: null,
+    payment_reference: null,
+    paid_at: status === "deferred" ? fixedIso : null,
+    confirmed_by: null,
+    deferred_from_booking_id: null,
+    deferred_to_booking_id: null,
+    snapshot: structuredClone(seededRsvpSnapshot),
+    created_at: fixedIso,
+    updated_at: fixedIso,
+  })),
+);
+
 operationalRpcHandler = (name, args) => {
   operationalRpcCalls.push({ name, args: structuredClone(args) });
   const override = operationalAuthSubOverride;
   operationalAuthSubOverride = null;
   const now = new Date().toISOString();
   const actingProfile = override || authUser.id;
+  if (name === "get_assigned_collector_payout_profiles") {
+    const role = operationalRoleFor(actingProfile);
+    if (!["member", "admin", "super_admin"].includes(role)) {
+      return Promise.resolve({ data: null, error: { message: "Approved membership required." } });
+    }
+    const assignedIds = [...new Set(
+      operationalTableRows.collector_assignments.map((row) => row.collector_profile_id)
+    )];
+    const assignedPayouts = assignedIds.map((profileId) => {
+      const application = applicationRows.get(profileId);
+      const payout = operationalTableRows.collector_payout_profiles
+        .find((row) => row.profile_id === profileId);
+      const memberProfile = [...approvedProfiles, ...pendingProfiles, ...declinedProfiles]
+        .find((item) => item.id === profileId);
+      return {
+        profile_id: profileId,
+        payme_link: payout?.payme_link || null,
+        fps_phone: application?.mobile || null,
+        full_name: application?.profiles?.full_name || memberProfile?.full_name || null,
+        preferred_name: application?.preferred_name || null,
+      };
+    });
+    return Promise.resolve({ data: assignedPayouts, error: null });
+  }
+  if (name === "get_operational_rsvp_counts") {
+    if (operationalRsvpCountError) {
+      return Promise.resolve({ data: null, error: operationalRsvpCountError });
+    }
+    if (operationalRsvpCountRowsOverride !== null) {
+      return Promise.resolve({
+        data: structuredClone(operationalRsvpCountRowsOverride),
+        error: null,
+      });
+    }
+    const counts = new Map();
+    for (const booking of operationalTableRows.operational_bookings) {
+      if (booking.status !== "confirmed") continue;
+      const session = operationalTableRows.operational_sessions
+        .find((row) => row.id === booking.session_id);
+      const template = operationalTableRows.operational_activity_templates
+        .find((row) => row.activity_id === session?.activity_id);
+      if (!template?.requires_rsvp) continue;
+      counts.set(booking.session_id, (counts.get(booking.session_id) || 0) + 1);
+    }
+    return Promise.resolve({
+      data: [...counts].map(([session_id, going_count]) => ({ session_id, going_count })),
+      error: null,
+    });
+  }
+  if (name === "cancel_operational_session") {
+    const session = operationalTableRows.operational_sessions.find((row) => row.id === args.p_session_id);
+    if (!session) return Promise.resolve({ data: null, error: { message: "Session not found." } });
+    if (session.cancelled_at) return Promise.resolve({ data: null, error: { message: "Session is already cancelled." } });
+    session.cancelled_at = now;
+    session.cancelled_by = actingProfile;
+    session.cancelled_source = "admin";
+    session.cancel_reason = args.p_reason;
+    return Promise.resolve({ data: session, error: null });
+  }
+  if (name === "reopen_operational_rsvp") {
+    const session = operationalTableRows.operational_sessions.find((row) => row.id === args.p_session_id);
+    const template = operationalTableRows.operational_activity_templates
+      .find((row) => row.activity_id === session?.activity_id);
+    if (!session) return Promise.resolve({ data: null, error: { message: "Session not found." } });
+    if (!session.cancelled_at || !template?.requires_rsvp || Number(session.price_hkd) !== 0) {
+      return Promise.resolve({ data: null, error: { message: "Only cancelled RSVP events can be reopened." } });
+    }
+    session.cancelled_at = null;
+    session.cancelled_by = null;
+    session.cancelled_source = null;
+    session.cancel_reason = null;
+    return Promise.resolve({ data: session, error: null });
+  }
+  if (name === "create_operational_event") {
+    const activityId = `event-${operationalTableRows.operational_activity_templates.length + 1}`;
+    operationalTableRows.operational_activity_templates.push({
+      activity_id: activityId,
+      name: args.p_name,
+      venue: args.p_venue,
+      weekday: new Date(`${args.p_session_date}T00:00:00`).getDay(),
+      start_time: args.p_start_time,
+      duration_minutes: args.p_duration_minutes,
+      capacity: args.p_capacity,
+      price_hkd: args.p_price_hkd,
+      default_open: true,
+      active: false,
+      category: args.p_category || "Other",
+      maps_query: args.p_maps_query || null,
+      requires_rsvp: !!args.p_requires_rsvp,
+    });
+    const session = {
+      id: `${activityId}-${args.p_session_date}`,
+      activity_id: activityId,
+      session_date: args.p_session_date,
+      start_time: args.p_start_time,
+      duration_minutes: args.p_duration_minutes,
+      venue: args.p_venue,
+      capacity: args.p_capacity,
+      price_hkd: args.p_price_hkd,
+      is_open: true,
+      venue_tbc: false,
+      notice: null,
+      cancelled_at: null,
+      cancelled_by: null,
+      cancelled_source: null,
+      cancel_reason: null,
+      gym_confirmed_at: null,
+      gym_confirmed_by: null,
+      gym_note: null,
+      created_at: now,
+      updated_at: now,
+    };
+    operationalTableRows.operational_sessions.push(session);
+    return Promise.resolve({ data: session, error: null });
+  }
+  if (name === "delete_operational_event") {
+    const idx = operationalTableRows.operational_sessions.findIndex((s) => s.id === args.p_session_id);
+    const row = operationalTableRows.operational_sessions[idx];
+    if (!row) return Promise.resolve({ data: null, error: { message: "Session not found." } });
+    if (!row.activity_id.startsWith("event-")) {
+      return Promise.resolve({ data: null, error: { message: "Only one-off events can be deleted; cancel recurring sessions instead." } });
+    }
+    const hasBookings = operationalTableRows.operational_bookings.some(
+      (b) => b.session_id === args.p_session_id && ["reserved", "confirmed"].includes(b.status)
+    );
+    if (hasBookings) {
+      return Promise.resolve({ data: null, error: { message: "Event has active bookings — cancel the session instead." } });
+    }
+    operationalTableRows.operational_sessions.splice(idx, 1);
+    const tIdx = operationalTableRows.operational_activity_templates.findIndex((t) => t.activity_id === row.activity_id);
+    if (tIdx >= 0) operationalTableRows.operational_activity_templates.splice(tIdx, 1);
+    return Promise.resolve({ data: null, error: null });
+  }
   if (name === "reserve_operational_session") {
+    const sessionRow = operationalTableRows.operational_sessions.find((s) => s.id === args.p_session_id);
+    const templateRow = operationalTableRows.operational_activity_templates.find((t) => t.activity_id === sessionRow?.activity_id);
+    const isRsvp = sessionRow && Number(sessionRow.price_hkd) === 0 && templateRow?.requires_rsvp;
+    if (sessionRow && Number(sessionRow.price_hkd) === 0 && !isRsvp) {
+      return Promise.resolve({ data: null, error: { message: "Session does not require RSVP." } });
+    }
     const id = "b-" + (operationalTableRows.operational_bookings.length + 1);
     const booking = {
       id,
       profile_id: actingProfile,
       session_id: args.p_session_id,
-      status: "reserved",
+      status: isRsvp ? "confirmed" : "reserved",
       reserved_at: now,
       pay_deadline_at: now,
       payment_marked_at: null,
       payment_method: null,
       payment_reference: null,
-      paid_at: null,
+      paid_at: isRsvp ? now : null,
       confirmed_by: null,
-      snapshot: {
-        name: "ITC HYROX",
-        session_date: "2026-08-22",
-        start_time: "11:15:00",
-        venue: "BFT Causeway Bay",
-        price_hkd: 180,
-      },
+      snapshot: isRsvp && sessionRow
+        ? {
+          name: templateRow?.name || sessionRow.activity_id,
+          session_date: sessionRow.session_date,
+          start_time: sessionRow.start_time,
+          venue: sessionRow.venue,
+          price_hkd: 0,
+        }
+        : {
+          name: "ITC HYROX",
+          session_date: "2026-08-22",
+          start_time: "11:15:00",
+          venue: "BFT Causeway Bay",
+          price_hkd: 180,
+        },
     };
     operationalTableRows.operational_bookings.push(booking);
     return Promise.resolve({ data: booking, error: null });
+  }
+  if (name === "withdraw_operational_rsvp") {
+    const row = operationalTableRows.operational_bookings.find((b) => b.id === args.p_booking_id);
+    const sRow = operationalTableRows.operational_sessions.find((s) => s.id === row?.session_id);
+    const templateRow = operationalTableRows.operational_activity_templates.find((t) => t.activity_id === sRow?.activity_id);
+    if (!row || row.profile_id !== actingProfile || !sRow || Number(sRow.price_hkd) > 0
+        || !templateRow?.requires_rsvp || row.status !== "confirmed") {
+      return Promise.resolve({ data: null, error: { message: "Only your own confirmed RSVP can be withdrawn." } });
+    }
+    row.status = "cancelled";
+    return Promise.resolve({ data: row, error: null });
   }
   if (name === "mark_operational_payment") {
     const row = operationalTableRows.operational_bookings.find((b) => b.id === args.p_booking_id);
@@ -680,24 +1103,726 @@ operationalRpcHandler = (name, args) => {
     session.gym_note = args.p_note || null;
     return Promise.resolve({ data: session, error: null });
   }
+  if (name === "set_session_venue") {
+    const sessionId = args.p_session_id;
+    const activityId = String(sessionId || "").replace(/-\d{4}-\d{2}-\d{2}$/, "");
+    if (!["wnt", "run", "water", "lunch"].includes(activityId)) {
+      return Promise.resolve({ data: null, error: { message: "Activity venue is fixed." } });
+    }
+    const existing = operationalTableRows.operational_session_venue_overrides
+      .find((row) => row.session_id === sessionId);
+    const location = String(args.p_location || "").trim() || null;
+    const normalizedLocation = String(location || "").trim().toLowerCase().replace(/\s+/g, " ");
+    const acceptsPoint = activityId === "wnt"
+      && ["tamar park", "tamar park, admiralty"].includes(normalizedLocation);
+    const next = {
+      session_id: sessionId,
+      activity_id: activityId,
+      location,
+      maps_query: String(args.p_maps_query || "").trim() || null,
+      meeting_lat: acceptsPoint ? args.p_meeting_lat ?? null : null,
+      meeting_lng: acceptsPoint ? args.p_meeting_lng ?? null : null,
+      set_by: actingProfile,
+      set_at: now,
+      member_notified_at: existing?.member_notified_at || null,
+    };
+    if (args.p_was_tbc && !existing?.member_notified_at && next.location && next.maps_query) {
+      next.member_notified_at = now;
+    }
+    if (existing) Object.assign(existing, next);
+    else operationalTableRows.operational_session_venue_overrides.push(next);
+    return Promise.resolve({ data: next, error: null });
+  }
   return Promise.resolve({ data: null, error: null });
 };
 
 const store = await import("./js/store.js");
 const views = await import("./js/views.js");
+const data = await import("./js/data.js");
 const operations = await import("./js/operations.js");
+const todayISO = data.todayHktISO();
+assert.equal(todayISO, fixedHktTodayIso,
+  "fixed live smoke instant must resolve to the same HKT date in every host timezone");
+assert.equal(
+  data.hktEventStartMs("2026-08-05", "10:00:00"),
+  RealDate.parse(fixedIso),
+  "live event wall time must resolve as an HKT instant in every host timezone",
+);
 store.load();
+await operations.ensureLiveSessionWindow();
+assert.deepEqual(
+  operationalRpcCalls.find((call) => call.name === "ensure_hyrox_cycles")?.args,
+  { p_start_date: fixedHktTodayIso, p_weeks: 16 },
+  "live boot must automatically provision the bounded HYROX cycle window",
+);
 await store.hydrateLiveOperations();
+assert.equal(store.getHyroxCycle("hyrox-pool-2099-01-03")?.venuePlan, "pending");
+assert.equal(
+  store.hyroxCycleQueues("hyrox-pool-2099-01-03").weeklyWaitlist[0].userId,
+  fixtureMember.id,
+);
+assert.equal(store.getBooking("pooled-booking")?.venuePreference, "midtown");
+assert.equal(
+  operationalRpcCalls.filter((call) => call.name === "sweep_hyrox_cycle_deadlines").length,
+  1,
+  "initial live hydration must sweep HYROX deadlines",
+);
+const hyroxRpcCases = [
+  ["liveReserveHyroxCycle", "reserve_hyrox_cycle", ["hyrox-pool-2099-01-03", "midtown", true], {
+    p_cycle_id: "hyrox-pool-2099-01-03", p_preference: "midtown", p_fallback_acknowledged: true,
+  }],
+  ["liveJoinHyroxCycleWaitlist", "join_hyrox_cycle_waitlist", ["hyrox-pool-2099-01-03", "either", true], {
+    p_cycle_id: "hyrox-pool-2099-01-03", p_preference: "either", p_fallback_acknowledged: true,
+  }],
+  ["liveLeaveHyroxCycleQueue", "leave_hyrox_cycle_queue", ["hyrox-queue-1"], { p_entry_id: "hyrox-queue-1" }],
+  ["liveRejectHyroxPayment", "reject_hyrox_cycle_payment", ["pooled-booking", "Unreadable reference"], {
+    p_booking_id: "pooled-booking", p_reason: "Unreadable reference",
+  }],
+  ["liveScheduleHyroxCycle", "schedule_hyrox_cycle", ["hyrox-pool-2099-01-03"], {
+    p_cycle_id: "hyrox-pool-2099-01-03",
+  }],
+  ["liveSweepHyroxDeadlines", "sweep_hyrox_cycle_deadlines", [], {}],
+  ["liveFinalizeHyroxVenuePlan", "finalize_hyrox_venue_plan", ["hyrox-pool-2099-01-03"], {
+    p_cycle_id: "hyrox-pool-2099-01-03",
+  }],
+  ["liveSelectHyroxVenue", "select_hyrox_cycle_venue", ["pooled-booking", "hyrox-midtown-2099-01-03"], {
+    p_booking_id: "pooled-booking", p_target_session_id: "hyrox-midtown-2099-01-03",
+  }],
+  ["liveJoinHyroxVenueSwitchQueue", "join_hyrox_venue_switch_queue", ["pooled-booking", "hyrox-bft-2099-01-03"], {
+    p_booking_id: "pooled-booking", p_target_session_id: "hyrox-bft-2099-01-03",
+  }],
+  ["liveLeaveHyroxVenueSwitchQueue", "leave_hyrox_venue_switch_queue", ["hyrox-queue-1"], {
+    p_entry_id: "hyrox-queue-1",
+  }],
+  ["liveCloseHyroxVenueAllocation", "close_hyrox_venue_allocation", ["hyrox-pool-2099-01-03"], {
+    p_cycle_id: "hyrox-pool-2099-01-03",
+  }],
+  ["liveCancelHyroxCycle", "cancel_hyrox_cycle", ["hyrox-pool-2099-01-03", "Storm warning"], {
+    p_cycle_id: "hyrox-pool-2099-01-03", p_reason: "Storm warning",
+  }],
+];
+for (const [exportName, rpcName, args, expectedArgs] of hyroxRpcCases) {
+  assert.equal(typeof operations[exportName], "function", `${exportName} must be exported`);
+  await operations[exportName](...args);
+  const actualArgs = operationalRpcCalls.filter((call) => call.name === rpcName).at(-1)?.args;
+  if (rpcName === "sweep_hyrox_cycle_deadlines") {
+    assert.deepEqual(Object.keys(actualArgs || {}), ["p_now"]);
+    assert.match(actualArgs.p_now, /^\d{4}-\d{2}-\d{2}T/);
+  } else {
+    assert.deepEqual(actualArgs, expectedArgs,
+      `${exportName} must send the approved ${rpcName} payload`);
+  }
+}
+const successfulHyroxRpcHandler = operationalRpcHandler;
+operationalRpcHandler = (name, args) => {
+  if (name === "sweep_hyrox_cycle_deadlines") {
+    operationalRpcCalls.push({ name, args: structuredClone(args) });
+    return Promise.resolve({ data: null, error: { message: "HYROX sweep unavailable" } });
+  }
+  return successfulHyroxRpcHandler(name, args);
+};
+await assert.rejects(
+  () => store.hydrateLiveOperations({ force: true }),
+  /HYROX sweep unavailable/,
+  "HYROX sweep failures must surface instead of falling back to local state",
+);
+assert.equal(operations.operationalStateStatus().error, "HYROX sweep unavailable");
+operationalRpcHandler = successfulHyroxRpcHandler;
+await store.hydrateLiveOperations({ force: true });
+const pooledBookingBeforeReject = structuredClone(store.getBooking("pooled-booking"));
+const pooledCycleBeforeReject = structuredClone(store.getHyroxCycle("hyrox-pool-2099-01-03"));
+const pooledQueueBeforeReject = structuredClone(store.hyroxCycleQueues("hyrox-pool-2099-01-03"));
+operationalRpcHandler = (name, args) => {
+  if (name === "reserve_hyrox_cycle") {
+    operationalRpcCalls.push({ name, args: structuredClone(args) });
+    return Promise.resolve({ data: null, error: { message: "HYROX registration is closed." } });
+  }
+  return successfulHyroxRpcHandler(name, args);
+};
+await assert.rejects(
+  () => store.reserveHyroxCycle("approved-member", "hyrox-pool-2099-01-03", "midtown", true),
+  /HYROX registration is closed/,
+  "live pooled reserve failures must surface without local fallback",
+);
+assert.deepEqual(store.getBooking("pooled-booking"), pooledBookingBeforeReject);
+assert.deepEqual(store.getHyroxCycle("hyrox-pool-2099-01-03"), pooledCycleBeforeReject);
+assert.deepEqual(store.hyroxCycleQueues("hyrox-pool-2099-01-03"), pooledQueueBeforeReject);
+operationalRpcHandler = successfulHyroxRpcHandler;
+const sweepCountBeforeAnonymousHydration = operationalRpcCalls
+  .filter((call) => call.name === "sweep_hyrox_cycle_deadlines").length;
+liveSession = null;
+await store.hydrateLiveOperations({ force: true });
+assert.equal(
+  operationalRpcCalls.filter((call) => call.name === "sweep_hyrox_cycle_deadlines").length,
+  sweepCountBeforeAnonymousHydration,
+  "anonymous live hydration must not invoke the authenticated HYROX sweep",
+);
+assert.deepEqual(
+  store.hyroxCycleQueues("hyrox-pool-2099-01-03"),
+  { weeklyWaitlist: [], venueSwitches: [] },
+  "anonymous live hydration must omit private HYROX queues",
+);
+liveSession = {
+  access_token: "test-access-token", token_type: "bearer", expires_in: 3600,
+  expires_at: 9999999999, refresh_token: "test-refresh-token", user: authUser,
+};
+const initialRealtimeHandlers = operationalSubscriptions.flatMap((channel) => channel.handlers);
+assert.equal(
+  initialRealtimeHandlers.filter(({ filter }) => filter.table === "operational_hyrox_cycles").length,
+  1,
+  "live operations must subscribe to pooled HYROX cycles exactly once",
+);
+assert.equal(
+  initialRealtimeHandlers.filter(({ filter }) => filter.table === "operational_hyrox_queue_entries").length,
+  1,
+  "live operations must subscribe to pooled HYROX queues exactly once",
+);
+
+// Assigned collector payout enrichment is optional. Missing, forbidden, or
+// membership-gated RPCs must never hide the public operational schedule or
+// the Admin's paid-session controls.
+const successfulAssignedPayoutHandler = operationalRpcHandler;
+const assignedPayoutFailures = [
+  {
+    label: "function unavailable",
+    message: "Could not find the function public.get_assigned_collector_payout_profiles without parameters in the schema cache",
+  },
+  {
+    label: "permission denied",
+    message: "permission denied for function get_assigned_collector_payout_profiles",
+  },
+  { label: "membership required", message: "Approved membership required." },
+];
+for (const failure of assignedPayoutFailures) {
+  operationalRpcHandler = (name, args) => {
+    if (name === "get_assigned_collector_payout_profiles") {
+      operationalRpcCalls.push({ name, args: structuredClone(args) });
+      return Promise.resolve({ data: null, error: { message: failure.message } });
+    }
+    return successfulAssignedPayoutHandler(name, args);
+  };
+  const assignedCallsBeforeHydration = operationalRpcCalls
+    .filter((call) => call.name === "get_assigned_collector_payout_profiles").length;
+  await store.hydrateLiveOperations({ force: true });
+  assert.equal(
+    operationalRpcCalls.filter((call) => call.name === "get_assigned_collector_payout_profiles").length,
+    assignedCallsBeforeHydration + 1,
+    `${failure.label} test must exercise a forced assigned-payout hydration`
+  );
+  assert.ok(store.upcomingSessions(21).some((session) => session.kind === "paid"),
+    `${failure.label} payout enrichment must preserve paid sessions`);
+  assert.ok(store.upcomingSessions(21).some((session) => session.kind === "rsvp"),
+    `${failure.label} payout enrichment must preserve RSVP sessions`);
+  const status = operations.operationalStateStatus();
+  assert.equal(status.error, null, `${failure.label} must not become a core operations error`);
+  assert.equal(status.payoutError, failure.message,
+    `${failure.label} must report only payout degradation`);
+  assert.equal(status.rsvpCountError, null,
+    `${failure.label} payout degradation must not affect RSVP count hydration`);
+}
+
+operationalRpcHandler = successfulAssignedPayoutHandler;
+const originalAuthIdentity = structuredClone(authUser);
+const originalProfileIdentity = structuredClone(profile);
+for (const operationalIdentity of [
+  { label: "anonymous", id: "anonymous-profile", role: null },
+  { label: "pending", id: "pending-submitted", role: "pending" },
+  { label: "declined", id: "declined-member", role: "declined" },
+]) {
+  Object.assign(authUser, {
+    id: operationalIdentity.id,
+    email: `${operationalIdentity.label}@example.com`,
+  });
+  Object.assign(profile, {
+    id: operationalIdentity.id,
+    email: `${operationalIdentity.label}@example.com`,
+    role: operationalIdentity.role,
+  });
+  await store.hydrateLiveOperations({ force: true });
+  const status = operations.operationalStateStatus();
+  assert.equal(status.error, null,
+    `${operationalIdentity.label} payout gating must not become a core operations error`);
+  assert.equal(status.payoutError, "Approved membership required.",
+    `${operationalIdentity.label} must report payout-only membership degradation`);
+  assert.equal(status.rsvpCountError, null,
+    `${operationalIdentity.label} payout gating must not affect RSVP count hydration`);
+  assert.ok(store.upcomingSessions(21).some((session) => session.kind === "paid"),
+    `${operationalIdentity.label} public Schedule source must retain paid sessions`);
+  assert.ok(store.upcomingSessions(21).some((session) => session.kind === "rsvp"),
+    `${operationalIdentity.label} public Schedule source must retain RSVP sessions`);
+}
+Object.assign(authUser, originalAuthIdentity);
+Object.assign(profile, originalProfileIdentity);
+
+const assignedPayoutFixture = {
+  profile_id: "assigned-enrichment-collector",
+  payme_link: "https://payme.hsbc.com.hk/1/assigned-enrichment",
+  fps_phone: "+852 6888 8888",
+};
+const directPayoutFixture = {
+  profile_id: "approved-member",
+  payme_link: "https://payme.hsbc.com.hk/1/direct-member",
+  fps_phone: "+852 6111 1111",
+};
+applicationRows.set(assignedPayoutFixture.profile_id, {
+  profile_id: assignedPayoutFixture.profile_id,
+  mobile: assignedPayoutFixture.fps_phone,
+  preferred_name: "Jerry",
+  profiles: { full_name: "Jerry Chan" },
+});
+applicationRows.set(directPayoutFixture.profile_id, {
+  profile_id: directPayoutFixture.profile_id,
+  mobile: "+852 6222 2222",
+});
+const assignedCollectorSession = store.upcomingSessions(21)
+  .find((session) => session.kind === "paid" && !session.cancelled);
+assert.ok(assignedCollectorSession, "assigned collector identity coverage needs a paid session");
+operationalTableRows.collector_assignments.push(
+  {
+    week_start: assignedCollectorSession.dateISO,
+    collector_profile_id: assignedPayoutFixture.profile_id,
+    assigned_at: fixedIso,
+  },
+  {
+    week_start: "2026-08-15",
+    collector_profile_id: directPayoutFixture.profile_id,
+    assigned_at: fixedIso,
+  },
+);
+operationalTableRows.collector_payout_profiles.push(assignedPayoutFixture, directPayoutFixture);
+Object.assign(authUser, { id: "approved-member", email: "micah.member@example.com" });
+Object.assign(profile, {
+  id: "approved-member",
+  email: "micah.member@example.com",
+  role: "member",
+});
+await store.hydrateLiveOperations({ force: true });
+assert.equal(operations.operationalStateStatus().payoutError, null,
+  "successful payout enrichment must clear prior degradation");
+assert.equal(operations.operationalStateStatus().rsvpCountError, null,
+  "successful payout enrichment must coexist with RSVP count hydration");
+assert.deepEqual(operations.livePayoutFor("assigned-enrichment-collector"), {
+  profileId: "assigned-enrichment-collector",
+  paymeLink: "https://payme.hsbc.com.hk/1/assigned-enrichment",
+  fpsPhone: "+852 6888 8888",
+  fullName: "Jerry Chan",
+  preferredName: "Jerry",
+}, "assigned payout hydration must carry the narrow collector display identity");
+const assignedCollector = store.collectorFor(assignedCollectorSession.id);
+assert.equal(assignedCollector?.preferredName, "Jerry",
+  "member payment identity must resolve the assigned collector name without the Admin directory");
+assert.deepEqual(operations.livePayoutFor("approved-member"), {
+  profileId: "approved-member",
+  paymeLink: "https://payme.hsbc.com.hk/1/direct-member",
+  fpsPhone: "+852 6222 2222",
+  fullName: "Micah Member",
+}, "applications.mobile must override a stale direct RLS payout phone for an assigned collector");
+Object.assign(authUser, originalAuthIdentity);
+Object.assign(profile, originalProfileIdentity);
+operationalTableRows.collector_assignments = operationalTableRows.collector_assignments
+  .filter((row) => ![assignedPayoutFixture.profile_id, directPayoutFixture.profile_id]
+    .includes(row.collector_profile_id));
+operationalTableRows.collector_payout_profiles = operationalTableRows.collector_payout_profiles
+  .filter((row) => ![assignedPayoutFixture.profile_id, directPayoutFixture.profile_id].includes(row.profile_id));
+applicationRows.delete(assignedPayoutFixture.profile_id);
+applicationRows.delete(directPayoutFixture.profile_id);
+await store.hydrateLiveOperations({ force: true });
+console.log("ok  payout RPC degradation preserves sessions and successful enrichment recovers");
+
+// Both optional enrichments share one hydration without sharing failure state.
+// Exercise forced calls in each direction with an assigned collector hidden
+// from the member's direct payout query, then recover both channels. All fake
+// auth, RPC, aggregate, and table state is restored for later live fixtures.
+{
+  const successfulCombinedOperationalRpcHandler = operationalRpcHandler;
+  const combinedLunch = store.upcomingSessions(21).find((session) => session.kind === "rsvp");
+  const combinedAssignedId = "combined-assigned-collector";
+  const combinedAssignedPayout = {
+    profile_id: combinedAssignedId,
+    payme_link: "https://payme.hsbc.com.hk/1/combined-assigned",
+    fps_phone: "+852 6999 0000",
+  };
+  assert.ok(combinedLunch, "combined hydration requires a live RSVP lunch");
+  operationalTableRows.collector_assignments.push({
+    week_start: combinedLunch.dateISO,
+    collector_profile_id: combinedAssignedId,
+    assigned_by: "approved-admin",
+    assigned_at: fixedIso,
+  });
+  operationalTableRows.collector_payout_profiles.push(combinedAssignedPayout);
+  applicationRows.set(combinedAssignedId, {
+    profile_id: combinedAssignedId,
+    mobile: combinedAssignedPayout.fps_phone,
+  });
+
+  const combinedOriginalAuthIdentity = structuredClone(authUser);
+  const combinedOriginalProfileIdentity = structuredClone(profile);
+  const optionalRpcCallCount = (name) => operationalRpcCalls
+    .filter((call) => call.name === name).length;
+  const forceCombinedHydration = async (label) => {
+    const payoutCallsBefore = optionalRpcCallCount("get_assigned_collector_payout_profiles");
+    const countCallsBefore = optionalRpcCallCount("get_operational_rsvp_counts");
+    await store.hydrateLiveOperations({ force: true });
+    assert.equal(
+      optionalRpcCallCount("get_assigned_collector_payout_profiles"),
+      payoutCallsBefore + 1,
+      `${label} must force assigned-payout hydration`,
+    );
+    assert.equal(
+      optionalRpcCallCount("get_operational_rsvp_counts"),
+      countCallsBefore + 1,
+      `${label} must force RSVP-count hydration`,
+    );
+  };
+
+  try {
+    Object.assign(authUser, { id: "approved-member", email: "micah.member@example.com" });
+    Object.assign(profile, {
+      id: "approved-member",
+      email: "micah.member@example.com",
+      role: "member",
+    });
+
+    operationalRsvpCountRowsOverride = [{ session_id: combinedLunch.id, going_count: 4 }];
+    operationalRpcHandler = (name, args) => {
+      if (name === "get_assigned_collector_payout_profiles") {
+        operationalRpcCalls.push({ name, args: structuredClone(args) });
+        return Promise.resolve({
+          data: null,
+          error: { message: "assigned payout unavailable" },
+        });
+      }
+      return successfulCombinedOperationalRpcHandler(name, args);
+    };
+    await forceCombinedHydration("combined payout failure");
+    assert.equal(operations.operationalStateStatus().error, null);
+    assert.equal(operations.operationalStateStatus().payoutError, "assigned payout unavailable");
+    assert.equal(operations.operationalStateStatus().rsvpCountError, null);
+    assert.equal(store.attendeeCountFor(combinedLunch), 4,
+      "successful RSVP counts must survive assigned-payout degradation");
+    assert.equal(operations.livePayoutFor(combinedAssignedId), null,
+      "the member must not receive an assigned payout when its enrichment fails");
+    assert.ok(store.upcomingSessions(21).some((session) => session.kind === "paid"));
+    assert.ok(store.upcomingSessions(21).some((session) => session.kind === "rsvp"));
+
+    operationalRpcHandler = successfulCombinedOperationalRpcHandler;
+    operationalRsvpCountRowsOverride = null;
+    operationalRsvpCountError = { message: "RSVP count unavailable" };
+    await forceCombinedHydration("combined RSVP count failure");
+    assert.equal(operations.operationalStateStatus().error, null);
+    assert.equal(operations.operationalStateStatus().payoutError, null);
+    assert.equal(operations.operationalStateStatus().rsvpCountError, "RSVP count unavailable");
+    assert.deepEqual(operations.livePayoutFor(combinedAssignedId), {
+      profileId: combinedAssignedId,
+      paymeLink: "https://payme.hsbc.com.hk/1/combined-assigned",
+      fpsPhone: "+852 6999 0000",
+    }, "assigned payout hydration must survive RSVP-count degradation");
+    assert.ok(store.getSession(combinedLunch.id),
+      "RSVP-count degradation must preserve the core RSVP session");
+    assert.ok(store.upcomingSessions(21).some((session) => session.kind === "paid"),
+      "RSVP-count degradation must preserve core paid sessions");
+
+    operationalRsvpCountError = null;
+    await forceCombinedHydration("combined enrichment recovery");
+    assert.equal(operations.operationalStateStatus().error, null);
+    assert.equal(operations.operationalStateStatus().payoutError, null);
+    assert.equal(operations.operationalStateStatus().rsvpCountError, null);
+    assert.equal(store.attendeeCountFor(combinedLunch), 1,
+      "recovered RSVP hydration must restore the fixture's one confirmed attendee");
+    assert.ok(operations.livePayoutFor(combinedAssignedId),
+      "recovered payout hydration must retain the assigned collector");
+    console.log("ok  optional payout and RSVP-count hydration fail independently and recover with core sessions");
+  } finally {
+    operationalRpcHandler = successfulCombinedOperationalRpcHandler;
+    operationalRsvpCountRowsOverride = null;
+    operationalRsvpCountError = null;
+    Object.assign(authUser, combinedOriginalAuthIdentity);
+    Object.assign(profile, combinedOriginalProfileIdentity);
+    operationalTableRows.collector_assignments = operationalTableRows.collector_assignments
+      .filter((row) => row.collector_profile_id !== combinedAssignedId);
+    operationalTableRows.collector_payout_profiles = operationalTableRows.collector_payout_profiles
+      .filter((row) => row.profile_id !== combinedAssignedId);
+    applicationRows.delete(combinedAssignedId);
+    await store.hydrateLiveOperations({ force: true });
+  }
+}
+
+// Live callers receive exactly their requested HKT calendar-day horizon. The
+// Social preview applies its additional rolling HKT start-time boundary.
+const horizonDay14Iso = "2026-08-18";
+const horizonDay15Iso = "2026-08-19";
+const temporaryHorizonRows = [
+  {
+    id: "hyrox-horizon-day-14",
+    activity_id: "hyrox-bft",
+    session_date: horizonDay14Iso,
+    start_time: "11:15:00",
+    duration_minutes: 60,
+    venue: "BFT Causeway Bay",
+    capacity: 20,
+    price_hkd: 180,
+    is_open: true,
+    venue_tbc: false,
+    notice: null,
+    cancelled_at: null,
+    cancelled_by: null,
+    cancelled_source: null,
+    cancel_reason: null,
+    gym_confirmed_at: null,
+    gym_confirmed_by: null,
+    gym_note: null,
+    created_at: fixedIso,
+    updated_at: fixedIso,
+  },
+  {
+    id: "hyrox-horizon-day-15",
+    activity_id: "hyrox-bft",
+    session_date: horizonDay15Iso,
+    start_time: "11:15:00",
+    duration_minutes: 60,
+    venue: "BFT Causeway Bay",
+    capacity: 20,
+    price_hkd: 180,
+    is_open: true,
+    venue_tbc: false,
+    notice: null,
+    cancelled_at: null,
+    cancelled_by: null,
+    cancelled_source: null,
+    cancel_reason: null,
+    gym_confirmed_at: null,
+    gym_confirmed_by: null,
+    gym_note: null,
+    created_at: fixedIso,
+    updated_at: fixedIso,
+  },
+  ...[
+    ["lunch-social-started", "09:59:00"],
+    ["lunch-social-future", "10:01:00"],
+  ].map(([id, startTime]) => ({
+    id,
+    activity_id: "lunch",
+    session_date: fixedHktTodayIso,
+    start_time: startTime,
+    duration_minutes: 30,
+    venue: "TBC",
+    capacity: null,
+    price_hkd: 0,
+    is_open: true,
+    venue_tbc: false,
+    notice: null,
+    cancelled_at: null,
+    cancelled_by: null,
+    cancelled_source: null,
+    cancel_reason: null,
+    gym_confirmed_at: null,
+    gym_confirmed_by: null,
+    gym_note: null,
+    created_at: fixedIso,
+    updated_at: fixedIso,
+  })),
+];
+operationalTableRows.operational_sessions.push(...temporaryHorizonRows);
+await operations.refreshOperationalState();
+const fourteenDayIds = store.upcomingSessions(14).map((session) => session.id);
+assert.ok(fourteenDayIds.includes("hyrox-horizon-day-14"),
+  "14-day live horizon must include its final calendar day");
+assert.ok(!fourteenDayIds.includes("hyrox-horizon-day-15"),
+  "14-day live horizon must exclude calendar day 15");
+assert.equal(store.nextSocialSession()?.id, "lunch-social-future",
+  "rolling Social preview must skip a same-day event whose start time passed");
+const temporaryHorizonIds = new Set(temporaryHorizonRows.map((row) => row.id));
+operationalTableRows.operational_sessions = operationalTableRows.operational_sessions
+  .filter((row) => !temporaryHorizonIds.has(row.id));
+await operations.refreshOperationalState();
+console.log("ok  live horizon is inclusive through day 14 and Socials use start time");
+
+const hydratedWntPoint = store.getSession("wnt-2026-08-26");
+assert.equal(hydratedWntPoint.meetingLat, 22.2825);
+assert.equal(hydratedWntPoint.meetingLng, 114.1659);
+const hydratedBft = store.upcomingSessions(21)
+  .find((session) => session.activityId === "hyrox-bft");
+const hydratedMidtown = store.upcomingSessions(21)
+  .find((session) => session.activityId === "hyrox-midtown");
+const hydratedQuarryBay = store.upcomingSessions(21)
+  .find((session) => session.activityId === "hyrox-quarry-bay");
+assert.ok(hydratedBft, "live BFT HYROX must use the canonical hyrox-bft id");
+assert.ok(hydratedQuarryBay, "live operations must hydrate the Quarry Bay HYROX session");
+assert.ok(
+  operationalTableRows.operational_sessions
+    .filter((row) => row.activity_id === "hyrox-quarry-bay")
+    .every((row) => row.capacity === 30),
+  "every live Quarry Bay HYROX session fixture must have capacity 30"
+);
+assert.deepEqual({
+  time: hydratedQuarryBay.time,
+  durationMin: hydratedQuarryBay.durationMin,
+  location: hydratedQuarryBay.location,
+  mapsQuery: hydratedQuarryBay.mapsQuery,
+  price: hydratedQuarryBay.price,
+  capacity: hydratedQuarryBay.capacity,
+  isOpen: hydratedQuarryBay.isOpen,
+}, {
+  time: "11:00",
+  durationMin: 60,
+  location: "10/F, Island ECC, Quarry Bay",
+  mapsQuery: "Island ECC, Quarry Bay, Hong Kong",
+  price: 180,
+  capacity: 30,
+  isOpen: true,
+});
+assert.equal(hydratedBft.photo, "../assets/itc/hyrox.webp");
+assert.equal(hydratedMidtown.photo, "../assets/itc/hyrox.webp");
+assert.equal(hydratedMidtown.location, "Midtown28 Fitness");
+assert.equal(hydratedMidtown.venue, "Midtown28 Fitness");
+assert.equal(hydratedMidtown.mapsQuery, "Midtown28 Fitness, Hong Kong");
+for (const html of [
+  views.viewActivity(hydratedBft.id),
+  views.viewActivity(hydratedMidtown.id),
+]) {
+  assert.match(html, /class="detail-photo" src="\.\.\/assets\/itc\/hyrox\.webp"/);
+}
+
+const customMidtownFixture = operationalTableRows.operational_sessions
+  .find((row) => row.id === hydratedMidtown.id);
+assert.ok(customMidtownFixture, "live smoke needs a Midtown fixture to mutate");
+customMidtownFixture.venue = "Custom Midtown Venue";
+try {
+  await operations.refreshOperationalState();
+  const customMidtown = store.upcomingSessions(21)
+    .find((session) => session.id === hydratedMidtown.id);
+  assert.equal(customMidtown.location, "Custom Midtown Venue");
+  assert.equal(customMidtown.venue, "Custom Midtown Venue");
+  assert.equal(customMidtown.mapsQuery, "Custom Midtown Venue");
+  assert.equal(customMidtown.photo, "../assets/itc/hyrox.webp");
+} finally {
+  customMidtownFixture.venue = "Midtown 28";
+  await operations.refreshOperationalState();
+}
 
 const appSource = readFileSync(resolve(__dirnameSmoke, "js/app.js"), "utf8");
 assert.match(appSource, /form\.dataset\.form === "apply"/);
+assert.match(appSource, /payload\.waiver = !!fd\.get\("waiver"\)/);
 assert.match(appSource, /await store\.saveMyApplication\(payload\)/);
+assert.match(appSource, /form\.dataset\.form === "membership-details"/);
+assert.match(appSource, /await store\.updateMyMembershipDetails\(/);
+assert.match(appSource, /await store\.acceptMyIndemnity\(\{/);
+assert.match(appSource, /const acceptButton = form\.querySelector\("\[data-doc-submit\]"\)/);
+assert.match(appSource, /acceptButton\.disabled/);
+assert.match(appSource, /signature:\s*fd\.get\("signature"\)/);
+assert.match(appSource, /signedAt:\s*fd\.get\("signedAt"\)/);
+assert.match(appSource, /emergencyRelationship:\s*fd\.get\("emergencyRelationship"\)/);
 assert.match(appSource, /t\.name !== "age_over_18"/);
 assert.match(appSource, /const APPLY_DRAFT_DEBOUNCE_MS = 500/);
 assert.match(appSource, /case "save-draft"/);
 assert.match(appSource, /case "discard-draft"/);
 assert.match(appSource, /store\.saveApplyDraft/);
 assert.match(appSource, /store\.clearApplyDraft/);
+
+await store.setWeekVenue("wnt-2026-08-05", {
+  location: "Central Harbourfront — 7pm sharp",
+  mapsQuery: "Central Harbourfront, Hong Kong",
+  wasTBC: true,
+});
+await operations.refreshOperationalState();
+const lastVenueCall = operationalRpcCalls
+  .filter((call) => call.name === "set_session_venue")
+  .at(-1);
+assert.equal(lastVenueCall.args.p_session_id, "wnt-2026-08-05");
+assert.equal(lastVenueCall.args.p_location, "Central Harbourfront — 7pm sharp");
+assert.equal(lastVenueCall.args.p_maps_query, "Central Harbourfront, Hong Kong");
+assert.equal(lastVenueCall.args.p_was_tbc, true);
+assert.equal(lastVenueCall.args.p_meeting_lat, null);
+assert.equal(lastVenueCall.args.p_meeting_lng, null);
+assert.equal(lastVenueCall.name, "set_session_venue");
+assert.deepEqual(operations.getLiveVenueOverride("wnt-2026-08-05"), {
+  sessionId: "wnt-2026-08-05",
+  activityId: "wnt",
+  location: "Central Harbourfront — 7pm sharp",
+  mapsQuery: "Central Harbourfront, Hong Kong",
+  meetingLat: null,
+  meetingLng: null,
+  setBy: authUser.id,
+  setAt: Date.parse(fixedIso),
+  memberNotifiedAt: Date.parse(fixedIso),
+});
+const realtimeHandlers = operationalSubscriptions
+  .flatMap((channel) => channel.handlers);
+assert.ok(
+  operationalSubscriptions.some((channel) =>
+    channel.handlers.length >= LIVE_TABLES_COUNT),
+  "Realtime channel should subscribe to every operational table"
+);
+assert.ok(operations.LIVE_TABLES.includes("collector_payout_profiles"),
+  "the payout table must remain part of the operational Realtime contract");
+assert.ok(realtimeHandlers.some(({ filter }) =>
+  filter.table === "collector_payout_profiles"),
+"the operational channel must retain assigned-payout refreshes");
+assert.ok(operations.LIVE_TABLES.includes("operational_rsvp_counts"),
+  "the count table must be part of the operational Realtime contract");
+assert.ok(realtimeHandlers.some(({ filter }) =>
+  filter.table === "operational_rsvp_counts"),
+"the operational channel must subscribe to identity-free RSVP count changes");
+assert.equal(operations.operationalStateStatus().loaded, true);
+
+// The mutation result is authoritative even when the best-effort full refresh
+// immediately after it fails. A rerender must see the just-saved override.
+const cacheFirstSessionId = "water-2026-08-11";
+operationalVenueOverrideReadError = { message: "simulated venue override refresh failure" };
+const refreshWarnings = [];
+const consoleWarnBeforeCacheTest = console.warn;
+console.warn = (...args) => refreshWarnings.push(args);
+await store.setWeekVenue(cacheFirstSessionId, {
+  location: "Victoria Park Swimming Pool",
+  mapsQuery: "Victoria Park Swimming Pool, Hong Kong",
+});
+console.warn = consoleWarnBeforeCacheTest;
+assert.ok(
+  refreshWarnings.some(([message]) => message === "operations refresh after rpc failed"),
+  "the live regression must exercise the failed best-effort refresh path"
+);
+assert.deepEqual(operations.getLiveVenueOverride(cacheFirstSessionId), {
+  sessionId: cacheFirstSessionId,
+  activityId: "water",
+  location: "Victoria Park Swimming Pool",
+  mapsQuery: "Victoria Park Swimming Pool, Hong Kong",
+  meetingLat: null,
+  meetingLng: null,
+  setBy: authUser.id,
+  setAt: Date.parse(fixedIso),
+  memberNotifiedAt: Date.parse(fixedIso),
+});
+const cacheFirstDecoratedSession = store.getSession(cacheFirstSessionId);
+assert.equal(cacheFirstDecoratedSession.location, "Victoria Park Swimming Pool");
+assert.equal(cacheFirstDecoratedSession.mapsQuery, "Victoria Park Swimming Pool, Hong Kong");
+await operations.refreshOperationalState();
+assert.equal(
+  operations.operationalStateStatus().error,
+  null,
+  "a one-shot refresh failure must not poison later operational refreshes"
+);
+console.log("ok  successful venue RPC updates live cache before a failed refresh");
+
+const partialLiveSessionId = "water-2026-08-18";
+await store.setWeekVenue(partialLiveSessionId, {
+  location: "",
+  mapsQuery: "Sun Yat Sen Pool, Hong Kong",
+});
+const partialLiveOverride = operations.getLiveVenueOverride(partialLiveSessionId);
+const partialLiveSession = store.getSession(partialLiveSessionId);
+assert.equal(partialLiveOverride.memberNotifiedAt, null);
+assert.equal(partialLiveSession.location, "TBC");
+assert.notEqual(partialLiveSession.venueTBC, false);
+await store.setWeekVenue(partialLiveSessionId, {
+  location: "Sun Yat Sen Memorial Park Swimming Pool",
+  mapsQuery: "Sun Yat Sen Pool, Hong Kong",
+});
+assert.equal(
+  operations.getLiveVenueOverride(partialLiveSessionId).memberNotifiedAt,
+  Date.parse(fixedIso),
+  "completing a live partial override must consume member dedupe only then"
+);
+console.log("ok  live partial venue remains TBC until both values confirm it");
 
 const signedOutHome = views.viewHome();
 assert.match(signedOutHome, /data-action="sign-in-google"[^>]*>Continue with Google</);
@@ -710,6 +1835,26 @@ assert.match(signedOutAccount, /data-action="sign-in-google"/);
 store.clearApplyDraft();
 
 await store.getCurrentUser();
+for (const failure of assignedPayoutFailures) {
+  operationalRpcHandler = (name, args) => {
+    if (name === "get_assigned_collector_payout_profiles") {
+      operationalRpcCalls.push({ name, args: structuredClone(args) });
+      return Promise.resolve({ data: null, error: { message: failure.message } });
+    }
+    return successfulAssignedPayoutHandler(name, args);
+  };
+  await store.hydrateLiveOperations({ force: true });
+  const activitiesHtml = await views.viewAdmin("activities");
+  assert.equal(typeof activitiesHtml, "string",
+    `${failure.label} must keep the Admin Activities route available`);
+  assert.ok(!activitiesHtml.includes("No upcoming paid sessions."),
+    `${failure.label} payout enrichment must preserve Admin paid controls`);
+}
+operationalRpcHandler = successfulAssignedPayoutHandler;
+await store.hydrateLiveOperations({ force: true });
+assert.equal(operations.operationalStateStatus().payoutError, null,
+  "successful Admin hydration must clear payout degradation");
+
 const originalProfileForApply = structuredClone(profile);
 const originalApplicationForApply = structuredClone(applicationRows.get(authUser.id));
 Object.assign(profile, { role: "pending" });
@@ -719,18 +1864,28 @@ const liveApplyHtml = await views.viewApply();
 assert.match(liveApplyHtml, /data-form="apply"/);
 assert.match(liveApplyHtml, /name="mobile"/);
 assert.match(liveApplyHtml, /name="age_over_18"/);
+for (const name of ["emergency_relationship", "waiver_signature_text", "waiver_signed_at"]) {
+  assert.match(liveApplyHtml, new RegExp(`name="${name}"`));
+}
 assert.match(liveApplyHtml, /name="waiver"/);
+assert.match(liveApplyHtml, /data-doc-accept="indemnity"/);
+assert.match(liveApplyHtml, /name="waiver"[^>]*disabled[^>]*data-doc-checkbox/);
+assert.match(liveApplyHtml, new RegExp(`name="waiver_signed_at"[^>]*value="${todayISO}"`));
+assert.match(liveApplyHtml, new RegExp(`name="waiver_signed_at"[^>]*max="${todayISO}"`));
 assert.doesNotMatch(liveApplyHtml, /name="email"/);
 
 store.saveApplyDraft({ fields: {
   mobile: "+852 6123 4567",
   age_over_18: "yes",
   emergency_name: "Taylor Coach",
+  emergency_relationship: "Coach",
   emergency_phone: "+852 6777 8888",
   heard_source: "friend",
   preferred_name: "Riley",
   photo_consent: true,
   waiver: true,
+  waiver_signature_text: "Riley Runner",
+  waiver_signed_at: "2026-08-05",
   privacy: true,
   guidelines: true,
 } });
@@ -738,21 +1893,39 @@ const draftApplyHtml = await views.viewApply();
 assert.match(draftApplyHtml, /data-draft-resume/);
 assert.match(draftApplyHtml, /value="\+852 6123 4567"/);
 assert.match(draftApplyHtml, /name="age_over_18" value="yes" checked/);
+assert.match(draftApplyHtml, /name="emergency_relationship" value="Coach"/);
+assert.match(draftApplyHtml, /name="waiver_signature_text" value="Riley Runner"/);
+assert.match(draftApplyHtml, /name="waiver_signed_at" value="2026-08-05"/);
 assert.match(draftApplyHtml, /data-action="save-draft"/);
 assert.match(draftApplyHtml, /data-action="discard-draft"/);
 
-await store.saveMyApplication({
+const liveApplyPayload = {
   mobile: "+852 6123 4567",
   age_over_18: "yes",
   guardian_name: "",
   guardian_phone: "",
   emergency_name: "Taylor Coach",
+  emergency_relationship: "Coach",
   emergency_phone: "+852 6777 8888",
   heard_source: "friend",
   heard_detail: "",
   preferred_name: "Riley",
   photo_consent: false,
-});
+  waiver: true,
+  waiver_signature_text: "Riley Runner",
+  waiver_signed_at: "2026-08-05",
+};
+for (const [label, overrides] of [
+  ["missing emergency name", { emergency_name: "" }],
+  ["missing emergency phone", { emergency_phone: "" }],
+]) {
+  await assert.rejects(
+    () => store.saveMyApplication({ ...liveApplyPayload, ...overrides }),
+    /Enter emergency contact name, relationship and phone/,
+    `${label} should be rejected during live application submit`
+  );
+}
+await store.saveMyApplication(liveApplyPayload);
 assert.equal(store.getApplyDraft(), null, "successful live submit must clear its draft");
 
 Object.assign(profile, originalProfileForApply);
@@ -775,6 +1948,15 @@ assert.ok(approvalsHtml.indexOf("Submitted Runner") < approvalsHtml.indexOf("Inc
 if (!approvalsHtml.includes("Application not submitted")) {
   throw new Error("Approvals must explain incomplete pending profiles");
 }
+assert.match(approvalsHtml, /<dt>Indemnity<\/dt><dd>Accepted<\/dd>/);
+const submittedApplication = structuredClone(applicationRows.get("pending-submitted"));
+applicationRows.set("pending-submitted", {
+  ...submittedApplication,
+  emergency_phone: "",
+});
+const reviewRequiredHtml = await views.viewAdmin("approvals");
+assert.match(reviewRequiredHtml, /<dt>Indemnity<\/dt><dd>Review required<\/dd>/);
+applicationRows.set("pending-submitted", submittedApplication);
 const submittedProfile = pendingProfiles.find((item) => item.id === "pending-submitted");
 const incompleteProfile = pendingProfiles.find((item) => item.id === "pending-incomplete");
 submittedProfile.role = "member";
@@ -800,6 +1982,48 @@ for (const action of ["approve", "decline"]) {
   assert.doesNotMatch(decisionButton("pending-submitted", action), /\sdisabled(?:\s|>)/,
     `Submitted ${action} must be enabled`);
 }
+const liveActivitiesHtml = await views.viewAdmin("activities");
+assert.equal((liveActivitiesHtml.match(/>Weekly Event Controls</g) || []).length, 1,
+  "Live Admin Activities must render exactly one Weekly Event Controls section");
+assert.match(liveActivitiesHtml, /Free &amp; RSVP Events/);
+assert.match(liveActivitiesHtml, /Paid Sessions/);
+assert.doesNotMatch(liveActivitiesHtml, />Weekly Venue Overrides<|>Weekly Session Overrides</);
+const liveWeeklyControlsStart = liveActivitiesHtml.indexOf(">Weekly Event Controls<");
+const liveOneOffEventsStart = liveActivitiesHtml.indexOf(">One-off Events<");
+const liveWeeklyControlsHtml = liveWeeklyControlsStart === -1 || liveOneOffEventsStart === -1
+  ? ""
+  : liveActivitiesHtml.slice(liveWeeklyControlsStart, liveOneOffEventsStart);
+for (const marker of [
+  'data-action="form-week-venue"',
+  'data-action="reset-week-venue"',
+  "Cancel this week's event",
+  'id="form-session-time"',
+  'id="form-session-notice"',
+  'data-action="venue-tbc-toggle"',
+  'id="form-cancel-week"',
+]) {
+  assert.ok(liveWeeklyControlsHtml.includes(marker),
+    `Live Weekly Event Controls must preserve ${marker}`);
+}
+assert.match(liveWeeklyControlsHtml, /\d+ going/,
+  "Live Weekly Event Controls must preserve the RSVP count");
+assert.ok(liveWeeklyControlsStart < liveOneOffEventsStart,
+  "Live One-off Events must follow Weekly Event Controls");
+assert.match(liveActivitiesHtml,
+  /aria-labelledby="paid-sessions-title">[\s\S]*<\/section>\s*<\/details>\s*<details class="admin-section mt24">\s*<summary><h2>One-off Events<\/h2>/,
+  "Live One-off Events must remain outside Weekly Event Controls");
+assert.match(liveActivitiesHtml, /Weekly Event Controls &gt; Free &amp; RSVP Events/);
+assert.doesNotMatch(liveActivitiesHtml, /BFT Causeway Bay \(BFT\)|Midtown28 Fitness \(Midtown\)/,
+  "Live Admin Activities must not append redundant HYROX venue suffixes");
+assert.doesNotMatch(liveActivitiesHtml, /confirmed in-app|awaiting payment|Not open/,
+  "Live Admin Activities must not carry HYROX booking/payment status");
+const livePaymentsHtml = await views.viewAdmin("payments");
+assert.match(livePaymentsHtml, /Payment reconciliation|HYROX booking &amp; payment/,
+  "Live Admin Payments must carry HYROX payment controls");
+const liveActivityEditorHtml = views.viewAdminActivity("wnt");
+assert.match(liveActivityEditorHtml, /Weekly Event Controls &gt; Free &amp; RSVP Events/);
+console.log("ok  live Admin Activities groups dated controls without changing form contracts");
+
 const membersHtml = await views.viewAdmin("members");
 assert.doesNotMatch(membersHtml, /member-summary|Member status counts|data-change="member-(?:status|role)-filter"/);
 for (const [key, options] of Object.entries({
@@ -935,6 +2159,14 @@ const categoryRows = [
     read_at: null,
   },
   {
+    id: "notification-role-unread",
+    kind: "admin_role_promoted",
+    title: "Member promoted",
+    body: "A member became an administrator.",
+    created_at: "2026-08-05T06:33:30.000Z",
+    read_at: null,
+  },
+  {
     id: "notification-club",
     kind: "giving_campaign_published",
     title: "Giving campaign published",
@@ -949,10 +2181,67 @@ for (const badge of ["Application", "Decision", "Role change", "Club update", "M
   assert.match(categoryNotificationsHtml, new RegExp(`class="notification-kind-badge">${badge}<`));
 }
 assert.match(categoryNotificationsHtml, /Giving campaign published[\s\S]*?data-destination="#\/giving"|data-destination="#\/giving"[\s\S]*?Giving campaign published/);
+const semanticFallbackRows = [
+  {
+    id: "notification-booking-reserved",
+    kind: "operational_booking_reserved",
+    title: "Booking reserved",
+    body: "Complete payment for your reservation.",
+    created_at: "2026-08-05T06:38:00.000Z",
+    read_at: null,
+  },
+  {
+    id: "notification-rsvp-confirmed",
+    kind: "operational_rsvp_confirmed",
+    title: "You're in",
+    body: "See you at lunch.",
+    created_at: "2026-08-05T06:37:30.000Z",
+    read_at: null,
+  },
+  {
+    id: "notification-payment-marked",
+    kind: "operational_payment_marked",
+    title: "Payment marked",
+    body: "Review the member payment.",
+    created_at: "2026-08-05T06:37:00.000Z",
+    read_at: null,
+  },
+  {
+    id: "notification-session-cancelled",
+    kind: "operational_session_cancelled_no_defer",
+    title: "Session cancelled without deferral",
+    body: "Review the schedule.",
+    created_at: "2026-08-05T06:36:00.000Z",
+    read_at: null,
+  },
+  {
+    id: "notification-rsvp-cancelled",
+    kind: "operational_session_cancelled_no_defer",
+    title: "RSVP session cancelled",
+    body: "Session cancelled by ITC — Lunch venue unavailable.",
+    destination: "#/activity/lunch-2026-08-08",
+    created_at: "2026-08-05T06:35:30.000Z",
+    read_at: null,
+  },
+];
+const semanticFallbackHtml = await views.viewNotifications(notificationNow, semanticFallbackRows);
+const semanticFallbackButtons = semanticFallbackHtml.match(/<button class="notification-row[\s\S]*?<\/button>/g) || [];
+for (const [title, destination] of [
+  ["Booking reserved", "#/account/payments"],
+  ["You&#39;re in", "#/schedule"],
+  ["Payment marked", "#/admin/payments"],
+  ["Session cancelled without deferral", "#/schedule"],
+  ["RSVP session cancelled", "#/activity/lunch-2026-08-08"],
+]) {
+  const button = semanticFallbackButtons.find((row) => row.includes(`<strong>${title}</strong>`));
+  assert.ok(button, `${title} must render as a notification row`);
+  assert.match(button, new RegExp(`data-destination="${destination}"`),
+    `${title} must render its semantic section fallback without an explicit destination`);
+}
 const categoryFilterCases = [
   ["application", "Application &lt;submitted&gt;"],
   ["decision", "Application approved"],
-  ["role", "Role changed"],
+  ["role", "Member promoted"],
   ["club", "Giving campaign published"],
 ];
 for (const [kind, expectedTitle] of categoryFilterCases) {
@@ -976,28 +2265,32 @@ assert.doesNotMatch(adminNotificationsHtml, /<h2[^>]*>Club operations<\/h2>|<h2[
 assert.equal((adminNotificationsHtml.match(/class="notification-list"/g) || []).length, 1,
   "Notifications must render one chronological list");
 assert.ok(adminNotificationsHtml.indexOf("Application &lt;submitted&gt;") < adminNotificationsHtml.indexOf("Welcome to ITC"));
-assert.ok(adminNotificationsHtml.indexOf("Welcome to ITC") < adminNotificationsHtml.indexOf("Role changed"));
 assert.doesNotMatch(adminNotificationsHtml, /Application <submitted>|Riley & approve/,
   "Notification content must be HTML escaped");
+assert.doesNotMatch(adminNotificationsHtml, /Role changed|Imported notification/,
+  "Read notification history must not render in the notification window");
 const notificationButtons = adminNotificationsHtml.match(/<button class="notification-row[\s\S]*?<\/button>/g) || [];
-assert.equal(notificationButtons.length, 4, "Every valid or malformed notification row must remain visible");
+assert.equal(notificationButtons.length, 2, "Only unread notification rows must remain visible");
 for (const button of notificationButtons) {
-  assert.match(button, /<span class="notification-unread"/,
-    "Read and unread rows must have the same grid indicator structure");
+  assert.match(button, /class="notification-row unread"[^>]*type="button"/,
+    "Every rendered notification row must be unread");
   assert.match(button, /class="notification-kind-badge"/,
     "Every notification row must show its category badge");
+  assert.match(button, /class="notification-unread" aria-label="Unread"/);
+  assert.doesNotMatch(button, /data-notification-read="true"/);
 }
-assert.match(adminNotificationsHtml, /class="notification-row unread"[^>]*type="button"/);
-assert.match(adminNotificationsHtml, /class="notification-row"[^>]*[\s\S]*?class="notification-unread" aria-hidden="true"/,
-  "Read rows must retain a hidden indicator placeholder");
-assert.match(adminNotificationsHtml, /class="notification-unread" aria-label="Unread"/);
 assert.match(adminNotificationsHtml, /5 minutes ago/);
 assert.match(adminNotificationsHtml, /5 Aug 2026, 2:32 PM HKT/);
-assert.match(adminNotificationsHtml, /Imported notification[\s\S]*?Time unavailable/,
-  "Malformed metadata must fall back without dropping the row");
 assert.doesNotMatch(adminNotificationsHtml, /Invalid Date|NaN/);
 assert.match(adminNotificationsHtml, /data-destination="#\/admin\/approvals"/);
 assert.match(adminNotificationsHtml, /data-destination="#\/account"/);
+const allReadNotificationsHtml = await views.viewNotifications(
+  notificationNow,
+  notificationRows.filter((row) => row.read_at)
+);
+assert.match(allReadNotificationsHtml, /No any notifications\./,
+  "An inbox containing only audited read rows must render the unread empty state");
+assert.doesNotMatch(allReadNotificationsHtml, /class="notification-row/);
 renderedUser.role = "member";
 views.notificationFilters.kind = "all";
 const memberNotificationsHtml = await views.viewNotifications(notificationNow);
@@ -1048,14 +2341,27 @@ const indemnity = await views.viewAccount("indemnity");
 if (!indemnity.includes(`Indemnity confirmed on ${confirmedDay}`) || indemnity.includes("To be accepted")) {
   throw new Error("Indemnity page should reflect the live application waiver acceptance date");
 }
+for (const marker of [
+  "Signed by",
+  "Riley Runner",
+  "Date of signing",
+  "Emergency contact relationship",
+  "Coach",
+  "Document version",
+  "v1",
+]) {
+  if (!indemnity.includes(marker)) {
+    throw new Error(`Current live indemnity page missing ${marker}`);
+  }
+}
 store.currentUser().role = "pending";
 store.currentUser().status = "pending";
 const pendingAccount = await views.viewAccount();
 if (!pendingAccount.includes("+852 6123 4567")) {
   throw new Error("Pending Profile should render the fetched application phone");
 }
-if (!pendingAccount.includes("Taylor Coach · +852 6777 8888")) {
-  throw new Error("Pending Profile should render the fetched application emergency contact");
+if (!pendingAccount.includes("Taylor Coach · Coach · +852 6777 8888")) {
+  throw new Error("Pending Profile should render the fetched application emergency contact and relationship");
 }
 if (!pendingAccount.includes("Accepted")) {
   throw new Error("Pending Profile should render the fetched application waiver state");
@@ -1103,6 +2409,495 @@ console.log("ok  pending and declined live profiles cannot render Payment or Giv
 store.currentUser().role = "super_admin";
 store.currentUser().status = "approved";
 
+// Live booking snapshots come from the DB with start_time/session_date/
+// venue/price_hkd keys; Profile > History must render them (a missing
+// time mapping previously crashed fmtTime with undefined).
+const liveHistoryHtml = await views.viewAccount("history");
+if (typeof liveHistoryHtml !== "string") {
+  throw new Error("live booking history must render for the signed-in member");
+}
+if (!liveHistoryHtml.includes("11:15 AM") || liveHistoryHtml.includes("undefined")) {
+  throw new Error("live booking history must render the snapshot start_time, not undefined");
+}
+console.log("ok  live booking history renders snapshot start_time without crashing");
+
+// History must hydrate omitted booking snapshot fields from the authoritative
+// operational session, and must collapse repeated RSVP join/withdraw rows.
+const liveHistoryPaidSessionRow = operationalTableRows.operational_sessions.find(
+  (row) => row.activity_id === "hyrox-bft" && row.id !== uuidBooking.sessionId
+);
+const liveHistoryRsvpSessionRow = operationalTableRows.operational_sessions.find(
+  (row) => row.activity_id === "lunch" && row.id !== seededRsvpLunchId
+);
+if (!liveHistoryPaidSessionRow || !liveHistoryRsvpSessionRow) {
+  throw new Error("live History regressions need separate paid and RSVP sessions");
+}
+const liveHistoryGapBooking = {
+  id: "history-gap-paid",
+  profile_id: authUser.id,
+  session_id: liveHistoryPaidSessionRow.id,
+  status: "reserved",
+  reserved_at: fixedIso,
+  pay_deadline_at: fixedIso,
+  payment_marked_at: null,
+  payment_method: null,
+  payment_reference: null,
+  paid_at: null,
+  confirmed_by: null,
+  deferred_from_booking_id: null,
+  deferred_to_booking_id: null,
+  snapshot: { session_date: liveHistoryPaidSessionRow.session_date },
+  created_at: fixedIso,
+  updated_at: fixedIso,
+};
+const liveHistoryRsvpRows = [
+  {
+    id: "history-rsvp-old",
+    profile_id: authUser.id,
+    session_id: liveHistoryRsvpSessionRow.id,
+    status: "confirmed",
+    reserved_at: fixedIso,
+    pay_deadline_at: fixedIso,
+    payment_marked_at: null,
+    payment_method: null,
+    payment_reference: null,
+    paid_at: fixedIso,
+    confirmed_by: null,
+    deferred_from_booking_id: null,
+    deferred_to_booking_id: null,
+    snapshot: { session_date: liveHistoryRsvpSessionRow.session_date },
+    created_at: "2026-08-05T01:00:00.000Z",
+    updated_at: "2026-08-05T01:00:00.000Z",
+  },
+  {
+    id: "history-rsvp-new",
+    profile_id: authUser.id,
+    session_id: liveHistoryRsvpSessionRow.id,
+    status: "cancelled",
+    reserved_at: fixedIso,
+    pay_deadline_at: fixedIso,
+    payment_marked_at: null,
+    payment_method: null,
+    payment_reference: null,
+    paid_at: fixedIso,
+    confirmed_by: null,
+    deferred_from_booking_id: null,
+    deferred_to_booking_id: null,
+    snapshot: { session_date: liveHistoryRsvpSessionRow.session_date },
+    created_at: "2026-08-05T03:00:00.000Z",
+    updated_at: "2026-08-05T03:00:00.000Z",
+  },
+];
+operationalTableRows.operational_bookings.push(liveHistoryGapBooking, ...liveHistoryRsvpRows);
+await operations.refreshOperationalState();
+const liveGapHistoryHtml = await views.viewAccount("history");
+const liveGapPaidCard = liveGapHistoryHtml
+  .split('<div class="card booking-card">')
+  .find((card) => card.includes(`href="#/booking/${liveHistoryGapBooking.id}"`)) || "";
+if (!liveGapPaidCard.includes("11:15 AM")
+    || !liveGapPaidCard.includes("ITC HYROX")
+    || !liveGapPaidCard.includes("BFT Causeway Bay")
+    || !liveGapPaidCard.includes("60 min")
+    || !liveGapPaidCard.includes("HK$180 to be paid")
+    || liveGapPaidCard.includes("null min")
+    || liveGapPaidCard.includes("paid HK$180")) {
+  throw new Error("live History must hydrate paid booking display data and unpaid copy from its session");
+}
+if (liveGapHistoryHtml.includes(`href="#/booking/${liveHistoryRsvpRows[0].id}"`)
+    || liveGapHistoryHtml.includes(`href="#/booking/${liveHistoryRsvpRows[1].id}"`)) {
+  throw new Error("live History must omit cancelled RSVP records that are not current bookings");
+}
+console.log("ok  live History hydrates gaps and omits cancelled RSVP records");
+
+// A booking can outlive the operational Schedule horizon. The History read
+// must fetch its missing session by ID rather than rendering a partial row.
+const historicalSessionRows = [
+  {
+    id: "history-old-session",
+    activity_id: "hyrox-bft",
+    session_date: "2026-07-01",
+    start_time: "10:30:00",
+    duration_minutes: 55,
+    venue: "BFT Causeway Bay",
+    capacity: 20,
+    price_hkd: 180,
+    is_open: true,
+    venue_tbc: false,
+    notice: null,
+    cancelled_at: null,
+    cancelled_by: null,
+    cancelled_source: null,
+    cancel_reason: null,
+    gym_confirmed_at: null,
+    gym_confirmed_by: null,
+    gym_note: null,
+    created_at: fixedIso,
+    updated_at: fixedIso,
+  },
+  {
+    id: "history-tie-session-a",
+    activity_id: "hyrox-bft",
+    session_date: "2026-07-02",
+    start_time: "09:00:00",
+    duration_minutes: 60,
+    venue: "BFT Causeway Bay",
+    capacity: 20,
+    price_hkd: 180,
+    is_open: true,
+    venue_tbc: false,
+    notice: null,
+    cancelled_at: null,
+    cancelled_by: null,
+    cancelled_source: null,
+    cancel_reason: null,
+    gym_confirmed_at: null,
+    gym_confirmed_by: null,
+    gym_note: null,
+    created_at: fixedIso,
+    updated_at: fixedIso,
+  },
+  {
+    id: "history-tie-session-z",
+    activity_id: "hyrox-bft",
+    session_date: "2026-07-02",
+    start_time: "09:30:00",
+    duration_minutes: 60,
+    venue: "BFT Causeway Bay",
+    capacity: 20,
+    price_hkd: 180,
+    is_open: true,
+    venue_tbc: false,
+    notice: null,
+    cancelled_at: null,
+    cancelled_by: null,
+    cancelled_source: null,
+    cancel_reason: null,
+    gym_confirmed_at: null,
+    gym_confirmed_by: null,
+    gym_note: null,
+  },
+].map((row) => ({ ...row, created_at: fixedIso, updated_at: fixedIso }));
+const historicalBookingBase = {
+  profile_id: authUser.id,
+  status: "reserved",
+  reserved_at: fixedIso,
+  pay_deadline_at: fixedIso,
+  payment_marked_at: null,
+  payment_method: null,
+  payment_reference: null,
+  paid_at: null,
+  confirmed_by: null,
+  deferred_from_booking_id: null,
+  deferred_to_booking_id: null,
+  snapshot: {},
+  created_at: fixedIso,
+  updated_at: fixedIso,
+};
+operationalTableRows.operational_sessions.push(...historicalSessionRows);
+operationalTableRows.operational_bookings.push(
+  { ...historicalBookingBase, id: "history-old-booking", session_id: "history-old-session", snapshot: { session_date: "2026-07-01" } },
+  { ...historicalBookingBase, id: "history-tie-z", session_id: "history-tie-session-z", snapshot: { session_date: "2026-07-02" } },
+  { ...historicalBookingBase, id: "history-tie-a", session_id: "history-tie-session-a", snapshot: { session_date: "2026-07-02" } },
+);
+await operations.refreshOperationalState();
+const historicalHistoryHtml = await views.viewAccount("history");
+const historicalCard = historicalHistoryHtml
+  .split('<div class="card booking-card">')
+  .find((card) => card.includes('href="#/booking/history-old-booking"')) || "";
+if (!historicalCard.includes("10:30 AM")
+    || !historicalCard.includes("55 min")
+    || !historicalCard.includes("ITC HYROX")
+    || !historicalCard.includes("BFT Causeway Bay")
+    || !historicalCard.includes("HK$180 to be paid")
+    || historicalCard.includes("null min")
+    || historicalCard.includes("paid HK$180")) {
+  throw new Error("History must hydrate a session older than the 7-day query by ID");
+}
+const fallbackQuery = operationalSessionQueries.find((query) =>
+  query.ids?.includes("history-old-session"));
+if (!fallbackQuery || fallbackQuery.since !== null
+    || !fallbackQuery.ids.includes("history-tie-session-a")
+    || !fallbackQuery.ids.includes("history-tie-session-z")) {
+  throw new Error("History must use a targeted operational_sessions ID lookup for missing sessions");
+}
+const tieA = historicalHistoryHtml.indexOf('href="#/booking/history-tie-a"');
+const tieZ = historicalHistoryHtml.indexOf('href="#/booking/history-tie-z"');
+if (tieA < 0 || tieZ < 0 || tieA > tieZ) {
+  throw new Error("History must use booking ID as a deterministic equal-timestamp tie-break");
+}
+console.log("ok  live History hydrates older sessions and sorts equal timestamps deterministically");
+operationalTableRows.operational_bookings = operationalTableRows.operational_bookings
+  .filter((row) => ![
+    liveHistoryGapBooking.id,
+    ...liveHistoryRsvpRows.map((item) => item.id),
+    "history-old-booking",
+    "history-tie-z",
+    "history-tie-a",
+  ].includes(row.id));
+operationalTableRows.operational_sessions = operationalTableRows.operational_sessions
+  .filter((row) => !historicalSessionRows.some((item) => item.id === row.id));
+await operations.refreshOperationalState();
+
+// --- One-off events (live) ---
+const freeEventRow = await store.createOneOffEvent({
+  name: "Charity Gala Workout", dateISO: "2026-09-12", time: "09:00",
+  durationMin: 45, location: "Sun Yat Sen Memorial Park", mapsQuery: "",
+  category: "Other", price: 0, capacity: 30,
+});
+const freeEventSession = store.getSession(freeEventRow.id);
+if (!freeEventSession || !freeEventSession.oneOff
+    || freeEventSession.name !== "Charity Gala Workout"
+    || freeEventSession.kind !== "free" || freeEventSession.weekday !== 6) {
+  throw new Error("live one-off free event must hydrate with template name and free kind");
+}
+if (!store.upcomingSessions(45).some((s) => s.id === freeEventRow.id)) {
+  throw new Error("live one-off event must appear in upcoming sessions");
+}
+const paidEventRow = await store.createOneOffEvent({
+  name: "Pop-up HYROX", dateISO: "2026-09-19", time: "08:30",
+  durationMin: 60, location: "BFT Central", mapsQuery: "BFT Central",
+  category: "HYROX", price: 200, capacity: 10,
+});
+const paidEventSession = store.getSession(paidEventRow.id);
+if (!paidEventSession || paidEventSession.kind !== "paid" || paidEventSession.price !== 200
+    || paidEventSession.category !== "HYROX" || paidEventSession.mapsQuery !== "BFT Central") {
+  throw new Error("live paid one-off event must hydrate with price, category and maps query");
+}
+await store.deleteOneOffEvent(paidEventRow.id);
+if (store.getSession(paidEventRow.id)) {
+  throw new Error("deleted one-off event must leave the live cache");
+}
+const keptEventRow = await store.createOneOffEvent({
+  name: "Sunset Social Run", dateISO: "2026-09-20", time: "18:00",
+  durationMin: 60, location: "Harbourfront", category: "Run", price: 150, capacity: 12,
+});
+await store.reserveSession(authUser.id, keptEventRow.id, Date.now());
+try {
+  await store.deleteOneOffEvent(keptEventRow.id);
+  throw new Error("delete must refuse one-off events with active bookings");
+} catch (err) {
+  if (!/cancel the session instead/i.test(err.message)) throw err;
+}
+console.log("ok  live one-off events create, hydrate, delete, and guard booked deletion");
+
+// --- RSVP events (live): price-0 sessions confirm instantly, no payment ---
+const lunchSession = store.upcomingSessions(21).find((s) => s.kind === "rsvp");
+if (!lunchSession || lunchSession.category !== "Socials" || lunchSession.name !== "Post-Training Lunch") {
+  throw new Error("live RSVP lunch session must hydrate with rsvp kind and Socials category");
+}
+if (lunchSession.capacity !== null || store.spotsLeft(lunchSession) !== null) {
+  throw new Error("the lunch is uncapped — capacity and spots must be null");
+}
+const otherLunchSession = store.upcomingSessions(28).find(
+  (session) => session.activityId === "lunch"
+    && session.id !== lunchSession.id
+    && session.dateISO !== lunchSession.dateISO
+);
+if (!otherLunchSession || otherLunchSession.location !== "TBC") {
+  throw new Error("live smoke needs another dated lunch at TBC to verify venue isolation");
+}
+const savedProfileRole = profile.role;
+const signedInOperationalUser = store.currentUser();
+const savedCurrentRole = signedInOperationalUser.role;
+profile.role = "member";
+signedInOperationalUser.role = "member";
+signedInOperationalUser.status = "approved";
+
+// Count enrichment is optional: a rejected aggregate must not poison core
+// sessions, and the status must identify count-only degradation.
+operationalRsvpCountError = { message: "permission denied for function get_operational_rsvp_counts" };
+await operations.refreshOperationalState();
+assert.equal(operations.operationalStateStatus().loaded, true);
+assert.equal(operations.operationalStateStatus().error, null);
+assert.equal(operations.operationalStateStatus().payoutError, null,
+  "RSVP count degradation must not affect assigned payout hydration");
+assert.match(operations.operationalStateStatus().rsvpCountError || "",
+  /permission denied for function get_operational_rsvp_counts/);
+assert.ok(store.getSession(lunchSession.id),
+  "a failed RSVP count RPC must leave core live sessions visible");
+assert.equal(operations.liveRsvpCountFor(lunchSession.id), null,
+  "degraded count hydration must expose null rather than a stale total");
+
+operationalRsvpCountError = null;
+operationalRsvpCountRowsOverride = [];
+await operations.refreshOperationalState();
+assert.equal(operations.liveRsvpCountFor(lunchSession.id), 0,
+  "a successful empty aggregate must initialize each RSVP session to zero");
+operationalRsvpCountRowsOverride = null;
+await operations.refreshOperationalState();
+assert.equal(operations.operationalStateStatus().rsvpCountError, null,
+  "successful count hydration must clear degraded status");
+assert.equal(operations.operationalStateStatus().payoutError, null,
+  "successful count recovery must preserve assigned payout hydration");
+assert.equal(operations.liveRsvpCountFor(lunchSession.id), 1,
+  "count aggregate must include another member's confirmed lunch RSVP");
+assert.equal(store.attendeeCountFor(lunchSession), 1,
+  "ordinary members must see the exact baseline despite booking RLS");
+assert.ok(!operations.liveBookingsForSession(lunchSession.id)
+  .some((booking) => booking.userId === "rsvp-other-member"),
+"ordinary members must not receive another member's direct booking row");
+assert.ok(![...approvedProfiles, ...pendingProfiles, ...declinedProfiles]
+  .some((row) => row.id === "rsvp-other-member"),
+"the aggregate must not hydrate another RSVP member's profile row");
+
+const lunchHtml = views.viewActivity(lunchSession.id);
+if (!lunchHtml.includes('data-action="rsvp-join"') || lunchHtml.includes("Book & pay")) {
+  throw new Error("live RSVP activity should offer Count me in, not checkout");
+}
+
+// Booking RLS suppresses another member's booking event, but the public
+// identity-free count-table event must still refresh this ordinary member.
+const foreignRealtimeBooking = {
+  ...structuredClone(operationalTableRows.operational_bookings
+    .find((booking) => booking.id === "rsvp-other-confirmed")),
+  id: "rsvp-foreign-realtime-confirmed",
+  profile_id: "rsvp-foreign-realtime-member",
+};
+operationalTableRows.operational_bookings.push(foreignRealtimeBooking);
+assert.equal(store.attendeeCountFor(lunchSession), 1,
+  "a foreign booking hidden by RLS must not update the cached aggregate by itself");
+const countTableHandler = realtimeHandlers.find(({ filter }) =>
+  filter.table === "operational_rsvp_counts");
+assert.ok(countTableHandler, "count-table Realtime handler must exist");
+const countRefresh = new Promise((resolve, reject) => {
+  const timeout = setTimeout(() => {
+    unsubscribe();
+    reject(new Error("count-table Realtime event did not refresh operational state"));
+  }, 1000);
+  const unsubscribe = operations.subscribeOperationalState(() => {
+    clearTimeout(timeout);
+    unsubscribe();
+    resolve();
+  });
+});
+countTableHandler.handler({
+  eventType: "UPDATE",
+  new: { session_id: lunchSession.id, going_count: 2, updated_at: fixedIso },
+  old: { session_id: lunchSession.id, going_count: 1, updated_at: fixedIso },
+});
+await countRefresh;
+assert.equal(store.attendeeCountFor(lunchSession), 2,
+  "a foreign count-table event must refresh the ordinary member's exact aggregate");
+assert.ok(!operations.liveBookingsForSession(lunchSession.id)
+  .some((booking) => booking.userId === foreignRealtimeBooking.profile_id),
+"the count refresh must not bypass booking RLS or hydrate the foreign owner");
+
+const countBeforeRsvp = store.attendeeCountFor(lunchSession);
+const rsvpBooking = await store.rsvpSession(authUser.id, lunchSession.id);
+if (rsvpBooking.status !== "confirmed") {
+  throw new Error("live RSVP should confirm instantly without payment");
+}
+assert.equal(store.attendeeCountFor(lunchSession), countBeforeRsvp + 1,
+  "Count me in must increase the all-member RSVP count by exactly one");
+assert.deepEqual(JSON.parse(mem.get("itc.prototype.v1")).users, [],
+  "live RSVP join must not copy identity rows into prototype state");
+const joinedTotal = countBeforeRsvp + 1;
+const goingHtml = views.viewActivity(lunchSession.id);
+if (!goingHtml.includes("rsvp-withdraw")) {
+  throw new Error("RSVP'd member should see a withdraw action");
+}
+const priorCountWeekOffset = views.scheduleState.weekOffset;
+const priorCountSelected = views.scheduleState.selected;
+views.scheduleState.weekOffset = Math.round(
+  (data.sundayOf(data.parseISO(lunchSession.dateISO)) - data.sundayOf(data.todayLocal())) / (7 * 86400000)
+);
+views.scheduleState.selected = lunchSession.dateISO;
+const countScheduleHtml = views.viewSchedule();
+views.scheduleState.weekOffset = priorCountWeekOffset;
+views.scheduleState.selected = priorCountSelected;
+const scheduleRowStart = countScheduleHtml.indexOf(`href="#/activity/${lunchSession.id}"`);
+const scheduleRowEnd = countScheduleHtml.indexOf("</a>", scheduleRowStart);
+const ownerScheduleRow = countScheduleHtml.slice(scheduleRowStart, scheduleRowEnd);
+assert.ok(ownerScheduleRow.includes(
+  `<span class="badge free booked">Going</span><span class="spots">${joinedTotal} going</span>`
+), "an RSVP owner must see the exact count beside Going on Schedule");
+signedInOperationalUser.role = "super_admin";
+const countAdminHtml = await views.viewAdmin("activities");
+signedInOperationalUser.role = "member";
+for (const [surface, html] of [
+  ["Schedule", countScheduleHtml],
+  ["Activity Details", goingHtml],
+  ["Admin", countAdminHtml],
+]) {
+  assert.ok(html.includes(`${joinedTotal} going`),
+    `${surface} must render the same exact RSVP aggregate`);
+}
+
+await store.withdrawRsvp(rsvpBooking.id);
+assert.equal(store.attendeeCountFor(lunchSession), countBeforeRsvp,
+  "withdrawal must decrease the all-member RSVP count by exactly one");
+assert.deepEqual(JSON.parse(mem.get("itc.prototype.v1")).users, [],
+  "live RSVP withdrawal must leave prototype identity rows empty");
+if (store.getBooking(rsvpBooking.id).status !== "cancelled") {
+  throw new Error("withdraw should cancel the RSVP");
+}
+profile.role = savedProfileRole;
+signedInOperationalUser.role = savedCurrentRole;
+signedInOperationalUser.status = "approved";
+await operations.refreshOperationalState();
+console.log("ok  exact RSVP aggregates survive member RLS and degrade without hiding core sessions");
+
+// Same-day live sessions order by start time, and weekly venue overrides
+// apply to live RSVP sessions (not just locally-seeded free events).
+const saturdaySessions = store.upcomingSessions(14).filter((s) => s.dateISO === lunchSession.dateISO);
+const saturdayTimes = saturdaySessions.map((s) => s.time);
+const sortedTimes = [...saturdayTimes].sort();
+if (saturdayTimes.join(",") !== sortedTimes.join(",")) {
+  throw new Error(`same-day sessions must order by start time; got ${saturdayTimes.join(",")}`);
+}
+if (saturdaySessions.findIndex((s) => s.kind === "rsvp")
+    < saturdaySessions.findIndex((s) => s.activityId === "hyrox-bft")) {
+  throw new Error("the post-training lunch must follow the morning HYROX sessions");
+}
+await store.setWeekVenue(lunchSession.id, { location: "Cafe Deco, Central", mapsQuery: "Cafe Deco, Central" });
+const overriddenLunch = store.getSession(lunchSession.id);
+if (overriddenLunch.location !== "Cafe Deco, Central" || overriddenLunch.mapsQuery !== "Cafe Deco, Central") {
+  throw new Error("weekly venue override must apply to live RSVP sessions");
+}
+if (store.getSession(otherLunchSession.id)?.location !== "TBC") {
+  throw new Error("saving a live lunch venue must not change another dated lunch");
+}
+const priorScheduleWeekOffset = views.scheduleState.weekOffset;
+const priorScheduleSelected = views.scheduleState.selected;
+views.scheduleState.weekOffset = Math.round(
+  (data.sundayOf(data.parseISO(lunchSession.dateISO)) - data.sundayOf(data.todayLocal())) / (7 * 86400000)
+);
+views.scheduleState.selected = lunchSession.dateISO;
+const lunchScheduleHtml = views.viewSchedule();
+const lunchDetailHtml = views.viewActivity(lunchSession.id);
+if (!lunchScheduleHtml.includes("Cafe Deco, Central")
+    || !lunchDetailHtml.includes("Cafe Deco, Central")) {
+  throw new Error("live lunch venue override must appear on Schedule and Activity Details");
+}
+views.scheduleState.weekOffset = priorScheduleWeekOffset;
+views.scheduleState.selected = priorScheduleSelected;
+await store.setWeekVenue(lunchSession.id, {
+  location: null,
+  mapsQuery: null,
+  meetingLat: null,
+  meetingLng: null,
+});
+const resetLunch = store.getSession(lunchSession.id);
+if (resetLunch.location !== "TBC") {
+  throw new Error("resetting a live lunch venue should restore its TBC recurring default");
+}
+if (store.getSession(otherLunchSession.id)?.location !== "TBC") {
+  throw new Error("resetting a live lunch venue must not change another dated lunch");
+}
+console.log("ok  live sessions order by start time and lunch accepts isolated weekly venue overrides");
+
+await store.cancelSessionWeek(lunchSession.id, "Organizer away");
+const reopenedLiveRsvpRow = await store.repostRsvpEvent(lunchSession.id);
+const reopenedLiveRsvp = store.getSession(lunchSession.id);
+if (!reopenedLiveRsvpRow || reopenedLiveRsvpRow.id !== lunchSession.id
+    || !reopenedLiveRsvp || reopenedLiveRsvp.oneOff || reopenedLiveRsvp.kind !== "rsvp"
+    || reopenedLiveRsvp.name !== lunchSession.name || reopenedLiveRsvp.dateISO !== lunchSession.dateISO
+    || reopenedLiveRsvp.time !== lunchSession.time || reopenedLiveRsvp.capacity !== null
+    || reopenedLiveRsvp.cancelled) {
+  throw new Error("live repost should reopen the original RSVP event");
+}
+console.log("ok  live Admin can repost a cancelled RSVP event in place");
+
 // A live Admin must compose the Supabase UUID directory with device-local
 // Payment operations without copying editable identity records into storage.
 await views.viewAdmin("payments");
@@ -1112,28 +2907,39 @@ operationalAuthSubOverride = null;
 if (!await store.markBookingPaid(memberUuidBooking.id, "FPS", "LIVE-MEMBER-REF", Date.now())) {
   throw new Error("Live member UUID booking must enter pending Payment Ops");
 }
-store.setDuty(authUser.id, gatedPaidSession.dateISO);
+await store.setDuty(authUser.id, gatedPaidSession.dateISO);
 await store.updateCollectorPayouts(authUser.id, {
-  paymeLink: "https://payme.example/live-admin",
-  fpsPhone: "+852 6999 0000",
+  paymeLink: "payme.hsbc.com.hk/1/live-admin",
+  fpsPhone: "+852 6123 4567",
 });
 let liveOpsHtml = await views.viewAdmin("payments");
-for (const marker of ["Micah Member", "LIVE-MEMBER-REF", "Riley Runner", "https://payme.example/live-admin", "+852 6999 0000"]) {
+for (const marker of ["Micah Member", "LIVE-MEMBER-REF", "Riley", "https://payme.hsbc.com.hk/1/live-admin", "+852 6123 4567"]) {
   if (!liveOpsHtml.includes(marker)) {
     throw new Error(`Live Payment Ops composition missing ${marker}`);
   }
 }
 const persistedLiveOps = JSON.parse(mem.get("itc.prototype.v1"));
 if (persistedLiveOps.users.length !== 0
-    || persistedLiveOps.paymentPayouts?.[authUser.id]?.fpsPhone !== "+852 6999 0000") {
+    || persistedLiveOps.paymentPayouts?.[authUser.id]?.paymeLink !== "https://payme.hsbc.com.hk/1/live-admin"
+    || persistedLiveOps.paymentPayouts?.[authUser.id]?.fpsPhone !== "+852 6123 4567") {
   throw new Error("Live Payment Ops must persist UUID-keyed details without a local identity directory");
 }
 store.load();
 liveOpsHtml = await views.viewAdmin("payments");
-if (!liveOpsHtml.includes("https://payme.example/live-admin")
-    || !liveOpsHtml.includes("LIVE-MEMBER-REF")) {
+if (!liveOpsHtml.includes("https://payme.hsbc.com.hk/1/live-admin")
+    || !liveOpsHtml.includes("LIVE-MEMBER-REF")
+    || liveOpsHtml.includes('name="fpsPhone"')
+    || !liveOpsHtml.includes("+852 6123 4567")) {
   throw new Error("Live Payment Ops details must survive a local state reload");
 }
+operationalTableRows.collector_payout_profiles.push({
+  profile_id: "unassigned-super",
+  payme_link: "https://payme.hsbc.com.hk/1/unassigned-super",
+  fps_phone: "+852 6999 9999",
+});
+await operations.refreshOperationalState();
+assert.ok(operations.livePayoutFor("unassigned-super"),
+  "Admin hydration must first populate the unassigned payout cache fixture");
 
 // Exercise the member-facing route after the real auth transition clears the
 // in-memory Admin directory. UUID-keyed duty and payout operations must remain
@@ -1163,12 +2969,47 @@ releaseSignOut({ error: null });
 await signOutForMember;
 await store.getCurrentUser();
 store.load();
+const assignedPayoutCallsBeforeMemberHydration = operationalRpcCalls
+  .filter((call) => call.name === "get_assigned_collector_payout_profiles").length;
+await operations.refreshOperationalState();
+const memberDirectPayoutRead = operationalPayoutDirectReads.at(-1);
+assert.equal(memberDirectPayoutRead?.profileId, "approved-member");
+assert.doesNotMatch(memberDirectPayoutRead?.profileIds.join(",") || "", /live-user-1|unassigned-super/,
+  "member direct payout-table hydration must not bypass self/Admin RLS");
+assert.equal(
+  operationalRpcCalls.filter((call) => call.name === "get_assigned_collector_payout_profiles").length,
+  assignedPayoutCallsBeforeMemberHydration + 1,
+  "forced member hydration must request assigned collector payouts"
+);
+assert.equal(operations.livePayoutFor("unassigned-super"), null,
+  "forced member hydration must clear an Admin-derived unassigned payout row");
+store.currentUser().fullName = 'Micah & "Member" <Runner>';
+store.getBooking(memberPayBooking.id).snapshot.location = 'BFT & "Bay" <Deck>';
 const memberPayHtml = views.viewPay(memberPayBooking.id);
-for (const marker of ["On-duty collector", "https://payme.example/live-admin", "+852 6999 0000", 'data-action="copy-fps"']) {
+for (const marker of ["Riley", "https://payme.hsbc.com.hk/1/live-admin", "+852 6123 4567", 'data-action="copy-fps"']) {
   if (typeof memberPayHtml !== "string" || !memberPayHtml.includes(marker)) {
     throw new Error(`Member payout route after auth transition missing ${marker}`);
   }
 }
+const renderedPaymentNote = `${memberPayBooking.snapshot.name} · ${data.fmtDate(memberPayBooking.snapshot.dateISO)} · BFT & "Bay" <Deck> · Micah & "Member" <Runner>`;
+const escapedRenderedPaymentNote = `${memberPayBooking.snapshot.name} · ${data.fmtDate(memberPayBooking.snapshot.dateISO)} · BFT &amp; &quot;Bay&quot; &lt;Deck&gt; · Micah &amp; &quot;Member&quot; &lt;Runner&gt;`;
+const renderedPaymentNoteControl = [...memberPayHtml.matchAll(/<button\b[^>]*>/g)]
+  .map((match) => match[0])
+  .find((tag) => /\bdata-action="copy-payment-note"/.test(tag));
+const renderedPaymentNoteAttribute = renderedPaymentNoteControl
+  ?.match(/\bdata-note="([^"]*)"/)?.[1];
+const renderedPaymentNotePayload = String(renderedPaymentNoteAttribute || "")
+  .replace(/&quot;/g, '"')
+  .replace(/&#39;/g, "'")
+  .replace(/&lt;/g, "<")
+  .replace(/&gt;/g, ">")
+  .replace(/&amp;/g, "&");
+assert.ok(memberPayHtml.includes(`<strong>${escapedRenderedPaymentNote}</strong>`),
+  "member payment view must escape visible HTML-sensitive note text");
+assert.equal(renderedPaymentNoteAttribute, escapedRenderedPaymentNote,
+  "member payment view must escape its data-note attribute");
+assert.equal(renderedPaymentNotePayload, renderedPaymentNote,
+  "the rendered data-note must decode to the exact delegated clipboard payload");
 if (JSON.parse(mem.get("itc.prototype.v1")).users.length !== 0) {
   throw new Error("Member payout resolution must not persist a duplicate identity directory");
 }
@@ -1182,6 +3023,9 @@ Object.assign(profile, {
 });
 await store.getCurrentUser();
 await store.listPaymentUsers();
+await operations.refreshOperationalState();
+assert.ok(store.getBooking(uuidBooking.id),
+  "restoring the Admin auth fixture must rehydrate its existing paid booking");
 console.log("ok  live member payout survives Admin sign-out, member sign-in, and local reload");
 console.log("ok  live Admin composes Supabase members with UUID-keyed local Payment Ops");
 
@@ -1194,6 +3038,7 @@ for (const label of [
   "Mobile / WhatsApp number",
   "Age status",
   "Emergency contact name",
+  "Emergency contact relationship",
   "Emergency contact phone",
   "How you heard about ITC",
 ]) {
@@ -1227,8 +3072,11 @@ if (!/name="age_over_18" value="yes"[^>]*checked/.test(detailsEdit)) {
 if (!detailsEdit.includes("data-minor-only") || !detailsEdit.includes("hidden")) {
   throw new Error("Live details edit route should keep the guardian block conditional");
 }
-if (!detailsEdit.includes('value="Taylor Coach"') || !detailsEdit.includes('value="+852 6777 8888"')) {
+if (!detailsEdit.includes('value="Taylor Coach"') || !detailsEdit.includes('value="Coach"') || !detailsEdit.includes('value="+852 6777 8888"')) {
   throw new Error("Live details edit route should prefill emergency contact fields");
+}
+if (!detailsEdit.includes('name="emergency_relationship"')) {
+  throw new Error("Live details edit route should include emergency_relationship");
 }
 if (detailsEdit.includes('name="photo_consent"')) {
   throw new Error("Live details edit route should exclude photo consent controls");
@@ -1324,6 +3172,7 @@ await store.updateMyMembershipDetails({
   mobile: "+852 9000 0000",
   age_over_18: "yes",
   emergency_name: "Alex Runner",
+  emergency_relationship: "Coach",
   emergency_phone: "+852 9111 1111",
   heard_source: "friend",
   heard_detail: "Run club",
@@ -1338,6 +3187,7 @@ if (
     "date_of_birth",
     "emergency_name",
     "emergency_phone",
+    "emergency_relationship",
     "guardian_name",
     "guardian_phone",
     "heard_detail",
@@ -1383,6 +3233,7 @@ for (const banned of [
   "guardian_phone",
   "emergency_name",
   "emergency_phone",
+  "emergency_relationship",
   "heard_source",
   "heard_detail",
   "preferred_name",
@@ -1394,29 +3245,68 @@ for (const banned of [
   if (banned in privacyPatch) throw new Error(`privacy patch should exclude ${banned}`);
 }
 applicationUpdates.length = 0;
-const preservedWaiver = await store.acceptMyIndemnity();
-if (preservedWaiver !== "2026-08-05T01:00:00.000Z") {
-  throw new Error("acceptMyIndemnity should preserve an existing timestamp");
-}
-if (applicationUpdates.length !== 0) {
-  throw new Error("acceptMyIndemnity should not write when already accepted");
-}
+const preservedWaiver = await store.acceptMyIndemnity({
+  signature: "Riley Runner",
+  signedAt: "2026-08-05",
+  emergencyRelationship: "Coach",
+});
+assert.equal(preservedWaiver, "2026-08-05T01:00:00.000Z");
+assert.equal(applicationUpdates.length, 0, "current v1 acceptance should remain idempotent");
 applicationRows.set(authUser.id, {
   ...applicationRows.get(authUser.id),
-  waiver_accepted_at: null,
+  emergency_phone: "",
 });
-const waiverMissing = await views.viewAccount("indemnity");
-if (!waiverMissing.includes("To be accepted")) {
-  throw new Error("Indemnity page should prompt when the live waiver is missing");
+await assert.rejects(
+  () => store.acceptMyIndemnity({
+    signature: "Riley Runner",
+    signedAt: "2026-08-05",
+    emergencyRelationship: "Coach",
+  }),
+  /Enter emergency contact name, relationship and phone/
+);
+assert.equal(applicationUpdates.length, 0, "missing canonical emergency contact must not write a live waiver update");
+applicationRows.set(authUser.id, {
+  ...applicationRows.get(authUser.id),
+  emergency_phone: "+852 6777 8888",
+});
+applicationRows.set(authUser.id, {
+  ...applicationRows.get(authUser.id),
+  waiver_signature_text: null,
+  waiver_signed_at: null,
+  waiver_form_version: null,
+  emergency_relationship: null,
+});
+const legacyAccount = await views.viewAccount();
+if (!legacyAccount.includes(`Legacy acceptance recorded on ${confirmedDay}`) || legacyAccount.includes("Indemnity confirmed on")) {
+  throw new Error("Legacy live rows must stay stale/re-signable on the Profile summary");
 }
-const createdWaiver = await store.acceptMyIndemnity();
-if (createdWaiver !== fixedIso) {
-  throw new Error(`acceptMyIndemnity should write ${fixedIso}, got ${createdWaiver}`);
+const legacyWaiver = await views.viewAccount("indemnity");
+for (const marker of [
+  "A new version of the Indemnity is available",
+  'data-doc-accept="indemnity"',
+  'name="signature"',
+  'name="signedAt"',
+  'name="emergencyRelationship"',
+  "Accept &amp; Confirm",
+  "Edit in Membership Details",
+]) {
+  if (!legacyWaiver.includes(marker)) {
+    throw new Error(`Legacy live re-sign flow missing ${marker}`);
+  }
 }
-const indemnityPatch = applicationUpdates.at(-1);
-if (!indemnityPatch || Object.keys(indemnityPatch).join(",") !== "waiver_accepted_at") {
-  throw new Error("acceptMyIndemnity should only write waiver_accepted_at");
-}
+const createdWaiver = await store.acceptMyIndemnity({
+  signature: "Riley Runner",
+  signedAt: "2026-08-05",
+  emergencyRelationship: "Coach",
+});
+assert.equal(createdWaiver, fixedIso);
+assert.deepEqual(applicationUpdates.at(-1), {
+  waiver_accepted_at: fixedIso,
+  waiver_signature_text: "Riley Runner",
+  waiver_signed_at: "2026-08-05",
+  waiver_form_version: "v1",
+  emergency_relationship: "Coach",
+});
 
 const home = views.viewHome();
 if (!home.includes("Good to see you, Riley.")) {
@@ -1433,6 +3323,18 @@ if (!refreshedAccount.includes(`Indemnity confirmed on ${confirmedDay}`) || refr
 const refreshedIndemnity = await views.viewAccount("indemnity");
 if (!refreshedIndemnity.includes(`Indemnity confirmed on ${confirmedDay}`) || refreshedIndemnity.includes("To be accepted")) {
   throw new Error("Indemnity page should rerender from the accepted live waiver timestamp");
+}
+applicationRows.set(authUser.id, {
+  ...applicationRows.get(authUser.id),
+  waiver_accepted_at: null,
+  waiver_signature_text: null,
+  waiver_signed_at: null,
+  waiver_form_version: null,
+  emergency_relationship: null,
+});
+const waiverMissing = await views.viewAccount("indemnity");
+if (!waiverMissing.includes("To be accepted")) {
+  throw new Error("Indemnity page should prompt when the live waiver is missing");
 }
 applicationRows.delete(authUser.id);
 const missingAccount = await views.viewAccount();
@@ -1463,9 +3365,11 @@ const missingPrivacy = await views.viewAccount("privacy");
 if (missingPrivacy?.redirect || !missingPrivacy.includes("Application details unavailable")) {
   throw new Error("Live privacy should show an unavailable card when no application exists");
 }
+applicationRows.set("live-user-1", structuredClone(originalApplicationForApply));
 
 const domListeners = new Map();
 const windowListeners = new Map();
+let documentVisibilityState = "visible";
 let activeElement = null;
 const makeElement = () => {
   const classes = new Set();
@@ -1474,6 +3378,7 @@ const makeElement = () => {
   className: "",
   innerHTML: "",
   textContent: "",
+  dataset: {},
   hidden: false,
   attributes: new Map(),
   classList: {
@@ -1510,6 +3415,7 @@ const elements = new Map([
 ]);
 globalThis.document = {
   get activeElement() { return activeElement; },
+  get visibilityState() { return documentVisibilityState; },
   getElementById: (id) => elements.get(id),
   createElement: () => makeElement(),
   addEventListener: (event, callback) => domListeners.set(event, callback),
@@ -1517,8 +3423,13 @@ globalThis.document = {
 globalThis.HTMLInputElement = class {};
 globalThis.HTMLFormElement = class {};
 globalThis.FormData = class {
-  constructor(form) { this.form = form; }
-  get(name) { return this.form.fields?.[name] ?? null; }
+  constructor(form) {
+    this.values = { ...(form.fields || {}) };
+    for (const control of form.nativeControls || []) {
+      if (control.disabled && control.name) delete this.values[control.name];
+    }
+  }
+  get(name) { return this.values[name] ?? null; }
 };
 globalThis.location = {
   hash: "#/account",
@@ -1620,8 +3531,9 @@ assert.equal(routeLoader.hidden, true, "route loading feedback must clear");
 // feedback and out-of-order completion cannot replace the newest route.
 const deferred = () => {
   let resolve;
-  const promise = new Promise((done) => { resolve = done; });
-  return { promise, resolve };
+  let reject;
+  const promise = new Promise((done, fail) => { resolve = done; reject = fail; });
+  return { promise, resolve, reject };
 };
 const oldestGate = deferred();
 const middleGate = deferred();
@@ -1798,6 +3710,73 @@ await domListeners.get("click")({
   },
 });
 
+// The live reservation notification must preserve its exact booking-owned pay
+// route from rendered HTML through the real click delegate. Reopening the same
+// now-read row must keep that route without issuing a second read update.
+const exactPaymentDestination = `#/pay/${uuidBooking.id}`;
+const bookingReservedNotification = {
+  id: "notification-booking-reserved-exact",
+  kind: "operational_booking_reserved",
+  title: "Booking reserved",
+  body: "Complete payment for your reservation.",
+  destination: exactPaymentDestination,
+  created_at: "2026-08-05T06:39:45.000Z",
+  read_at: null,
+};
+notificationRows.push(bookingReservedNotification);
+const renderedNotificationControl = async () => {
+  const html = await views.viewNotifications(notificationNow, [bookingReservedNotification]);
+  const button = (html.match(/<button class="notification-row[\s\S]*?<\/button>/g) || [])
+    .find((row) => row.includes("<strong>Booking reserved</strong>"));
+  assert.ok(button, "Booking reserved must render as a notification row");
+  const attribute = (name) => button.match(new RegExp(`${name}="([^"]*)"`))?.[1];
+  const destination = attribute("data-destination");
+  assert.equal(destination, exactPaymentDestination,
+    "Booking reserved must render the exact reserved-booking payment route");
+  assert.notEqual(destination, "#/account");
+  assert.notEqual(destination, "#/account/payments");
+
+  const control = makeElement();
+  control.tagName = "BUTTON";
+  control.textContent = "Booking reserved Complete payment for your reservation.";
+  control.dataset = {
+    action: attribute("data-action"),
+    notificationId: attribute("data-notification-id"),
+    notificationRead: attribute("data-notification-read"),
+    destination,
+  };
+  control.closest = () => control;
+  return control;
+};
+
+const unreadBookingReservedControl = await renderedNotificationControl();
+assert.equal(unreadBookingReservedControl.dataset.notificationRead, "false");
+const updatesBeforeBookingReservedOpen = notificationUpdates.length;
+await domListeners.get("click")({ target: unreadBookingReservedControl });
+assert.equal(notificationUpdates.length, updatesBeforeBookingReservedOpen + 1,
+  "opening the unread reservation notification must complete one read update");
+assert.equal(notificationUpdates.at(-1)?.id, bookingReservedNotification.id);
+assert.ok(bookingReservedNotification.read_at,
+  "opening the unread reservation notification must persist its read state");
+assert.equal(location.hash, exactPaymentDestination,
+  "the unread reservation notification must navigate to its exact payment route");
+await windowListeners.get("hashchange")();
+assert.ok(viewEl.innerHTML.includes(`data-booking="${uuidBooking.id}"`),
+  "the same existing payment view must accept the current member's reserved booking");
+for (const marker of [
+  "PayMe", "Suggested payment note", 'data-action="copy-payment-note"',
+  "Assigned collector / payee", "FPS mobile number", "Exact amount", "Suggested reference",
+  'data-action="copy-fps"', 'data-action="copy-reference"',
+]) {
+  assert.ok(viewEl.innerHTML.includes(marker),
+    `notification-routed Payment view missing integrated marker: ${marker}`);
+}
+assert.doesNotMatch(viewEl.innerHTML, /Booking not found\.|QR|Scan with your banking app|amount is embedded/i);
+notificationRows.splice(notificationRows.indexOf(bookingReservedNotification), 1);
+location.hash = "#/notifications";
+await windowListeners.get("hashchange")();
+console.log("ok  exact Booking reserved notification routes to the owned existing payment view");
+
 // Unread row activation is checked, duplicate-safe, and row-safe. It does not
 // navigate until one unread row is confirmed updated, then advances the render
 // generation so an older same-route count cannot overwrite the new badge.
@@ -1818,6 +3797,21 @@ notificationControl.dataset = {
 notificationControl.closest = () => notificationControl;
 const updatesBeforeOpen = notificationUpdates.length;
 const notificationHtmlBeforeOpen = viewEl.innerHTML;
+let notificationNavigationSnapshot = null;
+let observedNotificationHash = location.hash;
+Object.defineProperty(location, "hash", {
+  configurable: true,
+  get: () => observedNotificationHash,
+  set: (value) => {
+    if (value === "#/admin/approvals" && !notificationNavigationSnapshot) {
+      notificationNavigationSnapshot = {
+        html: viewEl.innerHTML,
+        bellLabel: notificationBell.getAttribute("aria-label"),
+      };
+    }
+    observedNotificationHash = value;
+  },
+});
 const markReadRender = domListeners.get("click")({ target: notificationControl });
 const duplicateOpen = domListeners.get("click")({ target: notificationControl });
 assert.equal(notificationUpdates.length, updatesBeforeOpen + 1, "double activation must send one update");
@@ -1829,12 +3823,22 @@ assert.equal(notificationControl.classList.contains("is-busy"), true);
 assert.equal(notificationControl.textContent, "Application submitted Review Riley",
   "structured notification content must not be replaced by a busy label");
 await duplicateOpen;
+assert.equal(location.hash, "#/notifications",
+  "a duplicate activation must not navigate before the first read update succeeds");
 updateGate.resolve();
 await markReadRender;
 notificationUpdateGate = null;
 assert.equal(location.hash, "#/admin/approvals");
-assert.equal(viewEl.innerHTML, notificationHtmlBeforeOpen,
-  "notification activation must not explicitly render in addition to hashchange");
+assert.notEqual(viewEl.innerHTML, notificationHtmlBeforeOpen,
+  "successful mark-read must update the notification window before navigation");
+assert.doesNotMatch(viewEl.innerHTML, /Application &lt;submitted&gt;/,
+  "the read row must be removed from the notification window immediately");
+assert.match(viewEl.innerHTML, /Welcome to ITC/,
+  "other unread rows must remain in the notification window");
+assert.doesNotMatch(notificationNavigationSnapshot?.html || "", /Application &lt;submitted&gt;/,
+  "the row must already be absent when the destination hash is assigned");
+assert.equal(notificationNavigationSnapshot?.bellLabel, "Notifications, 1 unread",
+  "the unread count must already be updated when navigation starts");
 await windowListeners.get("hashchange")();
 assert.match(viewEl.innerHTML, /Ready for review/);
 assert.equal(notificationBell.getAttribute("aria-label"), "Notifications, 1 unread");
@@ -1988,48 +3992,783 @@ for (const [errorType, setError] of [
 const click = domListeners.get("click");
 const change = domListeners.get("change");
 
-// Rendered Payment controls must reach their store seams through delegated
-// handling, mutate state, and route to the moved booking.
+// Assigned payout rows for another collector are RLS-suppressed from an
+// ordinary member's Realtime stream. Entering/restoring Payment must therefore
+// force the narrow assigned-payout hydration, and stale completions must not
+// replace a newer route.
+Object.assign(authUser, {
+  id: "approved-member",
+  email: "micah.member@example.com",
+  user_metadata: { full_name: "Micah Member", avatar_url: "" },
+});
+Object.assign(profile, {
+  id: "approved-member", email: "micah.member@example.com",
+  full_name: "Micah Member", avatar_url: "", role: "member",
+});
+await store.getCurrentUser();
+const assignedCollectorPayout = operationalTableRows.collector_payout_profiles
+  .find((row) => row.profile_id === "live-user-1");
+Object.assign(assignedCollectorPayout, {
+  payme_link: "https://payme.hsbc.com.hk/1/route-version-a",
+  fps_phone: "+852 6111 0001",
+});
+await operations.refreshOperationalState();
+Object.assign(assignedCollectorPayout, {
+  payme_link: "https://payme.hsbc.com.hk/1/route-version-b",
+  fps_phone: "+852 6111 0002",
+});
+const assignedCallsBeforePayRoute = operationalRpcCalls
+  .filter((call) => call.name === "get_assigned_collector_payout_profiles").length;
+location.hash = `#/pay/${memberPayBooking.id}`;
+await windowListeners.get("hashchange")();
+assert.equal(
+  operationalRpcCalls.filter((call) => call.name === "get_assigned_collector_payout_profiles").length,
+  assignedCallsBeforePayRoute + 1,
+  "entering an approved live Payment route must force assigned-payout hydration"
+);
+assert.match(viewEl.innerHTML, /route-version-b/);
+assert.doesNotMatch(viewEl.innerHTML, /route-version-a/);
+assert.doesNotMatch(
+  operationalPayoutDirectReads.at(-1)?.profileIds.join(",") || "",
+  /live-user-1|unassigned-super/,
+  "Payment refresh must not bypass foreign payout-table RLS"
+);
+assert.equal(operations.livePayoutFor("unassigned-super"), null,
+  "Payment refresh must not retain an unassigned payout row");
+assert.equal(JSON.parse(mem.get("itc.prototype.v1")).users.length, 0,
+  "Payment refresh must not persist collector identity rows locally");
+
+Object.assign(assignedCollectorPayout, {
+  payme_link: "https://payme.hsbc.com.hk/1/route-version-c",
+  fps_phone: "+852 6111 0003",
+});
+documentVisibilityState = "visible";
+await domListeners.get("visibilitychange")();
+assert.match(viewEl.innerHTML, /route-version-c/,
+  "restoring a visible Payment route must reconcile a suppressed payout update");
+assert.doesNotMatch(viewEl.innerHTML, /route-version-b/);
+
+Object.assign(assignedCollectorPayout, {
+  payme_link: "https://payme.hsbc.com.hk/1/route-version-d",
+  fps_phone: "+852 6111 0004",
+});
+const payoutRouteGate = deferred();
+const payoutRouteBaseHandler = operationalRpcHandler;
+operationalRpcHandler = (name, args) => {
+  if (name === "get_assigned_collector_payout_profiles") {
+    operationalRpcCalls.push({ name, args: structuredClone(args) });
+    return payoutRouteGate.promise;
+  }
+  return payoutRouteBaseHandler(name, args);
+};
+location.hash = `#/pay/${memberPayBooking.id}`;
+const stalePayoutRoute = windowListeners.get("hashchange")();
+await new Promise(setImmediate);
+location.hash = "#/home";
+await windowListeners.get("hashchange")();
+const homeAfterStalePayoutRoute = viewEl.innerHTML;
+assert.match(homeAfterStalePayoutRoute, /Good to see you, Micah\./);
+payoutRouteGate.resolve({ data: [structuredClone(assignedCollectorPayout)], error: null });
+await stalePayoutRoute;
+assert.equal(viewEl.innerHTML, homeAfterStalePayoutRoute,
+  "a delayed Payment hydration must not overwrite a newer route generation");
+operationalRpcHandler = payoutRouteBaseHandler;
+Object.assign(authUser, {
+  id: "live-user-1", email: "runner@example.com",
+  user_metadata: { full_name: "Riley Runner", avatar_url: "https://example.com/avatar.jpg" },
+});
+Object.assign(profile, {
+  id: "live-user-1", email: "runner@example.com", full_name: "Riley Runner",
+  avatar_url: "https://example.com/avatar.jpg", role: "super_admin",
+});
+await store.getCurrentUser();
+await store.listPaymentUsers();
+await operations.refreshOperationalState();
+console.log("ok  Payment route and visibility refresh RLS-suppressed assigned payouts safely");
+
+// Reserve and mark-paid form delegation must remain pending with the live RPC,
+// capture values before controls are disabled, suppress duplicates, and expose
+// success/navigation only after authoritative settlement.
 const routingSessions = store.upcomingSessions(28).filter((session) =>
   session.kind === "paid" && !store.isMidtown(session) && !session.cancelled
   && !store.userReservationFor(authUser.id, session.id)
   && !store.userBookingFor(authUser.id, session.id)
 );
 if (routingSessions.length < 2) throw new Error("Payment routing regression needs two sessions");
-const routedReleaseBooking = await store.reserveSession(authUser.id, routingSessions[0], Date.now());
-const routedDeferBooking = await store.reserveSession(authUser.id, routingSessions[1], Date.now());
-const routedDeferMarked = await store.markBookingPaid(routedDeferBooking.id, "FPS", "ROUTING", Date.now());
-if (!routedDeferMarked) throw new Error("Live deferral routing must mark payment");
-await store.confirmBookingPayment(routedDeferBooking.id, Date.now());
-const routedDeferTarget = store.deferTargetsFor(routedDeferBooking)[0];
-if (!routedDeferTarget) throw new Error("Payment routing regression needs a defer target");
+const delegatedBaseOperationalRpcHandler = operationalRpcHandler;
+const operationControl = (tagName, name = "", textContent = "") => {
+  const control = makeElement();
+  control.tagName = tagName;
+  control.name = name;
+  control.textContent = textContent;
+  control.disabled = false;
+  return control;
+};
+const equipOperationForm = (form, fields = {}) => {
+  const inputs = Object.keys(fields).map((name) => operationControl("INPUT", name));
+  const submit = operationControl("BUTTON", "", "Submit");
+  submit.type = "submit";
+  form.fields = { ...fields };
+  form.nativeControls = [...inputs, submit];
+  form.querySelector = (selector) => selector === '[type="submit"]' ? submit : null;
+  form.querySelectorAll = (selector) => selector === "input, button" ? [...inputs, submit] : [];
+  return { inputs, submit, controls: [...inputs, submit] };
+};
+const operationalBookingRow = (id, session, overrides = {}) => ({
+  id,
+  profile_id: authUser.id,
+  session_id: session.id,
+  status: "reserved",
+  reserved_at: fixedIso,
+  pay_deadline_at: fixedIso,
+  payment_marked_at: null,
+  payment_method: null,
+  payment_reference: null,
+  paid_at: null,
+  confirmed_by: null,
+  deferred_from_booking_id: null,
+  deferred_to_booking_id: null,
+  snapshot: {
+    name: session.name,
+    session_date: session.dateISO,
+    start_time: `${session.time}:00`,
+    venue: session.location,
+    price_hkd: session.price,
+  },
+  created_at: fixedIso,
+  updated_at: fixedIso,
+  ...overrides,
+});
+
+const reserveForm = new HTMLFormElement();
+reserveForm.id = "form-reserve";
+reserveForm.dataset = { session: routingSessions[0].id };
+const reserveControls = equipOperationForm(reserveForm);
+const reserveGate = deferred();
+let reserveRpcArgs = null;
+operationalRpcHandler = (name, args) => {
+  if (name === "reserve_operational_session") {
+    operationalRpcCalls.push({ name, args: structuredClone(args) });
+    reserveRpcArgs = structuredClone(args);
+    return reserveGate.promise;
+  }
+  return delegatedBaseOperationalRpcHandler(name, args);
+};
+location.hash = `#/checkout/${routingSessions[0].id}`;
+toastStack.children.length = 0;
+const reserveRpcCallCountBefore = operationalRpcCalls.filter((call) =>
+  call.name === "reserve_operational_session"
+    && call.args.p_session_id === routingSessions[0].id).length;
+let reserveSettled = false;
+const reserveSubmit = domListeners.get("submit")({ target: reserveForm, preventDefault() {} })
+  .then(() => { reserveSettled = true; });
+const duplicateReserveSubmit = domListeners.get("submit")({ target: reserveForm, preventDefault() {} });
+await new Promise(setImmediate);
+assert.deepEqual(reserveRpcArgs, { p_session_id: routingSessions[0].id });
+assert.equal(reserveSettled, false, "reserve form must remain pending with the live RPC");
+assert.equal(
+  operationalRpcCalls.filter((call) => call.name === "reserve_operational_session"
+    && call.args.p_session_id === routingSessions[0].id).length - reserveRpcCallCountBefore,
+  1,
+  "duplicate reserve submit must issue one RPC"
+);
+assert.equal(location.hash, `#/checkout/${routingSessions[0].id}`);
+assert.equal(toastStack.children.length, 0, "reserve success must wait for settlement");
+assert.equal(reserveControls.submit.disabled, true);
+assert.equal(reserveControls.submit.getAttribute("aria-busy"), "true");
+const routedDeferServerRow = operationalBookingRow("booking-form-reserve", routingSessions[0]);
+operationalTableRows.operational_bookings.push(routedDeferServerRow);
+reserveGate.resolve({ data: structuredClone(routedDeferServerRow), error: null });
+await Promise.all([reserveSubmit, duplicateReserveSubmit]);
+const routedDeferBooking = store.getBooking(routedDeferServerRow.id);
+assert.ok(routedDeferBooking);
+assert.equal(location.hash, `#/pay/${routedDeferBooking.id}`);
+assert.deepEqual(toastStack.children.map((item) => item.textContent), [
+  "Spot reserved — pay before the deadline",
+]);
+assert.equal(reserveControls.submit.disabled, false);
+assert.equal(reserveControls.submit.hasAttribute("aria-busy"), false);
+
+const rejectedReserveForm = new HTMLFormElement();
+rejectedReserveForm.id = "form-reserve";
+rejectedReserveForm.dataset = { session: routingSessions[1].id };
+const rejectedReserveControls = equipOperationForm(rejectedReserveForm);
+const rejectedReserveGate = deferred();
+operationalRpcHandler = (name, args) => {
+  if (name === "reserve_operational_session") {
+    operationalRpcCalls.push({ name, args: structuredClone(args) });
+    return rejectedReserveGate.promise;
+  }
+  return delegatedBaseOperationalRpcHandler(name, args);
+};
+location.hash = `#/checkout/${routingSessions[1].id}`;
+toastStack.children.length = 0;
+const rejectedReserveSubmit = domListeners.get("submit")({
+  target: rejectedReserveForm, preventDefault() {},
+});
+await new Promise(setImmediate);
+assert.equal(rejectedReserveControls.submit.disabled, true);
+rejectedReserveGate.resolve({ data: null, error: { message: "Reservation service unavailable" } });
+await rejectedReserveSubmit;
+assert.equal(location.hash, `#/checkout/${routingSessions[1].id}`);
+assert.deepEqual(toastStack.children.map((item) => item.textContent), [
+  "Reservation service unavailable",
+]);
+assert.equal(toastStack.children[0].getAttribute("role"), "alert");
+assert.equal(rejectedReserveControls.submit.disabled, false);
+assert.equal(rejectedReserveControls.submit.hasAttribute("aria-busy"), false);
+
+const markPaidForm = new HTMLFormElement();
+markPaidForm.id = "form-mark-paid";
+markPaidForm.dataset = { booking: routedDeferBooking.id };
+const markPaidControls = equipOperationForm(markPaidForm, { method: "FPS", ref: "FORM-PAID-REF" });
+const markPaidGate = deferred();
+let markPaidRpcArgs = null;
+operationalRpcHandler = (name, args) => {
+  if (name === "mark_operational_payment") {
+    operationalRpcCalls.push({ name, args: structuredClone(args) });
+    markPaidRpcArgs = structuredClone(args);
+    return markPaidGate.promise;
+  }
+  return delegatedBaseOperationalRpcHandler(name, args);
+};
+location.hash = `#/pay/${routedDeferBooking.id}`;
+toastStack.children.length = 0;
+let markPaidSettled = false;
+const markPaidSubmit = domListeners.get("submit")({ target: markPaidForm, preventDefault() {} })
+  .then(() => { markPaidSettled = true; });
+const duplicateMarkPaidSubmit = domListeners.get("submit")({ target: markPaidForm, preventDefault() {} });
+await new Promise(setImmediate);
+assert.deepEqual(markPaidRpcArgs, {
+  p_booking_id: routedDeferBooking.id,
+  p_method: "fps",
+  p_reference: "FORM-PAID-REF",
+}, "mark-paid must capture FormData before disabling its fields");
+assert.equal(markPaidSettled, false, "mark-paid form must remain pending with the live RPC");
+assert.equal(
+  operationalRpcCalls.filter((call) => call.name === "mark_operational_payment"
+    && call.args.p_booking_id === routedDeferBooking.id).length,
+  1,
+  "duplicate mark-paid submit must issue one RPC"
+);
+assert.equal(location.hash, `#/pay/${routedDeferBooking.id}`);
+assert.equal(toastStack.children.length, 0, "mark-paid success must wait for settlement");
+for (const control of markPaidControls.controls) assert.equal(control.disabled, true);
+assert.equal(markPaidControls.submit.getAttribute("aria-busy"), "true");
+Object.assign(routedDeferServerRow, {
+  payment_marked_at: fixedIso,
+  payment_method: "fps",
+  payment_reference: "FORM-PAID-REF",
+});
+markPaidGate.resolve({ data: structuredClone(routedDeferServerRow), error: null });
+await Promise.all([markPaidSubmit, duplicateMarkPaidSubmit]);
+assert.equal(location.hash, `#/booking/${routedDeferBooking.id}`);
+assert.deepEqual(toastStack.children.map((item) => item.textContent), [
+  "Payment marked — awaiting collector confirmation",
+]);
+for (const control of markPaidControls.controls) assert.equal(control.disabled, false);
+assert.equal(markPaidControls.submit.hasAttribute("aria-busy"), false);
+
+operationalRpcHandler = delegatedBaseOperationalRpcHandler;
+const routedReleaseBooking = await store.reserveSession(authUser.id, routingSessions[1], Date.now());
+const rejectedMarkPaidForm = new HTMLFormElement();
+rejectedMarkPaidForm.id = "form-mark-paid";
+rejectedMarkPaidForm.dataset = { booking: routedReleaseBooking.id };
+const rejectedMarkPaidControls = equipOperationForm(rejectedMarkPaidForm, {
+  method: "PayMe", ref: "REJECTED-REF",
+});
+const rejectedMarkPaidGate = deferred();
+operationalRpcHandler = (name, args) => {
+  if (name === "mark_operational_payment") {
+    operationalRpcCalls.push({ name, args: structuredClone(args) });
+    return rejectedMarkPaidGate.promise;
+  }
+  return delegatedBaseOperationalRpcHandler(name, args);
+};
+location.hash = `#/pay/${routedReleaseBooking.id}`;
+toastStack.children.length = 0;
+const rejectedMarkPaidSubmit = domListeners.get("submit")({
+  target: rejectedMarkPaidForm, preventDefault() {},
+});
+await new Promise(setImmediate);
+assert.equal(rejectedMarkPaidControls.submit.disabled, true);
+rejectedMarkPaidGate.reject(new Error("Payment transport unavailable"));
+await rejectedMarkPaidSubmit;
+await new Promise(setImmediate);
+assert.equal(location.hash, `#/pay/${routedReleaseBooking.id}`);
+assert.deepEqual(toastStack.children.map((item) => item.textContent), [
+  "Payment transport unavailable",
+]);
+assert.equal(toastStack.children[0].getAttribute("role"), "alert");
+assert.equal(rejectedMarkPaidControls.submit.disabled, false);
+assert.equal(rejectedMarkPaidControls.submit.hasAttribute("aria-busy"), false);
+assert.equal(escapedRejections.length, 0, "mark-paid rejection must not escape its delegated handler");
+console.log("ok  live reserve and mark-paid forms await, guard duplicates, and catch failures");
+
+// Adjacent operations all return Promises in live mode. Each delegated seam
+// must remain busy and duplicate-safe until its exact RPC settles.
+const delayedClickMutation = async ({
+  action, dataset, rpcName, expectedArgs, result = null, beforeResolve = () => {}, successToast,
+}) => {
+  const gate = deferred();
+  operationalRpcHandler = (name, args) => {
+    if (name === rpcName) {
+      operationalRpcCalls.push({ name, args: structuredClone(args) });
+      return gate.promise;
+    }
+    return delegatedBaseOperationalRpcHandler(name, args);
+  };
+  const control = operationControl("BUTTON", "", "Action");
+  control.dataset = { action, ...dataset };
+  control.closest = () => control;
+  toastStack.children.length = 0;
+  const callsBefore = operationalRpcCalls.filter((call) => call.name === rpcName).length;
+  let settled = false;
+  const first = click({ target: control, preventDefault() {} }).then(() => { settled = true; });
+  const duplicate = click({ target: control, preventDefault() {} });
+  await new Promise(setImmediate);
+  assert.equal(settled, false, `${action} must wait for ${rpcName}`);
+  assert.equal(operationalRpcCalls.filter((call) => call.name === rpcName).length,
+    callsBefore + 1, `${action} duplicate must issue one ${rpcName} RPC`);
+  assert.deepEqual(operationalRpcCalls.filter((call) => call.name === rpcName).at(-1)?.args,
+    expectedArgs, `${action} must send the normalized RPC payload`);
+  assert.equal(control.disabled, true, `${action} must disable its control while pending`);
+  assert.equal(control.getAttribute("aria-busy"), "true");
+  assert.equal(toastStack.children.length, 0, `${action} success must wait for settlement`);
+  beforeResolve();
+  gate.resolve({ data: structuredClone(result), error: null });
+  await Promise.all([first, duplicate]);
+  assert.equal(control.disabled, false);
+  assert.equal(control.hasAttribute("aria-busy"), false);
+  assert.ok(toastStack.children.some((item) => item.textContent === successToast),
+    `${action} must report success after settlement`);
+};
+
+const queueMidtown = store.upcomingSessions(28).find((session) => store.isMidtown(session) && !session.cancelled);
+assert.ok(queueMidtown, "adjacent async audit needs a Midtown session");
+const interestRow = {
+  id: "queue-interest-async", session_id: queueMidtown.id, profile_id: authUser.id,
+  kind: "interest", status: "active", joined_at: fixedIso, resolved_at: null,
+};
+await delayedClickMutation({
+  action: "join-interest",
+  dataset: { session: queueMidtown.id },
+  rpcName: "join_operational_queue",
+  expectedArgs: { p_session_id: queueMidtown.id, p_kind: "interest" },
+  result: interestRow,
+  beforeResolve: () => operationalTableRows.operational_queue_entries.push(interestRow),
+  successToast: "You're #1 in line for Midtown",
+});
+await delayedClickMutation({
+  action: "leave-interest",
+  dataset: { session: queueMidtown.id },
+  rpcName: "leave_operational_queue",
+  expectedArgs: { p_entry_id: interestRow.id },
+  result: { ...interestRow, status: "left", resolved_at: fixedIso },
+  beforeResolve: () => Object.assign(interestRow, { status: "left", resolved_at: fixedIso }),
+  successToast: "Left the Midtown list",
+});
+const waitlistRow = {
+  id: "queue-waitlist-async", session_id: routingSessions[1].id, profile_id: authUser.id,
+  kind: "waitlist", status: "active", joined_at: fixedIso, resolved_at: null,
+};
+await delayedClickMutation({
+  action: "join-waitlist",
+  dataset: { session: routingSessions[1].id },
+  rpcName: "join_operational_queue",
+  expectedArgs: { p_session_id: routingSessions[1].id, p_kind: "waitlist" },
+  result: waitlistRow,
+  beforeResolve: () => operationalTableRows.operational_queue_entries.push(waitlistRow),
+  successToast: "You're #1 on the waitlist",
+});
+await delayedClickMutation({
+  action: "leave-waitlist",
+  dataset: { session: routingSessions[1].id },
+  rpcName: "leave_operational_queue",
+  expectedArgs: { p_entry_id: waitlistRow.id },
+  result: { ...waitlistRow, status: "left", resolved_at: fixedIso },
+  beforeResolve: () => Object.assign(waitlistRow, { status: "left", resolved_at: fixedIso }),
+  successToast: "Left the waitlist",
+});
+const dutyWeek = routingSessions[0].dateISO;
+const dutyRow = {
+  week_start: dutyWeek, collector_profile_id: authUser.id,
+  assigned_by: authUser.id, assigned_at: fixedIso,
+};
+await delayedClickMutation({
+  action: "duty-claim",
+  dataset: { week: dutyWeek },
+  rpcName: "set_collector_assignment",
+  expectedArgs: { p_week_start: dutyWeek, p_profile_id: authUser.id },
+  result: dutyRow,
+  beforeResolve: () => {
+    const index = operationalTableRows.collector_assignments
+      .findIndex((row) => row.week_start === dutyWeek);
+    if (index >= 0) operationalTableRows.collector_assignments[index] = dutyRow;
+    else operationalTableRows.collector_assignments.push(dutyRow);
+  },
+  successToast: "You're on duty this week",
+});
+const confirmedServerRow = { ...routedDeferServerRow, status: "confirmed", paid_at: fixedIso, confirmed_by: authUser.id };
+await delayedClickMutation({
+  action: "confirm-payment",
+  dataset: { booking: routedDeferBooking.id },
+  rpcName: "approve_operational_payment",
+  expectedArgs: { p_booking_id: routedDeferBooking.id },
+  result: confirmedServerRow,
+  beforeResolve: () => Object.assign(routedDeferServerRow, confirmedServerRow),
+  successToast: "Payment confirmed — member notified",
+});
+const midtownServerRow = operationalTableRows.operational_sessions.find((row) => row.id === queueMidtown.id);
+await delayedClickMutation({
+  action: "midtown-toggle",
+  dataset: { session: queueMidtown.id, open: "1" },
+  rpcName: "set_operational_midtown_open",
+  expectedArgs: { p_session_id: queueMidtown.id, p_enabled: true },
+  result: { ...midtownServerRow, is_open: true },
+  beforeResolve: () => { midtownServerRow.is_open = true; },
+  successToast: "Midtown opened — interest list converting",
+});
+const paidControlServerRow = operationalTableRows.operational_sessions
+  .find((row) => row.id === routingSessions[0].id);
+await delayedClickMutation({
+  action: "venue-tbc-toggle",
+  dataset: { session: routingSessions[0].id, on: "1" },
+  rpcName: "set_operational_venue_tbc",
+  expectedArgs: { p_session_id: routingSessions[0].id, p_enabled: true },
+  result: { ...paidControlServerRow, venue_tbc: true },
+  beforeResolve: () => { paidControlServerRow.venue_tbc = true; },
+  successToast: "Venue marked TBC",
+});
+
+const dutySetGate = deferred();
+operationalRpcHandler = (name, args) => {
+  if (name === "set_collector_assignment") {
+    operationalRpcCalls.push({ name, args: structuredClone(args) });
+    return dutySetGate.promise;
+  }
+  return delegatedBaseOperationalRpcHandler(name, args);
+};
+const dutySetControl = operationControl("SELECT");
+dutySetControl.value = "approved-admin";
+dutySetControl.dataset = { change: "duty-set", week: dutyWeek };
+dutySetControl.closest = () => dutySetControl;
+toastStack.children.length = 0;
+const dutySetChange = change({ target: dutySetControl });
+const duplicateDutySetChange = change({ target: dutySetControl });
+await new Promise(setImmediate);
+assert.equal(dutySetControl.disabled, true);
+assert.equal(dutySetControl.getAttribute("aria-busy"), "true");
+assert.equal(operationalRpcCalls.filter((call) => call.name === "set_collector_assignment"
+  && call.args.p_profile_id === "approved-admin").length, 1);
+assert.equal(toastStack.children.length, 0);
+const handedDutyRow = { ...dutyRow, collector_profile_id: "approved-admin" };
+const dutyIndex = operationalTableRows.collector_assignments.findIndex((row) => row.week_start === dutyWeek);
+operationalTableRows.collector_assignments[dutyIndex] = handedDutyRow;
+dutySetGate.resolve({ data: handedDutyRow, error: null });
+await Promise.all([dutySetChange, duplicateDutySetChange]);
+assert.equal(dutySetControl.disabled, false);
+assert.equal(dutySetControl.hasAttribute("aria-busy"), false);
+assert.ok(toastStack.children.some((item) => item.textContent === "Duty handed over"));
+
+const delayedFormMutation = async ({
+  formAction, session, fields, rpcName, expectedArgs, result, beforeResolve, successToast,
+}) => {
+  const form = new HTMLFormElement();
+  form.id = formAction;
+  form.dataset = { session };
+  form.reportValidity = () => true;
+  const equipped = equipOperationForm(form, fields);
+  const gate = deferred();
+  operationalRpcHandler = (name, args) => {
+    if (name === rpcName) {
+      operationalRpcCalls.push({ name, args: structuredClone(args) });
+      return gate.promise;
+    }
+    return delegatedBaseOperationalRpcHandler(name, args);
+  };
+  toastStack.children.length = 0;
+  const callsBefore = operationalRpcCalls.filter((call) => call.name === rpcName).length;
+  let settled = false;
+  const first = domListeners.get("submit")({ target: form, preventDefault() {} })
+    .then(() => { settled = true; });
+  const duplicate = domListeners.get("submit")({ target: form, preventDefault() {} });
+  await new Promise(setImmediate);
+  assert.equal(settled, false, `${formAction} must wait for ${rpcName}`);
+  assert.equal(operationalRpcCalls.filter((call) => call.name === rpcName).length, callsBefore + 1);
+  assert.deepEqual(operationalRpcCalls.filter((call) => call.name === rpcName).at(-1)?.args,
+    expectedArgs, `${formAction} must capture its form values before disabling`);
+  for (const control of equipped.controls) assert.equal(control.disabled, true);
+  assert.equal(equipped.submit.getAttribute("aria-busy"), "true");
+  assert.equal(toastStack.children.length, 0);
+  beforeResolve();
+  gate.resolve({ data: structuredClone(result), error: null });
+  await Promise.all([first, duplicate]);
+  for (const control of equipped.controls) assert.equal(control.disabled, false);
+  assert.equal(equipped.submit.hasAttribute("aria-busy"), false);
+  assert.ok(toastStack.children.some((item) => item.textContent === successToast));
+};
 window.confirm = () => true;
 globalThis.confirm = window.confirm;
-const releaseControl = makeElement();
+await delayedFormMutation({
+  formAction: "form-session-time",
+  session: routingSessions[0].id,
+  fields: { time: "12:30" },
+  rpcName: "set_operational_session_time",
+  expectedArgs: { p_session_id: routingSessions[0].id, p_time: "12:30" },
+  result: { ...paidControlServerRow, start_time: "12:30:00" },
+  beforeResolve: () => { paidControlServerRow.start_time = "12:30:00"; },
+  successToast: "Session time updated",
+});
+await delayedFormMutation({
+  formAction: "form-session-notice",
+  session: routingSessions[0].id,
+  fields: { notice: "Bring a towel" },
+  rpcName: "set_operational_notice",
+  expectedArgs: { p_session_id: routingSessions[0].id, p_notice: "Bring a towel" },
+  result: { ...paidControlServerRow, notice: "Bring a towel" },
+  beforeResolve: () => { paidControlServerRow.notice = "Bring a towel"; },
+  successToast: "Session note posted",
+});
+await delayedFormMutation({
+  formAction: "form-cancel-week",
+  session: routingSessions[1].id,
+  fields: { reason: "Storm warning" },
+  rpcName: "cancel_operational_session",
+  expectedArgs: { p_session_id: routingSessions[1].id, p_reason: "Storm warning" },
+  result: {
+    ...operationalTableRows.operational_sessions.find((row) => row.id === routingSessions[1].id),
+    cancelled_at: fixedIso, cancelled_source: "admin", cancel_reason: "Storm warning",
+  },
+  beforeResolve: () => Object.assign(
+    operationalTableRows.operational_sessions.find((row) => row.id === routingSessions[1].id),
+    { cancelled_at: fixedIso, cancelled_source: "admin", cancel_reason: "Storm warning" }
+  ),
+  successToast: "Session cancelled — members notified",
+});
+
+const rejectedMidtownGate = deferred();
+operationalRpcHandler = (name, args) => {
+  if (name === "set_operational_midtown_open") {
+    operationalRpcCalls.push({ name, args: structuredClone(args) });
+    return rejectedMidtownGate.promise;
+  }
+  return delegatedBaseOperationalRpcHandler(name, args);
+};
+const rejectedMidtownControl = operationControl("BUTTON", "", "Close Midtown");
+rejectedMidtownControl.dataset = { action: "midtown-toggle", session: queueMidtown.id, open: "0" };
+rejectedMidtownControl.closest = () => rejectedMidtownControl;
+toastStack.children.length = 0;
+const rejectedMidtownClick = click({ target: rejectedMidtownControl, preventDefault() {} });
+await new Promise(setImmediate);
+rejectedMidtownGate.reject(new Error("Midtown controls unavailable"));
+await rejectedMidtownClick;
+assert.deepEqual(toastStack.children.map((item) => item.textContent), ["Midtown controls unavailable"]);
+assert.equal(toastStack.children[0].getAttribute("role"), "alert");
+assert.equal(rejectedMidtownControl.disabled, false);
+assert.equal(rejectedMidtownControl.hasAttribute("aria-busy"), false);
+assert.equal(escapedRejections.length, 0);
+console.log("ok  adjacent live queue, duty, confirmation, Midtown, session, and cancellation controls await RPCs");
+
+// Unpaid booking cancellation is authoritative in live mode: the cache and
+// backend stay reserved while pending, success survives forced hydration, and
+// rejection remains reserved without fake JavaScript waitlist promotion.
+operationalRpcHandler = delegatedBaseOperationalRpcHandler;
+let releaseConfirmation = null;
+window.confirm = (message) => {
+  releaseConfirmation = message;
+  return true;
+};
+globalThis.confirm = window.confirm;
+const releaseGate = deferred();
+let releaseRpcArgs = null;
+operationalRpcHandler = (name, args) => {
+  if (name === "release_operational_reservation") {
+    operationalRpcCalls.push({ name, args: structuredClone(args) });
+    releaseRpcArgs = structuredClone(args);
+    return releaseGate.promise;
+  }
+  return delegatedBaseOperationalRpcHandler(name, args);
+};
+const releaseControl = operationControl("BUTTON", "", "Cancel booking");
 releaseControl.dataset = { action: "release-reservation", booking: routedReleaseBooking.id };
 releaseControl.closest = () => releaseControl;
-await click({ target: releaseControl, preventDefault() {} });
+toastStack.children.length = 0;
+let releaseSettled = false;
+const releaseClick = click({ target: releaseControl, preventDefault() {} })
+  .then(() => { releaseSettled = true; });
+const duplicateReleaseClick = click({ target: releaseControl, preventDefault() {} });
+await new Promise(setImmediate);
+assert.deepEqual(releaseRpcArgs, { p_booking_id: routedReleaseBooking.id });
+assert.equal(releaseConfirmation, "Cancel this unpaid booking? Your spot will be released.");
+assert.equal(releaseSettled, false);
+assert.equal(operationalRpcCalls.filter((call) => call.name === "release_operational_reservation"
+  && call.args.p_booking_id === routedReleaseBooking.id).length, 1);
+assert.equal(store.getBooking(routedReleaseBooking.id).status, "reserved");
+assert.equal(operationalTableRows.operational_bookings
+  .find((row) => row.id === routedReleaseBooking.id)?.status, "reserved");
+assert.equal(releaseControl.disabled, true);
+assert.equal(releaseControl.getAttribute("aria-busy"), "true");
+assert.equal(releaseControl.textContent, "Cancelling…");
+assert.equal(toastStack.children.length, 0);
+const releaseServerRow = operationalTableRows.operational_bookings
+  .find((row) => row.id === routedReleaseBooking.id);
+releaseServerRow.status = "cancelled";
+releaseGate.resolve({ data: structuredClone(releaseServerRow), error: null });
+await Promise.all([releaseClick, duplicateReleaseClick]);
 assert.equal(store.getBooking(routedReleaseBooking.id).status, "cancelled");
+await operations.refreshOperationalState();
+assert.equal(store.getBooking(routedReleaseBooking.id).status, "cancelled",
+  "released live reservation must remain cancelled after forced hydration");
+assert.deepEqual(toastStack.children.map((item) => item.textContent), ["Booking cancelled"]);
+assert.equal(releaseControl.disabled, false);
+assert.equal(releaseControl.hasAttribute("aria-busy"), false);
+assert.equal(releaseControl.textContent, "Cancel booking");
+
+operationalRpcHandler = delegatedBaseOperationalRpcHandler;
+const rejectedReleaseBooking = await store.reserveSession(authUser.id, routingSessions[1], Date.now());
+const rejectedReleaseGate = deferred();
+operationalRpcHandler = (name, args) => {
+  if (name === "release_operational_reservation") {
+    operationalRpcCalls.push({ name, args: structuredClone(args) });
+    return rejectedReleaseGate.promise;
+  }
+  return delegatedBaseOperationalRpcHandler(name, args);
+};
+const rejectedReleaseControl = operationControl("BUTTON", "", "Cancel booking");
+rejectedReleaseControl.dataset = { action: "release-reservation", booking: rejectedReleaseBooking.id };
+rejectedReleaseControl.closest = () => rejectedReleaseControl;
+toastStack.children.length = 0;
+const rejectedReleaseClick = click({ target: rejectedReleaseControl, preventDefault() {} });
+await new Promise(setImmediate);
+rejectedReleaseGate.resolve({ data: null, error: { message: "Release service unavailable" } });
+await rejectedReleaseClick;
+assert.equal(store.getBooking(rejectedReleaseBooking.id).status, "reserved");
+await operations.refreshOperationalState();
+assert.equal(store.getBooking(rejectedReleaseBooking.id).status, "reserved");
+assert.equal(operationalTableRows.operational_bookings
+  .find((row) => row.id === rejectedReleaseBooking.id)?.status, "reserved");
+assert.deepEqual(toastStack.children.map((item) => item.textContent), ["Release service unavailable"]);
+assert.equal(toastStack.children[0].getAttribute("role"), "alert");
+assert.equal(rejectedReleaseControl.disabled, false);
+assert.equal(rejectedReleaseControl.hasAttribute("aria-busy"), false);
+console.log("ok  delegated release persists authoritatively and restores failure state");
+
+operationalRpcHandler = delegatedBaseOperationalRpcHandler;
+const routedDeferTargets = store.deferTargetsFor(routedDeferBooking);
+const routedDeferSource = store.getSession(routedDeferBooking.sessionId);
+if (!routedDeferTargets.length) throw new Error("Payment routing regression needs a defer target");
+assert.equal(routedDeferTargets.every((session) =>
+  session.activityId === routedDeferSource.activityId), true,
+"live defer choices must match the confirmed booking activity");
+const routedDeferTarget = routedDeferTargets[0];
 const deferControl = makeElement();
 deferControl.dataset = { action: "defer-to", booking: routedDeferBooking.id, session: routedDeferTarget.id };
 deferControl.closest = () => deferControl;
+releaseConfirmation = null;
+toastStack.children.length = 0;
 await click({ target: deferControl, preventDefault() {} });
+assert.equal(releaseConfirmation,
+  "Defer to this session? Your current spot will be released and your payment will carry over.");
+assert.deepEqual(toastStack.children.map((item) => item.textContent), [
+  "Booking moved — previous spot released and payment carried over",
+]);
 const routedMovedBooking = store.bookingsForUser(authUser.id).find((booking) =>
   booking.deferredFrom === routedDeferBooking.id
 );
 if (!routedMovedBooking) throw new Error("defer-to must create the moved booking");
 assert.equal(location.hash, `#/booking/${routedMovedBooking.id}`);
-let copiedFps = null;
+const copiedValues = [];
 Object.defineProperty(globalThis.navigator, "clipboard", {
   configurable: true,
-  value: { writeText: async (value) => { copiedFps = value; } },
+  value: { writeText: async (value) => { copiedValues.push(value); } },
 });
-const fpsControl = makeElement();
-fpsControl.dataset = { action: "copy-fps", phone: "+852 6999 0000" };
-fpsControl.closest = () => fpsControl;
-await click({ target: fpsControl, preventDefault() {} });
-assert.equal(copiedFps, "+852 6999 0000");
-console.log("ok  delegated release, deferral, and FPS copy controls execute prototype behavior");
+for (const [action, copyValue, copyKind, expectedToast] of [
+  ["copy-fps", "+852 6123 4567", "number", "FPS number copied"],
+  ["copy-fps", "1234567", "id", "FPS ID copied"],
+  ["copy-reference", "ITC-A1B2C3", "reference", "Payment reference copied"],
+  ["copy-reference", "GIVE-TEST", "giving-reference", "Giving reference copied"],
+]) {
+  toastStack.children.length = 0;
+  const control = makeElement();
+  control.dataset = { action, copyValue, copyKind };
+  control.closest = () => control;
+  await click({ target: control, preventDefault() {} });
+  assert.equal(copiedValues.at(-1), copyValue);
+  assert.deepEqual(toastStack.children.map((item) => item.textContent), [expectedToast]);
+  assert.equal(toastStack.children[0].getAttribute("role"), "status");
+}
+for (const clipboard of [
+  undefined,
+  { writeText: async () => { throw new Error("permission denied"); } },
+]) {
+  Object.defineProperty(globalThis.navigator, "clipboard", {
+    configurable: true,
+    value: clipboard,
+  });
+  toastStack.children.length = 0;
+  const control = makeElement();
+  control.dataset = { action: "copy-reference", copyValue: "ITC-A1B2C3", copyKind: "reference" };
+  control.closest = () => control;
+  await click({ target: control, preventDefault() {} });
+  assert.deepEqual(toastStack.children.map((item) => item.textContent), [
+    "Copy unavailable — select and copy the value manually",
+  ]);
+  assert.equal(toastStack.children[0].getAttribute("role"), "alert");
+}
+let emptyCopyCalls = 0;
+Object.defineProperty(globalThis.navigator, "clipboard", {
+  configurable: true,
+  value: { writeText: async () => { emptyCopyCalls++; } },
+});
+toastStack.children.length = 0;
+const emptyCopyControl = makeElement();
+emptyCopyControl.dataset = { action: "copy-fps", copyValue: "", copyKind: "number" };
+emptyCopyControl.closest = () => emptyCopyControl;
+await click({ target: emptyCopyControl, preventDefault() {} });
+assert.equal(emptyCopyCalls, 0);
+assert.deepEqual(toastStack.children.map((item) => item.textContent), [
+  "Copy unavailable — select and copy the value manually",
+]);
+assert.equal(toastStack.children[0].getAttribute("role"), "alert");
+Object.defineProperty(globalThis.navigator, "clipboard", {
+  configurable: true,
+  value: { writeText: async (value) => { copiedValues.push(value); } },
+});
+const paymentNoteControl = makeElement();
+paymentNoteControl.dataset = { action: "copy-payment-note", note: renderedPaymentNotePayload };
+paymentNoteControl.closest = () => paymentNoteControl;
+await click({ target: paymentNoteControl, preventDefault() {} });
+assert.equal(copiedValues.at(-1), renderedPaymentNote,
+  "delegated copy must receive the exact payload rendered by viewPay");
+for (const clipboard of [
+  undefined,
+  { writeText: async () => { throw new Error("Clipboard permission denied"); } },
+]) {
+  Object.defineProperty(globalThis.navigator, "clipboard", {
+    configurable: true,
+    value: clipboard,
+  });
+  toastStack.children.length = 0;
+  await assert.doesNotReject(() => click({ target: paymentNoteControl, preventDefault() {} }),
+    "missing or rejected clipboard access must be handled by delegated payment-note copying");
+  assert.deepEqual(toastStack.children.map((item) => [item.textContent, item.getAttribute("role")]), [
+    ["Unable to copy payment note", "alert"],
+  ]);
+}
+let blankPaymentNoteCopyCalls = 0;
+Object.defineProperty(globalThis.navigator, "clipboard", {
+  configurable: true,
+  value: { writeText: async () => { blankPaymentNoteCopyCalls++; } },
+});
+toastStack.children.length = 0;
+paymentNoteControl.dataset.note = "   ";
+await click({ target: paymentNoteControl, preventDefault() {} });
+assert.equal(blankPaymentNoteCopyCalls, 0);
+assert.deepEqual(toastStack.children.map((item) => [item.textContent, item.getAttribute("role")]), [
+  ["Unable to copy payment note", "alert"],
+]);
+console.log("ok  delegated release, deferral, safe FPS/reference copy, and payment-note copy controls execute prototype behavior");
 
 // Gym finalization must travel through the delegated submit seam, persist the
 // authorized Admin mutation, and rerender the confirmed state.
@@ -2050,6 +4789,382 @@ assert.equal(confirmedGymSession.gymNote, "Confirmed 18 with BFT");
 assert.match(viewEl.innerHTML, /Confirmed with gym/);
 assert.match(viewEl.innerHTML, /Confirmed 18 with BFT/);
 console.log("ok  delegated gym confirmation persists and rerenders confirmed state");
+
+const swimmingSession = store.upcomingSessions(21)
+  .find((session) => session.activityId === "water" && !data.sessionStarted(session));
+assert.ok(swimmingSession, "live smoke needs an upcoming Swimming session");
+
+const weeklyVenueForm = new HTMLFormElement();
+weeklyVenueForm.id = "";
+weeklyVenueForm.dataset = {
+  action: "form-week-venue",
+  session: swimmingSession.id,
+};
+weeklyVenueForm.fields = {
+  location: "  Victoria Park Swimming Pool  ",
+  mapsQuery: "",
+};
+const weeklySubmit = makeElement();
+weeklySubmit.type = "submit";
+weeklySubmit.closest = () => weeklyVenueForm;
+weeklyVenueForm.querySelector = (selector) => selector === '[type="submit"]' ? weeklySubmit : null;
+weeklyVenueForm.querySelectorAll = () => [weeklySubmit];
+
+// A click on the nested submit control must be left to the browser so it can
+// emit the form's submit event. The form's own data-action must not make the
+// generic click delegate cancel that default behavior first.
+let weeklyClickPrevented = false;
+await click({
+  target: weeklySubmit,
+  preventDefault() { weeklyClickPrevented = true; },
+});
+assert.equal(weeklyClickPrevented, false,
+  "weekly venue submit click must not be cancelled by the click delegate");
+
+await domListeners.get("submit")({ target: weeklyVenueForm, preventDefault() {} });
+await new Promise(setImmediate);
+const weeklyVenueCall = operationalRpcCalls
+  .filter((call) => call.name === "set_session_venue")
+  .at(-1);
+assert.equal(weeklyVenueCall.args.p_session_id, swimmingSession.id);
+assert.equal(weeklyVenueCall.args.p_location, "Victoria Park Swimming Pool");
+assert.equal(weeklyVenueCall.args.p_maps_query, "Victoria Park Swimming Pool");
+const savedSwimming = store.getSession(swimmingSession.id);
+assert.equal(savedSwimming.location, "Victoria Park Swimming Pool");
+assert.equal(savedSwimming.mapsQuery, "Victoria Park Swimming Pool");
+console.log("ok  delegated weekly venue submit copies location into blank map queries");
+
+const wntVenueForm = new HTMLFormElement();
+wntVenueForm.id = "";
+wntVenueForm.dataset = {
+  action: "form-week-venue",
+  session: "wnt-2026-08-26",
+};
+wntVenueForm.fields = {
+  location: "Tamar Park",
+  mapsQuery: "Tamar Park",
+  meetingLat: "22.2827",
+  meetingLng: "114.1661",
+};
+const wntVenueSubmit = makeElement();
+wntVenueSubmit.type = "submit";
+wntVenueForm.querySelector = (selector) => selector === '[type="submit"]' ? wntVenueSubmit : null;
+wntVenueForm.querySelectorAll = () => [wntVenueSubmit];
+await domListeners.get("submit")({ target: wntVenueForm, preventDefault() {} });
+await new Promise(setImmediate);
+const wntVenueCall = operationalRpcCalls
+  .filter((call) => call.name === "set_session_venue")
+  .at(-1);
+assert.deepEqual({
+  p_session_id: wntVenueCall.args.p_session_id,
+  p_location: wntVenueCall.args.p_location,
+  p_maps_query: wntVenueCall.args.p_maps_query,
+  p_meeting_lat: wntVenueCall.args.p_meeting_lat,
+  p_meeting_lng: wntVenueCall.args.p_meeting_lng,
+}, {
+  p_session_id: "wnt-2026-08-26",
+  p_location: "Tamar Park",
+  p_maps_query: "Tamar Park",
+  p_meeting_lat: 22.2827,
+  p_meeting_lng: 114.1661,
+});
+const savedWntPoint = store.getSession("wnt-2026-08-26");
+assert.equal(savedWntPoint.meetingLat, 22.2827);
+assert.equal(savedWntPoint.meetingLng, 114.1661);
+console.log("ok  delegated WNT venue submit persists exact meeting coordinates");
+
+const weeklyVenueFailureForm = new HTMLFormElement();
+weeklyVenueFailureForm.id = "";
+weeklyVenueFailureForm.dataset = {
+  action: "form-week-venue",
+  session: "wnt-2026-08-26",
+};
+weeklyVenueFailureForm.fields = {
+  location: "Tamar Park",
+  mapsQuery: "Tamar Park",
+  meetingLat: "22.2829",
+  meetingLng: "114.1663",
+};
+const weeklyVenueFailureSubmit = makeElement();
+weeklyVenueFailureSubmit.type = "submit";
+weeklyVenueFailureForm.querySelector = (selector) => selector === '[type="submit"]' ? weeklyVenueFailureSubmit : null;
+weeklyVenueFailureForm.querySelectorAll = () => [weeklyVenueFailureSubmit];
+const htmlBeforeVenueFailure = viewEl.innerHTML;
+const baseOperationalRpcHandler = operationalRpcHandler;
+let rejectNextVenueSave = true;
+operationalRpcHandler = (name, args) => {
+  if (rejectNextVenueSave && name === "set_session_venue") {
+    rejectNextVenueSave = false;
+    operationalRpcCalls.push({ name, args: structuredClone(args) });
+    return Promise.resolve({ data: null, error: { message: "Venue override setup unavailable" } });
+  }
+  return baseOperationalRpcHandler(name, args);
+};
+await domListeners.get("submit")({ target: weeklyVenueFailureForm, preventDefault() {} });
+await new Promise(setImmediate);
+assert.equal(viewEl.innerHTML, htmlBeforeVenueFailure);
+assert.equal(weeklyVenueFailureForm.fields.location, "Tamar Park");
+assert.equal(weeklyVenueFailureForm.fields.meetingLat, "22.2829");
+assert.equal(weeklyVenueFailureForm.fields.meetingLng, "114.1663");
+assert.equal(weeklyVenueFailureSubmit.disabled, false);
+assert.ok(toastStack.children.some((item) =>
+  item.textContent === "Venue override setup unavailable"
+));
+console.log("ok  failed weekly venue submit preserves form state without rerendering");
+
+operationalRpcHandler = baseOperationalRpcHandler;
+applicationRows.set(authUser.id, {
+  profile_id: authUser.id,
+  mobile: "+852 6123 4567",
+});
+const renderedPayoutFormHtml = await views.viewAdmin("payments");
+assert.match(renderedPayoutFormHtml,
+  /<form id="form-payouts"[^>]*data-fps-phone="\+852 6123 4567"/,
+  "the payout form must carry the Membership Details phone it rendered");
+applicationRows.delete(authUser.id);
+await store.updateCollectorPayouts(authUser.id, {
+  paymeLink: "payme.hsbc.com.hk/1/prior-live",
+  fpsPhone: "+852 6000 0000",
+});
+const priorPayout = structuredClone(
+  JSON.parse(mem.get("itc.prototype.v1")).paymentPayouts?.[authUser.id]
+);
+assert.deepEqual(priorPayout, {
+  paymeLink: "https://payme.hsbc.com.hk/1/prior-live",
+  fpsPhone: "+852 6000 0000",
+});
+
+function equipPayoutForm(form) {
+  const input = makeElement();
+  input.tagName = "INPUT";
+  input.name = "paymeLink";
+  input.disabled = false;
+  const submit = makeElement();
+  submit.tagName = "BUTTON";
+  submit.type = "submit";
+  submit.textContent = "Save payout details";
+  submit.disabled = false;
+  form.nativeControls = [input, submit];
+  form.querySelector = (selector) => selector === '[type="submit"]' ? submit : null;
+  form.querySelectorAll = (selector) => selector === "input, button" ? [input, submit] : [];
+  return { input, submit };
+}
+
+const rejectedPayoutForm = new HTMLFormElement();
+rejectedPayoutForm.id = "";
+rejectedPayoutForm.dataset = {
+  action: "form-payouts",
+  fpsPhone: "+852 6123 4567",
+};
+rejectedPayoutForm.fields = { paymeLink: "payme.hsbc.com.hk/1/rejected-live" };
+const rejectedPayoutControls = equipPayoutForm(rejectedPayoutForm);
+const htmlBeforePayoutFailure = viewEl.innerHTML;
+const payoutRpcGate = deferred();
+let payoutRpcArgs = null;
+operationalRpcHandler = (name, args) => {
+  if (name === "update_collector_payout_profile") {
+    payoutRpcArgs = structuredClone(args);
+    return payoutRpcGate.promise;
+  }
+  return baseOperationalRpcHandler(name, args);
+};
+toastStack.children.length = 0;
+let payoutSubmitSettled = false;
+const payoutSubmit = domListeners.get("submit")({
+  target: rejectedPayoutForm,
+  preventDefault() {},
+}).then(() => { payoutSubmitSettled = true; });
+await new Promise(setImmediate);
+assert.deepEqual(payoutRpcArgs, {
+  p_profile_id: authUser.id,
+  p_payme_link: "https://payme.hsbc.com.hk/1/rejected-live",
+  p_fps_phone: "+852 6123 4567",
+});
+assert.deepEqual(
+  JSON.parse(mem.get("itc.prototype.v1")).paymentPayouts?.[authUser.id],
+  priorPayout,
+  "live payout cache must keep its prior value while the RPC is pending"
+);
+assert.equal(payoutSubmitSettled, false, "payout submit must remain pending with the live RPC");
+for (const control of Object.values(rejectedPayoutControls)) {
+  assert.equal(control.disabled, true, "every payout form control must be disabled while saving");
+}
+assert.equal(rejectedPayoutControls.submit.getAttribute("aria-busy"), "true");
+assert.equal(rejectedPayoutControls.submit.textContent, "Saving…");
+assert.equal(viewEl.innerHTML, htmlBeforePayoutFailure);
+assert.equal(rejectedPayoutForm.fields.paymeLink, "payme.hsbc.com.hk/1/rejected-live");
+payoutRpcGate.resolve({ data: null, error: { message: "Payout profile unavailable" } });
+await payoutSubmit;
+assert.deepEqual(
+  JSON.parse(mem.get("itc.prototype.v1")).paymentPayouts?.[authUser.id],
+  priorPayout,
+  "rejected live payout RPC must leave the prior device value unchanged"
+);
+assert.equal(viewEl.innerHTML, htmlBeforePayoutFailure);
+assert.equal(rejectedPayoutForm.fields.paymeLink, "payme.hsbc.com.hk/1/rejected-live");
+for (const control of Object.values(rejectedPayoutControls)) {
+  assert.equal(control.disabled, false, "payout controls must be restored after rejection");
+}
+assert.equal(rejectedPayoutControls.submit.hasAttribute("aria-busy"), false);
+assert.equal(rejectedPayoutControls.submit.textContent, "Save payout details");
+assert.deepEqual(toastStack.children.map((item) => item.textContent), [
+  "Payout profile unavailable",
+]);
+assert.equal(toastStack.children[0].getAttribute("role"), "alert");
+console.log("ok  rejected live payout preserves prior cache and restores its busy form");
+
+const invalidPayoutForm = new HTMLFormElement();
+invalidPayoutForm.id = "";
+invalidPayoutForm.dataset = {
+  action: "form-payouts",
+  fpsPhone: "+852 6123 4567",
+};
+invalidPayoutForm.fields = { paymeLink: "https://evil.example/1/not-payme" };
+const invalidPayoutControls = equipPayoutForm(invalidPayoutForm);
+const payoutRpcCallsBeforeInvalid = operationalRpcCalls
+  .filter((call) => call.name === "update_collector_payout_profile").length;
+toastStack.children.length = 0;
+await domListeners.get("submit")({ target: invalidPayoutForm, preventDefault() {} });
+assert.equal(
+  operationalRpcCalls.filter((call) => call.name === "update_collector_payout_profile").length,
+  payoutRpcCallsBeforeInvalid,
+  "an unsafe PayMe link must be rejected before the live payout RPC"
+);
+assert.deepEqual(toastStack.children.map((item) => item.textContent), [
+  "Enter your personal PayMe link from PayMe.",
+]);
+assert.equal(toastStack.children[0].getAttribute("role"), "alert");
+assert.equal(invalidPayoutControls.input.disabled, false);
+assert.equal(invalidPayoutControls.submit.disabled, false);
+console.log("ok  unsafe delegated PayMe submit fails before its live RPC");
+
+const successfulPayoutForm = new HTMLFormElement();
+successfulPayoutForm.id = "";
+successfulPayoutForm.dataset = {
+  action: "form-payouts",
+  fpsPhone: "+852 6123 4567",
+};
+successfulPayoutForm.fields = { paymeLink: "payme.hsbc/successful-live" };
+const successfulPayoutControls = equipPayoutForm(successfulPayoutForm);
+const successfulPayoutRpcGate = deferred();
+operationalRpcHandler = (name, args) => {
+  if (name === "update_collector_payout_profile") {
+    payoutRpcArgs = structuredClone(args);
+    return successfulPayoutRpcGate.promise;
+  }
+  return baseOperationalRpcHandler(name, args);
+};
+toastStack.children.length = 0;
+let successfulPayoutSettled = false;
+const successfulPayoutSubmit = domListeners.get("submit")({
+  target: successfulPayoutForm,
+  preventDefault() {},
+}).then(() => { successfulPayoutSettled = true; });
+await new Promise(setImmediate);
+assert.deepEqual(
+  JSON.parse(mem.get("itc.prototype.v1")).paymentPayouts?.[authUser.id],
+  priorPayout,
+  "successful live payout must not persist before RPC settlement"
+);
+assert.equal(successfulPayoutSettled, false);
+assert.equal(successfulPayoutControls.input.disabled, true);
+assert.equal(successfulPayoutControls.submit.disabled, true);
+const successfulServerPayout = operationalTableRows.collector_payout_profiles
+  .find((row) => row.profile_id === authUser.id);
+assert.deepEqual(payoutRpcArgs, {
+  p_profile_id: authUser.id,
+  p_payme_link: "https://payme.hsbc/successful-live",
+  p_fps_phone: "+852 6123 4567",
+}, "typed PayMe and rendered FPS phone must be captured before controls disable");
+Object.assign(successfulServerPayout, {
+  payme_link: "https://payme.hsbc/successful-live",
+  fps_phone: "+852 6123 4567",
+});
+successfulPayoutRpcGate.resolve({ data: structuredClone(successfulServerPayout), error: null });
+await successfulPayoutSubmit;
+await new Promise(setImmediate);
+assert.deepEqual(
+  JSON.parse(mem.get("itc.prototype.v1")).paymentPayouts?.[authUser.id],
+  {
+    paymeLink: "https://payme.hsbc/successful-live",
+    fpsPhone: "+852 6123 4567",
+  },
+  "successful live payout must persist its normalized value after RPC settlement"
+);
+assert.equal(successfulPayoutControls.input.disabled, false);
+assert.equal(successfulPayoutControls.submit.disabled, false);
+assert.equal(successfulPayoutControls.submit.hasAttribute("aria-busy"), false);
+assert.ok(toastStack.children.some((item) => item.textContent === "Payout details saved"));
+console.log("ok  successful live payout persists only after RPC settlement");
+
+operationalRpcHandler = baseOperationalRpcHandler;
+const applicationFailurePayoutForm = new HTMLFormElement();
+applicationFailurePayoutForm.id = "";
+applicationFailurePayoutForm.dataset = {
+  action: "form-payouts",
+  fpsPhone: "+852 6123 4567",
+};
+applicationFailurePayoutForm.fields = { paymeLink: "payme.hsbc.com.hk/1/application-failure" };
+const applicationFailurePayoutControls = equipPayoutForm(applicationFailurePayoutForm);
+const applicationFailurePayoutGate = deferred();
+const payoutRpcCallsBeforeApplicationFailure = operationalRpcCalls
+  .filter((call) => call.name === "update_collector_payout_profile").length;
+operationalRpcHandler = (name, args) => {
+  if (name === "update_collector_payout_profile") {
+    payoutRpcArgs = structuredClone(args);
+    operationalRpcCalls.push({ name, args: structuredClone(args) });
+    return applicationFailurePayoutGate.promise;
+  }
+  return baseOperationalRpcHandler(name, args);
+};
+applicationReadError = new Error("Membership details unavailable");
+toastStack.children.length = 0;
+let applicationFailureSubmitSettled = false;
+const applicationFailureSubmit = domListeners.get("submit")({
+  target: applicationFailurePayoutForm,
+  preventDefault() {},
+}).then(() => { applicationFailureSubmitSettled = true; });
+await new Promise(setImmediate);
+assert.equal(applicationFailureSubmitSettled, false,
+  "a valid payout submit must await its RPC despite an unavailable application reread");
+assert.equal(
+  operationalRpcCalls.filter((call) => call.name === "update_collector_payout_profile").length,
+  payoutRpcCallsBeforeApplicationFailure + 1,
+  "an unavailable application reread must not block a valid payout RPC"
+);
+assert.deepEqual(payoutRpcArgs, {
+  p_profile_id: authUser.id,
+  p_payme_link: "https://payme.hsbc.com.hk/1/application-failure",
+  p_fps_phone: "+852 6123 4567",
+});
+for (const control of Object.values(applicationFailurePayoutControls)) {
+  assert.equal(control.disabled, true);
+}
+Object.assign(successfulServerPayout, {
+  payme_link: "https://payme.hsbc.com.hk/1/application-failure",
+  fps_phone: "+852 6123 4567",
+});
+applicationFailurePayoutGate.resolve({
+  data: structuredClone(successfulServerPayout),
+  error: null,
+});
+await applicationFailureSubmit;
+applicationReadError = null;
+assert.deepEqual(
+  JSON.parse(mem.get("itc.prototype.v1")).paymentPayouts?.[authUser.id],
+  {
+    paymeLink: "https://payme.hsbc.com.hk/1/application-failure",
+    fpsPhone: "+852 6123 4567",
+  },
+  "rendered FPS fallback must allow authoritative payout persistence without a second application read"
+);
+assert.equal(applicationFailurePayoutForm.fields.paymeLink, "payme.hsbc.com.hk/1/application-failure");
+assert.equal(applicationFailurePayoutControls.input.disabled, false);
+assert.equal(applicationFailurePayoutControls.submit.disabled, false);
+assert.equal(applicationFailurePayoutControls.submit.hasAttribute("aria-busy"), false);
+assert.ok(toastStack.children.some((item) => item.textContent === "Payout details saved"));
+assert.ok(!toastStack.children.some((item) => item.textContent === "Membership details unavailable"));
+console.log("ok  rendered FPS fallback keeps valid payout save independent of application rereads");
 
 // Legacy member-management URLs canonicalize instead of rendering the removed
 // row/avatar implementation.
@@ -2409,7 +5524,7 @@ console.log("ok  live Giving database and profile APIs coexist with Payment/Auth
 
 // Cancellation copy must read exactly 'Session cancelled by ITC — <reason>'
 // across schedule, activity, and admin ops surfaces.
-const seededCancellation = await store.getSession("hyrox-2026-08-15");
+const seededCancellation = await store.getSession("hyrox-bft-2026-08-15");
 if (!seededCancellation || !seededCancellation.cancelled) {
   throw new Error("15 August 2026 session should be server-cancelled on hydration");
 }
@@ -2434,8 +5549,279 @@ scheduleHtml += views.viewSchedule();
 if (!scheduleHtml.includes("Session cancelled by ITC — HYROX race weekend")) {
   throw new Error("Schedule must render the canonical cancellation copy");
 }
-const activityHtml = views.viewActivity("hyrox-2026-08-15");
+const activityHtml = views.viewActivity("hyrox-bft-2026-08-15");
 if (!activityHtml.includes("Session cancelled by ITC — HYROX race weekend")) {
   throw new Error("Activity view must render the canonical cancellation copy");
 }
-console.log("ok  live cancellation copy renders 'Session cancelled by ITC — <reason>' everywhere");
+if (!activityHtml.includes("Paid bookings were moved to the next available session — check your account.")
+    || activityHtml.includes("Stay tuned for the next available social.")) {
+  throw new Error("live paid cancellation Activity Details must render only the paid follow-up copy");
+}
+const liveCancelledRsvpRow = {
+  ...structuredClone(operationalTableRows.operational_sessions.find((row) => row.id === lunchSession.id)),
+  id: "lunch-cancelled-render",
+  cancelled_at: fixedIso,
+  cancelled_by: "approved-admin",
+  cancelled_source: "admin",
+  cancel_reason: "Lunch venue unavailable",
+};
+const liveCancelledFreeTemplate = {
+  activity_id: "event-live-free-render",
+  name: "Cancelled Community Social",
+  venue: "Tamar Park",
+  weekday: 0,
+  start_time: "15:00:00",
+  duration_minutes: 90,
+  capacity: 20,
+  price_hkd: 0,
+  default_open: true,
+  active: false,
+  category: "Socials",
+  maps_query: "Tamar Park",
+  requires_rsvp: false,
+};
+const liveCancelledFreeRow = {
+  ...structuredClone(liveCancelledRsvpRow),
+  id: "event-live-free-render-2026-08-30",
+  activity_id: liveCancelledFreeTemplate.activity_id,
+  session_date: "2026-08-30",
+  start_time: "15:00:00",
+  venue: "Tamar Park",
+  capacity: 20,
+  price_hkd: 0,
+};
+operationalTableRows.operational_activity_templates.push(liveCancelledFreeTemplate);
+operationalTableRows.operational_sessions.push(liveCancelledRsvpRow, liveCancelledFreeRow);
+await operations.refreshOperationalState();
+const liveRsvpCancellationHtml = views.viewActivity(liveCancelledRsvpRow.id);
+const liveFreeCancellationHtml = views.viewActivity(liveCancelledFreeRow.id);
+for (const [label, html] of [
+  ["RSVP", liveRsvpCancellationHtml],
+  ["free", liveFreeCancellationHtml],
+]) {
+  if (!html.includes("Stay tuned for the next available social.")
+      || html.includes("Paid bookings were moved to the next available session — check your account.")) {
+    throw new Error(`live ${label} cancellation Activity Details must render the exact social follow-up copy`);
+  }
+}
+console.log("ok  live cancellation copy renders exact paid and social follow-up variants");
+
+// Location-map surface: a non-cancelled paid HYROX exposes Get directions
+// without the inline map host.
+const liveNonCancelledHyrox = store.upcomingSessions(21)
+  .filter((s) => s.activityId === "hyrox-bft" && !data.sessionStarted(s))
+  .find((s) => s.id !== "hyrox-bft-2026-08-15");
+if (!liveNonCancelledHyrox) throw new Error("live smoke needs an upcoming non-cancelled hyrox session");
+const liveHyroxDetail = views.viewActivity(liveNonCancelledHyrox.id);
+if (!liveHyroxDetail.includes("Get directions") || liveHyroxDetail.includes('id="activity-map"')) {
+  throw new Error("paid HYROX activity must surface Get directions without the inline map");
+}
+console.log("ok  live paid HYROX surfaces Get directions without the inline map");
+
+// app.js owns the browser-relative lazy import. Exercise that real import from
+// app/js/app.js so a duplicated "js/" path cannot pass through the smoke file's
+// different base URL.
+const browserRelativeMap = await app.loadActivityMapModule();
+assert.equal(
+  typeof browserRelativeMap.mountActivityMap,
+  "function",
+  "app.js must resolve the map module relative to its own app/js URL"
+);
+
+// Admin Tamar picker: map click and marker drag emit exact selected points.
+const pickerLeafletBefore = globalThis.L;
+let pickerMapClick;
+let pickerMarkerDrag;
+let pickerMarkerPoint = { lat: 22.2816182, lng: 114.1655613 };
+let pickerRemoved = 0;
+const pickerSetViews = [];
+const pickerChanges = [];
+const pickerMap = {
+  setView(coords, zoom) { pickerSetViews.push([coords, zoom]); },
+  on(type, callback) { if (type === "click") pickerMapClick = callback; },
+  remove() { pickerRemoved += 1; },
+};
+const pickerMarker = {
+  addTo() { return this; },
+  setLatLng(coords) { pickerMarkerPoint = { lat: coords[0], lng: coords[1] }; },
+  getLatLng() { return pickerMarkerPoint; },
+  on(type, callback) { if (type === "dragend") pickerMarkerDrag = callback; },
+};
+globalThis.L = {
+  map: () => pickerMap,
+  tileLayer: () => ({ addTo() {} }),
+  marker: () => pickerMarker,
+};
+const pickerHost = makeElement();
+pickerHost.isConnected = true;
+const pickerController = await browserRelativeMap.mountVenuePicker(pickerHost, {
+  initialPoint: { lat: 22.2816182, lng: 114.1655613 },
+  onChange: (point) => pickerChanges.push(point),
+  loadLeaflet: async () => {},
+});
+assert.deepEqual(pickerSetViews, [[ [22.2816182, 114.1655613], 17 ]]);
+pickerMapClick({ latlng: { lat: 22.2825, lng: 114.1659 } });
+assert.deepEqual(pickerChanges.at(-1), { lat: 22.2825, lng: 114.1659 });
+pickerMarkerPoint = { lat: 22.2827, lng: 114.1661 };
+pickerMarkerDrag();
+assert.deepEqual(pickerChanges.at(-1), { lat: 22.2827, lng: 114.1661 });
+pickerController.destroy();
+assert.equal(pickerRemoved, 1);
+globalThis.L = pickerLeafletBefore;
+
+// Form synchronization reveals Tamar, seeds defaults, retains marker changes,
+// and clears/destroys the picker after changing to an indoor venue.
+const pickerForm = new HTMLFormElement();
+pickerForm.dataset = { session: "wnt-2026-08-26" };
+const pickerLocation = { value: "Tamar Park" };
+const pickerLat = { value: "" };
+const pickerLng = { value: "" };
+const pickerShell = makeElement();
+pickerShell.classList.toggle("hidden", true);
+const pickerFormHost = makeElement();
+pickerFormHost.isConnected = true;
+pickerForm.querySelector = (selector) => ({
+  '[name="location"]': pickerLocation,
+  '[name="meetingLat"]': pickerLat,
+  '[name="meetingLng"]': pickerLng,
+  "[data-venue-picker-shell]": pickerShell,
+  "[data-venue-picker]": pickerFormHost,
+})[selector] || null;
+let pickerFormChange;
+let pickerFormDestroyed = 0;
+let pickerInitialPoint;
+assert.equal(await app.syncWeekVenuePicker(pickerForm, {
+  ownsGeneration: () => true,
+  loadModule: async () => ({
+    mountVenuePicker: async (_host, options) => {
+      pickerInitialPoint = options.initialPoint;
+      pickerFormChange = options.onChange;
+      return { destroy() { pickerFormDestroyed += 1; } };
+    },
+  }),
+}), true);
+assert.equal(pickerShell.classList.contains("hidden"), false);
+assert.deepEqual(pickerInitialPoint, { lat: 22.2816182, lng: 114.1655613 });
+assert.equal(pickerLat.value, "22.2816182");
+assert.equal(pickerLng.value, "114.1655613");
+pickerFormChange({ lat: 22.2825, lng: 114.1659 });
+assert.equal(pickerLat.value, "22.2825");
+assert.equal(pickerLng.value, "114.1659");
+pickerLocation.value = "Island ECC 9/F";
+assert.equal(await app.syncWeekVenuePicker(pickerForm), false);
+assert.equal(pickerShell.classList.contains("hidden"), true);
+assert.equal(pickerLat.value, "");
+assert.equal(pickerLng.value, "");
+assert.equal(pickerFormDestroyed, 1);
+console.log("ok  Admin Tamar picker click, drag, default, and clear behavior");
+
+// A rejected lazy import must settle the host on the public fallback instead
+// of escaping as an unhandled rejection or leaving "Loading map…" forever.
+const rejectedImportHost = {
+  id: "activity-map",
+  isConnected: true,
+  dataset: { mapsQuery: "Causeway Bay, Hong Kong", markerLabel: "Rejected import" },
+  innerHTML: "<p>Loading map…</p>",
+};
+const rejectedImportResult = await app.mountCommittedActivityMap(rejectedImportHost, {
+  loadModule: async () => { throw new Error("simulated map import rejection"); },
+});
+assert.equal(rejectedImportResult, false, "a rejected map import must resolve to false");
+assert.match(rejectedImportHost.innerHTML, /Couldn.t find the venue on the map/);
+assert.doesNotMatch(rejectedImportHost.innerHTML, /Loading map/);
+console.log("ok  app-relative map import resolves and import rejection renders fallback");
+
+// A failed ECC guide image must be replaced with the generic map host while
+// route ownership is current; stale routes must leave their figure untouched.
+let venueImageError;
+let replacedVenueFigure = null;
+let mountedFallbackHost = null;
+const venueFigure = {
+  replaceWith(node) { replacedVenueFigure = node; },
+};
+const venueImage = {
+  dataset: { fallbackQuery: "Island ECC" },
+  isConnected: true,
+  closest: () => venueFigure,
+  addEventListener(type, callback) {
+    if (type === "error") venueImageError = callback;
+  },
+};
+assert.equal(app.mountVenueImageFallback(venueImage, {
+  mountMap: async (host) => { mountedFallbackHost = host; return true; },
+}), true);
+assert.equal(replacedVenueFigure, null);
+await venueImageError();
+assert.ok(replacedVenueFigure, "image error must replace the guide figure");
+assert.equal(mountedFallbackHost?.dataset?.mapsQuery, "Island ECC");
+
+let noQueryError;
+let noQueryRemoved = false;
+const noQueryImage = {
+  dataset: { fallbackQuery: "" },
+  isConnected: true,
+  closest: () => ({ remove() { noQueryRemoved = true; } }),
+  addEventListener(type, callback) { if (type === "error") noQueryError = callback; },
+};
+assert.equal(app.mountVenueImageFallback(noQueryImage), true);
+noQueryError();
+assert.equal(noQueryRemoved, true, "failed guide without a map query must be removed");
+
+let detailPhotoError;
+let detailPhotoSrc = "/assets/itc/missing-hyrox.webp";
+let detailPhotoRemoved = false;
+const detailPhoto = {
+  dataset: { photoFallback: "/assets/itc/hyrox.webp" },
+  isConnected: true,
+  getAttribute(name) { return name === "src" ? detailPhotoSrc : null; },
+  set src(value) { detailPhotoSrc = value; },
+  remove() { detailPhotoRemoved = true; },
+  addEventListener(type, callback) { if (type === "error") detailPhotoError = callback; },
+};
+assert.equal(app.mountDetailPhotoFallback(detailPhoto), true);
+detailPhotoError();
+assert.equal(detailPhotoSrc, "/assets/itc/hyrox.webp", "failed HYROX image must retry the root asset");
+detailPhotoError();
+assert.equal(detailPhotoRemoved, true, "a failed HYROX fallback must not remain broken");
+console.log("ok  HYROX detail photo retries a root asset fallback");
+
+let staleReplaced = false;
+let staleImageError;
+const staleImage = {
+  dataset: { fallbackQuery: "Island ECC" },
+  isConnected: true,
+  closest: () => ({ replaceWith() { staleReplaced = true; } }),
+  addEventListener(type, callback) { if (type === "error") staleImageError = callback; },
+};
+assert.equal(app.mountVenueImageFallback(staleImage, {
+  ownsGeneration: () => false,
+}), false);
+assert.equal(staleImageError, undefined);
+assert.equal(staleReplaced, false);
+console.log("ok  ECC guide failure falls back to map only for the current route");
+
+// Mount contract: stale activity hosts must not be remounted after navigation.
+let lateMounted = false;
+const lateMap = await import("./js/map.js");
+globalThis.window.__lateMapLoader = () => {
+  lateMounted = true;
+  return Promise.resolve();
+};
+const lateHost = {
+  id: "activity-map",
+  isConnected: false,
+  dataset: { mapsQuery: "Causeway Bay, Hong Kong", markerLabel: "Late" },
+  innerHTML: "<p>Loading\u2026</p>",
+};
+const lateResult = await lateMap.mountActivityMap(lateHost, {
+  ownsGeneration: () => false,
+  fetchImpl: async () => ({ ok: true, json: async () => [] }),
+  loadLeaflet: globalThis.window.__lateMapLoader,
+});
+if (lateResult !== false) {
+  throw new Error("stale activity host must resolve to false");
+}
+if (lateMounted) {
+  throw new Error("stale activity host must not load Leaflet");
+}
+console.log("ok  inline map mount respects stale generation ownership");
