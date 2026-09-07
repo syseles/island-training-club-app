@@ -114,7 +114,11 @@ function hyroxCycleVenues(cycle) {
 function hyroxCycleStatus(cycle) {
   const now = Date.now();
   if (cycle.registrationState === "cancelled") return { label: "Cancelled", className: "danger" };
-  if (now < cycle.registrationOpensAt) return { label: "Sign up opens Monday at 6 PM HKT", className: "neutral" };
+  if (now < cycle.registrationOpensAt) return {
+    label: "Sign up opens Monday at 6 PM HKT",
+    compactLabel: "Opens Mon · 6 PM",
+    className: "neutral",
+  };
   if (cycle.venuePlan === "bft_only") return { label: "BFT only", className: "free" };
   if (cycle.venuePlan === "both") return { label: cycle.allocationClosedAt ? "Both gyms confirmed" : "Both gyms open", className: "free" };
   if (cycle.registrationState === "reconciling") return { label: "Payment review", className: "warn" };
@@ -133,12 +137,15 @@ function hyroxCycleRow(cycle) {
   const booking = hyroxCycleBookingForUser(cycle);
   const action = booking
     ? `<span class="badge free">${booking.status === "confirmed" ? "Booked" : "Payment due"}</span>`
-    : `<span class="badge ${status.className}">${esc(status.label)}</span>`;
+    : `<span class="badge ${status.className}">${esc(status.compactLabel || status.label)}</span>`;
   const venues = hyroxCycleVenues(cycle)
-    .map((venue) => `${esc(venue.location)} · ${esc(fmtTime(venue.time))}`).join(" · ");
+    .sort((a, b) => a.time.localeCompare(b.time));
+  const venueDetails = venues
+    .map((venue) => `<span>${esc(venue.location)} · ${esc(fmtTime(venue.time))}</span>`)
+    .join("");
   return `<a class="session-row hyrox-cycle-row" href="#/hyrox/${esc(cycle.id)}">
-    <time>${esc(fmtTime(hyroxCycleVenues(cycle)[0]?.time || "00:00"))}</time>
-    <div><h3>ITC HYROX<br><span>BFT + Midtown Pool</span></h3><p>${venues}</p></div>
+    <time>${esc(fmtTime(venues[0]?.time || "00:00"))}</time>
+    <div class="hyrox-cycle-content"><h3>ITC HYROX<br><span>BFT + Midtown Pool</span></h3><p class="hyrox-cycle-venues">${venueDetails}</p></div>
     <div class="row-end">${action}</div>
   </a>`;
 }

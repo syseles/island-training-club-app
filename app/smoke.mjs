@@ -821,10 +821,12 @@ assert.match(integratedViewSource, /export async function viewAdmin\(tab = "memb
   "Admin must default to Members");
 assert.doesNotMatch(integratedViewSource, /\["approvals", "Approvals"\]/,
   "Approvals must be merged into Members instead of remaining a separate tab");
-assert.match(integratedStyleSource, /\.session-row\.hyrox-cycle-row\s*\{[\s\S]*?grid-template-columns:\s*56px minmax\(0, 1fr\) auto;/,
-  "HYROX cycle rows must keep the mobile-safe three-column layout");
-assert.match(integratedStyleSource, /\.session-row\.hyrox-cycle-row h3\s*\{[\s\S]*?overflow-wrap:\s*anywhere;/,
-  "HYROX cycle titles must wrap instead of squishing on mobile");
+assert.match(integratedStyleSource, /@media \(max-width: 600px\)[\s\S]*?\.session-row\.hyrox-cycle-row\s*\{[\s\S]*?grid-template-columns:\s*44px minmax\(0, 1fr\);/,
+  "HYROX cycle rows must switch to two columns on mobile");
+assert.match(integratedStyleSource, /@media \(max-width: 600px\)[\s\S]*?\.hyrox-cycle-row \.row-end\s*\{[\s\S]*?grid-column:\s*2;/,
+  "HYROX cycle status must move below the details on mobile");
+assert.match(integratedViewSource, /class="hyrox-cycle-content"[\s\S]*?class="hyrox-cycle-venues"/,
+  "HYROX cycle rows must expose stable hooks for readable mobile details");
 assert.match(integratedViewSource, /function adminHyroxWeeklyBookingSetup\(\)[\s\S]*?HYROX weekly booking setup/);
 assert.doesNotMatch(integratedViewSource, /function adminHyroxProvisioningInfo/);
 assert.match(integratedViewSource, /function venueDisplayName\(session\)/);
@@ -4456,7 +4458,12 @@ console.log("ok  reset");
   const lockedSchedule = views.viewSchedule();
   if ((lockedSchedule.match(new RegExp(`href=\\"#/hyrox/${cycle.id}\\"`, "g")) || []).length !== 1
       || !lockedSchedule.includes("ITC HYROX<br><span>BFT + Midtown Pool</span>")
-      || !lockedSchedule.includes("Sign up opens Monday at 6 PM HKT")
+      || !lockedSchedule.includes("<time>11 AM</time>")
+      || !lockedSchedule.includes("Midtown28 Fitness · 11 AM")
+      || !lockedSchedule.includes("BFT Causeway Bay · 11:15 AM")
+      || !lockedSchedule.includes("Opens Mon · 6 PM")
+      || lockedSchedule.includes("2 starts")
+      || lockedSchedule.indexOf("Midtown28 Fitness · 11 AM") > lockedSchedule.indexOf("BFT Causeway Bay · 11:15 AM")
       || lockedSchedule.includes(`href=\"#/activity/${cycle.bftSessionId}\"`)
       || lockedSchedule.includes(`href=\"#/activity/${cycle.midtownSessionId}\"`)
       || !lockedSchedule.includes("Quarry Bay")) {
