@@ -604,7 +604,7 @@ if (!views.viewApply().includes('name="donorId"')) {
   console.error("FAIL apply form missing optional Donor ID field");
 } else console.log("ok  apply form collects optional Donor ID");
 await check("checkout (visitor) -> redirect", () => views.viewCheckout(paid.id));
-await check("admin (visitor) -> redirect", () => views.viewAdmin("approvals"));
+await check("admin (visitor) -> redirect", () => views.viewAdmin("members"));
 await check("notfound", () => views.viewNotFound());
 
 // free activity must never show booking/capacity language
@@ -782,7 +782,7 @@ if (!pendHtml.includes("Booking locked")) {
 
 // --- Admin approval flow ---
 installLocalFixtures(); store.signIn("admin@example.test");
-for (const tab of ["approvals", "members", "activities", "giving", "payments"]) {
+for (const tab of ["members", "activities", "giving", "payments"]) {
   const adminHtml = await check(`admin ${tab}`, () => views.viewAdmin(tab));
   const activeTabs = adminHtml.match(/<a[^>]*aria-current="page"[^>]*>/g) || [];
   if (activeTabs.length !== 1 || !activeTabs[0].includes(`href="#/admin/${tab}"`)) {

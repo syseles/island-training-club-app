@@ -1045,7 +1045,6 @@ function accountVisitor() {
         <div id="signin-error"></div>
         <button class="btn mt16" type="submit">Sign in</button>
       </form>
-<<<<<<< HEAD
       <p class="muted small mt16">This local prototype has no password. Sign in with the email used for an application on this device.</p>
     </div></div>
     <div class="card mt16"><div class="card-body">
@@ -1723,7 +1722,6 @@ export function viewPay(bookingId) {
     </div></div>
     <form id="form-mark-paid" class="mt16" data-booking="${b.id}">
       <div class="card"><div class="card-body">
-<<<<<<< HEAD
         <h3>Done? Tell the collector</h3>
         <div class="field-row">
           <label class="chip"><input type="radio" name="method" value="PayMe" checked> PayMe</label>
@@ -1873,7 +1871,7 @@ function adminGivingSetupRequired() {
     </div></div>`;
 }
 
-export async function viewAdmin(tab = "approvals") {
+export async function viewAdmin(tab = "members") {
   const user = store.currentUser();
   if (!user || !isAdminRole(user.role)) {
     return { redirect: "#/account" };
@@ -1882,7 +1880,6 @@ export async function viewAdmin(tab = "approvals") {
   const tabs = `
     <nav class="admin-tabs">
       ${[
-        ["approvals", "Approvals"],
         ["members", "Members"],
         ["activities", "Activities"],
         ["giving", "Giving"],
@@ -1900,8 +1897,12 @@ export async function viewAdmin(tab = "approvals") {
       .sort((a, b) => a.fullName.localeCompare(b.fullName));
   }
   let body;
+  let pendingApplicants = null;
   if (tab === "activities") body = adminActivities();
-  else if (tab === "members") body = adminMembers(user, memberUsers);
+  else if (tab === "members") {
+    pendingApplicants = await store.listApprovalCandidates();
+    body = adminMembers(user, memberUsers, pendingApplicants);
+  }
   else if (tab === "giving") {
     try {
       body = adminGiving(await store.listGivingCampaigns());
@@ -1910,7 +1911,7 @@ export async function viewAdmin(tab = "approvals") {
       body = adminGivingSetupRequired();
     }
   } else if (["payments", "ops"].includes(tab)) body = adminOps(user, memberUsers);
-  else body = adminApprovals(await store.listApprovalCandidates());
+  else body = adminMembers(user, memberUsers, []);
 
   return `
     <div class="kicker">Admin</div>
@@ -2207,7 +2208,7 @@ function adminActivities() {
     <a class="btn ghost mt16" href="#/admin/activity/new">+ New activity</a>`;
 }
 
-function adminMembers(viewer, users) {
+function adminMembers(viewer, users, pendingApplicants) {
   const canEdit = isSuperRole(viewer.role);
   const query = adminMemberFilters.query.trim().toLocaleLowerCase();
   const filtered = users.filter((u) => {
@@ -2216,6 +2217,9 @@ function adminMembers(viewer, users) {
     const matchesRole = adminMemberFilters.role === "all" || normalizedRole(u.role) === adminMemberFilters.role;
     return matchesQuery && matchesStatus && matchesRole;
   });
+  const approvalsSection = pendingApplicants && pendingApplicants.length
+    ? adminApprovals(pendingApplicants)
+    : "";
   const option = (value, label, selected) =>
     `<option value="${value}" ${selected === value ? "selected" : ""}>${label}</option>`;
   const filterChip = (key, value, label) =>
@@ -2268,7 +2272,8 @@ function adminMembers(viewer, users) {
       </fieldset>
       ${hasActiveFilters ? '<button class="admin-filters-clear" type="button" data-action="admin-member-filters-clear">Clear filters</button>' : ""}
     </div>
-    <div class="member-results">${rows || `<div class="empty">No members match${activeFilters ? ` ${activeFilters}` : " these filters"}.</div>`}</div>`;
+    <div class="member-results">${rows || `<div class="empty">No members match${activeFilters ? ` ${activeFilters}` : " these filters"}.</div>`}</div>
+    ${approvalsSection ? `<div class="member-approvals">${approvalsSection}</div>` : ""}`;
 }
 
 export function viewAdminActivity(id) {

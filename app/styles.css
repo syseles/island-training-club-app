@@ -978,6 +978,7 @@ a.profile-row:hover .pr-text strong { color: var(--accent); }
 .applicant dd { margin: 0; color: var(--ink); }
 
 .approval-group .card + .card { margin-top: 10px; }
+.member-approvals { margin-top: 28px; }
 
 .applicant-awaiting {
   background: transparent;
