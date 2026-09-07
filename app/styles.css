@@ -1737,7 +1737,9 @@ a.profile-row:hover .pr-text strong { color: var(--accent); }
 .hyrox-venue-options { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; padding: 0; }
 .hyrox-venue-options .hyrox-venue-card { padding: 18px 18px 20px; }
 .hyrox-venue-card { border: 1px solid var(--line-soft); margin: 0; }
-.hyrox-island-ecc-card { margin-top: 32px; }
+.hyrox-island-ecc-card { margin-top: 12px; }
+.hyrox-admin-cycle + .hyrox-island-ecc-card { margin-top: 12px; }
+section.hyrox-admin-cycle + .hyrox-island-ecc-card { margin-top: 12px; }
 .hyrox-venue-card h3 { overflow-wrap: anywhere; }
 .hyrox-preference-grid { display: grid; gap: 10px; border: 0; padding: 0; margin: 0 0 18px; }
 .hyrox-preference-grid legend { font-weight: 700; margin-bottom: 8px; }
