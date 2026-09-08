@@ -20,6 +20,7 @@ import {
   ANNOUNCEMENTS,
   findSession,
   sessionStarted,
+  hktEventStartMs,
   sessionsInRange,
   parseISO,
   mondayOf,
@@ -145,14 +146,14 @@ function hyroxCycleBookingForUser(cycle) {
   const user = store.currentUser();
   if (!user) return null;
   return store.bookingsForUser(user.id).find((booking) => booking.cycleId === cycle.id
-    && ["reserved", "confirmed"].includes(booking.status)) || null;
+    && ["reserved", "confirmed", "attended"].includes(booking.status)) || null;
 }
 
 function hyroxCycleRow(cycle) {
   const status = hyroxCycleStatus(cycle);
   const booking = hyroxCycleBookingForUser(cycle);
   const action = booking
-    ? `<span class="badge free">${booking.status === "confirmed" ? "Booked" : "Payment due"}</span>`
+    ? `<span class="badge free">${booking.status === "reserved" ? "Payment due" : booking.status === "attended" ? "Arrived" : "Booked"}</span>`
     : `<span class="badge ${status.className}">${esc(status.compactLabel || status.label)}</span>`;
   const venues = hyroxCycleVenues(cycle)
     .sort((a, b) => a.time.localeCompare(b.time));
@@ -191,7 +192,7 @@ function sessionRow(s, { past, showDate = true, highlight } = {}) {
   } else if (booked) {
     end = s.kind === "rsvp"
       ? `<span class="badge free booked">Going</span><span class="spots">${store.attendeeCountFor(s)} going</span>`
-      : `<span class="badge free booked">Booked</span>`;
+      : `<span class="badge free booked">${booked.status === "attended" ? "Arrived" : "Booked"}</span>`;
   } else if (reserved) {
     end = `<span class="badge warn">Pay by ${fmtDeadline(reserved.payDeadlineAt)}</span>`;
   } else if (s.kind === "rsvp") {
@@ -1221,6 +1222,7 @@ export async function viewAccount(section, sub) {
         if (!app) {
           const sectionTitle = {
             details: "Membership Details",
+            donor: "Membership Details",
             indemnity: "Indemnity",
             privacy: "Privacy &amp; Notifications",
           }[section] || "Profile";
@@ -1250,15 +1252,17 @@ export async function viewAccount(section, sub) {
     case "indemnity":
       return await accountIndemnity(user);
     case "donor":
-      return accountDonor(user, isLive() ? await store.fetchApplicationForUser(user) : null);
+      return await accountDetails(user);
     case "payments":
       return accountPayments(user);
     case "privacy":
       return await accountPrivacy(user);
     case "privacy/edit":
       return await accountPrivacyEdit(user);
+    case "bookings":
+      return accountBookings(user, sub === "attended" ? "attended" : "all");
     case "history":
-      return accountHistory(user);
+      return accountBookings(user, "all");
     default:
       return viewNotFound();
   }
@@ -1278,11 +1282,14 @@ async function hydrateLiveUser(user) {
       emergencyPhone: app.emergency_phone ?? user.emergencyPhone ?? "",
       preferredName: (Object.prototype.hasOwnProperty.call(app, "preferred_name")) ? (app.preferred_name || "") : user.preferredName,
       heard: app.heard_source ?? user.heard ?? "",
+      donorId: app.donor_id ?? user.donorId ?? null,
       isMinor: app.is_minor !== undefined ? !!app.is_minor : user.isMinor,
       guardianName: app.guardian_name ?? user.guardianName ?? "",
       guardianPhone: app.guardian_phone ?? user.guardianPhone ?? "",
       mediaConsent: app.photo_consent !== undefined ? !!app.photo_consent : user.mediaConsent,
       whatsappReminders: app.whatsapp_reminders !== undefined ? !!app.whatsapp_reminders : user.whatsappReminders,
+      hyroxPaymentReminders: app.hyrox_payment_reminders !== undefined
+        ? !!app.hyrox_payment_reminders : user.hyroxPaymentReminders !== false,
       emailReceipts: app.email_receipts !== undefined ? !!app.email_receipts : user.emailReceipts,
       communityNews: app.community_news !== undefined ? !!app.community_news : user.communityNews,
       indemnityAcceptedAt: app.waiver_accepted_at ?? user.indemnityAcceptedAt,
@@ -1421,7 +1428,7 @@ async function accountMember(user) {
     superadmin: "Super admin",
   }[normalized];
 
-  const bookings = store.bookingsForUser(user.id).filter((b) => b.status !== "cancelled");
+  const bookings = visibleBookingsForUser(user.id);
   const attended = bookings.filter((b) => b.status === "attended").length;
 
   return `
@@ -1437,14 +1444,18 @@ async function accountMember(user) {
         </div>
       </div>
       <div class="ph-stats">
-        <div><strong>${bookings.length}</strong><span>Bookings</span></div>
-        <div><strong>${attended}</strong><span>Attended</span></div>
+        <a class="ph-stat" href="#/account/bookings" aria-label="View all bookings">
+          <strong>${bookings.length}</strong><span>Bookings</span>
+        </a>
+        <a class="ph-stat" href="#/account/bookings/attended" aria-label="View attended bookings">
+          <strong>${attended}</strong><span>Attended</span>
+        </a>
       </div>
     </div>
 
     <div class="profile-rows">
       ${isAdmin ? profileRow("#/admin", ICONS.shield, "Admin Tools", "Approvals, activities and members") : ""}
-      ${profileRow("#/account/details", ICONS.user, "Membership Details", "Contact and emergency information")}
+      ${profileRow("#/account/details", ICONS.user, "Membership Details", "Contact, emergency and donor information")}
       ${profileRow(
         "#/account/indemnity",
         ICONS.check,
@@ -1452,10 +1463,8 @@ async function accountMember(user) {
         indemnity.row,
         { cls: indemnity.kind === "current" ? "ok" : "todo" }
       )}
-      ${profileRow("#/account/donor", ICONS.heart, "Donor Profile", "Donor ID and e-receipt details")}
       ${profileRow("#/account/payments", ICONS.dollar, "Payments & Receipts", "Bookings, donations and orders")}
       ${profileRow("#/account/privacy", ICONS.bell, "Privacy & Notifications", "Consent and communication choices")}
-      ${profileRow("#/account/history", ICONS.clock, "History", "Activity history")}
     </div>
 
     <div class="btn-row">
@@ -1486,6 +1495,12 @@ async function accountDetailsEdit(user) {
     <form id="form-membership-details" data-form="membership-details" class="card mt16"><div class="card-body">
       <div class="line"><span>Full name</span><strong>${esc(user.fullName)}</strong></div>
       <div class="line"><span>Email</span><strong>${esc(user.email)}</strong></div>
+      <div class="field">
+        <label for="md-donorId">Donor ID</label>
+        <input id="md-donorId" name="donorId" value="${esc(hydrated.donorId || "")}" placeholder="e.g. CHUI-08879" autocomplete="off">
+        <div class="hint">Optional. Use the Donor ID from your IECC donor record so leaders can match your giving.</div>
+      </div>
+      <div id="membership-details-error"></div>
       <div class="field">
         <label for="md-preferred_name">Preferred name</label>
         <input id="md-preferred_name" name="preferred_name" value="${esc(hydrated.preferredName || "")}">
@@ -1538,6 +1553,7 @@ async function accountDetails(user) {
         <div class="line"><span>Full name</span><strong>${esc(user.fullName)}</strong></div>
         <div class="line"><span>Preferred name</span><strong>${hydrated.preferredName ? esc(hydrated.preferredName) : "Not provided"}</strong></div>
         <div class="line"><span>Email</span><strong>${esc(user.email)}</strong></div>
+        <div class="line"><span>Donor ID</span><strong>${hydrated.donorId ? esc(hydrated.donorId) : "Not provided"}</strong></div>
         <div class="line"><span>Member since</span><strong>${fmtDay(hydrated.appliedAt)}</strong></div>
         <div class="line"><span>Mobile / WhatsApp number</span><strong>${esc(hydrated.phone)}</strong></div>
         <div class="line"><span>Age status</span><strong>${ageStatus}</strong></div>
@@ -1617,52 +1633,6 @@ async function accountIndemnity(user) {
   `;
 }
 
-function accountDonor(user, application) {
-  const donorId = application?.donor_id || user.donorId || null;
-  const gifts = store.donationsForUser(user.id);
-  const totalGiven = gifts.reduce((sum, d) => sum + d.amount, 0);
-  return `
-    <a class="back-link" href="#/account">← Profile</a>
-    <div class="kicker mt16">Profile · Donor Profile</div>
-    <h1 class="display sm">Donor Profile.</h1>
-    <div class="card mt16"><div class="card-body">
-      <div class="receipt-lines" style="margin-top:0;border-top:0">
-        <div class="line"><span>Donor ID</span><strong>${donorId ? esc(donorId) : "Not provided"}</strong></div>
-        ${
-          gifts.length
-            ? `
-          <div class="line"><span>Total given</span><strong>${fmtMoney(totalGiven)}</strong></div>
-          <div class="line"><span>Gifts</span><strong>${gifts.length}</strong></div>
-          <div class="line"><span>Latest gift</span><strong>${new Date(gifts[0].createdAt).toLocaleDateString("en-HK", { day: "numeric", month: "short" })}</strong></div>`
-            : ""
-        }
-      </div>
-      ${
-        donorId
-          ? ""
-          : `
-        <form id="form-donor-id" class="mt16" novalidate>
-          <div class="field">
-            <label for="donor-id">Add your Donor ID</label>
-            <input id="donor-id" name="donorId" placeholder="e.g. CHUI-08879" autocomplete="off">
-            <div class="hint">Format: your last name, a hyphen, then the 4- or 5-digit number from your IECC donor record (e.g. CHUI-08879 or CHUI-8879). Left this blank at sign-up? Add it here any time — leaders use it to match your giving to your donor record.</div>
-          </div>
-          <div id="donor-error"></div>
-          <button class="btn ghost sm" type="submit">Save Donor ID</button>
-        </form>`
-      }
-      ${
-        gifts.length
-          ? `
-        <p class="muted small mt16">FPS gifts stay pending until a leader reconciles them against the club account. Full history lives on the Giving tab.</p>
-        <a class="btn ghost sm mt16" href="#/giving">Open Giving &amp; Fundraising →</a>`
-          : `
-        <p class="hero-meta mt16">No gifts yet — every step can give back. Support the current campaign via FPS.</p>
-        <a class="btn ghost sm mt16" href="#/giving">Give via FPS →</a>`
-      }
-    </div></div>`;
-}
-
 function accountPayments(user) {
   const receipts = store.receiptsForUser(user.id);
   const pooledBookings = store.bookingsForUser(user.id)
@@ -1700,6 +1670,8 @@ async function accountPrivacyEdit(user) {
       <div class="line"><span>Privacy policy accepted</span><strong>${hydrated.privacyAcceptedAt ? fmtDay(hydrated.privacyAcceptedAt) : "To be accepted"}</strong></div>
       <label class="check"><input type="checkbox" name="photo_consent" ${hydrated.mediaConsent ? "checked" : ""}> Photos and video at sessions</label>
       <label class="check"><input type="checkbox" name="whatsapp_reminders" ${hydrated.whatsappReminders ? "checked" : ""}> WhatsApp session reminders</label>
+      <label class="check"><input type="checkbox" name="hyrox_payment_reminders" ${hydrated.hyroxPaymentReminders !== false ? "checked" : ""}> HYROX payment reminders</label>
+      <p class="muted small">Thursday payment reminders for unpaid HYROX reservations. You can still check payment status in the app.</p>
       <label class="check"><input type="checkbox" name="email_receipts" ${hydrated.emailReceipts ? "checked" : ""}> Email receipts</label>
       <label class="check"><input type="checkbox" name="community_news" ${hydrated.communityNews ? "checked" : ""}> Community news</label>
       <div class="actions">
@@ -1721,11 +1693,12 @@ async function accountPrivacy(user) {
         <div class="line"><span>Photo/video consent</span><strong>${hydrated.mediaConsent ? "Allowed" : "Not allowed"}</strong></div>
         <div class="line"><span>Privacy policy accepted</span><strong>${hydrated.privacyAcceptedAt ? fmtDay(hydrated.privacyAcceptedAt) : "To be accepted"}</strong></div>
         <div class="line"><span>WhatsApp session reminders</span><strong>${onOff(hydrated.whatsappReminders)}</strong></div>
+        <div class="line"><span>HYROX payment reminders</span><strong>${onOff(hydrated.hyroxPaymentReminders !== false)}</strong></div>
         <div class="line"><span>Email receipts</span><strong>${onOff(hydrated.emailReceipts)}</strong></div>
         <div class="line"><span>Community news</span><strong>${onOff(hydrated.communityNews)}</strong></div>
       </div>
       <a class="btn ghost sm mt16" href="#/account/privacy/edit">Edit privacy preferences</a>
-      <p class="muted small mt16">Privacy and notification settings are stubbed for setup — they’ll be configurable here before launch.</p>
+      <p class="muted small mt16">You can update these communication preferences at any time.</p>
     </div></div>`;
 }
 
@@ -1736,7 +1709,7 @@ function bookingDisplaySnapshot(b) {
   return {
     ...snapshot,
     dateISO: snapshot.dateISO ?? session?.dateISO ?? cycle?.dateISO,
-    time: snapshot.time ?? session?.time,
+    time: snapshot.time ?? snapshot.startTime ?? session?.time ?? session?.startTime,
     name: snapshot.name ?? session?.name ?? "ITC HYROX",
     location: snapshot.location ?? session?.location ?? (cycle ? "Venue pending" : undefined),
     durationMin: snapshot.durationMin ?? session?.durationMin,
@@ -1749,21 +1722,25 @@ function pooledBookingRow(b, { highlight = false } = {}) {
   const s = bookingDisplaySnapshot(b);
   const venue = b.sessionId ? s.location : "Venue pending";
   return `<a class="session-row hyrox-queue-state${highlight ? " next" : ""}" href="#/booking/${esc(b.id)}">
-    <time>${esc(fmtDate(s.dateISO))}</time><div><h3>ITC HYROX</h3><p>${esc(venue)} · ${b.status === "confirmed" ? "Confirmed" : "Payment due"}</p></div>
-    <div class="row-end"><span class="badge ${b.sessionId ? "free" : "neutral"}">${b.sessionId ? "Booked" : "Venue pending"}</span></div>
+    <time>${esc(fmtDate(s.dateISO))}</time><div><h3>ITC HYROX</h3><p>${esc(venue)} · ${b.status === "attended" ? "Arrived" : b.status === "confirmed" ? "Confirmed" : "Payment due"}</p></div>
+    <div class="row-end"><span class="badge ${b.sessionId ? "free" : "neutral"}">${b.status === "attended" ? "Arrived" : b.sessionId ? "Booked" : "Venue pending"}</span></div>
   </a>`;
 }
 
 function bookingCard(b) {
   const s = bookingDisplaySnapshot(b);
-  const assigned = b.sessionId ? store.getSession(b.sessionId) : null;
-  const live = b.status === "confirmed" && (!assigned || !sessionStarted(assigned));
+  const started = sessionStarted(s);
+  const live = b.status === "confirmed" && !started;
   const status =
     b.status === "cancelled"
       ? '<span class="badge danger">Cancelled</span>'
       : b.status === "attended"
         ? '<span class="badge neutral">Attended</span>'
-        : '<span class="badge free">Booked</span>';
+        : b.status === "reserved"
+          ? '<span class="badge warn">Awaiting payment</span>'
+          : started
+            ? '<span class="badge neutral">Ended</span>'
+            : '<span class="badge free">Confirmed</span>';
   const amount = s.kind === "rsvp"
     ? "RSVP"
     : (b.paymentMarkedAt != null || ["confirmed", "attended"].includes(b.status))
@@ -1785,40 +1762,97 @@ function bookingCard(b) {
     </div></div>`;
 }
 
-function bookingHistoryTimestamp(booking) {
+function bookingTimestamp(booking) {
   const createdAt = Number(booking.createdAt);
   if (booking.createdAt != null && Number.isFinite(createdAt)) return createdAt;
   const reservedAt = Number(booking.reservedAt);
   return booking.reservedAt != null && Number.isFinite(reservedAt) ? reservedAt : 0;
 }
 
-function compareHistoryBookings(a, b) {
-  const aSnapshot = bookingDisplaySnapshot(a);
-  const bSnapshot = bookingDisplaySnapshot(b);
-  const dateOrder = (bSnapshot.dateISO || "").localeCompare(aSnapshot.dateISO || "");
-  if (dateOrder) return dateOrder;
-  const timestampOrder = bookingHistoryTimestamp(b) - bookingHistoryTimestamp(a);
-  if (timestampOrder) return timestampOrder;
-  return String(a.id || "").localeCompare(String(b.id || ""));
+function bookingPriority(booking) {
+  return { attended: 5, confirmed: 4, reserved: 3, cancelled: 2, withdrawn: 1 }[booking.status] || 0;
 }
 
-function accountHistory(user) {
-  const seenSessionIds = new Set();
-  const history = store.bookingsForUser(user.id)
-    .slice()
-    .sort(compareHistoryBookings)
-    .filter((booking) => {
-      const key = booking.cycleId || booking.sessionId || booking.id;
-      if (seenSessionIds.has(key)) return false;
-      seenSessionIds.add(key);
-      if (booking.cycleId) return true;
-      return !(booking.status === "confirmed" && !sessionStarted(bookingDisplaySnapshot(booking)));
-    });
+function bookingIdentity(booking) {
+  const snapshot = bookingDisplaySnapshot(booking);
+  return booking.cycleId
+    || booking.sessionId
+    || [snapshot.dateISO, snapshot.time, snapshot.name].filter(Boolean).join("|")
+    || booking.id;
+}
+
+function dedupeBookings(records) {
+  const unique = new Map();
+  records.forEach((booking) => {
+    const key = bookingIdentity(booking);
+    const current = unique.get(key);
+    const rsvpHistory = bookingDisplaySnapshot(booking).kind === "rsvp"
+      || (current && bookingDisplaySnapshot(current).kind === "rsvp");
+    if (!current
+        || (rsvpHistory && bookingTimestamp(booking) > bookingTimestamp(current))
+        || (!rsvpHistory && bookingPriority(booking) > bookingPriority(current))
+        || (!rsvpHistory && bookingPriority(booking) === bookingPriority(current)
+          && bookingTimestamp(booking) > bookingTimestamp(current))) {
+      unique.set(key, booking);
+    }
+  });
+  return [...unique.values()];
+}
+
+function visibleBookingsForUser(userId) {
+  return dedupeBookings(store.bookingsForUser(userId)).filter((booking) => {
+    const inactiveRsvp = ["cancelled", "withdrawn"].includes(booking.status);
+    return !(inactiveRsvp && bookingDisplaySnapshot(booking).kind === "rsvp");
+  });
+}
+
+function sortBookings(records, direction = "asc") {
+  return records.slice().sort((a, b) => {
+    const aSnapshot = bookingDisplaySnapshot(a);
+    const bSnapshot = bookingDisplaySnapshot(b);
+    const aKey = `${aSnapshot.dateISO || ""}T${aSnapshot.time || ""}`;
+    const bKey = `${bSnapshot.dateISO || ""}T${bSnapshot.time || ""}`;
+    const result = aKey.localeCompare(bKey);
+    if (result) return direction === "desc" ? -result : result;
+    const timestampResult = bookingTimestamp(b) - bookingTimestamp(a);
+    return timestampResult || String(a.id).localeCompare(String(b.id));
+  });
+}
+
+function bookingGroup(title, bookings) {
+  return bookings.length
+    ? `<section class="booking-group"><div class="section-head"><h2>${title}</h2></div>${bookings.map(bookingCard).join("")}</section>`
+    : "";
+}
+
+function accountBookings(user, filter = "all") {
+  const records = visibleBookingsForUser(user.id);
+  const filtered = filter === "attended"
+    ? records.filter((booking) => booking.status === "attended")
+    : records;
+  const upcoming = sortBookings(
+    filtered.filter((booking) => booking.status !== "cancelled" && !sessionStarted(bookingDisplaySnapshot(booking)))
+  );
+  const past = sortBookings(
+    filtered.filter((booking) => booking.status !== "cancelled" && sessionStarted(bookingDisplaySnapshot(booking))),
+    "desc"
+  );
+  const cancelled = sortBookings(
+    filtered.filter((booking) => booking.status === "cancelled"),
+    "desc"
+  );
+  const hasRecords = upcoming.length || past.length || cancelled.length;
   return `
     <a class="back-link" href="#/account">← Profile</a>
-    <div class="kicker mt16">Profile · History</div>
-    <h1 class="display sm">History.</h1>
-    ${history.length ? history.map(bookingCard).join("") : `<div class="empty">Past sessions will appear here.</div>`}`;
+    <div class="kicker mt16">Profile · Bookings</div>
+    <h1 class="display sm">Bookings.</h1>
+    <div class="chip-row mt16" aria-label="Booking filter">
+      <a class="chip ${filter === "all" ? "active" : ""}" href="#/account/bookings">All bookings</a>
+      <a class="chip ${filter === "attended" ? "active" : ""}" href="#/account/bookings/attended">Attended</a>
+    </div>
+    ${hasRecords
+      ? `${bookingGroup("Upcoming", upcoming)}${bookingGroup("Past", past)}${bookingGroup("Cancelled", cancelled)}`
+      : `<div class="empty mt16">${filter === "attended" ? "Attended sessions will appear here." : "Your bookings will appear here."}</div>`}`;
 }
 
 // --- Apply ---------------------------------------------------------------------------------
@@ -2052,7 +2086,7 @@ export function viewCheckout(sessionId) {
     </div>
     <form id="form-reserve" class="mt16" data-session="${s.id}">
       <button class="btn" type="submit">Reserve spot · pay later</button>
-      <p class="muted small mt8 center">Can’t make it? Defer to a future session anytime before it starts — no refunds.</p>
+      <p class="muted small mt8 center">Once confirmed, this week is final. If you can’t attend, message the collector — ITC will follow up about credit for the missed session.</p>
     </form>`;
 }
 
@@ -2232,22 +2266,23 @@ export function viewBooking(bookingId) {
       const queueName = target?.location?.includes("BFT") ? "BFT switch queue" : "Midtown switch queue";
       actions += `<div class="card mt16"><div class="card-body"><h3>Venue choice</h3>
         <p class="muted small">Current assignment: <strong>${esc(assignedVenue || "Venue pending")}</strong>.</p>
-        ${switchEntry ? `<p class="hyrox-queue-state">${esc(queueName)} · queue position ${store.hyroxCycleQueuePosition(b.userId, cycle.id, "venue_switch", switchEntry.targetSessionId)}. Your ${esc(target?.location || "other venue")} place remains guaranteed while you wait.</p>
+        ${switchEntry ? `<p class="hyrox-queue-state">${esc(queueName)} · queue position ${store.hyroxCycleQueuePosition(b.userId, cycle.id, "venue_switch", switchEntry.targetSessionId)}. Your ${esc(assignedVenue || "current venue")} place remains guaranteed while you wait.</p>
           <button class="btn ghost sm" type="button" data-action="leave-hyrox-switch-queue" data-entry="${switchEntry.id}">Leave switch queue</button>`
           : `<div class="actions"><button class="btn ghost sm" type="button" data-action="select-hyrox-venue" data-booking="${b.id}" data-session="${target?.id}">Change to ${esc(target?.location || "other venue")}</button>
             <button class="btn ghost sm" type="button" data-action="join-hyrox-switch-queue" data-booking="${b.id}" data-session="${target?.id}">${esc(queueName)}</button></div>`}
       </div></div>`;
     }
     if (targets.length) {
+      // No-deferral policy: confirmed paid bookings do not offer self-service
+      // deferral. Members who can't attend should contact ITC so the
+      // collector can adjust headcount and arrange credit follow-up. The
+      // store still exposes `deferBooking` for store-level callers (Admin
+      // cycle cancellation uses it), but the booking detail screen no
+      // longer surfaces the action.
       actions += `
       <div class="card mt16"><div class="card-body">
-        <h3>Can’t make it? Defer — no refunds</h3>
-        <p class="muted small">Move your paid spot to a future ${esc(s.name)} session with availability. Payment carries over.</p>
-        ${targets.map((t) => `
-          <div class="member-row">
-            <div class="who"><strong>${esc(fmtDate(t.dateISO))} · ${fmtTime(t.time)}</strong><span>${esc(t.location)} · ${store.spotsLeft(t)} spots left</span></div>
-            <button class="btn ghost sm" type="button" data-action="defer-to" data-booking="${b.id}" data-session="${t.id}">Defer to this session</button>
-          </div>`).join("")}
+        <h3>Can’t make it?</h3>
+        <p class="muted small">This week is final once payment is confirmed. If you can’t attend, message the collector — ITC will adjust headcount and follow up about credit for the missed session.</p>
       </div></div>`;
     }
   } else {
@@ -2305,7 +2340,7 @@ export function viewReceipt(receiptId) {
 }
 
 export function viewNotFound(msg = "Page not found.") {
-  return `<div class="card"><div class="card-body">
+  return `<div class="card" data-route-not-found><div class="card-body">
     <span class="kicker">404</span>
     <h2 class="mt8">${esc(msg)}</h2>
     <a class="btn mt16" href="#/home">Back to home</a>
@@ -2399,6 +2434,85 @@ function pendingPayments(memberUsers) {
   });
 }
 
+function adminRosterName(userId, memberUsers) {
+  const member = (memberUsers || []).find((member) => member.id === userId);
+  return member?.fullName || member?.preferredName || "Member";
+}
+
+function adminQueueDisclosure({ id, title, subtitle, entries, memberUsers, preference = false, closed = false }) {
+  // Queue selectors already provide queue order; never alphabetize requests.
+  const rows = closed ? [] : entries;
+  return `<details class="admin-payment-group admin-queue-group" name="roster-${esc(id)}" data-queue-title="${esc(title)}">
+    <summary><span><strong>${esc(title)}</strong>${subtitle ? `<span class="muted small">${esc(subtitle)}</span>` : ""}</span><span class="badge neutral">${closed ? "Closed" : rows.length}</span></summary>
+    ${closed ? `<p class="muted small">Switching closed Friday at 9 PM HKT. Unmatched members keep their assigned venue.</p>` : rows.length ? `<ol class="admin-queue-list">${rows.map((entry) => {
+      const userId = typeof entry === "string" ? entry : entry.userId;
+      return `<li><strong>${esc(adminRosterName(userId, memberUsers))}</strong>${preference ? `<span class="muted small">Preference: ${esc(hyroxVenuePreferenceLabel(entry.venuePreference))}</span>` : ""}</li>`;
+    }).join("")}</ol>` : `<p class="muted small">No active requests.</p>`}
+  </details>`;
+}
+
+function adminPaymentRoster({ id, label, dateISO, venue, bookings, memberUsers, queue = "" }) {
+  const directory = new Map((memberUsers || []).map((member) => [member.id, member]));
+  const displayName = (booking) => {
+    const member = directory.get(booking.userId);
+    return member ? (member.fullName || member.preferredName || "Member") : "Member";
+  };
+  const definitions = [
+    ["payment_due", "Payment due", "warn"],
+    ["awaiting_confirmation", "Awaiting confirmation", "warn"],
+    ["paid", "Paid", "free"],
+  ];
+  const grouped = new Map(definitions.map(([state]) => [state, []]));
+  for (const booking of bookings || []) {
+    const state = store.paymentStateForBooking(booking);
+    if (state) grouped.get(state).push(booking);
+  }
+  for (const rows of grouped.values()) {
+    rows.sort((a, b) => displayName(a).localeCompare(displayName(b)));
+  }
+  return `<div class="admin-roster-disclosures" data-payment-roster="${esc(id)}" aria-label="Payment roster · ${esc(label)} · ${esc(fmtDate(dateISO))}">
+    <p class="muted small admin-roster-context">${esc(venue)}</p>
+    ${definitions.map(([state, text, badgeClass]) => {
+      const rows = grouped.get(state);
+      return `<details class="admin-payment-group" name="roster-${esc(id)}" data-payment-state="${state}"${state === "awaiting_confirmation" && rows.length ? " open" : ""}>
+        <summary><span>${esc(text)}</span><span class="badge ${badgeClass}">${rows.length}</span></summary>
+        ${rows.length ? rows.map((booking) => `<div class="admin-roster-row"><strong>${esc(displayName(booking))}</strong>${state === "awaiting_confirmation" ? `<button class="btn sm" type="button" data-action="confirm-payment" data-booking="${esc(booking.id)}">Confirm received</button>` : `<span class="badge ${badgeClass}">${esc(text)}</span>`}</div>${state === "awaiting_confirmation" && booking.cycleId ? `<form id="form-hyrox-payment-reject" class="admin-roster-reject" data-booking="${esc(booking.id)}"><div class="field"><label>Reject reason<input name="reason" required placeholder="e.g. Reference not found"></label></div><button class="btn danger ghost sm" type="submit">Reject claim</button></form>` : ""}`).join("") : `<p class="muted small">No members in this state.</p>`}
+      </details>`;
+    }).join("")}
+    ${queue}
+  </div><!-- payment-roster-end:${esc(id)} -->`;
+}
+
+function adminAttendanceSession(session, memberUsers) {
+  const directory = new Map((memberUsers || []).map((member) => [member.id, member]));
+  const displayName = (booking) => {
+    const member = directory.get(booking.userId);
+    return member ? (member.fullName || member.preferredName || "Member") : "Member";
+  };
+  const bookings = store.attendanceBookingsForSession(session.id);
+  const expected = bookings.filter((booking) => booking.status === "confirmed")
+    .sort((a, b) => displayName(a).localeCompare(displayName(b)));
+  const arrived = bookings.filter((booking) => booking.status === "attended")
+    .sort((a, b) => displayName(a).localeCompare(displayName(b)));
+  const window = store.attendanceWindowForSession(session);
+  const timingCopy = window.state === "upcoming"
+    ? "Check-in opens 15 minutes before the session."
+    : window.state === "locked"
+      ? "Attendance locked."
+      : "Attendance check-in is open.";
+  const row = (booking, isArrived) => `<div class="admin-roster-row">
+    <span class="admin-attendance-name"><strong>${esc(displayName(booking))}</strong><span class="badge ${isArrived ? "free" : "neutral"}">${isArrived ? "Arrived" : "Expected"}</span></span>
+    ${window.state === "open" ? `<button class="btn ${isArrived ? "ghost " : ""}sm" type="button" data-action="attendance-toggle" data-booking="${esc(booking.id)}" data-arrived="${isArrived ? "0" : "1"}">${isArrived ? "Undo" : "Mark Arrived"}</button>` : ""}
+  </div>`;
+  return `<details class="admin-attendance-session" data-attendance-session="${esc(session.id)}" open>
+    <summary><span><strong>Expected arrivals</strong><span class="muted small">${esc(fmtTime(session.time))} · ${esc(session.location || "Venue pending")}</span></span><span>${arrived.length} arrived · ${expected.length} still expected</span></summary>
+    <p class="muted small admin-attendance-copy">${timingCopy}</p>
+    ${expected.map((booking) => row(booking, false)).join("")}
+    ${arrived.map((booking) => row(booking, true)).join("")}
+    ${bookings.length ? "" : `<p class="muted small admin-attendance-empty">No confirmed-paid arrivals.</p>`}
+  </details>`;
+}
+
 function venueDisplayName(session) {
   const identity = `${session?.id || ""} ${session?.location || ""}`.toLowerCase();
   if (identity.includes("bft")) return "BFT";
@@ -2407,33 +2521,9 @@ function venueDisplayName(session) {
   return session?.location || "venue";
 }
 
-function adminVenueStatusMetrics(session) {
-  const held = store.heldBookingsForSession(session.id);
-  const confirmed = held.filter((booking) => booking.status === "confirmed").length;
-  const claims = held.filter((booking) => booking.status === "reserved" && booking.paymentMarkedAt);
-  const claimsCount = claims.length;
-  const unpaid = held.filter((booking) => booking.status === "reserved" && !booking.paymentMarkedAt).length;
-  const capacity = Number(session.capacity);
-  const spotsLeft = Number.isFinite(capacity) ? Math.max(0, capacity - held.length) : null;
-  const safeId = esc(session.id);
-  const claimsList = claimsCount ? `<details id="hyrox-venue-${safeId}-claims" class="admin-claims-section admin-status-anchor" open>
-    <summary><span class="kicker dim">Payment claims to review</span><span class="badge warn">${claimsCount}</span></summary>
-    ${claims.map((booking) => `
-      <div class="member-row"><div class="who"><strong>${esc(booking.snapshot?.name || "Member")}</strong><span>${esc(booking.paymentRef || "No reference")}</span></div>
-        <button class="btn sm" type="button" data-action="confirm-payment" data-booking="${esc(booking.id)}">Confirm received</button></div>
-      <form id="form-hyrox-payment-reject" class="mt8" data-booking="${esc(booking.id)}"><div class="field"><label>Reject reason</label><input name="reason" required placeholder="e.g. Reference not found"></div><button class="btn danger ghost sm" type="submit">Reject claim</button></form>`).join("")}
-  </details>` : "";
-  return `<div class="admin-hyrox-counts venue-counts" aria-label="${esc(venueDisplayName(session))} booking status">
-    <div class="admin-hyrox-count"><strong>${confirmed}</strong><span>Confirmed paid</span></div>
-    <div class="admin-hyrox-count"><strong>${claimsCount}</strong><span>Payment claims to review</span></div>
-    <div class="admin-hyrox-count"><strong>${unpaid}</strong><span>Unpaid holds</span></div>
-    <div class="admin-hyrox-count"><strong>${held.length}</strong><span>Active places</span></div>
-    <div class="admin-hyrox-count"><strong>${spotsLeft ?? "∞"}</strong><span>Spots left</span></div>
-  </div>
-  ${claimsList}
-  <div id="hyrox-venue-${safeId}-confirmed" class="admin-status-anchor"></div>
-  <div id="hyrox-venue-${safeId}-unpaid" class="admin-status-anchor"></div>
-  <div id="hyrox-venue-${safeId}-active" class="admin-status-anchor"></div>`;
+function adminCapacityLine(count, capacity) {
+  const available = capacity == null ? "Uncapped" : `${Math.max(0, Number(capacity) - count)} available`;
+  return `<p class="muted small admin-capacity-line">${count} active places · ${available}</p>`;
 }
 
 function adminVenueHandoff(session, { message, override, meta = "", extra = "", ready = true, heading = venueDisplayName(session), subheading = "", cardClass = "" }) {
@@ -2442,7 +2532,6 @@ function adminVenueHandoff(session, { message, override, meta = "", extra = "", 
   return `<div class="card hyrox-venue-card mt16 ${cardClass}"><div class="card-body">
     ${meta}
     <div class="section-head"><div><h3>${esc(heading)}</h3>${subheading ? `<p class="muted small hyrox-card-subtitle">${esc(subheading)}</p>` : ""}</div>${override.gymConfirmedAt ? `<span class="badge free">Confirmed</span>` : `<span class="badge neutral">Venue handoff</span>`}</div>
-    ${adminVenueStatusMetrics(session)}
     ${extra}
     ${override.gymConfirmedAt
       ? `<p class="badge free mt8">Confirmed with ${esc(venueName)} · ${new Date(override.gymConfirmedAt).toLocaleDateString("en-HK", { day: "numeric", month: "short" })}${override.gymNote ? ` — ${esc(override.gymNote)}` : ""}</p>`
@@ -2459,7 +2548,7 @@ function adminVenueHandoff(session, { message, override, meta = "", extra = "", 
   </div></div>`;
 }
 
-function adminHyroxGymControls(cycle) {
+function adminHyroxGymControls(cycle, memberUsers) {
   const sessionIds = (cycle.venuePlan === "bft_only"
     ? [cycle.bftSessionId]
     : [cycle.bftSessionId, cycle.midtownSessionId]).filter(Boolean);
@@ -2471,29 +2560,67 @@ function adminHyroxGymControls(cycle) {
       const session = store.getSession(sessionId);
       if (!session) return "";
       const override = store.weekVenueOverride(sessionId);
-      const message = `ITC HYROX booking — ${fmtDate(cycle.dateISO)} at ${session.location}. Confirmed: ${store.heldBookingsForSession(sessionId).filter((booking) => booking.status === "confirmed").length}.`;
-      return adminVenueHandoff(session, { message, override, ready });
+      const paidCount = store.paymentRosterBookings().filter((booking) =>
+        booking.sessionId === sessionId && ["confirmed", "attended"].includes(booking.status)
+      ).length;
+      const message = `ITC HYROX booking — ${fmtDate(cycle.dateISO)} at ${session.location}. Confirmed: ${paidCount}.`;
+      const otherId = sessionId === cycle.bftSessionId ? cycle.midtownSessionId : cycle.bftSessionId;
+      const other = store.getSession(otherId);
+      const queue = cycle.venuePlan === "both" ? adminQueueDisclosure({
+        id: sessionId,
+        title: `Switch requests into ${venueDisplayName(session)}`,
+        subtitle: `Already booked at ${venueDisplayName(other)}`,
+        entries: store.hyroxCycleQueues(cycle.id).venueSwitches.filter((entry) => entry.targetSessionId === sessionId),
+        memberUsers,
+        closed: !!cycle.allocationClosedAt || Date.now() >= cycle.venueChoiceDeadlineAt,
+      }) : "";
+      const extra = cycle.venuePlan === "pending" ? "" : `${queue}${adminAttendanceSession(session, memberUsers)}`;
+      return adminVenueHandoff(session, { message, override, ready, extra });
     }).join("")}
   </div>`;
 }
 
-function adminHyroxCycleCards() {
-  return store.hyroxCycles().map((cycle) => {
+function paymentVisibleHyroxCycles(financialBookings, now = Date.now()) {
+  return store.hyroxCycles().filter((cycle) => {
+    const active = financialBookings.some((booking) => booking.cycleId === cycle.id);
+    const childSessions = [cycle.bftSessionId, cycle.midtownSessionId]
+      .map((sessionId) => sessionId ? store.getSession(sessionId) : null)
+      .filter(Boolean);
+    const closesAt = childSessions.length
+      ? Math.max(...childSessions.map((session) => store.attendanceWindowForSession(session, now).closesAt))
+      : cycle.venueChoiceDeadlineAt + 24 * 60 * 60_000;
+    return active || (now >= cycle.registrationOpensAt && now <= closesAt);
+  });
+}
+
+function adminHyroxCycleCards(memberUsers) {
+  const financialBookings = store.paymentRosterBookings();
+  return paymentVisibleHyroxCycles(financialBookings).map((cycle) => {
     const bookings = store.hyroxCycleBookings(cycle.id);
-    const active = bookings.filter((booking) => ["reserved", "confirmed"].includes(booking.status));
-    const confirmed = bookings.filter((booking) => booking.status === "confirmed");
-    const claims = bookings.filter((booking) => booking.status === "reserved" && booking.paymentMarkedAt);
-    const unpaid = bookings.filter((booking) => booking.status === "reserved" && !booking.paymentMarkedAt);
+    const active = bookings.filter((booking) => store.paymentStateForBooking(booking));
+    const claims = bookings.filter((booking) => store.paymentStateForBooking(booking) === "awaiting_confirmation");
     const queues = store.hyroxCycleQueues(cycle.id);
     const locked = Date.now() < cycle.registrationOpensAt && cycle.registrationState === "draft";
     const afterPromotion = Date.now() >= cycle.promotedPaymentDeadlineAt;
-    const allocationCounts = cycle.venuePlan === "both"
-      ? `<p class="muted small">BFT assignments: ${confirmed.filter((b) => b.sessionId === cycle.bftSessionId).length} · Midtown assignments: ${confirmed.filter((b) => b.sessionId === cycle.midtownSessionId).length} · switch queue: ${queues.venueSwitches.length}</p>`
-      : "";
-    const pendingClaims = claims.map((booking) => `
-      <div class="member-row"><div class="who"><strong>${esc(booking.snapshot?.name || "Member")}</strong><span>${esc(booking.paymentRef || "No reference")}</span></div>
-        <button class="btn sm" type="button" data-action="confirm-payment" data-booking="${esc(booking.id)}">Confirm received</button></div>
-      <form id="form-hyrox-payment-reject" class="mt8" data-booking="${esc(booking.id)}"><div class="field"><label>Reject reason</label><input name="reason" required placeholder="e.g. Reference not found"></div><button class="btn danger ghost sm" type="submit">Reject claim</button></form>`).join("");
+    const cycleFinancialBookings = financialBookings.filter((booking) => booking.cycleId === cycle.id);
+    const paymentRoster = adminPaymentRoster({
+      id: cycle.id,
+      label: "ITC HYROX weekly cycle",
+      dateISO: cycle.dateISO,
+      venue: active.some((booking) => !booking.sessionId)
+        ? "Venue allocation pending"
+        : cycle.venuePlan === "both" ? "BFT + Midtown 28" : "BFT",
+      bookings: cycleFinancialBookings,
+      memberUsers,
+      queue: adminQueueDisclosure({
+        id: cycle.id, title: "Weekly waitlist",
+        subtitle: "Waiting for a place in the shared pool",
+        entries: queues.weeklyWaitlist, memberUsers, preference: true,
+      }),
+    });
+    const allocationPending = cycleFinancialBookings.some((booking) =>
+      !booking.sessionId && ["confirmed", "attended"].includes(booking.status)
+    ) || (cycle.venuePlan === "pending" && cycleFinancialBookings.some((booking) => !booking.sessionId));
     const retry = !claims.length && cycle.venuePlan === "pending" && cycle.reconciliationStartedAt
       ? `<button class="btn sm" type="button" data-action="hyrox-plan-retry" data-cycle="${esc(cycle.id)}">Retry automatic venue plan</button>` : "";
     const close = cycle.venuePlan !== "pending" && !cycle.allocationClosedAt && Date.now() >= cycle.venueChoiceDeadlineAt
@@ -2501,34 +2628,20 @@ function adminHyroxCycleCards() {
     return `<section class="card hyrox-admin-cycle mt16"><div class="card-body">
       <div class="section-head"><div><span class="kicker">${esc(fmtDate(cycle.dateISO))}</span><h2>ITC HYROX<br><span>Payment reconciliation</span></h2></div><span class="badge ${locked ? "neutral" : "warn"}">${locked ? "Locked" : esc(cycle.registrationState)}</span></div>
       <p class="muted small">${locked ? "Registration opens Monday at 6 PM HKT." : afterPromotion ? "Final reconciliation summary after Thursday 8 PM HKT." : "Payment review runs Thursday at 6 PM HKT."}</p>
-      <div class="admin-hyrox-counts" aria-label="HYROX registration status">
-        <div class="admin-hyrox-count"><strong>${confirmed.length}</strong><span>Confirmed paid</span></div>
-        <a class="admin-hyrox-count admin-hyrox-count-link" href="#hyrox-status-${esc(cycle.id)}-claims" data-claims-anchor>
-          <strong>${claims.length}</strong><span>Payment claims to review</span>
-        </a>
-        <div class="admin-hyrox-count"><strong>${unpaid.length}</strong><span>Unpaid reservations</span></div>
-        <div class="admin-hyrox-count"><strong>${active.length}</strong><span>Active places</span></div>
-        <div class="admin-hyrox-count"><strong>${queues.weeklyWaitlist.length}</strong><span>Weekly waitlist</span></div>
-      </div>
-      ${claims.length ? `<details id="hyrox-status-${esc(cycle.id)}-claims" class="admin-claims-section admin-status-anchor" open>
-        <summary><span class="kicker dim">Payment claims to review</span><span class="badge warn">${claims.length}</span></summary>
-        ${pendingClaims}
-      </details>` : ""}
-      <div id="hyrox-status-${esc(cycle.id)}-confirmed" class="admin-status-anchor"></div>
-      <div id="hyrox-status-${esc(cycle.id)}-unpaid" class="admin-status-anchor"></div>
-      <div id="hyrox-status-${esc(cycle.id)}-active" class="admin-status-anchor"></div>
-      <div id="hyrox-status-${esc(cycle.id)}-waitlist" class="admin-status-anchor"></div>
-      <div class="actions">${retry}${close}</div>${adminHyroxGymControls(cycle)}
+      ${paymentRoster}
+      ${adminCapacityLine(active.length, cycle.capacity)}
+      ${allocationPending ? `<p class="muted small mt16">Expected-arrivals roster available after venue allocation.</p>` : ""}
+      <div class="actions">${retry}${close}</div>${adminHyroxGymControls(cycle, memberUsers)}
       <form id="form-cancel-hyrox-cycle" class="mt16" data-cycle="${esc(cycle.id)}"><div class="field"><label>Cancel this HYROX cycle — reason</label><input name="reason" required placeholder="e.g. Gym unavailable"></div><button class="btn danger ghost sm" type="submit">Cancel HYROX cycle</button></form>
-    </div></section>${adminIslandEccHandoff(cycle)}`;
+    </div></section>${adminIslandEccHandoff(cycle, memberUsers)}`;
   }).join("");
 }
 
-function adminHyroxWeeklyBookingSetup() {
+function adminHyroxWeeklyBookingSetup(memberUsers) {
   return `<details class="admin-section mt24">
     <summary><h2>HYROX weekly booking setup</h2></summary>
-    ${adminHyroxCycleCards()}
-    ${adminFinalizeGym()}
+    ${adminHyroxCycleCards(memberUsers)}
+    ${adminFinalizeGym(memberUsers)}
   </details>`;
 }
 
@@ -2588,7 +2701,7 @@ function adminOps(viewer, memberUsers, profilePhone = "") {
   return `
     ${dutyCard}
     ${pendingCard}
-    ${adminHyroxWeeklyBookingSetup()}`;
+    ${adminHyroxWeeklyBookingSetup(memberUsers)}`;
 }
 
 // Weekly paid-session setup controls (time, note, venue TBC) live
@@ -2636,17 +2749,29 @@ function adminPaidSessionControls() {
 
 // Money-side per-session work stays on the Payments tab: confirming paid
 // headcount with the venue reads bookings/receipts, not session setup.
-function adminFinalizeGymCard(s, cardClass = "") {
+function adminFinalizeGymCard(s, cardClass = "", memberUsers = []) {
   const override = store.getSession(s.id);
   if (override.cancelled) return "";
-  const held = store.heldBookingsForSession(s.id);
-  const confirmed = held.filter((b) => b.status === "confirmed");
+  const held = store.paymentRosterBookings().filter((booking) => booking.sessionId === s.id);
+  const confirmed = held.filter((booking) => ["confirmed", "attended"].includes(booking.status));
   const names = store.attendeesFor(s);
   const venueName = venueDisplayName(s);
   const venueCardClass = cardClass || (venueName === "Island ECC" ? "hyrox-island-ecc-card" : "");
   const message = `ITC HYROX booking — ${fmtDate(s.dateISO)} ${fmtTime(s.time)} at ${s.location}. Confirmed: ${confirmed.length} of ${s.capacity}. Names: ${names.join(", ")}. Total: ${fmtMoney(confirmed.length * s.price)}.`;
   const isMid = store.isMidtown(s);
   const open = store.midtownOpenFor(s);
+  const paymentRoster = adminPaymentRoster({
+    id: s.id,
+    label: s.name || "ITC HYROX",
+    dateISO: s.dateISO,
+    venue: s.location || "Venue pending",
+    bookings: held,
+    memberUsers,
+    queue: adminQueueDisclosure({
+      id: s.id, title: "Session waitlist", subtitle: "Waiting for a place in this session",
+      entries: store.queueFor(s.id).waitlist, memberUsers,
+    }),
+  });
   return adminVenueHandoff(s, {
     message,
     override,
@@ -2654,29 +2779,54 @@ function adminFinalizeGymCard(s, cardClass = "") {
     heading: `ITC HYROX - ${venueName}`,
     subheading: "Payment reconciliation",
     cardClass: venueCardClass,
-    extra: isMid
+    extra: `${paymentRoster}${adminCapacityLine(held.length, s.capacity)}${adminAttendanceSession(s, memberUsers)}${isMid
       ? `<p class="muted small mt8">Registration: <strong>${open ? "Open" : "Closed"}</strong></p>
          <button class="btn ghost sm" type="button" data-action="midtown-toggle" data-session="${esc(s.id)}" data-open="${open ? "0" : "1"}">${open ? "Close Midtown" : "Open Midtown"}</button>`
-      : "",
+      : ""}`,
   });
 }
 
-function adminIslandEccHandoff(cycle) {
+function adminIslandEccHandoff(cycle, memberUsers) {
   const childIds = [cycle.bftSessionId, cycle.midtownSessionId].filter(Boolean);
-  const session = store.upcomingSessions(21).find((candidate) => {
+  const financialSessionIds = store.paymentRosterBookings()
+    .filter((booking) => booking.sessionId && booking.snapshot?.dateISO === cycle.dateISO)
+    .map((booking) => booking.sessionId);
+  const candidates = [
+    ...store.upcomingSessions(21),
+    ...financialSessionIds.map((sessionId) => store.getSession(sessionId)).filter(Boolean),
+  ];
+  const session = candidates.find((candidate) => {
     if (candidate.category !== "HYROX" || candidate.dateISO !== cycle.dateISO
-        || childIds.includes(candidate.id) || sessionStarted(candidate)) return false;
+        || childIds.includes(candidate.id)) return false;
     return !store.getSession(candidate.id).cancelled;
   });
-  return session ? adminFinalizeGymCard(session, "hyrox-island-ecc-card") : "";
+  return session ? adminFinalizeGymCard(session, "hyrox-island-ecc-card", memberUsers) : "";
 }
 
-function adminFinalizeGym() {
-  const cycleDates = new Set(store.hyroxCycles().map((cycle) => cycle.dateISO));
-  const upcoming = store.upcomingSessions(21).filter((s) => s.category === "HYROX" && !sessionStarted(s)
-    && !cycleDates.has(s.dateISO)
-    && ![store.hyroxCycleForDate(s.dateISO)?.bftSessionId, store.hyroxCycleForDate(s.dateISO)?.midtownSessionId].includes(s.id));
-  const cards = upcoming.map((session) => adminFinalizeGymCard(session)).join("");
+function adminFinalizeGym(memberUsers) {
+  const financialBookings = store.paymentRosterBookings();
+  const cycleDates = new Set(paymentVisibleHyroxCycles(financialBookings).map((cycle) => cycle.dateISO));
+  const candidates = new Map(store.upcomingSessions(21)
+    .filter((session) => session.category === "HYROX")
+    .map((session) => [session.id, session]));
+  for (const booking of financialBookings) {
+    if (!booking.sessionId || booking.cycleId) continue;
+    const session = store.getSession(booking.sessionId);
+    if (session?.category === "HYROX") candidates.set(session.id, session);
+  }
+  const upcoming = [...candidates.values()].filter((session) => {
+    const cycleChildren = [
+      store.hyroxCycleForDate(session.dateISO)?.bftSessionId,
+      store.hyroxCycleForDate(session.dateISO)?.midtownSessionId,
+    ];
+    const hasActiveBooking = financialBookings.some((booking) => booking.sessionId === session.id);
+    const start = hktEventStartMs(session.dateISO, session.time);
+    const withinDisplayWindow = Date.now() >= start - 21 * 24 * 60 * 60_000
+      && store.attendanceWindowForSession(session).state !== "locked";
+    return !cycleDates.has(session.dateISO) && !cycleChildren.includes(session.id)
+      && (hasActiveBooking || withinDisplayWindow);
+  }).sort((a, b) => hktEventStartMs(a.dateISO, a.time) - hktEventStartMs(b.dateISO, b.time));
+  const cards = upcoming.map((session) => adminFinalizeGymCard(session, "", memberUsers)).join("");
   return `
     <section class="admin-control-group mt24" aria-labelledby="hyrox-venue-handoff-title">
       <div class="section-head"><h3 id="hyrox-venue-handoff-title">Venue handoff</h3></div>

@@ -15,7 +15,7 @@ The prototype implements the selected "Night Circuit" direction and the confirme
 - Weekly HYROX uses one shared 32-place BFT/Midtown pool at a fixed price, with automatic recurring parent-card provisioning, Monday opening, venue allocation, confirmation, receipt, and member-area management. Quarry Bay remains a separate direct-booking session.
 - Account lifecycle: public visitor → application → leader approval → member. Pending applicants keep public access only.
 - Member area: upcoming bookings, receipts, payment history, profile.
-- Admin area: applicant approval queue, activity editor (including the unresolved HYROX price/capacity as editable placeholders), member role list.
+- Admin area: combined member/application management, activity controls, Giving operations, and Payments with compact, expandable financial-state and waitlist rows plus time-gated paid-session attendance check-in. BFT/Midtown share one financial roster and weekly waitlist; allocated venues show their incoming switch queues separately. Island ECC uses the same layout for its independent session waitlist.
 - Super Admin can additionally change member roles.
 
 Run it (same server as the design review):
@@ -37,9 +37,9 @@ The design review remains available at `http://127.0.0.1:4173/references/itc-mob
 - Zero dependencies, no build step. Plain ES modules so the codebase stays easy to refine; the production stack is still an open decision.
 - The combined Testing candidate has explicit ownership boundaries:
   - **Supabase in configured live mode:** identity, roles, applications, notifications, Giving campaigns, donor profiles, and operational sessions, bookings, queues, collector assignments, payout profiles, confirmations, RSVP totals, and receipts. Browser mutations use scoped RPCs; no real money is moved.
-  - **`localStorage`:** local-mode prototype state plus device-local Community interactions and application drafts. In live mode it may retain a UUID-keyed payout handoff cache only after an authoritative Supabase save; forced hydration remains authoritative.
-- Navigation combines the Notification bell with a signed-in-only Giving tab. Admin navigation contains Approvals, Members, Activities, Giving, and Payments. Dated free/RSVP and paid session administration is grouped under **Activities → Weekly Event Controls**.
-- Persisted prototype state is **v19** and accepts/migrates existing **v9–v18** snapshots without discarding genuine domain records. Local pooled HYROX state is only a prototype parity seam; configured live Supabase remains authoritative.
+  - **`localStorage`:** local-mode prototype state plus device-local Community interactions, application drafts, and the last successfully rendered route for mobile handoff recovery. In live mode it may retain that identity-scoped route and a UUID-keyed payout handoff cache only after an authoritative Supabase save; forced hydration remains authoritative.
+- Navigation combines the Notification bell with a signed-in-only Giving tab. Admin navigation contains Members, Activities, Giving, and Payments. Dated free/RSVP and paid session administration is grouped under **Activities → Weekly Event Controls**; Admin → Payments keeps financial reconciliation and time-gated attendance together.
+- Persisted prototype state is **v22** and accepts/migrates existing **v9–v21** snapshots without discarding genuine domain records. Local pooled HYROX state is only a prototype parity seam; configured live Supabase remains authoritative.
 - With Supabase configured, a new Google profile remains `pending` until its application is submitted and an Admin approves it. Pending and declined profiles cannot use Payment or Giving controls.
 - Without Supabase configuration, local state starts empty. Apply through the membership flow to create a local pending profile, which can then sign in again by email (no password).
 - `app/js/store.js` remains the backend seam across both ownership domains until a production backend is selected.

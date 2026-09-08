@@ -153,6 +153,10 @@ function parseHash() {
     .filter(Boolean);
 }
 
+function replaceRoute(route) {
+  history.replaceState(history.state, "", `${location.pathname}${location.search}${route}`);
+}
+
 const NAV_FOR = {
   home: "home",
   schedule: "schedule",
@@ -488,6 +492,9 @@ async function render(generation = renderGeneration) {
   if (notificationsActive) notificationRouteRows = nextNotificationRouteRows;
   viewEl.innerHTML = out;
   const user = store.currentUser();
+  if (!viewEl.querySelector("[data-route-not-found]")) {
+    store.rememberLastRoute(location.hash, user?.id);
+  }
   navEl.innerHTML = views.navHTML(NAV_FOR[page] ?? "home", user);
   avatarEl.classList.toggle("is-empty", !user);
   avatarEl.innerHTML = views.avatarHTML(user);
@@ -1062,6 +1069,28 @@ document.addEventListener("click", async (e) => {
       break;
     }
 
+    case "attendance-toggle": {
+      const bookingId = String(el.dataset.booking || "");
+      if (!bookingId || !["0", "1"].includes(el.dataset.arrived)) break;
+      const arrived = el.dataset.arrived === "1";
+      try {
+        await withBusyControl(el, arrived ? "Marking…" : "Undoing…", async () => {
+          await store.setBookingAttendance(bookingId, arrived);
+          toast(arrived ? "Marked Arrived" : "Attendance reset to Expected");
+          await renderWithFeedback();
+        });
+      } catch (err) {
+        toast(err.message || "Unable to update attendance", true);
+        try {
+          await store.hydrateLiveOperations({ force: true });
+          await renderWithFeedback();
+        } catch (refreshError) {
+          console.warn("Unable to refresh attendance after mutation failure", refreshError);
+        }
+      }
+      break;
+    }
+
     case "hyrox-plan-retry":
       if (controlBusy.has(el)) break;
       try {
@@ -1267,6 +1296,23 @@ document.addEventListener("submit", async (e) => {
     return;
   }
 
+  if (form.id === "form-privacy") {
+    e.preventDefault();
+    if (!form.reportValidity()) return;
+    const control = form.querySelector('[type="submit"]');
+    await withBusyControl(control, "Saving…", async () => {
+      try {
+        await store.updateMyPrivacyPreferences(Object.fromEntries(new FormData(form).entries()));
+        toast("Privacy preferences saved");
+        location.hash = "#/account/privacy";
+        await renderWithFeedback();
+      } catch (err) {
+        toast(err.message || "Unable to save privacy preferences", true);
+      }
+    });
+    return;
+  }
+
   const formAction = form.id || form.dataset.action;
 
   switch (formAction) {
@@ -1399,26 +1445,6 @@ document.addEventListener("submit", async (e) => {
         ref: `GIVE-${Math.random().toString(36).slice(2, 8).toUpperCase()}`,
       });
       await renderWithFeedback();
-      break;
-    }
-
-    case "form-membership-details": {
-      e.preventDefault();
-      const user = store.currentUser();
-      if (!user) return;
-      const errEl = form.querySelector("#membership-details-error");
-      const raw = String(new FormData(form).get("donorId") || "").trim();
-      if (donorIdProblem(raw)) {
-        errEl.innerHTML =
-          `<div class="form-error">That Donor ID doesn’t look right — it needs a hyphen between your last name and the 4- or 5-digit number (e.g. CHUI-08879 or CHUI-8879). Please enter it again.</div>`;
-        return;
-      }
-      try {
-        if (raw) await store.updateMyDonorId(raw);
-        toast("Membership details saved");
-        location.hash = "#/account/details";
-        await renderWithFeedback();
-      } catch (err) { toast(err.message || "Unable to save membership details", true); }
       break;
     }
 
@@ -1764,7 +1790,8 @@ async function boot() {
       toast(bootError.message || "Application read failed", true);
     }
   }
-  if (!location.hash) location.hash = "#/home";
+  const startup = store.startupRoute(location.hash, store.currentUser()?.id);
+  if (startup !== location.hash) replaceRoute(startup);
   window.addEventListener("hashchange", async () => {
     const generation = ++renderGeneration;
     // The Payment/Auth baseline hydrates identity before rendering. Commit
@@ -1809,27 +1836,32 @@ async function boot() {
     }
   });
 
-  // Assigned collector payout changes can be RLS-suppressed from an ordinary
-  // member's Realtime stream. Restoring an open Payment route reruns the same
-  // forced, least-privilege hydration used on route entry.
+  // Mobile app switching can relaunch the installed app without its hash.
+  // Recover the last committed route in that case. An intact non-Payment
+  // route needs no work; Payment still refreshes its least-privilege collector
+  // details whenever the member returns from PayMe.
   document.addEventListener("visibilitychange", async () => {
-    if (document.visibilityState !== "visible" || parseHash()[0] !== "pay") return;
+    if (document.visibilityState !== "visible") return;
+    const resumedRoute = store.startupRoute(location.hash, store.currentUser()?.id);
+    const recoveredRoute = resumedRoute !== location.hash;
+    if (recoveredRoute) replaceRoute(resumedRoute);
+    if (!recoveredRoute && parseHash()[0] !== "pay") return;
     try {
       await renderWithFeedback();
     } catch (err) {
-      toast(err.message || "Unable to refresh payment details", true);
+      toast(err.message || "Unable to refresh the current page", true);
     }
   });
 
-  // Live-mode auth listener: when Supabase completes sign-in, route the
-  // pending user to /apply (if they have not yet submitted an application).
+  // Supabase may emit SIGNED_IN again when an existing session regains focus.
+  // Refresh identity without replacing the current route; only a pending
+  // applicant still needs the follow-up redirect to /apply.
   if (isLive() && supabase) {
     supabase.auth.onAuthStateChange((event) => {
       if (event !== "SIGNED_IN") return;
       setTimeout(async () => {
         try {
           await store.getCurrentUser();
-          location.hash = "#/home";
           await renderWithFeedback();
           await maybeRedirectToApply();
         } catch (err) {

@@ -464,6 +464,22 @@ begin
   ) then
     raise notice 'FAIL: pooled operational receipt scope missing'; failures := failures + 1;
   end if;
+  if not exists (
+    select 1 from information_schema.columns
+     where table_schema = 'public' and table_name = 'operational_bookings'
+       and column_name = 'attended_at' and data_type = 'timestamp with time zone'
+  ) or not exists (
+    select 1 from information_schema.columns
+     where table_schema = 'public' and table_name = 'operational_bookings'
+       and column_name = 'attended_by' and data_type = 'uuid'
+  ) then
+    raise notice 'FAIL: operational attendance audit columns missing'; failures := failures + 1;
+  end if;
+  if to_regprocedure('public.set_operational_attendance(uuid,boolean)') is null
+      or has_function_privilege('anon', 'public.set_operational_attendance(uuid,boolean)', 'execute')
+      or not has_function_privilege('authenticated', 'public.set_operational_attendance(uuid,boolean)', 'execute') then
+    raise notice 'FAIL: attendance RPC ACLs violate least privilege'; failures := failures + 1;
+  end if;
   if failures > 0 then raise exception 'schema failures: %', failures; end if;
   raise notice 'OK: operational schema foundations';
 end $$;
@@ -2130,7 +2146,7 @@ declare
     + 252;
   v_cycle_id text;
   v_cycle public.operational_hyrox_cycles;
-  v_thu_17 timestamptz;
+  v_thu_16 timestamptz;
   v_thu_18 timestamptz;
   v_thu_19 timestamptz;
   v_thu_20 timestamptz;
@@ -2143,7 +2159,7 @@ begin
   select * into v_cycle from public.schedule_hyrox_cycle(v_cycle_id);
   reset role;
 
-  v_thu_17 := v_cycle.payment_deadline_at - interval '1 hour';
+  v_thu_16 := v_cycle.payment_deadline_at - interval '2 hours';
   v_thu_18 := v_cycle.payment_deadline_at;
   v_thu_19 := v_cycle.holder_grace_deadline_at;
   v_thu_20 := v_cycle.promoted_payment_deadline_at;
@@ -2177,21 +2193,29 @@ begin
     (v_cycle_id, '70000000-0000-0000-0000-000000000006', 'weekly_waitlist',
      'either', v_cycle.registration_opens_at, v_cycle.registration_opens_at + interval '5 seconds');
 
-  perform public.sweep_hyrox_cycle_deadlines(v_thu_17);
+  perform public.send_hyrox_member_payment_reminders(v_thu_16);
+  perform public.sweep_hyrox_cycle_deadlines(v_thu_16);
   perform pg_temp.op_assert(
-    (select payment_reminder_sent_at = v_thu_17
+    (select payment_reminder_sent_at = v_thu_16
        from public.operational_hyrox_cycles where id = v_cycle_id)
       and (select count(*) from public.notifications
             where kind = 'operational_hyrox_payment_reminder'
               and body like '%' || v_date::text || '%') = 2,
-    'Thursday 17:00 reminds each unmarked original holder once'
+    'Thursday 16:00 reminds each unmarked original holder once'
   );
-  perform public.sweep_hyrox_cycle_deadlines(v_thu_17 + interval '1 minute');
+  perform public.send_hyrox_member_payment_reminders(v_thu_16 + interval '1 minute');
+  perform public.send_hyrox_collector_payment_reminder(v_thu_16);
   perform pg_temp.op_assert(
     (select count(*) from public.notifications
       where kind = 'operational_hyrox_payment_reminder'
         and body like '%' || v_date::text || '%') = 2,
-    'repeated Thursday 17:00 sweep does not duplicate reminders'
+    'repeated Thursday 16:00 sweep does not duplicate member reminders'
+  );
+  perform pg_temp.op_assert(
+    (select count(*) from public.notifications
+      where kind = 'operational_hyrox_collector_payment_reminder'
+        and body like '%' || v_date::text || '%') = 1,
+    'Thursday 16:00 collector reminder is aggregate and idempotent'
   );
 
   perform public.sweep_hyrox_cycle_deadlines(v_thu_18);
@@ -4204,6 +4228,178 @@ begin
       raise;
     end if;
   end;
+  reset role;
+end $$;
+
+-- =====================================================================
+-- Admin attendance: paid-only, time-bound, reversible and idempotent
+-- =====================================================================
+
+do $$
+declare
+  v_today date := (now() at time zone 'Asia/Hong_Kong')::date;
+  v_open_time time := ((now() at time zone 'Asia/Hong_Kong') + interval '10 minutes')::time;
+  v_future_time time := ((now() at time zone 'Asia/Hong_Kong') + interval '16 minutes')::time;
+  v_old_time time := ((now() at time zone 'Asia/Hong_Kong') - interval '25 hours 1 second')::time;
+  v_open_boundary_time time := ((now() at time zone 'Asia/Hong_Kong') + interval '15 minutes')::time;
+  v_close_boundary_time time := ((now() at time zone 'Asia/Hong_Kong') - interval '25 hours')::time;
+  v_open_date date := ((now() at time zone 'Asia/Hong_Kong') + interval '10 minutes')::date;
+  v_future_date date := ((now() at time zone 'Asia/Hong_Kong') + interval '16 minutes')::date;
+  v_old_date date := ((now() at time zone 'Asia/Hong_Kong') - interval '25 hours 1 second')::date;
+  v_open_boundary_date date := ((now() at time zone 'Asia/Hong_Kong') + interval '15 minutes')::date;
+  v_close_boundary_date date := ((now() at time zone 'Asia/Hong_Kong') - interval '25 hours')::date;
+  v_open_session text;
+  v_future_session text;
+  v_old_session text;
+  v_free_session text;
+  v_cancelled_session text;
+  v_open_boundary_session text;
+  v_close_boundary_session text;
+  v_first_attended_at timestamptz;
+  v_attendee_name_count integer;
+  v_receipt_status text;
+  v_booking public.operational_bookings;
+begin
+  v_open_session := 'event-attendance-open-' || v_open_date::text;
+  v_future_session := 'event-attendance-future-' || v_future_date::text;
+  v_old_session := 'event-attendance-old-' || v_old_date::text;
+  v_free_session := 'event-attendance-free-' || v_open_date::text;
+  v_cancelled_session := 'event-attendance-cancelled-' || v_open_date::text;
+  v_open_boundary_session := 'event-attendance-open-boundary-' || v_open_boundary_date::text;
+  v_close_boundary_session := 'event-attendance-close-boundary-' || v_close_boundary_date::text;
+
+  insert into public.operational_activity_templates
+    (activity_id, name, venue, weekday, start_time, duration_minutes,
+     capacity, price_hkd, default_open, active, category, requires_rsvp)
+  values
+    ('event-attendance-open', 'Attendance Open', 'Test Venue', extract(dow from v_open_date)::smallint, v_open_time, 60, 10, 180, true, false, 'HYROX', false),
+    ('event-attendance-future', 'Attendance Future', 'Test Venue', extract(dow from v_future_date)::smallint, v_future_time, 60, 10, 180, true, false, 'HYROX', false),
+    ('event-attendance-old', 'Attendance Old', 'Test Venue', extract(dow from v_old_date)::smallint, v_old_time, 60, 10, 180, true, false, 'HYROX', false),
+    ('event-attendance-free', 'Attendance Free', 'Test Venue', extract(dow from v_open_date)::smallint, v_open_time, 60, 10, 0, true, false, 'Socials', true),
+    ('event-attendance-cancelled', 'Attendance Cancelled', 'Test Venue', extract(dow from v_open_date)::smallint, v_open_time, 60, 10, 180, true, false, 'HYROX', false),
+    ('event-attendance-open-boundary', 'Attendance Opening Boundary', 'Test Venue', extract(dow from v_open_boundary_date)::smallint, v_open_boundary_time, 60, 10, 180, true, false, 'HYROX', false),
+    ('event-attendance-close-boundary', 'Attendance Closing Boundary', 'Test Venue', extract(dow from v_close_boundary_date)::smallint, v_close_boundary_time, 60, 10, 180, true, false, 'HYROX', false);
+
+  insert into public.operational_sessions
+    (id, activity_id, session_date, start_time, duration_minutes, venue, capacity, price_hkd, is_open)
+  values
+    (v_open_session, 'event-attendance-open', v_open_date, v_open_time, 60, 'Test Venue', 10, 180, true),
+    (v_future_session, 'event-attendance-future', v_future_date, v_future_time, 60, 'Test Venue', 10, 180, true),
+    (v_old_session, 'event-attendance-old', v_old_date, v_old_time, 60, 'Test Venue', 10, 180, true),
+    (v_free_session, 'event-attendance-free', v_open_date, v_open_time, 60, 'Test Venue', 10, 0, true),
+    (v_cancelled_session, 'event-attendance-cancelled', v_open_date, v_open_time, 60, 'Test Venue', 10, 180, true),
+    (v_open_boundary_session, 'event-attendance-open-boundary', v_open_boundary_date, v_open_boundary_time, 60, 'Test Venue', 10, 180, true),
+    (v_close_boundary_session, 'event-attendance-close-boundary', v_close_boundary_date, v_close_boundary_time, 60, 'Test Venue', 10, 180, true);
+
+  update public.operational_sessions
+     set cancelled_at = now(), cancelled_by = 'aa000000-0000-0000-0000-00000000a001',
+         cancelled_source = 'admin', cancel_reason = 'Attendance cancellation test'
+   where id = v_cancelled_session;
+
+  insert into public.operational_bookings
+    (id, profile_id, session_id, status, reserved_at, pay_deadline_at,
+     payment_marked_at, payment_method, payment_reference, paid_at, confirmed_by, snapshot)
+  values
+    ('13000000-0000-0000-0000-000000000001', 'bb000000-0000-0000-0000-00000000b001', v_open_session, 'confirmed', now() - interval '2 days', now() - interval '1 day', now() - interval '1 day', 'payme', 'ATTEND-PAID', now() - interval '1 day', 'aa000000-0000-0000-0000-00000000a001', '{"name":"Attendance Open","price_hkd":180}'::jsonb),
+    ('13000000-0000-0000-0000-000000000002', 'dd000000-0000-0000-0000-00000000d001', v_open_session, 'reserved', now(), now() + interval '1 day', null, null, null, null, null, '{"name":"Attendance Open","price_hkd":180}'::jsonb),
+    ('13000000-0000-0000-0000-000000000003', 'bb000000-0000-0000-0000-00000000b001', v_future_session, 'confirmed', now(), now(), now(), 'fps', 'FUTURE', now(), 'aa000000-0000-0000-0000-00000000a001', '{"name":"Attendance Future","price_hkd":180}'::jsonb),
+    ('13000000-0000-0000-0000-000000000004', 'bb000000-0000-0000-0000-00000000b001', v_old_session, 'confirmed', now(), now(), now(), 'fps', 'OLD', now(), 'aa000000-0000-0000-0000-00000000a001', '{"name":"Attendance Old","price_hkd":180}'::jsonb),
+    ('13000000-0000-0000-0000-000000000005', 'bb000000-0000-0000-0000-00000000b001', v_free_session, 'confirmed', now(), now(), null, null, null, now(), null, '{"name":"Attendance Free","price_hkd":0}'::jsonb),
+    ('13000000-0000-0000-0000-000000000006', 'bb000000-0000-0000-0000-00000000b001', v_cancelled_session, 'confirmed', now(), now(), now(), 'payme', 'CANCELLED', now(), 'aa000000-0000-0000-0000-00000000a001', '{"name":"Attendance Cancelled","price_hkd":180}'::jsonb),
+    ('13000000-0000-0000-0000-000000000007', 'bb000000-0000-0000-0000-00000000b001', v_open_boundary_session, 'confirmed', now(), now(), now(), 'payme', 'OPEN-BOUNDARY', now(), 'aa000000-0000-0000-0000-00000000a001', '{"name":"Attendance Opening Boundary","price_hkd":180}'::jsonb),
+    ('13000000-0000-0000-0000-000000000008', 'bb000000-0000-0000-0000-00000000b001', v_close_boundary_session, 'confirmed', now(), now(), now(), 'payme', 'CLOSE-BOUNDARY', now(), 'aa000000-0000-0000-0000-00000000a001', '{"name":"Attendance Closing Boundary","price_hkd":180}'::jsonb);
+
+  insert into public.operational_receipts
+    (receipt_number, booking_id, profile_id, session_id, amount_hkd, payment_method, issued_by)
+  values
+    ('ITC-ATTEND-0001', '13000000-0000-0000-0000-000000000001',
+     'bb000000-0000-0000-0000-00000000b001', v_open_session, 180, 'payme',
+     'aa000000-0000-0000-0000-00000000a001');
+
+  perform set_config('request.jwt.claim.sub', 'bb000000-0000-0000-0000-00000000b001', true);
+  set local role authenticated;
+  begin
+    perform public.set_operational_attendance('13000000-0000-0000-0000-000000000001', true);
+    raise exception 'member should not set attendance';
+  exception when others then
+    if sqlerrm not like '%Administrator access required%' then raise; end if;
+  end;
+  reset role;
+
+  perform set_config('request.jwt.claim.sub', 'aa000000-0000-0000-0000-00000000a001', true);
+  set local role authenticated;
+  select * into v_booking from public.set_operational_attendance('13000000-0000-0000-0000-000000000001', true);
+  perform pg_temp.op_assert(v_booking.status = 'attended'
+    and v_booking.attended_by = 'aa000000-0000-0000-0000-00000000a001',
+    'Admin marks a confirmed-paid booking Arrived');
+  v_first_attended_at := v_booking.attended_at;
+  reset role;
+
+  perform set_config('request.jwt.claim.sub', 'bb000000-0000-0000-0000-00000000b001', true);
+  set local role authenticated;
+  select count(*) into v_attendee_name_count
+    from public.get_operational_attendee_names(v_open_session);
+  perform pg_temp.op_assert(v_attendee_name_count = 1,
+    'Arrived paid members remain in the protected attendee-name roster');
+  reset role;
+
+  select status into v_receipt_status from public.operational_receipts
+   where booking_id = '13000000-0000-0000-0000-000000000001';
+  perform pg_temp.op_assert(v_receipt_status = 'issued', 'attendance preserves the issued receipt');
+  select * into v_booking from public.operational_bookings
+   where id = '13000000-0000-0000-0000-000000000001';
+  perform pg_temp.op_assert(v_booking.profile_id = 'bb000000-0000-0000-0000-00000000b001'
+    and v_booking.session_id = v_open_session
+    and v_booking.payment_marked_at = now() - interval '1 day'
+    and v_booking.payment_method = 'payme'
+    and v_booking.payment_reference = 'ATTEND-PAID'
+    and v_booking.paid_at = now() - interval '1 day'
+    and v_booking.confirmed_by = 'aa000000-0000-0000-0000-00000000a001',
+    'attendance changes only status and attendance audit fields');
+
+  perform set_config('request.jwt.claim.sub', 'ff000000-0000-0000-0000-00000000f001', true);
+  set local role authenticated;
+  select * into v_booking from public.set_operational_attendance('13000000-0000-0000-0000-000000000001', true);
+  perform pg_temp.op_assert(v_booking.attended_at = v_first_attended_at
+    and v_booking.attended_by = 'aa000000-0000-0000-0000-00000000a001',
+    'idempotent mark preserves first attendance audit');
+  select * into v_booking from public.set_operational_attendance('13000000-0000-0000-0000-000000000001', false);
+  perform pg_temp.op_assert(v_booking.status = 'confirmed'
+    and v_booking.attended_at is null and v_booking.attended_by is null,
+    'Super Admin reverses Arrived to Expected');
+
+  begin
+    perform public.set_operational_attendance('13000000-0000-0000-0000-000000000001', null);
+    raise exception 'null attendance state should reject';
+  exception when others then if sqlerrm not like '%Attendance state is required%' then raise; end if; end;
+  begin
+    perform public.set_operational_attendance('13000000-0000-0000-0000-000000000002', true);
+    raise exception 'unpaid booking should reject';
+  exception when others then if sqlerrm not like '%confirmed-paid%' then raise; end if; end;
+  begin
+    perform public.set_operational_attendance('13000000-0000-0000-0000-000000000005', true);
+    raise exception 'free RSVP should reject';
+  exception when others then if sqlerrm not like '%paid sessions only%' then raise; end if; end;
+  begin
+    perform public.set_operational_attendance('13000000-0000-0000-0000-000000000006', true);
+    raise exception 'cancelled session should reject';
+  exception when others then if sqlerrm not like '%Session is cancelled%' then raise; end if; end;
+  begin
+    perform public.set_operational_attendance('13000000-0000-0000-0000-000000000003', true);
+    raise exception 'early attendance should reject';
+  exception when others then if sqlerrm not like '%outside the check-in window%' then raise; end if; end;
+  begin
+    perform public.set_operational_attendance('13000000-0000-0000-0000-000000000004', true);
+    raise exception 'late attendance should reject';
+  exception when others then if sqlerrm not like '%outside the check-in window%' then raise; end if; end;
+
+  perform public.set_operational_attendance('13000000-0000-0000-0000-000000000007', true);
+  perform public.set_operational_attendance('13000000-0000-0000-0000-000000000008', true);
+  perform pg_temp.op_assert(
+    (select count(*) = 2 from public.operational_bookings
+      where id in ('13000000-0000-0000-0000-000000000007', '13000000-0000-0000-0000-000000000008')
+        and status = 'attended'),
+    'exact attendance opening and closing boundaries are inclusive');
   reset role;
 end $$;
 

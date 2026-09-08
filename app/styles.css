@@ -393,6 +393,108 @@ a.admin-hyrox-count-link:focus-visible {
 .admin-claims-section > .member-row,
 .admin-claims-section > form { margin-top: 10px; }
 
+.admin-payment-roster {
+  margin-top: 16px;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  overflow: hidden;
+}
+
+.admin-payment-roster > summary,
+.admin-payment-group > summary,
+.admin-attendance-session > summary {
+  cursor: pointer;
+  list-style: none;
+}
+
+.admin-payment-roster > summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px;
+}
+
+.admin-roster-heading { display: grid; gap: 3px; min-width: 0; }
+.admin-roster-counts { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px 10px; }
+.admin-roster-counts span { color: var(--muted); font-size: 10px; font-weight: 800; text-transform: uppercase; }
+
+.admin-roster-disclosures {
+  margin-top: 16px;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+.admin-roster-context { padding: 10px 14px; }
+.admin-capacity-line { margin-top: 12px; }
+.admin-payment-group { border-top: 1px solid var(--line-soft); }
+.admin-payment-group > summary { min-height: 48px; cursor: pointer; }
+.admin-payment-group > summary::after { content: "›"; font-size: 20px; }
+.admin-payment-group[open] > summary::after { transform: rotate(90deg); }
+.admin-payment-group > summary > span:first-child { flex: 1; min-width: 0; }
+.admin-payment-group > summary > span:first-child > span { display: block; margin-top: 4px; }
+.admin-payment-group > summary:hover,
+.admin-payment-group[open] > summary { background: var(--surface-2); }
+.admin-payment-group[open] { border-left: 3px solid var(--accent); }
+.admin-payment-group > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: -3px; }
+.admin-queue-group { margin-top: 8px; }
+.admin-queue-list { margin: 0; padding: 0 16px 12px 38px; }
+.admin-queue-list li { padding: 10px 0; overflow-wrap: anywhere; }
+.admin-queue-list li span { display: block; margin-top: 4px; }
+.admin-roster-reject { padding: 0 14px 12px; }
+.admin-payment-group > summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.admin-payment-group > p { padding: 0 14px 12px; }
+
+.admin-attendance-session {
+  margin-top: 14px;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+.admin-attendance-session > summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px;
+  background: var(--surface-2);
+  font-size: 12px;
+}
+.admin-attendance-session > summary > span:first-child { display: grid; gap: 3px; }
+.admin-attendance-copy,
+.admin-attendance-empty { padding: 10px 14px; }
+.admin-attendance-name { display: flex; align-items: center; gap: 8px; min-width: 0; }
+
+.admin-roster-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+  padding: 10px 14px;
+  border-top: 1px solid var(--line-soft);
+}
+.admin-roster-row strong { min-width: 0; overflow-wrap: anywhere; }
+
+@media (max-width: 600px) {
+  .admin-payment-roster > summary,
+  .admin-attendance-session > summary { align-items: flex-start; flex-direction: column; }
+  .admin-roster-counts { justify-content: flex-start; }
+  .admin-roster-row { align-items: stretch; flex-direction: column; }
+  .admin-attendance-name { justify-content: space-between; }
+  .admin-roster-row .btn { width: 100%; }
+}
+
 /* ---- Badges ----------------------------------------------------------- */
 
 .badge {
@@ -603,8 +705,19 @@ a.link-card > .card-body > svg {
   border-top: 1px solid rgba(5, 7, 4, .22);
 }
 
-.ph-stats > div { flex: 1; text-align: center; }
+.ph-stats > .ph-stat {
+  flex: 1;
+  display: block;
+  padding: 2px 8px;
+  color: inherit;
+  text-align: center;
+  text-decoration: none;
+  border-radius: 10px;
+}
 
+.ph-stats > .ph-stat + .ph-stat { border-left: 1px solid rgba(5, 7, 4, .22); border-radius: 0 10px 10px 0; }
+.ph-stats > .ph-stat:hover { background: rgba(5, 7, 4, .08); }
+.ph-stats > .ph-stat:focus-visible { outline: 2px solid var(--accent-ink); outline-offset: 2px; }
 .ph-stats strong { display: block; font-size: 20px; font-weight: 900; }
 
 .ph-stats span { font-size: 11px; color: rgba(5, 7, 4, .62); }

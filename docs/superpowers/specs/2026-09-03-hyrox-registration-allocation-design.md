@@ -134,7 +134,7 @@ timezone.
   mark payment.
 - When capacity first reaches 32, unmarked holders are notified that they must
   pay by Thursday 6 PM or risk losing the place to the waitlist.
-- Thursday 5 PM sends a payment reminder to every unmarked holder.
+- Thursday 4 PM sends a payment reminder to every unmarked holder.
 - The collector approves or rejects each payment claim.
 - Collector approval issues the receipt immediately; venue assignment is not
   required for receipt issuance.
@@ -468,7 +468,7 @@ receipts tied to the same booking identity.
 | `promoted_payment_deadline_at` | timestamptz | Thursday 20:00 HKT hard deadline for 19:00 promotions |
 | `venue_choice_deadline_at` | timestamptz | Friday 21:00 HKT |
 | `capacity_warning_sent_at` | timestamptz nullable | idempotent full-pool warning marker |
-| `payment_reminder_sent_at` | timestamptz nullable | idempotent Thursday 17:00 reminder marker |
+| `payment_reminder_sent_at` | timestamptz nullable | idempotent Thursday 16:00 reminder marker |
 | `holder_grace_started_at` | timestamptz nullable | idempotent Thursday 18:00 transition marker |
 | `waitlist_promoted_at` | timestamptz nullable | idempotent Thursday 19:00 transition marker |
 | `reconciliation_started_at` | timestamptz nullable | idempotent Thursday 20:00 transition marker |
@@ -639,7 +639,7 @@ Create transactional notifications for:
 - Monday 6 PM registration opening for approved members;
 - reservation confirmed and standard payment deadline;
 - full-capacity payment-risk warning;
-- Thursday 5 PM payment reminder;
+- Thursday 4 PM payment reminder;
 - Thursday 6 PM final holder warning and collector summary;
 - Thursday 7 PM holder demotion, weekly-waitlist promotion and promoted deadline;
 - Thursday 8 PM payment closure, waitlist dissolution and collector summary;

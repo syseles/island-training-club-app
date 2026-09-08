@@ -99,6 +99,9 @@ function buildHyroxCycleRow(row) {
     promotedPaymentDeadlineAt: parseTimestamp(row.promoted_payment_deadline_at),
     capacityWarningSentAt: parseTimestamp(row.capacity_warning_sent_at),
     paymentReminderSentAt: parseTimestamp(row.payment_reminder_sent_at),
+    collectorPaymentReminderSentAt: parseTimestamp(row.collector_payment_reminder_sent_at),
+    venueChoiceReminderSentAt: parseTimestamp(row.venue_choice_reminder_sent_at),
+    venueFinalizationReminderSentAt: parseTimestamp(row.venue_finalization_reminder_sent_at),
     holderGraceStartedAt: parseTimestamp(row.holder_grace_started_at),
     waitlistPromotedAt: parseTimestamp(row.waitlist_promoted_at),
     reconciliationStartedAt: parseTimestamp(row.reconciliation_started_at),
@@ -218,6 +221,8 @@ function buildBookingRow(row, sessionsById = null) {
     paymentRejectedAt: parseTimestamp(row.payment_rejected_at),
     paymentRejectedBy: row.payment_rejected_by || null,
     paymentRejectionReason: row.payment_rejection_reason || null,
+    attendedAt: parseTimestamp(row.attended_at),
+    attendedBy: row.attended_by || null,
     snapshot: {
       ...snapshot,
       price: snapshot.price_hkd ?? snapshot.price ?? session?.price ?? null,
@@ -754,13 +759,14 @@ export function livePendingBookings() {
 
 export function liveHeldBookingsForSession(sessionId) {
   return liveCache.bookings.filter(
-    (b) => b.sessionId === sessionId && (b.status === "reserved" || b.status === "confirmed")
+    (b) => b.sessionId === sessionId
+      && (b.status === "reserved" || b.status === "confirmed" || b.status === "attended")
   );
 }
 
 export function liveConfirmedBookingsForSession(sessionId) {
   return liveCache.bookings.filter(
-    (b) => b.sessionId === sessionId && b.status === "confirmed"
+    (b) => b.sessionId === sessionId && (b.status === "confirmed" || b.status === "attended")
   );
 }
 
@@ -826,7 +832,28 @@ export function liveReceiptById(id) {
 export async function liveSweepHyroxDeadlines({ refresh = true, now = Date.now() } = {}) {
   try {
     const pNow = now instanceof Date ? now.toISOString() : new Date(now).toISOString();
-    return await runOperationalRpc("sweep_hyrox_cycle_deadlines", { p_now: pNow }, { skipRefresh: !refresh });
+    await runOperationalRpc(
+      "send_hyrox_member_payment_reminders",
+      { p_now: pNow },
+      { skipRefresh: true }
+    );
+    const result = await runOperationalRpc(
+      "sweep_hyrox_cycle_deadlines",
+      { p_now: pNow },
+      { skipRefresh: true }
+    );
+    await runOperationalRpc(
+      "send_hyrox_collector_payment_reminder",
+      { p_now: pNow },
+      { skipRefresh: true }
+    );
+    await runOperationalRpc(
+      "send_hyrox_venue_reminders",
+      { p_now: pNow },
+      { skipRefresh: true }
+    );
+    if (refresh) await refreshOperationalState();
+    return result;
   } catch (error) {
     liveCache.error = operationalProblem(error);
     notifyListeners();
@@ -856,6 +883,14 @@ export const liveRejectHyroxPayment = (bookingId, reason) =>
     p_booking_id: bookingId,
     p_reason: reason,
   });
+
+export async function liveSetOperationalAttendance(bookingId, arrived) {
+  await runOperationalRpc("set_operational_attendance", {
+    p_booking_id: bookingId,
+    p_arrived: !!arrived,
+  });
+  return liveBookingById(bookingId);
+}
 
 export const liveScheduleHyroxCycle = (cycleId) =>
   runOperationalRpc("schedule_hyrox_cycle", { p_cycle_id: cycleId });

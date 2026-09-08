@@ -43,7 +43,20 @@ const STORAGE_KEY = "itc.prototype.v1";
 const APPLY_DEVICE_KEY = "itc.device.id";
 const APPLY_DRAFT_KEY = "itc.apply.draft.v1";
 const APPLY_DRAFT_VERSION = 1;
-const STATE_VERSION = 19;
+const LAST_ROUTE_KEY = "itc.last-route.v1";
+const LAST_ROUTE_VERSION = 1;
+const STATE_VERSION = 22;
+
+const ROUTE_ID = "[A-Za-z0-9._~-]+";
+const RESTORABLE_ROUTE_PATTERNS = [
+  /^#\/(?:home|schedule|giving|notifications|apply)$/,
+  /^#\/community(?:\/(?:prayers|fellowship|meals|announcements|about))?$/,
+  /^#\/account(?:\/(?:details(?:\/edit)?|indemnity|donor|payments|privacy(?:\/edit)?|bookings(?:\/attended)?|history))?$/,
+  new RegExp(`^#/(?:activity|checkout|pay|booking|receipt)/${ROUTE_ID}$`),
+  new RegExp(`^#/hyrox/${ROUTE_ID}(?:/register)?$`),
+  /^#\/admin(?:\/(?:members|activities|giving|payments))?$/,
+  new RegExp(`^#/admin/(?:activity|campaign)/${ROUTE_ID}$`),
+];
 
 // Live-mode (Supabase) session cache. Avoids hammering the DB on every
 // page load. The TTL is short so role flips and welcome notifications
@@ -58,6 +71,55 @@ let livePaymentDirectory = new Map();
 const LIVE_PROFILE_TTL_MS = 30_000;
 
 let state = null;
+
+export function isRestorableRoute(route) {
+  return typeof route === "string"
+    && route.length <= 240
+    && RESTORABLE_ROUTE_PATTERNS.some((pattern) => pattern.test(route));
+}
+
+function routeOwner(userId) {
+  return userId ? `user:${String(userId)}` : "visitor";
+}
+
+export function rememberLastRoute(route, userId = null) {
+  if (!isRestorableRoute(route)) return false;
+  try {
+    localStorage.setItem(LAST_ROUTE_KEY, JSON.stringify({
+      version: LAST_ROUTE_VERSION,
+      owner: routeOwner(userId),
+      route,
+    }));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function lastRouteFor(userId = null) {
+  try {
+    const raw = localStorage.getItem(LAST_ROUTE_KEY);
+    if (!raw) return null;
+    const record = JSON.parse(raw);
+    if (record?.version !== LAST_ROUTE_VERSION || !isRestorableRoute(record?.route)) {
+      localStorage.removeItem(LAST_ROUTE_KEY);
+      return null;
+    }
+    return record.owner === routeOwner(userId) ? record.route : null;
+  } catch {
+    try { localStorage.removeItem(LAST_ROUTE_KEY); } catch {}
+    return null;
+  }
+}
+
+export function clearLastRoute() {
+  try { localStorage.removeItem(LAST_ROUTE_KEY); } catch {}
+}
+
+export function startupRoute(currentHash, userId = null) {
+  const explicitRoute = typeof currentHash === "string" ? currentHash.trim() : "";
+  return explicitRoute || lastRouteFor(userId) || "#/home";
+}
 
 function freshState() {
   return {
@@ -228,6 +290,40 @@ function migrate() {
             "$1hyrox-bft-$2"
           );
         }
+      }
+    }
+  }
+  if (v < 22) {
+    // v22: attendance is additive. Existing financial, allocation and booking
+    // state is preserved while the two new audit fields start empty.
+    for (const booking of state.bookings) {
+      if (!Object.prototype.hasOwnProperty.call(booking, "attendedAt")) booking.attendedAt = null;
+      if (!Object.prototype.hasOwnProperty.call(booking, "attendedBy")) booking.attendedBy = null;
+    }
+  }
+  if (v < 21) {
+    // v21: Friday venue-choice and venue-finalization reminders are additive
+    // cycle checkpoints; existing bookings and allocations remain intact.
+    for (const cycle of Object.values(state.hyroxCycles || {})) {
+      if (!Object.prototype.hasOwnProperty.call(cycle, "venueChoiceReminderSentAt")) {
+        cycle.venueChoiceReminderSentAt = null;
+      }
+      if (!Object.prototype.hasOwnProperty.call(cycle, "venueFinalizationReminderSentAt")) {
+        cycle.venueFinalizationReminderSentAt = null;
+      }
+    }
+  }
+  if (v < 20) {
+    // v20: HYROX payment reminders are enabled by default and each cycle
+    // tracks the separate collector reminder independently of member notices.
+    for (const user of state.users) {
+      if (!Object.prototype.hasOwnProperty.call(user, "hyroxPaymentReminders")) {
+        user.hyroxPaymentReminders = true;
+      }
+    }
+    for (const cycle of Object.values(state.hyroxCycles || {})) {
+      if (!Object.prototype.hasOwnProperty.call(cycle, "collectorPaymentReminderSentAt")) {
+        cycle.collectorPaymentReminderSentAt = null;
       }
     }
   }
@@ -505,6 +601,25 @@ function save() {
 export function resetLocalData() {
   localStorage.removeItem(STORAGE_KEY);
   return load();
+}
+
+export function paymentStateForBooking(booking) {
+  if (!booking) return null;
+  if (booking.status === "reserved") {
+    return booking.paymentMarkedAt != null ? "awaiting_confirmation" : "payment_due";
+  }
+  return booking.status === "confirmed" || booking.status === "attended" ? "paid" : null;
+}
+
+export function attendanceWindowForSession(session, now = Date.now()) {
+  const start = hktEventStartMs(session.dateISO, session.time);
+  const opensAt = start - 15 * 60_000;
+  const closesAt = start + Number(session.durationMin) * 60_000 + 24 * 60 * 60_000;
+  return {
+    opensAt,
+    closesAt,
+    state: now < opensAt ? "upcoming" : now <= closesAt ? "open" : "locked",
+  };
 }
 
 // --- Session / auth ----------------------------------------------------------
@@ -892,12 +1007,62 @@ export function pendingPaymentBookings() {
     .sort((a, b) => a.snapshot.dateISO.localeCompare(b.snapshot.dateISO));
 }
 
+export function paymentRosterBookings() {
+  requirePaymentAdminActor();
+  const bookings = isLive() ? liveOps.listLiveBookings() : state.bookings;
+  return bookings.filter((booking) => {
+    const session = booking.sessionId ? getSession(booking.sessionId) : null;
+    const price = session?.price ?? booking.snapshot?.price;
+    return Number(price) > 0 && paymentStateForBooking(booking);
+  });
+}
+
+export function attendanceBookingsForSession(sessionId) {
+  requirePaymentAdminActor();
+  const session = getSession(sessionId);
+  if (!session || session.kind !== "paid" || session.cancelled) return [];
+  const bookings = isLive()
+    ? liveOps.liveBookingsForSession(sessionId)
+    : state.bookings.filter((booking) => booking.sessionId === sessionId);
+  return bookings.filter((booking) =>
+    booking.status === "confirmed" || booking.status === "attended"
+  );
+}
+
+export async function setBookingAttendance(bookingId, arrived, now = Date.now()) {
+  const actor = requirePaymentAdminActor();
+  if (typeof arrived !== "boolean") throw new Error("Attendance state is required.");
+  const booking = getBooking(bookingId);
+  if (!booking) throw new Error("Booking not found.");
+  if (isLive()) return liveOps.liveSetOperationalAttendance(bookingId, arrived);
+  if (!booking.sessionId) throw new Error("Attendance requires an assigned session.");
+  const session = getSession(booking.sessionId);
+  if (!session) throw new Error("Assigned session not found.");
+  if (session.cancelled) throw new Error("Session is cancelled.");
+  if (session.kind !== "paid" || Number(session.price) <= 0) {
+    throw new Error("Attendance check-in is for paid sessions only.");
+  }
+  if (booking.status !== "confirmed" && booking.status !== "attended") {
+    throw new Error("Only confirmed-paid bookings can be checked in.");
+  }
+  if (attendanceWindowForSession(session, now).state !== "open") {
+    throw new Error("Attendance is outside the check-in window.");
+  }
+  if ((arrived && booking.status === "attended")
+      || (!arrived && booking.status === "confirmed")) return booking;
+  booking.status = arrived ? "attended" : "confirmed";
+  booking.attendedAt = arrived ? now : null;
+  booking.attendedBy = arrived ? actor.id : null;
+  save();
+  return booking;
+}
+
 export function activeBookingsForSession(sessionId) {
   if (isLive()) {
     return liveOps.liveConfirmedBookingsForSession(sessionId);
   }
   return state.bookings.filter(
-    (b) => b.sessionId === sessionId && b.status === "confirmed"
+    (b) => b.sessionId === sessionId && (b.status === "confirmed" || b.status === "attended")
   );
 }
 
@@ -949,11 +1114,12 @@ export async function attendeeNamesFor(sessionId) {
 export function userBookingFor(userId, sessionId) {
   if (isLive()) {
     return liveOps.liveBookingsForUser(userId).find(
-      (b) => b.sessionId === sessionId && b.status === "confirmed"
+      (b) => b.sessionId === sessionId && (b.status === "confirmed" || b.status === "attended")
     ) || null;
   }
   return state.bookings.find(
-    (b) => b.userId === userId && b.sessionId === sessionId && b.status === "confirmed"
+    (b) => b.userId === userId && b.sessionId === sessionId
+      && (b.status === "confirmed" || b.status === "attended")
   );
 }
 
@@ -1020,7 +1186,8 @@ export function notificationsFor(userId) {
 export function heldBookingsForSession(sessionId) {
   if (isLive()) return liveOps.liveHeldBookingsForSession(sessionId);
   return state.bookings.filter(
-    (b) => b.sessionId === sessionId && (b.status === "reserved" || b.status === "confirmed")
+    (b) => b.sessionId === sessionId
+      && (b.status === "reserved" || b.status === "confirmed" || b.status === "attended")
   );
 }
 
@@ -1149,6 +1316,8 @@ function reserveApprovedSession(userId, sessionOrId, now = Date.now()) {
     deferredTo: null,
     deferredFrom: null,
     reminderSentAt: null,
+    attendedAt: null,
+    attendedBy: null,
     snapshot: snapshotFor(session),
   };
   state.bookings.push(booking);
@@ -1393,6 +1562,9 @@ export function scheduleHyroxCycle(dateISO) {
     venueChoiceDeadlineAt: hyroxChoiceDeadline(dateISO),
     capacityWarningSentAt: null,
     paymentReminderSentAt: null,
+    collectorPaymentReminderSentAt: null,
+    venueChoiceReminderSentAt: null,
+    venueFinalizationReminderSentAt: null,
     holderGraceStartedAt: null,
     waitlistPromotedAt: null,
     reconciliationStartedAt: null,
@@ -1445,6 +1617,7 @@ export function reserveHyroxCycle(userId, cycleId, preference, fallbackAcknowled
     createdAt: now, reservedAt: now, payDeadlineAt: cycle.holderGraceDeadlineAt,
     paymentMarkedAt: null, paidAt: null, paidMethod: null, paymentRef: null,
     confirmedBy: null, deferredTo: null, deferredFrom: null,
+    attendedAt: null, attendedBy: null,
     venuePreference: preference, fallbackAcknowledgedAt: now,
     promotedFromWaitlistAt: null, allocationState: null, allocationSource: null,
     allocatedAt: null, allocationSnapshot: null, paymentRejectedAt: null,
@@ -1463,6 +1636,7 @@ function createHyroxWaitlistBooking(cycle, entry, now, deadline, promoted = fals
     status: "reserved", createdAt: now, reservedAt: now, payDeadlineAt: deadline,
     paymentMarkedAt: null, paidAt: null, paidMethod: null, paymentRef: null,
     confirmedBy: null, deferredTo: null, deferredFrom: null,
+    attendedAt: null, attendedBy: null,
     venuePreference: entry.venuePreference, fallbackAcknowledgedAt: entry.fallbackAcknowledgedAt,
     promotedFromWaitlistAt: promoted ? now : null, allocationState: null,
     allocationSource: null, allocatedAt: null, allocationSnapshot: null,
@@ -1567,9 +1741,59 @@ export function sweepHyroxCycleDeadlines(now = Date.now()) {
       cycle.paymentReminderSentAt = now;
       dirty = true;
       state.bookings.filter((booking) => booking.cycleId === cycle.id
-        && booking.status === "reserved" && !booking.paymentMarkedAt)
-        .forEach((booking) => notify(booking.userId, "hyrox-payment-reminder",
-          "HYROX payment reminder — mark payment by Thursday at 6 PM HKT.", `#/pay/${booking.id}`));
+        && booking.status === "reserved" && !booking.paymentMarkedAt
+        && !booking.promotedFromWaitlistAt)
+        .forEach((booking) => {
+          const user = state.users.find((candidate) => candidate.id === booking.userId);
+          if (user?.hyroxPaymentReminders !== false) {
+            notify(booking.userId, "hyrox-payment-reminder",
+              "HYROX payment reminder — mark payment by Thursday at 6 PM HKT.", `#/pay/${booking.id}`);
+          }
+        });
+    }
+    if (now >= hyroxPaymentReminderAt(cycle.dateISO) && !cycle.collectorPaymentReminderSentAt) {
+      const collector = collectorFor(cycle.bftSessionId || cycle.midtownSessionId);
+      if (collector?.id) {
+        const bookings = state.bookings.filter((booking) => booking.cycleId === cycle.id
+          && booking.status === "reserved" && !booking.promotedFromWaitlistAt);
+        const queues = hyroxQueueEntries(cycle.id).filter((entry) => entry.kind === "weekly_waitlist"
+          && entry.status === "active");
+        const marked = bookings.filter((booking) => booking.paymentMarkedAt).length;
+        const unmarked = bookings.length - marked;
+        notify(collector.id, "hyrox-collector-payment-reminder",
+          `HYROX payments due at 6 PM HKT — ${marked} payment claims, ${unmarked} unmarked holders, ${queues.length} weekly waitlist for ${cycle.dateISO}.`,
+          "#/admin/payments");
+        cycle.collectorPaymentReminderSentAt = now;
+        dirty = true;
+      }
+    }
+    if (now >= cycle.venueChoiceDeadlineAt - 2 * 3600 * 1000
+        && !cycle.venueChoiceReminderSentAt) {
+      cycle.venueChoiceReminderSentAt = now;
+      dirty = true;
+      state.bookings.filter((booking) => booking.cycleId === cycle.id
+        && booking.status === "confirmed"
+        && booking.allocationState === "provisional")
+        .forEach((booking) => notify(booking.userId, "hyrox-venue-choice-reminder",
+          "Venue changes close Friday at 9 PM HKT. Review your HYROX venue preference before then.",
+          `#/booking/${booking.id}`));
+    }
+    if (now >= cycle.venueChoiceDeadlineAt && !cycle.venueFinalizationReminderSentAt) {
+      const venueSessionIds = cycle.venuePlan === "bft_only"
+        ? [cycle.bftSessionId]
+        : [cycle.bftSessionId, cycle.midtownSessionId];
+      const incomplete = !cycle.allocationClosedAt
+        || venueSessionIds.filter(Boolean).some((sessionId) => !getSession(sessionId)?.gymConfirmedAt);
+      const collector = collectorFor(cycle.bftSessionId || cycle.midtownSessionId);
+      if (collector?.id) {
+        if (incomplete) {
+          notify(collector.id, "hyrox-venue-finalization-reminder",
+            `HYROX venue finalization is due — close the allocation and confirm each enabled venue for ${cycle.dateISO}.`,
+            "#/admin/payments");
+        }
+        cycle.venueFinalizationReminderSentAt = now;
+        dirty = true;
+      }
     }
     if (now >= cycle.paymentDeadlineAt && !cycle.holderGraceStartedAt) {
       cycle.holderGraceStartedAt = now;
@@ -2575,6 +2799,8 @@ export async function rsvpSession(userId, sessionOrId, now = Date.now()) {
     deferredTo: null,
     deferredFrom: null,
     reminderSentAt: null,
+    attendedAt: null,
+    attendedBy: null,
     snapshot: snapshotFor(session),
   };
   state.bookings.push(booking);
@@ -3334,6 +3560,7 @@ function localApplication(user) {
     whatsapp_reminders: !!user.whatsappReminders,
     email_receipts: !!user.emailReceipts,
     community_news: !!user.communityNews,
+    hyrox_payment_reminders: user.hyroxPaymentReminders !== false,
   };
 }
 
@@ -3358,6 +3585,11 @@ function membershipPatch(form) {
     heard_detail: String(form.heard_detail || "").trim() || null,
     preferred_name: String(form.preferred_name || "").trim() || null,
   };
+  if (Object.prototype.hasOwnProperty.call(form, "donorId")) {
+    const rawDonorId = String(form.donorId || "").trim();
+    if (donorIdProblem(rawDonorId)) throw new Error("Enter a valid Donor ID");
+    patch.donor_id = rawDonorId ? normalizeDonorId(rawDonorId) : null;
+  }
   if (!patch.mobile) throw new Error("Enter mobile number");
   if (!patch.heard_source) throw new Error("Choose how you heard about ITC");
   return patch;
@@ -3369,6 +3601,7 @@ function privacyPatch(form) {
     whatsapp_reminders: !!form.whatsapp_reminders,
     email_receipts: !!form.email_receipts,
     community_news: !!form.community_news,
+    hyrox_payment_reminders: !!form.hyrox_payment_reminders,
   };
 }
 
@@ -3457,6 +3690,7 @@ export async function updateMyMembershipDetails(form) {
     user.heard = patch.heard_source;
     user.heardDetail = patch.heard_detail;
     user.preferredName = patch.preferred_name;
+    if (Object.prototype.hasOwnProperty.call(patch, "donor_id")) user.donorId = patch.donor_id;
     save();
     return localApplication(user);
   }
@@ -3481,6 +3715,7 @@ export async function updateMyPrivacyPreferences(form) {
     user.whatsappReminders = patch.whatsapp_reminders;
     user.emailReceipts = patch.email_receipts;
     user.communityNews = patch.community_news;
+    user.hyroxPaymentReminders = patch.hyrox_payment_reminders;
     save();
     return localApplication(user);
   }

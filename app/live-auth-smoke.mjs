@@ -174,6 +174,7 @@ let operationalAuthSubOverride = null;
 let operationalVenueOverrideReadError = null;
 let operationalRsvpCountError = null;
 let operationalRsvpCountRowsOverride = null;
+let operationalAttendanceError = null;
 const operationalRpcCalls = [];
 const operationalPayoutDirectReads = [];
 const operationalSessionQueries = [];
@@ -250,6 +251,8 @@ const operationalTableRows = {
     payment_rejected_at: null,
     payment_rejected_by: null,
     payment_rejection_reason: null,
+    attended_at: null,
+    attended_by: null,
     snapshot: {
       name: "ITC HYROX",
       booking_mode: "weekly_pool",
@@ -1038,6 +1041,23 @@ operationalRpcHandler = (name, args) => {
     row.status = "cancelled";
     return Promise.resolve({ data: row, error: null });
   }
+  if (name === "set_operational_attendance") {
+    if (operationalAttendanceError) {
+      return Promise.resolve({ data: null, error: operationalAttendanceError });
+    }
+    const row = operationalTableRows.operational_bookings.find((b) => b.id === args.p_booking_id);
+    if (!row) return Promise.resolve({ data: null, error: { message: "Booking not found." } });
+    if (args.p_arrived && row.status === "confirmed") {
+      row.status = "attended";
+      row.attended_at = now;
+      row.attended_by = actingProfile;
+    } else if (!args.p_arrived && row.status === "attended") {
+      row.status = "confirmed";
+      row.attended_at = null;
+      row.attended_by = null;
+    }
+    return Promise.resolve({ data: structuredClone(row), error: null });
+  }
   if (name === "mark_operational_payment") {
     const row = operationalTableRows.operational_bookings.find((b) => b.id === args.p_booking_id);
     if (row) {
@@ -1162,6 +1182,41 @@ assert.equal(
   fixtureMember.id,
 );
 assert.equal(store.getBooking("pooled-booking")?.venuePreference, "midtown");
+const attendanceRow = operationalTableRows.operational_bookings
+  .find((booking) => booking.id === "pooled-booking");
+attendanceRow.status = "attended";
+attendanceRow.attended_at = "2026-08-05T02:01:00.000Z";
+attendanceRow.attended_by = "approved-admin";
+await operations.hydrateOperationalState({ force: true, authenticated: true });
+assert.equal(store.getBooking("pooled-booking")?.status, "attended");
+assert.equal(store.getBooking("pooled-booking")?.attendedAt, RealDate.parse("2026-08-05T02:01:00.000Z"));
+assert.equal(store.getBooking("pooled-booking")?.attendedBy, "approved-admin");
+attendanceRow.status = "confirmed";
+attendanceRow.attended_at = null;
+attendanceRow.attended_by = null;
+await operations.hydrateOperationalState({ force: true, authenticated: true });
+const attendanceCallsBefore = operationalRpcCalls.length;
+await operations.liveSetOperationalAttendance("pooled-booking", true);
+assert.deepEqual(operationalRpcCalls[attendanceCallsBefore], {
+  name: "set_operational_attendance",
+  args: { p_booking_id: "pooled-booking", p_arrived: true },
+});
+assert.equal(store.getBooking("pooled-booking")?.status, "attended",
+  "successful attendance RPC must refresh the authoritative booking cache");
+assert.equal(store.getBooking("pooled-booking")?.attendedBy, authUser.id);
+operationalAttendanceError = { message: "Attendance is outside the check-in window." };
+await assert.rejects(
+  () => operations.liveSetOperationalAttendance("pooled-booking", false),
+  /Attendance is outside the check-in window/,
+);
+assert.equal(store.getBooking("pooled-booking")?.status, "attended",
+  "a rejected attendance RPC must leave the authoritative cache unchanged");
+operationalAttendanceError = null;
+await operations.liveSetOperationalAttendance("pooled-booking", false);
+assert.equal(store.getBooking("pooled-booking")?.status, "confirmed");
+assert.equal(store.getBooking("pooled-booking")?.attendedAt, null);
+assert.equal(store.getBooking("pooled-booking")?.attendedBy, null);
+console.log("ok  live attendance rows map and RPC mutations refresh authoritative state");
 assert.equal(
   operationalRpcCalls.filter((call) => call.name === "sweep_hyrox_cycle_deadlines").length,
   1,
@@ -1854,6 +1909,13 @@ operationalRpcHandler = successfulAssignedPayoutHandler;
 await store.hydrateLiveOperations({ force: true });
 assert.equal(operations.operationalStateStatus().payoutError, null,
   "successful Admin hydration must clear payout degradation");
+const liveRosterHtml = await views.viewAdmin("payments");
+const liveRosterStart = liveRosterHtml.indexOf('data-payment-roster="hyrox-pool-2099-01-03"');
+const liveRoster = liveRosterStart < 0 ? "" : liveRosterHtml.slice(liveRosterStart);
+assert.match(liveRoster, /Payment roster[\s\S]*Micah Member[\s\S]*Paid/);
+assert.doesNotMatch(liveRoster, /micah\.member@example\.com/i,
+  "live financial roster must use the Admin directory without exposing email");
+console.log("ok  live Admin Payments renders directory-backed financial names");
 
 const originalProfileForApply = structuredClone(profile);
 const originalApplicationForApply = structuredClone(applicationRows.get(authUser.id));
@@ -1943,8 +2005,13 @@ if (queue.some((item) => item.id === authUser.id)) {
 const approvalsHtml = await views.viewAdmin("approvals");
 assert.match(approvalsHtml, /Ready for review \(1\)/);
 assert.match(approvalsHtml, /Awaiting application \(1\)/);
-assert.ok(approvalsHtml.indexOf("Submitted Runner") < approvalsHtml.indexOf("Incomplete Runner"),
-  "Submitted applications must render first");
+const readyForReviewStart = approvalsHtml.indexOf("Ready for review (1)");
+const awaitingApplicationStart = approvalsHtml.indexOf("Awaiting application (1)");
+const readyForReviewHtml = approvalsHtml.slice(readyForReviewStart, awaitingApplicationStart);
+assert.match(readyForReviewHtml, /data-applicant-name="Submitted Runner"/,
+  "the submitted application must render in Ready for review");
+assert.doesNotMatch(readyForReviewHtml, /data-applicant-name="Incomplete Runner"/,
+  "an incomplete application must not render in Ready for review");
 if (!approvalsHtml.includes("Application not submitted")) {
   throw new Error("Approvals must explain incomplete pending profiles");
 }
@@ -1970,7 +2037,8 @@ assert.match(awaitingEmptyHtml, /Ready for review \(1\)/);
 assert.match(awaitingEmptyHtml, /Awaiting application \(0\)[\s\S]*No members awaiting an application\./);
 submittedProfile.role = "member";
 const allEmptyHtml = await views.viewAdmin("approvals");
-assert.match(allEmptyHtml, /No pending members/);
+assert.doesNotMatch(allEmptyHtml, /data-approval-card|Ready for review|Awaiting application/,
+  "Members must omit the approval groups when no pending profiles remain");
 submittedProfile.role = "pending";
 incompleteProfile.role = "pending";
 const decisionButton = (profileId, action) => approvalsHtml.match(
@@ -2050,9 +2118,14 @@ views.adminMemberFilters.status = "approved";
 views.adminMemberFilters.role = "admin";
 const filteredMembersHtml = await views.viewAdmin("members");
 assert.match(filteredMembersHtml, /data-action="admin-member-filters-clear"[^>]*>Clear filters</);
-assert.match(filteredMembersHtml, /Tina Admin/);
+const filteredResultsStart = filteredMembersHtml.indexOf('class="member-results"');
+const filteredApprovalsStart = filteredMembersHtml.indexOf('class="member-approvals"');
+const filteredResultsHtml = filteredMembersHtml.slice(
+  filteredResultsStart, filteredApprovalsStart < 0 ? undefined : filteredApprovalsStart
+);
+assert.match(filteredResultsHtml, /Tina Admin/);
 for (const excluded of ["Riley Runner", "Micah Member", "Submitted Runner", "Declined Runner"]) {
-  assert.doesNotMatch(filteredMembersHtml, new RegExp(excluded));
+  assert.doesNotMatch(filteredResultsHtml, new RegExp(excluded));
 }
 views.adminMemberFilters.query = "nobody";
 const noMembersHtml = await views.viewAdmin("members");
@@ -2560,7 +2633,7 @@ const historicalSessionRows = [
     id: "history-tie-session-z",
     activity_id: "hyrox-bft",
     session_date: "2026-07-02",
-    start_time: "09:30:00",
+    start_time: "09:00:00",
     duration_minutes: 60,
     venue: "BFT Causeway Bay",
     capacity: 20,
@@ -3102,6 +3175,7 @@ for (const label of [
   "Photo/video consent",
   "Privacy policy accepted",
   "WhatsApp session reminders",
+  "HYROX payment reminders",
   "Email receipts",
   "Community news",
 ]) {
@@ -3132,7 +3206,7 @@ if (!privacyEdit.includes('href="#/account/privacy"')) {
 if (!privacyEdit.includes("Privacy policy accepted") || !privacyEdit.includes(confirmedDay)) {
   throw new Error("Live privacy edit route should show privacy acceptance read-only");
 }
-for (const name of ["photo_consent", "whatsapp_reminders", "email_receipts", "community_news"]) {
+for (const name of ["photo_consent", "whatsapp_reminders", "hyrox_payment_reminders", "email_receipts", "community_news"]) {
   if (!privacyEdit.includes(`name="${name}"`)) {
     throw new Error(`Live privacy edit route missing ${name}`);
   }
@@ -3214,6 +3288,7 @@ for (const banned of [
 await store.updateMyPrivacyPreferences({
   photo_consent: false,
   whatsapp_reminders: true,
+  hyrox_payment_reminders: false,
   email_receipts: false,
   community_news: false,
 });
@@ -3222,7 +3297,7 @@ if (!privacyPatch) throw new Error("privacy update missing");
 const privacyKeys = Object.keys(privacyPatch).sort().join(",");
 if (
   privacyKeys !==
-  ["community_news", "email_receipts", "photo_consent", "whatsapp_reminders"].join(",")
+  ["community_news", "email_receipts", "hyrox_payment_reminders", "photo_consent", "whatsapp_reminders"].join(",")
 ) {
   throw new Error(`privacy patch leaked fields: ${privacyKeys}`);
 }
@@ -3417,6 +3492,7 @@ globalThis.document = {
   get activeElement() { return activeElement; },
   get visibilityState() { return documentVisibilityState; },
   getElementById: (id) => elements.get(id),
+  querySelector: () => null,
   createElement: () => makeElement(),
   addEventListener: (event, callback) => domListeners.set(event, callback),
 };
@@ -4344,6 +4420,123 @@ const delayedClickMutation = async ({
     `${action} must report success after settlement`);
 };
 
+const attendanceActionSessionRow = {
+  id: "attendance-action-session",
+  activity_id: "hyrox-bft",
+  session_date: "2026-08-05",
+  start_time: "10:10:00",
+  duration_minutes: 60,
+  venue: "BFT Causeway Bay",
+  capacity: 20,
+  price_hkd: 180,
+  is_open: true,
+  venue_tbc: false,
+  notice: null,
+  cancelled_at: null,
+  cancelled_by: null,
+  cancelled_source: null,
+  cancel_reason: null,
+  gym_confirmed_at: null,
+  gym_confirmed_by: null,
+  gym_note: null,
+  created_at: fixedIso,
+  updated_at: fixedIso,
+};
+const attendanceActionBookingRow = {
+  id: "attendance-action-booking",
+  profile_id: "approved-member",
+  session_id: attendanceActionSessionRow.id,
+  status: "confirmed",
+  reserved_at: fixedIso,
+  pay_deadline_at: fixedIso,
+  payment_marked_at: fixedIso,
+  payment_method: "payme",
+  payment_reference: "ATTEND-ACTION",
+  paid_at: fixedIso,
+  confirmed_by: authUser.id,
+  attended_at: null,
+  attended_by: null,
+  deferred_from_booking_id: null,
+  deferred_to_booking_id: null,
+  snapshot: {
+    name: "ITC HYROX", session_date: "2026-08-05", start_time: "10:10:00",
+    venue: "BFT Causeway Bay", price_hkd: 180,
+  },
+  created_at: fixedIso,
+  updated_at: fixedIso,
+};
+operationalTableRows.operational_sessions.push(attendanceActionSessionRow);
+operationalTableRows.operational_bookings.push(attendanceActionBookingRow);
+await operations.refreshOperationalState();
+location.hash = "#/admin/payments";
+await windowListeners.get("hashchange")();
+assert.match(viewEl.innerHTML,
+  /data-action="attendance-toggle"[^>]*data-booking="attendance-action-booking"[^>]*data-arrived="1"/);
+
+await delayedClickMutation({
+  action: "attendance-toggle",
+  dataset: { booking: attendanceActionBookingRow.id, arrived: "1" },
+  rpcName: "set_operational_attendance",
+  expectedArgs: { p_booking_id: attendanceActionBookingRow.id, p_arrived: true },
+  result: attendanceActionBookingRow,
+  beforeResolve: () => Object.assign(attendanceActionBookingRow, {
+    status: "attended", attended_at: fixedIso, attended_by: authUser.id,
+  }),
+  successToast: "Marked Arrived",
+});
+assert.equal(location.hash, "#/admin/payments");
+assert.equal(store.getBooking(attendanceActionBookingRow.id)?.status, "attended");
+assert.equal(store.activeBookingsForSession(attendanceActionSessionRow.id).some((booking) => booking.id === attendanceActionBookingRow.id), true,
+  "live Arrived bookings must remain active attendees");
+assert.equal(store.heldBookingsForSession(attendanceActionSessionRow.id).some((booking) => booking.id === attendanceActionBookingRow.id), true,
+  "live Arrived bookings must remain held for capacity");
+assert.equal(store.userBookingFor("approved-member", attendanceActionSessionRow.id)?.id, attendanceActionBookingRow.id,
+  "live Arrived bookings must remain discoverable as the member's paid booking");
+assert.match(viewEl.innerHTML,
+  /data-action="attendance-toggle"[^>]*data-booking="attendance-action-booking"[^>]*data-arrived="0"/);
+
+await delayedClickMutation({
+  action: "attendance-toggle",
+  dataset: { booking: attendanceActionBookingRow.id, arrived: "0" },
+  rpcName: "set_operational_attendance",
+  expectedArgs: { p_booking_id: attendanceActionBookingRow.id, p_arrived: false },
+  result: attendanceActionBookingRow,
+  beforeResolve: () => Object.assign(attendanceActionBookingRow, {
+    status: "confirmed", attended_at: null, attended_by: null,
+  }),
+  successToast: "Attendance reset to Expected",
+});
+assert.equal(location.hash, "#/admin/payments");
+assert.equal(store.getBooking(attendanceActionBookingRow.id)?.status, "confirmed");
+
+operationalRpcHandler = (name, args) => {
+  if (name === "set_operational_attendance") {
+    operationalRpcCalls.push({ name, args: structuredClone(args) });
+    return Promise.resolve({ data: null, error: { message: "Attendance is outside the check-in window." } });
+  }
+  return delegatedBaseOperationalRpcHandler(name, args);
+};
+const rejectedAttendanceControl = operationControl("BUTTON", "", "Mark Arrived");
+rejectedAttendanceControl.dataset = {
+  action: "attendance-toggle", booking: attendanceActionBookingRow.id, arrived: "1",
+};
+rejectedAttendanceControl.closest = () => rejectedAttendanceControl;
+Object.assign(attendanceActionBookingRow, {
+  status: "attended", attended_at: fixedIso, attended_by: authUser.id,
+});
+toastStack.children.length = 0;
+await click({ target: rejectedAttendanceControl, preventDefault() {} });
+assert.equal(location.hash, "#/admin/payments");
+assert.equal(store.getBooking(attendanceActionBookingRow.id)?.status, "attended",
+  "failed attendance mutations must refresh a concurrent authoritative server row");
+assert.match(viewEl.innerHTML,
+  /data-action="attendance-toggle"[^>]*data-booking="attendance-action-booking"[^>]*data-arrived="0"/);
+assert.deepEqual(toastStack.children.map((item) => [item.textContent, item.getAttribute("role")]), [
+  ["Attendance is outside the check-in window.", "alert"],
+]);
+operationalRpcHandler = delegatedBaseOperationalRpcHandler;
+console.log("ok  delegated attendance controls await, dedupe, rerender, undo, and recover errors");
+
 const queueMidtown = store.upcomingSessions(28).find((session) => store.isMidtown(session) && !session.cancelled);
 assert.ok(queueMidtown, "adjacent async audit needs a Midtown session");
 const interestRow = {
@@ -4786,7 +4979,7 @@ await new Promise(setImmediate);
 const confirmedGymSession = store.getSession(gymSession.id);
 assert.ok(confirmedGymSession.gymConfirmedAt, "delegated gym submit must persist confirmation");
 assert.equal(confirmedGymSession.gymNote, "Confirmed 18 with BFT");
-assert.match(viewEl.innerHTML, /Confirmed with gym/);
+assert.match(viewEl.innerHTML, /Confirmed with BFT/);
 assert.match(viewEl.innerHTML, /Confirmed 18 with BFT/);
 console.log("ok  delegated gym confirmation persists and rerenders confirmed state");
 
@@ -5432,8 +5625,9 @@ profile.role = "pending";
 applicationReadError = null;
 location.hash = "#/account";
 await dispatchAuthStateChange("SIGNED_IN");
-if (location.hash !== "#/apply" || !elements.get("view").innerHTML.includes("Good to see you, Riley.")) {
-  throw new Error("Deferred SIGNED_IN handling should render Home before redirecting a pending applicant to Apply");
+if (location.hash !== "#/apply"
+    || !elements.get("view").innerHTML.includes("Application details unavailable")) {
+  throw new Error("Deferred SIGNED_IN handling should preserve Account rendering before redirecting a pending applicant to Apply");
 }
 
 applicationReadError = new Error("Application read failed");
