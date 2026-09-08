@@ -45,7 +45,7 @@ const APPLY_DRAFT_KEY = "itc.apply.draft.v1";
 const APPLY_DRAFT_VERSION = 1;
 const LAST_ROUTE_KEY = "itc.last-route.v1";
 const LAST_ROUTE_VERSION = 1;
-const STATE_VERSION = 21;
+const STATE_VERSION = 22;
 
 const ROUTE_ID = "[A-Za-z0-9._~-]+";
 const RESTORABLE_ROUTE_PATTERNS = [
@@ -291,6 +291,14 @@ function migrate() {
           );
         }
       }
+    }
+  }
+  if (v < 22) {
+    // v22: attendance is additive. Existing financial, allocation and booking
+    // state is preserved while the two new audit fields start empty.
+    for (const booking of state.bookings) {
+      if (!Object.prototype.hasOwnProperty.call(booking, "attendedAt")) booking.attendedAt = null;
+      if (!Object.prototype.hasOwnProperty.call(booking, "attendedBy")) booking.attendedBy = null;
     }
   }
   if (v < 21) {
@@ -593,6 +601,25 @@ function save() {
 export function resetLocalData() {
   localStorage.removeItem(STORAGE_KEY);
   return load();
+}
+
+export function paymentStateForBooking(booking) {
+  if (!booking) return null;
+  if (booking.status === "reserved") {
+    return booking.paymentMarkedAt != null ? "awaiting_confirmation" : "payment_due";
+  }
+  return booking.status === "confirmed" || booking.status === "attended" ? "paid" : null;
+}
+
+export function attendanceWindowForSession(session, now = Date.now()) {
+  const start = hktEventStartMs(session.dateISO, session.time);
+  const opensAt = start - 15 * 60_000;
+  const closesAt = start + Number(session.durationMin) * 60_000 + 24 * 60 * 60_000;
+  return {
+    opensAt,
+    closesAt,
+    state: now < opensAt ? "upcoming" : now <= closesAt ? "open" : "locked",
+  };
 }
 
 // --- Session / auth ----------------------------------------------------------
@@ -1237,6 +1264,8 @@ function reserveApprovedSession(userId, sessionOrId, now = Date.now()) {
     deferredTo: null,
     deferredFrom: null,
     reminderSentAt: null,
+    attendedAt: null,
+    attendedBy: null,
     snapshot: snapshotFor(session),
   };
   state.bookings.push(booking);
@@ -1536,6 +1565,7 @@ export function reserveHyroxCycle(userId, cycleId, preference, fallbackAcknowled
     createdAt: now, reservedAt: now, payDeadlineAt: cycle.holderGraceDeadlineAt,
     paymentMarkedAt: null, paidAt: null, paidMethod: null, paymentRef: null,
     confirmedBy: null, deferredTo: null, deferredFrom: null,
+    attendedAt: null, attendedBy: null,
     venuePreference: preference, fallbackAcknowledgedAt: now,
     promotedFromWaitlistAt: null, allocationState: null, allocationSource: null,
     allocatedAt: null, allocationSnapshot: null, paymentRejectedAt: null,
@@ -1554,6 +1584,7 @@ function createHyroxWaitlistBooking(cycle, entry, now, deadline, promoted = fals
     status: "reserved", createdAt: now, reservedAt: now, payDeadlineAt: deadline,
     paymentMarkedAt: null, paidAt: null, paidMethod: null, paymentRef: null,
     confirmedBy: null, deferredTo: null, deferredFrom: null,
+    attendedAt: null, attendedBy: null,
     venuePreference: entry.venuePreference, fallbackAcknowledgedAt: entry.fallbackAcknowledgedAt,
     promotedFromWaitlistAt: promoted ? now : null, allocationState: null,
     allocationSource: null, allocatedAt: null, allocationSnapshot: null,
@@ -2716,6 +2747,8 @@ export async function rsvpSession(userId, sessionOrId, now = Date.now()) {
     deferredTo: null,
     deferredFrom: null,
     reminderSentAt: null,
+    attendedAt: null,
+    attendedBy: null,
     snapshot: snapshotFor(session),
   };
   state.bookings.push(booking);

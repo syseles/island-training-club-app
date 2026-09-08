@@ -78,6 +78,35 @@ assert.equal(
   "Hong Kong event wall time must resolve to the same instant in every browser timezone",
 );
 
+// A wrong status branch or off-by-one boundary puts collectors or check-in
+// controls in the wrong operational state.
+assert.equal(store.paymentStateForBooking({ status: "reserved", paymentMarkedAt: null }), "payment_due");
+assert.equal(store.paymentStateForBooking({ status: "reserved", paymentMarkedAt: 1 }), "awaiting_confirmation");
+assert.equal(store.paymentStateForBooking({ status: "confirmed", paymentMarkedAt: 1 }), "paid");
+assert.equal(store.paymentStateForBooking({ status: "attended", paymentMarkedAt: 1 }), "paid");
+for (const status of ["cancelled", "expired", "deferred", "withdrawn"]) {
+  assert.equal(store.paymentStateForBooking({ status, paymentMarkedAt: 1 }), null);
+}
+const attendanceBoundarySession = { dateISO: "2026-09-12", time: "11:00", durationMin: 60 };
+const attendanceBoundaryStart = Date.parse("2026-09-12T03:00:00.000Z");
+assert.deepEqual(
+  store.attendanceWindowForSession(attendanceBoundarySession, attendanceBoundaryStart - 15 * 60_000),
+  {
+    opensAt: Date.parse("2026-09-12T02:45:00.000Z"),
+    closesAt: Date.parse("2026-09-13T04:00:00.000Z"),
+    state: "open",
+  },
+);
+assert.equal(store.attendanceWindowForSession(
+  attendanceBoundarySession, Date.parse("2026-09-12T02:44:59.999Z")
+).state, "upcoming");
+assert.equal(store.attendanceWindowForSession(
+  attendanceBoundarySession, Date.parse("2026-09-13T04:00:00.000Z")
+).state, "open");
+assert.equal(store.attendanceWindowForSession(
+  attendanceBoundarySession, Date.parse("2026-09-13T04:00:00.001Z")
+).state, "locked");
+
 let failures = 0;
 async function check(label, fn) {
   try {
@@ -171,7 +200,7 @@ localStorage.setItem("itc.prototype.v1", JSON.stringify({
   duty: {},
 }));
 const renamedState = store.load();
-assert.equal(renamedState.version, 21, "legacy state must advance through the HYROX identifier, venue and reminder migrations");
+assert.equal(renamedState.version, 22, "legacy state must advance through the HYROX identifier, venue, reminder and attendance migrations");
 assert.equal(renamedState.users.find((user) => user.id === "legacy-member").hyroxPaymentReminders, true);
 assert.equal(renamedState.hyroxCycles["legacy-cycle"]?.collectorPaymentReminderSentAt ?? null, null);
 assert.ok(renamedState.activities.some((activity) => activity.id === "hyrox-bft"));
@@ -2941,8 +2970,8 @@ store.resetLocalData();
   localStorage.setItem("itc.prototype.v1", JSON.stringify(locationV13));
   store.load();
   const migratedV13 = JSON.parse(localStorage.getItem("itc.prototype.v1"));
-  if (migratedV13.version !== 21) {
-    throw new Error("v21 migration must persist version 21");
+  if (migratedV13.version !== 22) {
+    throw new Error("v22 migration must persist version 22");
   }
   const repairedWater = store.activities().find((activity) => activity.id === "water");
   if (repairedWater.location !== "TBC" || repairedWater.mapsQuery !== ""
@@ -4366,10 +4395,10 @@ console.log("ok  reset");
     failures++;
     console.error("FAIL v10 migration must clear session tied to a removed demo user");
   } else console.log("ok  v10 migration clears removed session");
-  if (migrated.version !== 21) {
+  if (migrated.version !== 22) {
     failures++;
-    console.error(`FAIL integrated migration must advance version to 21, got ${migrated.version}`);
-  } else console.log("ok  integrated migration advances genuine v9 state to v21");
+    console.error(`FAIL integrated migration must advance version to 22, got ${migrated.version}`);
+  } else console.log("ok  integrated migration advances genuine v9 state to v22");
 }
 
 {
@@ -4388,7 +4417,7 @@ console.log("ok  reset");
   store.load();
   const v14 = JSON.parse(mem.get("itc.prototype.v1"));
   const migratedUser = v14.users.find((user) => user.id === "real-v13-member");
-  if (v14.version !== 21 || !migratedUser) throw new Error("v21 migration lost the genuine member");
+  if (v14.version !== 22 || !migratedUser) throw new Error("v22 migration lost the genuine member");
   for (const field of ["indemnitySignature", "indemnitySignedAt", "indemnityFormVersion", "emergencyRelationship"]) {
     if (!(field in migratedUser) || migratedUser[field] !== null) {
       throw new Error(`v14 migration should initialize ${field} to null`);
@@ -4405,21 +4434,28 @@ console.log("ok  reset");
 
 // --- HYROX pooled local registration engine (Task 7) -----------------------
 {
-  const v18 = store.resetLocalData();
-  v18.version = 18;
-  delete v18.hyroxCycles;
-  delete v18.hyroxCycleQueues;
-  v18.bookings = [{
-    id: "v18-booking", userId: "fixture-member", sessionId: "hyrox-bft-2099-01-03",
-    status: "confirmed", snapshot: { name: "ITC HYROX", dateISO: "2099-01-03" },
-  }];
-  localStorage.setItem("itc.prototype.v1", JSON.stringify(v18));
+  const v21 = store.resetLocalData();
+  v21.version = 21;
+  const preservedBooking = {
+    id: "v21-booking", userId: "fixture-member", sessionId: "hyrox-bft-2099-01-03",
+    cycleId: "hyrox-pool-2099-01-03", status: "confirmed",
+    paymentMarkedAt: 4100, paidAt: 4200, paidMethod: "PayMe", paymentRef: "ITC-42",
+    allocatedAt: 4300, allocationSource: "preference",
+    snapshot: { name: "ITC HYROX", dateISO: "2099-01-03", price: 100 },
+  };
+  v21.bookings = [structuredClone(preservedBooking)];
+  localStorage.setItem("itc.prototype.v1", JSON.stringify(v21));
   const migrated = store.load();
-  if (migrated.version !== 21 || !migrated.hyroxCycles || !migrated.hyroxCycleQueues
-      || migrated.bookings[0]?.id !== "v18-booking") {
-    throw new Error("v21 migration must preserve pooled collections and v18 bookings");
-  }
-  console.log("ok  v21 migration preserves bookings and initializes reminder fields");
+  const migratedBooking = migrated.bookings[0];
+  assert.equal(migrated.version, 22);
+  assert.equal(migratedBooking.attendedAt, null);
+  assert.equal(migratedBooking.attendedBy, null);
+  assert.deepEqual(
+    Object.fromEntries(Object.keys(preservedBooking).map((key) => [key, migratedBooking[key]])),
+    preservedBooking,
+    "v22 must preserve every pre-attendance booking field",
+  );
+  console.log("ok  v22 migration preserves booking data and initializes attendance fields");
 }
 {
   store.resetLocalData();
@@ -5365,11 +5401,11 @@ for (const fixture of sourceSnapshots) {
     && !Array.isArray(migrated.paymentPayouts);
   const suppliedPayoutsPreserved = fixture.version !== 12
     || migrated.paymentPayouts["real-admin"]?.fpsPhone === "+852 6000 0000";
-  if (migrated.version !== 21 || suppliedIds.some((id) => !serialized.includes(id))
+  if (migrated.version !== 22 || suppliedIds.some((id) => !serialized.includes(id))
       || !payoutMapValid || !suppliedPayoutsPreserved) {
     failures++;
-    console.error(`FAIL genuine v${fixture.version} fixture must reach v21 intact`);
-  } else console.log(`ok  genuine v${fixture.version} fixture reaches v21 intact`);
+    console.error(`FAIL genuine v${fixture.version} fixture must reach v22 intact`);
+  } else console.log(`ok  genuine v${fixture.version} fixture reaches v22 intact`);
 }
 
 for (const invalidCounter of [null, -1, 1.5, "broken"]) {
