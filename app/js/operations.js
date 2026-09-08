@@ -100,6 +100,8 @@ function buildHyroxCycleRow(row) {
     capacityWarningSentAt: parseTimestamp(row.capacity_warning_sent_at),
     paymentReminderSentAt: parseTimestamp(row.payment_reminder_sent_at),
     collectorPaymentReminderSentAt: parseTimestamp(row.collector_payment_reminder_sent_at),
+    venueChoiceReminderSentAt: parseTimestamp(row.venue_choice_reminder_sent_at),
+    venueFinalizationReminderSentAt: parseTimestamp(row.venue_finalization_reminder_sent_at),
     holderGraceStartedAt: parseTimestamp(row.holder_grace_started_at),
     waitlistPromotedAt: parseTimestamp(row.waitlist_promoted_at),
     reconciliationStartedAt: parseTimestamp(row.reconciliation_started_at),
@@ -839,6 +841,11 @@ export async function liveSweepHyroxDeadlines({ refresh = true, now = Date.now()
     );
     await runOperationalRpc(
       "send_hyrox_collector_payment_reminder",
+      { p_now: pNow },
+      { skipRefresh: true }
+    );
+    await runOperationalRpc(
+      "send_hyrox_venue_reminders",
       { p_now: pNow },
       { skipRefresh: true }
     );

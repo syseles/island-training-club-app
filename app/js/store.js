@@ -43,7 +43,7 @@ const STORAGE_KEY = "itc.prototype.v1";
 const APPLY_DEVICE_KEY = "itc.device.id";
 const APPLY_DRAFT_KEY = "itc.apply.draft.v1";
 const APPLY_DRAFT_VERSION = 1;
-const STATE_VERSION = 20;
+const STATE_VERSION = 21;
 
 // Live-mode (Supabase) session cache. Avoids hammering the DB on every
 // page load. The TTL is short so role flips and welcome notifications
@@ -228,6 +228,18 @@ function migrate() {
             "$1hyrox-bft-$2"
           );
         }
+      }
+    }
+  }
+  if (v < 21) {
+    // v21: Friday venue-choice and venue-finalization reminders are additive
+    // cycle checkpoints; existing bookings and allocations remain intact.
+    for (const cycle of Object.values(state.hyroxCycles || {})) {
+      if (!Object.prototype.hasOwnProperty.call(cycle, "venueChoiceReminderSentAt")) {
+        cycle.venueChoiceReminderSentAt = null;
+      }
+      if (!Object.prototype.hasOwnProperty.call(cycle, "venueFinalizationReminderSentAt")) {
+        cycle.venueFinalizationReminderSentAt = null;
       }
     }
   }
@@ -1408,6 +1420,8 @@ export function scheduleHyroxCycle(dateISO) {
     capacityWarningSentAt: null,
     paymentReminderSentAt: null,
     collectorPaymentReminderSentAt: null,
+    venueChoiceReminderSentAt: null,
+    venueFinalizationReminderSentAt: null,
     holderGraceStartedAt: null,
     waitlistPromotedAt: null,
     reconciliationStartedAt: null,
@@ -1605,6 +1619,34 @@ export function sweepHyroxCycleDeadlines(now = Date.now()) {
           `HYROX payments due at 6 PM HKT — ${marked} payment claims, ${unmarked} unmarked holders, ${queues.length} weekly waitlist for ${cycle.dateISO}.`,
           "#/admin/payments");
         cycle.collectorPaymentReminderSentAt = now;
+        dirty = true;
+      }
+    }
+    if (now >= cycle.venueChoiceDeadlineAt - 2 * 3600 * 1000
+        && !cycle.venueChoiceReminderSentAt) {
+      cycle.venueChoiceReminderSentAt = now;
+      dirty = true;
+      state.bookings.filter((booking) => booking.cycleId === cycle.id
+        && booking.status === "confirmed"
+        && booking.allocationState === "provisional")
+        .forEach((booking) => notify(booking.userId, "hyrox-venue-choice-reminder",
+          "Venue changes close Friday at 9 PM HKT. Review your HYROX venue preference before then.",
+          `#/booking/${booking.id}`));
+    }
+    if (now >= cycle.venueChoiceDeadlineAt && !cycle.venueFinalizationReminderSentAt) {
+      const venueSessionIds = cycle.venuePlan === "bft_only"
+        ? [cycle.bftSessionId]
+        : [cycle.bftSessionId, cycle.midtownSessionId];
+      const incomplete = !cycle.allocationClosedAt
+        || venueSessionIds.filter(Boolean).some((sessionId) => !getSession(sessionId)?.gymConfirmedAt);
+      const collector = collectorFor(cycle.bftSessionId || cycle.midtownSessionId);
+      if (collector?.id) {
+        if (incomplete) {
+          notify(collector.id, "hyrox-venue-finalization-reminder",
+            `HYROX venue finalization is due — close the allocation and confirm each enabled venue for ${cycle.dateISO}.`,
+            "#/admin/payments");
+        }
+        cycle.venueFinalizationReminderSentAt = now;
         dirty = true;
       }
     }

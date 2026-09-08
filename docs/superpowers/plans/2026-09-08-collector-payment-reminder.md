@@ -64,9 +64,9 @@
 - Produces: migration-safe preference/cycle columns, `send_hyrox_collector_payment_reminder(timestamptz)`, and a live sweep that invokes both authoritative RPCs.
 
 - [ ] **Step 1: Add the migration with `ADD COLUMN IF NOT EXISTS`, SECURITY DEFINER member/collector reminder RPCs, least-privilege execute grants, and no table grants that expose booking rows.
-- [ ] **Step 2: In the RPC, process cycles at `payment_deadline_at - interval '2 hours'`, lock with `FOR UPDATE SKIP LOCKED`, resolve the latest collector assignment, insert only aggregate counts, and timestamp only after a collector notification is inserted.
+- [ ] **Step 2: In the payment RPCs, process member and collector cycles at `payment_deadline_at - interval '2 hours'`, lock with `FOR UPDATE SKIP LOCKED`, resolve the latest collector assignment, insert only aggregate counts for the collector, and timestamp only after the appropriate notification work is idempotently recorded.
 - [ ] **Step 3: Add the migration-owned notification trigger that suppresses only opted-out `operational_hyrox_payment_reminder` rows and leaves missing/NULL preferences enabled.
-- [ ] **Step 4: Call the member RPC, existing deadline sweep, and collector RPC from `liveSweepHyroxDeadlines` with the same server time, then refresh operational state once.
+- [ ] **Step 4: Call the member RPC, existing deadline sweep, collector RPC, and Friday venue-reminder RPC from `liveSweepHyroxDeadlines` with the same server time, then refresh operational state once.
 - [ ] **Step 5: Run SQL text smoke assertions and JavaScript syntax checks.
 
 ### Task 4: Full verification and commit
