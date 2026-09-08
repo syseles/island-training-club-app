@@ -4487,18 +4487,18 @@ console.log("ok  reset");
     "Two gyms. One epic Saturday",
     "Once paid, this booking is final",
     'value="bft"', 'value="midtown"', 'value="either"',
-    "11:15am", "11:00am",
+    "11:15AM", "11:00AM",
     "20 or fewer paid", "More than 20 paid",
     "Thursday 6 PM", "Friday 9 PM", 'name="fallbackAcknowledged"',
-    "I understand that my booking will be at BFT at 11:15am if only BFT opens.",
+    "I understand that my booking will be at BFT at 11:15AM if only BFT opens.",
     "Reserve my spot",
     "hyrox-no-deferral",
     "hyrox-radio-dot",
   ]) {
     if (!registration.includes(marker)) throw new Error(`HYROX registration missing ${marker}`);
   }
-  assert.doesNotMatch(registration, /\b11:15\b/,
-    "registration copy must use the readable '11:15am' form, not the bare '11:15' form");
+  assert.doesNotMatch(registration, /\b11:15(?:am|pm)\b/,
+    "registration copy must use the uppercase '11:15AM' form, not a lowercase suffix");
   console.log("ok  pooled HYROX Schedule and registration views explain the automatic venue plan");
 }
 {
