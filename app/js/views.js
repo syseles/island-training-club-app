@@ -1786,9 +1786,12 @@ function dedupeBookings(records) {
   records.forEach((booking) => {
     const key = bookingIdentity(booking);
     const current = unique.get(key);
+    const rsvpHistory = bookingDisplaySnapshot(booking).kind === "rsvp"
+      || (current && bookingDisplaySnapshot(current).kind === "rsvp");
     if (!current
-        || bookingPriority(booking) > bookingPriority(current)
-        || (bookingPriority(booking) === bookingPriority(current)
+        || (rsvpHistory && bookingTimestamp(booking) > bookingTimestamp(current))
+        || (!rsvpHistory && bookingPriority(booking) > bookingPriority(current))
+        || (!rsvpHistory && bookingPriority(booking) === bookingPriority(current)
           && bookingTimestamp(booking) > bookingTimestamp(current))) {
       unique.set(key, booking);
     }
@@ -1811,7 +1814,8 @@ function sortBookings(records, direction = "asc") {
     const bKey = `${bSnapshot.dateISO || ""}T${bSnapshot.time || ""}`;
     const result = aKey.localeCompare(bKey);
     if (result) return direction === "desc" ? -result : result;
-    return bookingTimestamp(b) - bookingTimestamp(a);
+    const timestampResult = bookingTimestamp(b) - bookingTimestamp(a);
+    return timestampResult || String(a.id).localeCompare(String(b.id));
   });
 }
 

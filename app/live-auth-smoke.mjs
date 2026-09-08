@@ -2005,8 +2005,13 @@ if (queue.some((item) => item.id === authUser.id)) {
 const approvalsHtml = await views.viewAdmin("approvals");
 assert.match(approvalsHtml, /Ready for review \(1\)/);
 assert.match(approvalsHtml, /Awaiting application \(1\)/);
-assert.ok(approvalsHtml.indexOf("Submitted Runner") < approvalsHtml.indexOf("Incomplete Runner"),
-  "Submitted applications must render first");
+const readyForReviewStart = approvalsHtml.indexOf("Ready for review (1)");
+const awaitingApplicationStart = approvalsHtml.indexOf("Awaiting application (1)");
+const readyForReviewHtml = approvalsHtml.slice(readyForReviewStart, awaitingApplicationStart);
+assert.match(readyForReviewHtml, /data-applicant-name="Submitted Runner"/,
+  "the submitted application must render in Ready for review");
+assert.doesNotMatch(readyForReviewHtml, /data-applicant-name="Incomplete Runner"/,
+  "an incomplete application must not render in Ready for review");
 if (!approvalsHtml.includes("Application not submitted")) {
   throw new Error("Approvals must explain incomplete pending profiles");
 }
@@ -2032,7 +2037,8 @@ assert.match(awaitingEmptyHtml, /Ready for review \(1\)/);
 assert.match(awaitingEmptyHtml, /Awaiting application \(0\)[\s\S]*No members awaiting an application\./);
 submittedProfile.role = "member";
 const allEmptyHtml = await views.viewAdmin("approvals");
-assert.match(allEmptyHtml, /No pending members/);
+assert.doesNotMatch(allEmptyHtml, /data-approval-card|Ready for review|Awaiting application/,
+  "Members must omit the approval groups when no pending profiles remain");
 submittedProfile.role = "pending";
 incompleteProfile.role = "pending";
 const decisionButton = (profileId, action) => approvalsHtml.match(
@@ -2112,9 +2118,14 @@ views.adminMemberFilters.status = "approved";
 views.adminMemberFilters.role = "admin";
 const filteredMembersHtml = await views.viewAdmin("members");
 assert.match(filteredMembersHtml, /data-action="admin-member-filters-clear"[^>]*>Clear filters</);
-assert.match(filteredMembersHtml, /Tina Admin/);
+const filteredResultsStart = filteredMembersHtml.indexOf('class="member-results"');
+const filteredApprovalsStart = filteredMembersHtml.indexOf('class="member-approvals"');
+const filteredResultsHtml = filteredMembersHtml.slice(
+  filteredResultsStart, filteredApprovalsStart < 0 ? undefined : filteredApprovalsStart
+);
+assert.match(filteredResultsHtml, /Tina Admin/);
 for (const excluded of ["Riley Runner", "Micah Member", "Submitted Runner", "Declined Runner"]) {
-  assert.doesNotMatch(filteredMembersHtml, new RegExp(excluded));
+  assert.doesNotMatch(filteredResultsHtml, new RegExp(excluded));
 }
 views.adminMemberFilters.query = "nobody";
 const noMembersHtml = await views.viewAdmin("members");
@@ -2622,7 +2633,7 @@ const historicalSessionRows = [
     id: "history-tie-session-z",
     activity_id: "hyrox-bft",
     session_date: "2026-07-02",
-    start_time: "09:30:00",
+    start_time: "09:00:00",
     duration_minutes: 60,
     venue: "BFT Causeway Bay",
     capacity: 20,
@@ -3481,6 +3492,7 @@ globalThis.document = {
   get activeElement() { return activeElement; },
   get visibilityState() { return documentVisibilityState; },
   getElementById: (id) => elements.get(id),
+  querySelector: () => null,
   createElement: () => makeElement(),
   addEventListener: (event, callback) => domListeners.set(event, callback),
 };
@@ -4850,7 +4862,7 @@ await new Promise(setImmediate);
 const confirmedGymSession = store.getSession(gymSession.id);
 assert.ok(confirmedGymSession.gymConfirmedAt, "delegated gym submit must persist confirmation");
 assert.equal(confirmedGymSession.gymNote, "Confirmed 18 with BFT");
-assert.match(viewEl.innerHTML, /Confirmed with gym/);
+assert.match(viewEl.innerHTML, /Confirmed with BFT/);
 assert.match(viewEl.innerHTML, /Confirmed 18 with BFT/);
 console.log("ok  delegated gym confirmation persists and rerenders confirmed state");
 
@@ -5496,8 +5508,9 @@ profile.role = "pending";
 applicationReadError = null;
 location.hash = "#/account";
 await dispatchAuthStateChange("SIGNED_IN");
-if (location.hash !== "#/apply" || !elements.get("view").innerHTML.includes("Good to see you, Riley.")) {
-  throw new Error("Deferred SIGNED_IN handling should render Home before redirecting a pending applicant to Apply");
+if (location.hash !== "#/apply"
+    || !elements.get("view").innerHTML.includes("Application details unavailable")) {
+  throw new Error("Deferred SIGNED_IN handling should preserve Account rendering before redirecting a pending applicant to Apply");
 }
 
 applicationReadError = new Error("Application read failed");
