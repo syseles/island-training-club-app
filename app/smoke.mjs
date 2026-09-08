@@ -4487,11 +4487,13 @@ console.log("ok  reset");
     'value="bft"', 'value="midtown"', 'value="either"',
     "If 20 or fewer people have paid", "If more than 20 people have paid",
     "Thursday 6 PM", "Friday 9 PM", 'name="fallbackAcknowledged"',
-    "I understand that my booking will be at BFT at 11:15 if only BFT opens.",
+    "I understand that my booking will be at BFT at 11:15AM if only BFT opens.",
     "Reserve &amp; continue to pay",
   ]) {
     if (!registration.includes(marker)) throw new Error(`HYROX registration missing ${marker}`);
   }
+  assert.doesNotMatch(registration, /\b11:15(?:am|pm)\b/,
+    "registration copy must use the uppercase '11:15AM' form, not a lowercase suffix");
   console.log("ok  pooled HYROX Schedule and registration views explain the automatic venue plan");
 }
 {

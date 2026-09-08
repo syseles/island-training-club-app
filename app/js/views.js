@@ -529,7 +529,7 @@ export function viewHyroxRegistration(cycleId) {
         <label><input type="radio" name="preference" value="midtown"> Midtown 28</label>
         <label><input type="radio" name="preference" value="either"> Either venue</label>
       </fieldset>
-      <label class="check-row"><input type="checkbox" name="fallbackAcknowledged" required> I understand that my booking will be at BFT at 11:15 if only BFT opens.</label>
+      <label class="check-row"><input type="checkbox" name="fallbackAcknowledged" required> I understand that my booking will be at BFT at 11:15AM if only BFT opens.</label>
       <div class="hyrox-threshold-rule"><p>If 20 or fewer people have paid, we’ll only book BFT CwB.</p><p>If more than 20 people have paid, we’ll book both gyms.</p><p>Mark payment by Thursday 6 PM. Venue changes close Friday 9 PM.</p></div>
       <button class="btn" type="submit">Reserve &amp; continue to pay</button>
     </form>`;
