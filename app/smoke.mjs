@@ -1005,7 +1005,7 @@ assert.match(integratedViewSource, /function adminHyroxWeeklyBookingSetup\(membe
 assert.doesNotMatch(integratedViewSource, /function adminHyroxProvisioningInfo/);
 assert.match(integratedViewSource, /function venueDisplayName\(session\)/);
 assert.match(integratedViewSource, /Mark confirmed with \$\{esc\(venueName\)\}/);
-assert.match(integratedViewSource, /function adminVenueStatusMetrics\(session\)/);
+assert.match(integratedViewSource, /function adminCapacityLine\(count, capacity\)/);
 assert.match(readFileSync(resolve(__dirnameSmoke, "js/app.js"), "utf8"),
   /closest\("a\[href\^='#'\][^"]*"\)/,
   "App click delegate must intercept hash-only anchor links before the router runs");
@@ -3808,19 +3808,16 @@ store.signIn("member@example.test");
   if (!ops.includes("HYROX weekly booking setup") || !ops.includes("Venue handoff") || !ops.includes("wa.me"))
     throw new Error("ops should include the HYROX booking and payment card with a WhatsApp link");
   const islandEccCard = ops.indexOf("ITC HYROX - Island ECC");
-  if (!ops.includes("admin-hyrox-count-link") || !ops.includes("admin-status-anchor")
-      || !ops.includes(`hyrox-status-${opsCycle.id}-confirmed`)
-      || !ops.includes(`hyrox-status-${opsCycle.id}-claims`)
-      || !/hyrox-venue-[a-z0-9-]+-confirmed/.test(ops)
-      || !/hyrox-venue-[a-z0-9-]+-claims/.test(ops)) {
-    throw new Error("Admin HYROX status counts (parent + venue) should be drill-down links with anchored targets");
+  assert.match(ops, /class="admin-roster-disclosures"/,
+    "Payment states must use compact inline disclosures rather than duplicate metric tiles");
+  assert.doesNotMatch(ops, /class="admin-hyrox-counts/);
+  assert.match(ops, /Session waitlist/);
+  for (const state of ["payment_due", "awaiting_confirmation", "paid"]) {
+    assert.match(ops, new RegExp(`name="roster-${opsCycle.id}" data-payment-state="${state}"`));
   }
-  if (!ops.includes("admin-claims-section") || !ops.includes("Payment claims to review")) {
-    throw new Error("Only the claims tile should be a drill-down link to a collapsible claims list");
-  }
-  if (!ops.includes("<strong>Spots left</strong>") && !ops.includes(">Spots left<")) {
-    throw new Error("Venue status grid should expose a Spots left counter");
-  }
+  assert.match(ops, /data-payment-state="awaiting_confirmation" open/);
+  assert.match(ops, /active places · \d+ available/);
+  assert.doesNotMatch(ops, /data-claims-anchor|admin-claims-section/);
   if (ops.includes(">Capacity</span>")) {
     throw new Error("Venue status grid should not use the legacy Capacity label");
   }
@@ -3831,9 +3828,6 @@ store.signIn("member@example.test");
       || ops.includes("Venue: <strong>Island ECC</strong>")
       || islandEccCard < parentCycleEnd) {
     throw new Error("Island ECC reconciliation should follow its parent HYROX card without redundant venue copy");
-  }
-  if (ops.includes("admin-hyrox-count-link") && !ops.includes("data-claims-anchor")) {
-    throw new Error("Only the parent cycle Payment claims tile should be a drill-down link");
   }
   if (!ops.toLowerCase().includes("duty"))
     throw new Error("ops should include the duty card");
@@ -4507,6 +4501,9 @@ console.log("ok  reset");
     { id: "roster-paid", role: "member", status: "approved", fullName: "Paid Member", preferredName: "Paid", email: "paid-private@example.test", phone: "+852 6333 3003", donorId: "PAID-3003" },
     { id: "roster-expected", role: "member", status: "approved", fullName: "Expected Member", preferredName: "Expected", email: "expected-private@example.test", phone: "+852 6444 4004", donorId: "EXPE-4004" },
   );
+  rosterRaw.queues[paidSessions[0].id] = {
+    waitlist: [{ userId: "roster-paid", joinedAt: 1 }, { userId: "roster-due", joinedAt: 2 }], interest: [],
+  };
   rosterRaw.bookings.push(
     { id: "roster-due-booking", userId: "roster-due", sessionId: paidSessions[0].id, status: "reserved", paymentMarkedAt: null, attendedAt: null, attendedBy: null, snapshot: { name: "ITC HYROX", dateISO: paidSessions[0].dateISO, time: paidSessions[0].time, price: 180 } },
     { id: "roster-awaiting-booking", userId: "roster-awaiting", sessionId: paidSessions[0].id, status: "reserved", paymentMarkedAt: 10, paymentRef: "PRIVATE-REF", attendedAt: null, attendedBy: null, snapshot: { name: "ITC HYROX", dateISO: paidSessions[0].dateISO, time: paidSessions[0].time, price: 180 } },
@@ -4534,8 +4531,11 @@ console.log("ok  reset");
     "+852 6333 3003", "+852 6444 4004",
     "DUE-1001", "CLAI-2002", "PAID-3003", "EXPE-4004", "PRIVATE-REF",
   ]) assert.equal(rosterHtml.includes(secret), false, `Admin name roster leaked ${secret}`);
+  const financialHtml = rosterHtml.split('data-queue-title="Session waitlist"')[0];
+  const sessionWaitlistHtml = rosterHtml.split('data-queue-title="Session waitlist"')[1];
+  assert.ok(sessionWaitlistHtml.indexOf("Paid Member") < sessionWaitlistHtml.indexOf("Due Member"));
   for (const name of ["Due Member", "Claim Member", "Paid Member", "Expected Member"]) {
-    assert.equal((rosterHtml.match(new RegExp(name, "g")) || []).length, 1,
+    assert.equal((financialHtml.match(new RegExp(name, "g")) || []).length, 1,
       `${name} must occur once in its financial group`);
   }
 
@@ -4929,6 +4929,8 @@ console.log("ok  reset");
     store.confirmBookingPayment(booking.id, bothOpening + i + 1);
     bothBookings.push(booking.id);
   }
+  store.joinHyroxCycleWaitlist("fixture-member", both.id, "midtown", true, bothOpening + 100);
+  store.joinHyroxCycleWaitlist("fixture-admin", both.id, "either", true, bothOpening + 101);
   const bothPlan = store.finalizeHyroxVenuePlan(both.id, both.paymentDeadlineAt + 1);
   const bftAssigned = bothBookings.filter((id) => store.getBooking(id).sessionId === both.bftSessionId);
   const midtownAssigned = bothBookings.filter((id) => store.getBooking(id).sessionId === both.midtownSessionId);
@@ -4944,6 +4946,33 @@ console.log("ok  reset");
       || store.hyroxCycleQueuePosition(midtownBooking.userId, both.id, "venue_switch", both.bftSessionId) !== 1) {
     throw new Error("full pooled target should preserve assignment and queue a guaranteed venue switch");
   }
+  const switchAdminHtml = await views.viewAdmin("payments");
+  assert.match(switchAdminHtml, /Switch requests into BFT/);
+  assert.match(switchAdminHtml, /Already booked at Midtown 28/);
+  assert.match(switchAdminHtml, /Switch requests into Midtown 28/);
+  assert.match(switchAdminHtml, /Already booked at BFT/);
+  assert.match(switchAdminHtml, /Weekly waitlist/);
+  const switchList = switchAdminHtml.split(`name="roster-${both.bftSessionId}" data-queue-title="Switch requests into BFT"`)[1]?.split("</details>")[0];
+  assert.ok(switchList?.includes(`hyrox-switch ${midtownBooking.userId.split("-").at(-1)}`));
+  assert.match(switchList, /badge neutral">1<\/span>/);
+  assert.doesNotMatch(switchList, /@example.test|paymentRef|donorId|\+852/);
+  const weeklyList = switchAdminHtml.split(`name="roster-${both.id}" data-queue-title="Weekly waitlist"`)[1]?.split("</details>")[0];
+  assert.match(weeklyList, /Preference: Midtown 28/);
+  assert.ok(weeklyList.indexOf("Test Member") < weeklyList.indexOf("Test Admin"), "weekly queue preserves position rather than alphabetical sorting");
+  assert.equal((switchAdminHtml.match(new RegExp(`data-payment-roster="${both.id}"`, "g")) || []).length, 1);
+  assert.equal(switchAdminHtml.includes(`data-payment-roster="${both.bftSessionId}"`), false, "pooled venue cards must not duplicate financial lists");
+  const savedNow = Date.now;
+  try {
+    Date.now = () => both.venueChoiceDeadlineAt;
+    const closedHtml = await views.viewAdmin("payments");
+    const closedList = closedHtml.split(`name="roster-${both.bftSessionId}" data-queue-title="Switch requests into BFT"`)[1]?.split("</details>")[0];
+    assert.match(closedList, /Switching closed Friday at 9 PM HKT/);
+    assert.doesNotMatch(closedList, /<li>/, "expired requests must not appear active even before a sweep");
+  } finally { Date.now = savedNow; }
+  store.signIn(`${midtownBooking.userId}@example.test`);
+  assert.ok(views.viewBooking(midtownBooking.id).includes(
+    `Your ${store.getSession(beforeSession).location} place remains guaranteed while you wait`));
+  store.signIn("admin@example.test");
   const opposite = store.joinHyroxVenueSwitchQueue(bftBooking.id, both.midtownSessionId,
     both.paymentDeadlineAt + 3);
   if (store.getBooking(midtownBooking.id).sessionId !== both.bftSessionId
@@ -5163,7 +5192,7 @@ console.log("ok  reset");
   if (!adminHtml.includes("<h2>ITC HYROX<br><span>Payment reconciliation</span></h2>")
       || !adminHtml.includes('<summary><h2>HYROX weekly booking setup</h2></summary>')
       || adminHtml.includes("BFT + Midtown parent cards are created automatically")
-      || !/admin-hyrox-count-link[\s\S]*?<strong>0<\/strong><span>Payment claims to review/.test(adminHtml)
+      || !/data-payment-state="awaiting_confirmation">\s*<summary><span>Awaiting confirmation<\/span><span class="badge warn">0<\/span>/.test(adminHtml)
       || !adminHtml.includes("form-cancel-hyrox-cycle")) {
     throw new Error("pooled Admin should show one authoritative cycle card with payment reconciliation");
   }

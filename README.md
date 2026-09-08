@@ -15,7 +15,7 @@ The prototype implements the selected "Night Circuit" direction and the confirme
 - Weekly HYROX uses one shared 32-place BFT/Midtown pool at a fixed price, with automatic recurring parent-card provisioning, Monday opening, venue allocation, confirmation, receipt, and member-area management. Quarry Bay remains a separate direct-booking session.
 - Account lifecycle: public visitor → application → leader approval → member. Pending applicants keep public access only.
 - Member area: upcoming bookings, receipts, payment history, profile.
-- Admin area: combined member/application management, activity controls, Giving operations, and Payments with named financial-state rosters plus time-gated paid-session attendance check-in.
+- Admin area: combined member/application management, activity controls, Giving operations, and Payments with compact, expandable financial-state and waitlist rows plus time-gated paid-session attendance check-in. BFT/Midtown share one financial roster and weekly waitlist; allocated venues show their incoming switch queues separately. Island ECC uses the same layout for its independent session waitlist.
 - Super Admin can additionally change member roles.
 
 Run it (same server as the design review):

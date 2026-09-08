@@ -420,7 +420,29 @@ a.admin-hyrox-count-link:focus-visible {
 .admin-roster-counts { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px 10px; }
 .admin-roster-counts span { color: var(--muted); font-size: 10px; font-weight: 800; text-transform: uppercase; }
 
+.admin-roster-disclosures {
+  margin-top: 16px;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+.admin-roster-context { padding: 10px 14px; }
+.admin-capacity-line { margin-top: 12px; }
 .admin-payment-group { border-top: 1px solid var(--line-soft); }
+.admin-payment-group > summary { min-height: 48px; cursor: pointer; }
+.admin-payment-group > summary::after { content: "›"; font-size: 20px; }
+.admin-payment-group[open] > summary::after { transform: rotate(90deg); }
+.admin-payment-group > summary > span:first-child { flex: 1; min-width: 0; }
+.admin-payment-group > summary > span:first-child > span { display: block; margin-top: 4px; }
+.admin-payment-group > summary:hover,
+.admin-payment-group[open] > summary { background: var(--surface-2); }
+.admin-payment-group[open] { border-left: 3px solid var(--accent); }
+.admin-payment-group > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: -3px; }
+.admin-queue-group { margin-top: 8px; }
+.admin-queue-list { margin: 0; padding: 0 16px 12px 38px; }
+.admin-queue-list li { padding: 10px 0; overflow-wrap: anywhere; }
+.admin-queue-list li span { display: block; margin-top: 4px; }
+.admin-roster-reject { padding: 0 14px 12px; }
 .admin-payment-group > summary {
   display: flex;
   align-items: center;
