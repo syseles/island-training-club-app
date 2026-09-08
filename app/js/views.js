@@ -2593,9 +2593,9 @@ function paymentVisibleHyroxCycles(financialBookings, now = Date.now()) {
   });
 }
 
-function adminHyroxCycleCards(memberUsers) {
+function adminHyroxCycleCards(memberUsers, cycles = paymentVisibleHyroxCycles(store.paymentRosterBookings())) {
   const financialBookings = store.paymentRosterBookings();
-  return paymentVisibleHyroxCycles(financialBookings).map((cycle) => {
+  return cycles.map((cycle) => {
     const bookings = store.hyroxCycleBookings(cycle.id);
     const active = bookings.filter((booking) => store.paymentStateForBooking(booking));
     const claims = bookings.filter((booking) => store.paymentStateForBooking(booking) === "awaiting_confirmation");
@@ -2625,9 +2625,12 @@ function adminHyroxCycleCards(memberUsers) {
       ? `<button class="btn sm" type="button" data-action="hyrox-plan-retry" data-cycle="${esc(cycle.id)}">Retry automatic venue plan</button>` : "";
     const close = cycle.venuePlan !== "pending" && !cycle.allocationClosedAt && Date.now() >= cycle.venueChoiceDeadlineAt
       ? `<button class="btn ghost sm" type="button" data-action="hyrox-allocation-close" data-cycle="${esc(cycle.id)}">Close venue allocation</button>` : "";
-    return `<section class="card hyrox-admin-cycle mt16"><div class="card-body">
+    const openingDate = new Date(cycle.registrationOpensAt).toLocaleDateString("en-HK", {
+      timeZone: "Asia/Hong_Kong", day: "numeric", month: "short",
+    });
+    return `<section class="card hyrox-admin-cycle mt16" data-hyrox-week="${esc(cycle.dateISO)}"><div class="card-body">
       <div class="section-head"><div><span class="kicker">${esc(fmtDate(cycle.dateISO))}</span><h2>ITC HYROX<br><span>Payment reconciliation</span></h2></div><span class="badge ${locked ? "neutral" : "warn"}">${locked ? "Locked" : esc(cycle.registrationState)}</span></div>
-      <p class="muted small">${locked ? "Registration opens Monday at 6 PM HKT." : afterPromotion ? "Final reconciliation summary after Thursday 8 PM HKT." : "Payment review runs Thursday at 6 PM HKT."}</p>
+      <p class="muted small">${locked ? `Registration opens Mon ${esc(openingDate)} · 6 PM HKT.` : afterPromotion ? "Final reconciliation summary after Thursday 8 PM HKT." : "Payment review runs Thursday at 6 PM HKT."}</p>
       ${paymentRoster}
       ${adminCapacityLine(active.length, cycle.capacity)}
       ${allocationPending ? `<p class="muted small mt16">Expected-arrivals roster available after venue allocation.</p>` : ""}
@@ -2638,10 +2641,32 @@ function adminHyroxCycleCards(memberUsers) {
 }
 
 function adminHyroxWeeklyBookingSetup(memberUsers) {
+  // Week grouping follows Hong Kong, independent of the Admin's device zone.
+  const saturday = new Date(Date.now() + 8 * 60 * 60_000);
+  saturday.setUTCDate(saturday.getUTCDate() + (6 - saturday.getUTCDay() + 7) % 7);
+  const currentDate = saturday.toISOString().slice(0, 10);
+  const futureDates = new Set(Array.from({ length: 3 }, (_, index) => {
+    const day = new Date(saturday);
+    day.setUTCDate(day.getUTCDate() + (index + 1) * 7);
+    return day.toISOString().slice(0, 10);
+  }));
+  const cycles = store.hyroxCycles();
+  const upcoming = cycles.filter((cycle) => futureDates.has(cycle.dateISO))
+    .sort((a, b) => a.dateISO.localeCompare(b.dateISO));
+  const visibleIds = new Set(paymentVisibleHyroxCycles(store.paymentRosterBookings()).map((cycle) => cycle.id));
+  const current = cycles.filter((cycle) => !futureDates.has(cycle.dateISO)
+    && (cycle.dateISO === currentDate || visibleIds.has(cycle.id)))
+    .sort((a, b) => (a.dateISO === currentDate ? -1 : b.dateISO === currentDate ? 1 : b.dateISO.localeCompare(a.dateISO)));
+  const groupedDates = new Set([...current, ...upcoming].map((cycle) => cycle.dateISO));
   return `<details class="admin-section mt24">
     <summary><h2>HYROX weekly booking setup</h2></summary>
-    ${adminHyroxCycleCards(memberUsers)}
-    ${adminFinalizeGym(memberUsers)}
+    ${adminHyroxCycleCards(memberUsers, current)}
+    <details class="admin-upcoming-weeks mt24">
+      <summary><h3>Upcoming weeks</h3><span class="badge neutral">${upcoming.length}</span></summary>
+      <p class="muted small mt8">The next three Saturdays. Previewing a week does not open member registration.</p>
+      ${adminHyroxCycleCards(memberUsers, upcoming) || `<p class="muted small mt8">No upcoming weeks provisioned yet.</p>`}
+    </details>
+    ${adminFinalizeGym(memberUsers, groupedDates)}
   </details>`;
 }
 
@@ -2792,7 +2817,7 @@ function adminIslandEccHandoff(cycle, memberUsers) {
     .filter((booking) => booking.sessionId && booking.snapshot?.dateISO === cycle.dateISO)
     .map((booking) => booking.sessionId);
   const candidates = [
-    ...store.upcomingSessions(21),
+    ...store.upcomingSessions(35),
     ...financialSessionIds.map((sessionId) => store.getSession(sessionId)).filter(Boolean),
   ];
   const session = candidates.find((candidate) => {
@@ -2803,9 +2828,9 @@ function adminIslandEccHandoff(cycle, memberUsers) {
   return session ? adminFinalizeGymCard(session, "hyrox-island-ecc-card", memberUsers) : "";
 }
 
-function adminFinalizeGym(memberUsers) {
+function adminFinalizeGym(memberUsers, groupedDates = null) {
   const financialBookings = store.paymentRosterBookings();
-  const cycleDates = new Set(paymentVisibleHyroxCycles(financialBookings).map((cycle) => cycle.dateISO));
+  const cycleDates = groupedDates || new Set(paymentVisibleHyroxCycles(financialBookings).map((cycle) => cycle.dateISO));
   const candidates = new Map(store.upcomingSessions(21)
     .filter((session) => session.category === "HYROX")
     .map((session) => [session.id, session]));

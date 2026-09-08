@@ -3775,6 +3775,47 @@ store.signIn("member@example.test");
   console.log("ok  no-deferral policy hides defer UI while keeping store hooks");
 }
 
+// --- Admin upcoming weeks: visible planning must not open registration ---
+{
+  store.resetLocalData();
+  installLocalFixtures();
+  const hktDate = new Date(Date.now() + 8 * 60 * 60_000);
+  hktDate.setUTCDate(hktDate.getUTCDate() + (6 - hktDate.getUTCDay() + 7) % 7);
+  const saturday = hktDate.toISOString().slice(0, 10);
+  const dates = Array.from({ length: 5 }, (_, index) => {
+    const day = new Date(`${saturday}T00:00:00Z`);
+    day.setUTCDate(day.getUTCDate() + index * 7);
+    return day.toISOString().slice(0, 10);
+  });
+  const cycles = dates.map((date) => store.scheduleHyroxCycle(date));
+  const savedNow = Date.now;
+  try {
+    Date.now = () => cycles[0].registrationOpensAt - 1;
+    const html = await views.viewAdmin("payments");
+    const upcomingStart = html.indexOf('class="admin-upcoming-weeks');
+    assert.ok(upcomingStart > 0, "Admin must expose a collapsed Upcoming weeks section");
+    const currentHtml = html.slice(0, upcomingStart);
+    const futureHtml = html.slice(upcomingStart);
+    assert.match(futureHtml, /<summary><h3>Upcoming weeks<\/h3>/);
+    assert.doesNotMatch(futureHtml.split("<summary>")[0], /\sopen(?:\s|>)/);
+    assert.ok(currentHtml.includes(`data-hyrox-week="${dates[0]}"`), "this Saturday stays prominent even before opening");
+    for (const [index, date] of dates.entries()) {
+      if (index === 4) {
+        assert.equal(futureHtml.includes(`data-hyrox-week="${date}"`), false, "preview is limited to the next three Saturdays");
+        continue;
+      }
+      const region = index === 0 ? currentHtml : futureHtml;
+      assert.equal((html.match(new RegExp(`data-hyrox-week="${date}"`, "g")) || []).length, 1);
+      assert.ok(region.includes(`data-hyrox-week="${date}"`));
+      assert.ok(region.includes(`data-payment-roster="hyrox-quarry-bay-${date}"`), "Island ECC aligns with its pooled week");
+    }
+    assert.match(futureHtml, /Registration opens Mon .* · 6 PM HKT/);
+    assert.equal(store.getHyroxCycle(cycles[1].id).registrationState, "draft");
+    assert.doesNotMatch(views.viewHyroxRegistration(cycles[1].id), /id="form-hyrox-reserve"/,
+      "Admin preview must not unlock member registration");
+  } finally { Date.now = savedNow; }
+}
+
 // --- HYROX payment system: admin ops (Task 10) ---
 store.resetLocalData();
 installLocalFixtures();
