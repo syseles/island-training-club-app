@@ -393,6 +393,63 @@ a.admin-hyrox-count-link:focus-visible {
 .admin-claims-section > .member-row,
 .admin-claims-section > form { margin-top: 10px; }
 
+.admin-payment-roster {
+  margin-top: 16px;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  overflow: hidden;
+}
+
+.admin-payment-roster > summary,
+.admin-payment-group > summary,
+.admin-attendance-session > summary {
+  cursor: pointer;
+  list-style: none;
+}
+
+.admin-payment-roster > summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px;
+}
+
+.admin-roster-heading { display: grid; gap: 3px; min-width: 0; }
+.admin-roster-counts { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px 10px; }
+.admin-roster-counts span { color: var(--muted); font-size: 10px; font-weight: 800; text-transform: uppercase; }
+
+.admin-payment-group { border-top: 1px solid var(--line-soft); }
+.admin-payment-group > summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.admin-payment-group > p { padding: 0 14px 12px; }
+.admin-roster-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+  padding: 10px 14px;
+  border-top: 1px solid var(--line-soft);
+}
+.admin-roster-row strong { min-width: 0; overflow-wrap: anywhere; }
+
+@media (max-width: 600px) {
+  .admin-payment-roster > summary { align-items: flex-start; flex-direction: column; }
+  .admin-roster-counts { justify-content: flex-start; }
+  .admin-roster-row { align-items: stretch; flex-direction: column; }
+  .admin-roster-row .btn { width: 100%; }
+}
+
 /* ---- Badges ----------------------------------------------------------- */
 
 .badge {

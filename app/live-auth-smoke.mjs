@@ -1909,6 +1909,13 @@ operationalRpcHandler = successfulAssignedPayoutHandler;
 await store.hydrateLiveOperations({ force: true });
 assert.equal(operations.operationalStateStatus().payoutError, null,
   "successful Admin hydration must clear payout degradation");
+const liveRosterHtml = await views.viewAdmin("payments");
+const liveRosterStart = liveRosterHtml.indexOf('data-payment-roster="hyrox-pool-2099-01-03"');
+const liveRoster = liveRosterStart < 0 ? "" : liveRosterHtml.slice(liveRosterStart);
+assert.match(liveRoster, /Payment roster[\s\S]*Micah Member[\s\S]*Paid/);
+assert.doesNotMatch(liveRoster, /micah\.member@example\.com/i,
+  "live financial roster must use the Admin directory without exposing email");
+console.log("ok  live Admin Payments renders directory-backed financial names");
 
 const originalProfileForApply = structuredClone(profile);
 const originalApplicationForApply = structuredClone(applicationRows.get(authUser.id));

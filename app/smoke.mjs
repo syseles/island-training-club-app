@@ -999,7 +999,7 @@ assert.match(integratedStyleSource, /@media \(max-width: 600px\)[\s\S]*?\.hyrox-
   "HYROX cycle status must move below the details on mobile");
 assert.match(integratedViewSource, /class="hyrox-cycle-content"[\s\S]*?class="hyrox-cycle-venues"/,
   "HYROX cycle rows must expose stable hooks for readable mobile details");
-assert.match(integratedViewSource, /function adminHyroxWeeklyBookingSetup\(\)[\s\S]*?HYROX weekly booking setup/);
+assert.match(integratedViewSource, /function adminHyroxWeeklyBookingSetup\(memberUsers\)[\s\S]*?HYROX weekly booking setup/);
 assert.doesNotMatch(integratedViewSource, /function adminHyroxProvisioningInfo/);
 assert.match(integratedViewSource, /function venueDisplayName\(session\)/);
 assert.match(integratedViewSource, /Mark confirmed with \$\{esc\(venueName\)\}/);
@@ -4498,6 +4498,42 @@ console.log("ok  reset");
   const confirmation = store.confirmBookingPayment(paidBooking.id);
   const receiptBefore = structuredClone(confirmation.receipt);
 
+  const rosterRaw = JSON.parse(localStorage.getItem("itc.prototype.v1"));
+  rosterRaw.users.push(
+    { id: "roster-due", role: "member", status: "approved", fullName: "Due Member", preferredName: "Due", email: "due-private@example.test", phone: "+852 6111 1001", donorId: "DUE-1001" },
+    { id: "roster-awaiting", role: "member", status: "approved", fullName: "Claim Member", preferredName: "Claim", email: "claim-private@example.test", phone: "+852 6222 2002", donorId: "CLAI-2002" },
+    { id: "roster-paid", role: "member", status: "approved", fullName: "Paid Member", preferredName: "Paid", email: "paid-private@example.test", phone: "+852 6333 3003", donorId: "PAID-3003" },
+  );
+  rosterRaw.bookings.push(
+    { id: "roster-due-booking", userId: "roster-due", sessionId: paidSessions[0].id, status: "reserved", paymentMarkedAt: null, attendedAt: null, attendedBy: null, snapshot: { name: "ITC HYROX", dateISO: paidSessions[0].dateISO, time: paidSessions[0].time, price: 180 } },
+    { id: "roster-awaiting-booking", userId: "roster-awaiting", sessionId: paidSessions[0].id, status: "reserved", paymentMarkedAt: 10, paymentRef: "PRIVATE-REF", attendedAt: null, attendedBy: null, snapshot: { name: "ITC HYROX", dateISO: paidSessions[0].dateISO, time: paidSessions[0].time, price: 180 } },
+    { id: "roster-paid-booking", userId: "roster-paid", sessionId: paidSessions[0].id, status: "attended", paymentMarkedAt: 10, paidAt: 20, attendedAt: 30, attendedBy: "fixture-admin", snapshot: { name: "ITC HYROX", dateISO: paidSessions[0].dateISO, time: paidSessions[0].time, price: 180 } },
+  );
+  localStorage.setItem("itc.prototype.v1", JSON.stringify(rosterRaw));
+  store.load();
+  const rosterAdminHtml = await views.viewAdmin("payments");
+  const rosterStart = rosterAdminHtml.indexOf(`data-payment-roster="${paidSessions[0].id}"`);
+  const nextRosterStart = rosterAdminHtml.indexOf('data-payment-roster="', rosterStart + 1);
+  const rosterHtml = rosterStart < 0 ? "" : rosterAdminHtml.slice(
+    rosterStart, nextRosterStart < 0 ? undefined : nextRosterStart
+  );
+  for (const marker of [
+    "Payment roster", "Payment due", "Awaiting confirmation", "Paid",
+    "Due Member", "Claim Member", "Paid Member",
+    'data-payment-state="payment_due"',
+    'data-payment-state="awaiting_confirmation"',
+    'data-payment-state="paid"',
+  ]) assert.ok(rosterHtml.includes(marker), `Admin payment roster missing ${marker}`);
+  for (const secret of [
+    "due-private@example.test", "claim-private@example.test", "paid-private@example.test",
+    "+852 6111 1001", "+852 6222 2002", "+852 6333 3003",
+    "DUE-1001", "CLAI-2002", "PAID-3003", "PRIVATE-REF",
+  ]) assert.equal(rosterHtml.includes(secret), false, `Admin name roster leaked ${secret}`);
+  for (const name of ["Due Member", "Claim Member", "Paid Member"]) {
+    assert.equal((rosterHtml.match(new RegExp(name, "g")) || []).length, 1,
+      `${name} must occur once in its financial group`);
+  }
+
   const rosterStates = store.paymentRosterBookings()
     .filter((booking) => [dueBooking.id, awaitingBooking.id, paidBooking.id].includes(booking.id))
     .map((booking) => store.paymentStateForBooking(booking));
@@ -5028,6 +5064,14 @@ console.log("ok  reset");
   }
   store.signOut();
   store.signIn("admin@example.test");
+  const preAllocationAdmin = await views.viewAdmin("payments");
+  const preAllocationRosterStart = preAllocationAdmin.indexOf(`data-payment-roster="${cycle.id}"`);
+  const preAllocationRoster = preAllocationRosterStart < 0 ? "" : preAllocationAdmin.slice(preAllocationRosterStart);
+  if (!preAllocationRoster.includes("Test Member")
+      || !preAllocationRoster.includes("Venue allocation pending")
+      || !preAllocationRoster.includes('data-payment-state="paid"')) {
+    throw new Error("pre-allocation pooled financial roster must retain paid member names under the parent cycle");
+  }
   store.finalizeHyroxVenuePlan(cycle.id, cycle.paymentDeadlineAt + 1);
   store.signIn("member@example.test");
   const allocatedHtml = views.viewBooking(booking.id);
