@@ -4486,6 +4486,12 @@ await delayedClickMutation({
 });
 assert.equal(location.hash, "#/admin/payments");
 assert.equal(store.getBooking(attendanceActionBookingRow.id)?.status, "attended");
+assert.equal(store.activeBookingsForSession(attendanceActionSessionRow.id).some((booking) => booking.id === attendanceActionBookingRow.id), true,
+  "live Arrived bookings must remain active attendees");
+assert.equal(store.heldBookingsForSession(attendanceActionSessionRow.id).some((booking) => booking.id === attendanceActionBookingRow.id), true,
+  "live Arrived bookings must remain held for capacity");
+assert.equal(store.userBookingFor("approved-member", attendanceActionSessionRow.id)?.id, attendanceActionBookingRow.id,
+  "live Arrived bookings must remain discoverable as the member's paid booking");
 assert.match(viewEl.innerHTML,
   /data-action="attendance-toggle"[^>]*data-booking="attendance-action-booking"[^>]*data-arrived="0"/);
 

@@ -299,6 +299,8 @@ for (const marker of [
   "cancelled_at is not null", "p_arrived is null",
   "revoke all on function public.set_operational_attendance(uuid, boolean)",
   "grant execute on function public.set_operational_attendance(uuid, boolean) to authenticated",
+  "create or replace function public.get_operational_attendee_names",
+  "b.status in ('confirmed', 'attended')",
 ]) {
   assert.ok(attendanceMigrationSource.toLowerCase().includes(marker.toLowerCase()),
     `attendance migration missing ${marker}`);
@@ -4604,6 +4606,14 @@ console.log("ok  reset");
   assert.equal(store.paymentStateForBooking(arrived), "paid");
   assert.deepEqual(store.receiptForBooking(paidBooking.id), receiptBefore,
     "attendance must preserve the issued receipt");
+  assert.equal(store.activeBookingsForSession(paidSessions[2].id).some((booking) => booking.id === paidBooking.id), true,
+    "Arrived remains active for paid attendee counts and names");
+  assert.equal(store.heldBookingsForSession(paidSessions[2].id).some((booking) => booking.id === paidBooking.id), true,
+    "Arrived remains held for paid capacity");
+  assert.equal(store.userBookingFor("fixture-member", paidSessions[2].id)?.id, paidBooking.id,
+    "Arrived remains the member's paid booking");
+  assert.equal(store.attendeesFor(paidSessions[2]).includes("Tester M."), true,
+    "Arrived remains in the protected local attendee-name list");
   const repeated = await store.setBookingAttendance(paidBooking.id, true, window.opensAt + 1);
   assert.equal(repeated.attendedAt, window.opensAt);
   assert.equal(repeated.attendedBy, "fixture-admin");
@@ -5123,6 +5133,22 @@ console.log("ok  reset");
       || !allocatedAdmin.includes("Test Member")) {
     throw new Error("allocated pooled bookings must join the concrete venue arrival roster");
   }
+  const allocatedWindow = store.attendanceWindowForSession(store.getSession(allocatedBooking.sessionId), 0);
+  await store.setBookingAttendance(allocatedBooking.id, true, allocatedWindow.opensAt);
+  store.signOut();
+  store.signIn("member@example.test");
+  const arrivedCycleHtml = views.viewHyroxCycle(cycle.id);
+  const arrivedPaymentsHtml = await views.viewAccount("payments");
+  if (!arrivedCycleHtml.includes("already in your account")
+      || arrivedCycleHtml.includes("Reserve your place")) {
+    throw new Error("Arrived pooled bookings must remain discoverable from the HYROX cycle");
+  }
+  if (!arrivedPaymentsHtml.includes("ITC HYROX") || !arrivedPaymentsHtml.includes("Paid")) {
+    throw new Error("Arrived pooled bookings must remain represented in member payment history");
+  }
+  store.signOut();
+  store.signIn("admin@example.test");
+  await store.setBookingAttendance(allocatedBooking.id, false, allocatedWindow.opensAt);
   store.signOut();
   store.signIn("member@example.test");
   const originalSessionId = allocatedBooking.sessionId;

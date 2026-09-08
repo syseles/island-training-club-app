@@ -146,14 +146,14 @@ function hyroxCycleBookingForUser(cycle) {
   const user = store.currentUser();
   if (!user) return null;
   return store.bookingsForUser(user.id).find((booking) => booking.cycleId === cycle.id
-    && ["reserved", "confirmed"].includes(booking.status)) || null;
+    && ["reserved", "confirmed", "attended"].includes(booking.status)) || null;
 }
 
 function hyroxCycleRow(cycle) {
   const status = hyroxCycleStatus(cycle);
   const booking = hyroxCycleBookingForUser(cycle);
   const action = booking
-    ? `<span class="badge free">${booking.status === "confirmed" ? "Booked" : "Payment due"}</span>`
+    ? `<span class="badge free">${booking.status === "reserved" ? "Payment due" : booking.status === "attended" ? "Arrived" : "Booked"}</span>`
     : `<span class="badge ${status.className}">${esc(status.compactLabel || status.label)}</span>`;
   const venues = hyroxCycleVenues(cycle)
     .sort((a, b) => a.time.localeCompare(b.time));
@@ -192,7 +192,7 @@ function sessionRow(s, { past, showDate = true, highlight } = {}) {
   } else if (booked) {
     end = s.kind === "rsvp"
       ? `<span class="badge free booked">Going</span><span class="spots">${store.attendeeCountFor(s)} going</span>`
-      : `<span class="badge free booked">Booked</span>`;
+      : `<span class="badge free booked">${booked.status === "attended" ? "Arrived" : "Booked"}</span>`;
   } else if (reserved) {
     end = `<span class="badge warn">Pay by ${fmtDeadline(reserved.payDeadlineAt)}</span>`;
   } else if (s.kind === "rsvp") {
@@ -1722,8 +1722,8 @@ function pooledBookingRow(b, { highlight = false } = {}) {
   const s = bookingDisplaySnapshot(b);
   const venue = b.sessionId ? s.location : "Venue pending";
   return `<a class="session-row hyrox-queue-state${highlight ? " next" : ""}" href="#/booking/${esc(b.id)}">
-    <time>${esc(fmtDate(s.dateISO))}</time><div><h3>ITC HYROX</h3><p>${esc(venue)} · ${b.status === "confirmed" ? "Confirmed" : "Payment due"}</p></div>
-    <div class="row-end"><span class="badge ${b.sessionId ? "free" : "neutral"}">${b.sessionId ? "Booked" : "Venue pending"}</span></div>
+    <time>${esc(fmtDate(s.dateISO))}</time><div><h3>ITC HYROX</h3><p>${esc(venue)} · ${b.status === "attended" ? "Arrived" : b.status === "confirmed" ? "Confirmed" : "Payment due"}</p></div>
+    <div class="row-end"><span class="badge ${b.sessionId ? "free" : "neutral"}">${b.status === "attended" ? "Arrived" : b.sessionId ? "Booked" : "Venue pending"}</span></div>
   </a>`;
 }
 

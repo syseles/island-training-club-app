@@ -4256,6 +4256,7 @@ declare
   v_open_boundary_session text;
   v_close_boundary_session text;
   v_first_attended_at timestamptz;
+  v_attendee_name_count integer;
   v_receipt_status text;
   v_booking public.operational_bookings;
 begin
@@ -4332,6 +4333,14 @@ begin
     and v_booking.attended_by = 'aa000000-0000-0000-0000-00000000a001',
     'Admin marks a confirmed-paid booking Arrived');
   v_first_attended_at := v_booking.attended_at;
+  reset role;
+
+  perform set_config('request.jwt.claim.sub', 'bb000000-0000-0000-0000-00000000b001', true);
+  set local role authenticated;
+  select count(*) into v_attendee_name_count
+    from public.get_operational_attendee_names(v_open_session);
+  perform pg_temp.op_assert(v_attendee_name_count = 1,
+    'Arrived paid members remain in the protected attendee-name roster');
   reset role;
 
   select status into v_receipt_status from public.operational_receipts

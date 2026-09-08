@@ -759,13 +759,14 @@ export function livePendingBookings() {
 
 export function liveHeldBookingsForSession(sessionId) {
   return liveCache.bookings.filter(
-    (b) => b.sessionId === sessionId && (b.status === "reserved" || b.status === "confirmed")
+    (b) => b.sessionId === sessionId
+      && (b.status === "reserved" || b.status === "confirmed" || b.status === "attended")
   );
 }
 
 export function liveConfirmedBookingsForSession(sessionId) {
   return liveCache.bookings.filter(
-    (b) => b.sessionId === sessionId && b.status === "confirmed"
+    (b) => b.sessionId === sessionId && (b.status === "confirmed" || b.status === "attended")
   );
 }
 

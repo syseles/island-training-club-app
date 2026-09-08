@@ -1062,7 +1062,7 @@ export function activeBookingsForSession(sessionId) {
     return liveOps.liveConfirmedBookingsForSession(sessionId);
   }
   return state.bookings.filter(
-    (b) => b.sessionId === sessionId && b.status === "confirmed"
+    (b) => b.sessionId === sessionId && (b.status === "confirmed" || b.status === "attended")
   );
 }
 
@@ -1114,11 +1114,12 @@ export async function attendeeNamesFor(sessionId) {
 export function userBookingFor(userId, sessionId) {
   if (isLive()) {
     return liveOps.liveBookingsForUser(userId).find(
-      (b) => b.sessionId === sessionId && b.status === "confirmed"
+      (b) => b.sessionId === sessionId && (b.status === "confirmed" || b.status === "attended")
     ) || null;
   }
   return state.bookings.find(
-    (b) => b.userId === userId && b.sessionId === sessionId && b.status === "confirmed"
+    (b) => b.userId === userId && b.sessionId === sessionId
+      && (b.status === "confirmed" || b.status === "attended")
   );
 }
 
@@ -1185,7 +1186,8 @@ export function notificationsFor(userId) {
 export function heldBookingsForSession(sessionId) {
   if (isLive()) return liveOps.liveHeldBookingsForSession(sessionId);
   return state.bookings.filter(
-    (b) => b.sessionId === sessionId && (b.status === "reserved" || b.status === "confirmed")
+    (b) => b.sessionId === sessionId
+      && (b.status === "reserved" || b.status === "confirmed" || b.status === "attended")
   );
 }
 
