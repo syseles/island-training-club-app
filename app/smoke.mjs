@@ -4477,6 +4477,125 @@ console.log("ok  reset");
   );
   console.log("ok  v22 migration preserves booking data and initializes attendance fields");
 }
+
+// --- Admin payment/attendance state seam -----------------------------------
+{
+  store.resetLocalData();
+  installLocalFixtures();
+  const paidSessions = store.upcomingSessions(70).filter((session) =>
+    session.kind === "paid" && !session.cancelled && !data.sessionStarted(session)
+      && !store.isMidtown(session)
+  );
+  if (paidSessions.length < 3) throw new Error("attendance tests need three future paid sessions");
+
+  store.signIn("member@example.test");
+  const dueBooking = store.reserveSession("fixture-member", paidSessions[0].id);
+  const awaitingBooking = store.reserveSession("fixture-member", paidSessions[1].id);
+  store.markBookingPaid(awaitingBooking.id, "FPS", "ATTEND-AWAITING");
+  const paidBooking = store.reserveSession("fixture-member", paidSessions[2].id);
+  store.markBookingPaid(paidBooking.id, "PayMe", "ATTEND-PAID");
+  store.signIn("admin@example.test");
+  const confirmation = store.confirmBookingPayment(paidBooking.id);
+  const receiptBefore = structuredClone(confirmation.receipt);
+
+  const rosterStates = store.paymentRosterBookings()
+    .filter((booking) => [dueBooking.id, awaitingBooking.id, paidBooking.id].includes(booking.id))
+    .map((booking) => store.paymentStateForBooking(booking));
+  assert.deepEqual(rosterStates, ["payment_due", "awaiting_confirmation", "paid"]);
+  assert.deepEqual(
+    store.attendanceBookingsForSession(paidSessions[2].id).map((booking) => booking.status),
+    ["confirmed"],
+  );
+
+  const window = store.attendanceWindowForSession(paidSessions[2], 0);
+  store.signIn("member@example.test");
+  await assert.rejects(
+    () => store.setBookingAttendance(paidBooking.id, true, window.opensAt),
+    /Approved Admin access required/,
+  );
+  store.signIn("admin@example.test");
+  await assert.rejects(
+    () => store.setBookingAttendance(dueBooking.id, true, window.opensAt),
+    /confirmed-paid/,
+  );
+  await assert.rejects(
+    () => store.setBookingAttendance(awaitingBooking.id, true, window.opensAt),
+    /confirmed-paid/,
+  );
+  await assert.rejects(
+    () => store.setBookingAttendance(paidBooking.id, true, window.opensAt - 1),
+    /outside the check-in window/,
+  );
+
+  const arrived = await store.setBookingAttendance(paidBooking.id, true, window.opensAt);
+  assert.equal(arrived.status, "attended");
+  assert.equal(arrived.attendedAt, window.opensAt);
+  assert.equal(arrived.attendedBy, "fixture-admin");
+  assert.equal(store.paymentStateForBooking(arrived), "paid");
+  assert.deepEqual(store.receiptForBooking(paidBooking.id), receiptBefore,
+    "attendance must preserve the issued receipt");
+  const repeated = await store.setBookingAttendance(paidBooking.id, true, window.opensAt + 1);
+  assert.equal(repeated.attendedAt, window.opensAt);
+  assert.equal(repeated.attendedBy, "fixture-admin");
+
+  store.signIn("member@example.test");
+  const attendedProfile = await views.viewAccount();
+  const attendedPage = await views.viewAccount("bookings", "attended");
+  assert.match(attendedProfile, /href="#\/account\/bookings\/attended"[^>]*>\s*<strong>1<\/strong>/);
+  assert.equal((attendedPage.match(/class="card booking-card"/g) || []).length, 1);
+  store.signIn("admin@example.test");
+
+  const expected = await store.setBookingAttendance(paidBooking.id, false, window.opensAt + 2);
+  assert.equal(expected.status, "confirmed");
+  assert.equal(expected.attendedAt, null);
+  assert.equal(expected.attendedBy, null);
+  const closingMark = await store.setBookingAttendance(paidBooking.id, true, window.closesAt);
+  assert.equal(closingMark.status, "attended", "the exact closing boundary must remain open");
+  await store.setBookingAttendance(paidBooking.id, false, window.closesAt);
+  await assert.rejects(
+    () => store.setBookingAttendance(paidBooking.id, true, window.closesAt + 1),
+    /outside the check-in window/,
+  );
+
+  const raw = JSON.parse(localStorage.getItem("itc.prototype.v1"));
+  raw.bookings.push({
+    id: "attendance-unallocated", userId: "fixture-member", sessionId: null,
+    cycleId: "attendance-cycle", status: "confirmed", paymentMarkedAt: 1,
+    paidAt: 2, attendedAt: null, attendedBy: null,
+    snapshot: { name: "ITC HYROX", dateISO: paidSessions[2].dateISO, price: 180 },
+  });
+  localStorage.setItem("itc.prototype.v1", JSON.stringify(raw));
+  store.load();
+  await assert.rejects(
+    () => store.setBookingAttendance("attendance-unallocated", true, window.opensAt),
+    /assigned session/,
+  );
+
+  store.signIn("member@example.test");
+  const rsvpSession = store.upcomingSessions(70).find((session) =>
+    session.kind === "rsvp" && !session.cancelled && !data.sessionStarted(session)
+  );
+  if (!rsvpSession) throw new Error("attendance tests need a future RSVP session");
+  const rsvpBooking = await store.rsvpSession("fixture-member", rsvpSession.id);
+  store.signIn("admin@example.test");
+  assert.equal(store.paymentRosterBookings().some((booking) => booking.id === rsvpBooking.id), false,
+    "free RSVP bookings must not enter financial rosters");
+  await assert.rejects(
+    () => store.setBookingAttendance(rsvpBooking.id, true,
+      store.attendanceWindowForSession(rsvpSession, 0).opensAt),
+    /paid sessions only/,
+  );
+
+  const cancelledRaw = JSON.parse(localStorage.getItem("itc.prototype.v1"));
+  cancelledRaw.sessionOverrides[paidSessions[2].id] = { cancelled: "Attendance test" };
+  localStorage.setItem("itc.prototype.v1", JSON.stringify(cancelledRaw));
+  store.load();
+  await assert.rejects(
+    () => store.setBookingAttendance(paidBooking.id, true, window.opensAt),
+    /Session is cancelled/,
+  );
+  console.log("ok  local attendance selectors and mutation enforce paid Admin timing rules");
+}
 {
   store.resetLocalData();
   installLocalFixtures();

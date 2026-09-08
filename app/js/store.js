@@ -1007,6 +1007,56 @@ export function pendingPaymentBookings() {
     .sort((a, b) => a.snapshot.dateISO.localeCompare(b.snapshot.dateISO));
 }
 
+export function paymentRosterBookings() {
+  requirePaymentAdminActor();
+  const bookings = isLive() ? liveOps.listLiveBookings() : state.bookings;
+  return bookings.filter((booking) => {
+    const session = booking.sessionId ? getSession(booking.sessionId) : null;
+    const price = session?.price ?? booking.snapshot?.price;
+    return Number(price) > 0 && paymentStateForBooking(booking);
+  });
+}
+
+export function attendanceBookingsForSession(sessionId) {
+  requirePaymentAdminActor();
+  const session = getSession(sessionId);
+  if (!session || session.kind !== "paid" || session.cancelled) return [];
+  const bookings = isLive()
+    ? liveOps.liveBookingsForSession(sessionId)
+    : state.bookings.filter((booking) => booking.sessionId === sessionId);
+  return bookings.filter((booking) =>
+    booking.status === "confirmed" || booking.status === "attended"
+  );
+}
+
+export async function setBookingAttendance(bookingId, arrived, now = Date.now()) {
+  const actor = requirePaymentAdminActor();
+  if (typeof arrived !== "boolean") throw new Error("Attendance state is required.");
+  const booking = getBooking(bookingId);
+  if (!booking) throw new Error("Booking not found.");
+  if (isLive()) return liveOps.liveSetOperationalAttendance(bookingId, arrived);
+  if (!booking.sessionId) throw new Error("Attendance requires an assigned session.");
+  const session = getSession(booking.sessionId);
+  if (!session) throw new Error("Assigned session not found.");
+  if (session.cancelled) throw new Error("Session is cancelled.");
+  if (session.kind !== "paid" || Number(session.price) <= 0) {
+    throw new Error("Attendance check-in is for paid sessions only.");
+  }
+  if (booking.status !== "confirmed" && booking.status !== "attended") {
+    throw new Error("Only confirmed-paid bookings can be checked in.");
+  }
+  if (attendanceWindowForSession(session, now).state !== "open") {
+    throw new Error("Attendance is outside the check-in window.");
+  }
+  if ((arrived && booking.status === "attended")
+      || (!arrived && booking.status === "confirmed")) return booking;
+  booking.status = arrived ? "attended" : "confirmed";
+  booking.attendedAt = arrived ? now : null;
+  booking.attendedBy = arrived ? actor.id : null;
+  save();
+  return booking;
+}
+
 export function activeBookingsForSession(sessionId) {
   if (isLive()) {
     return liveOps.liveConfirmedBookingsForSession(sessionId);
