@@ -929,6 +929,14 @@ assert.match(integratedAppSource,
 assert.match(integratedAppSource,
   /visibilitychange[\s\S]*?store\.startupRoute\(location\.hash, store\.currentUser\(\)\?\.id\)/,
   "resume must recover an unexpectedly empty hash before refreshing the route");
+const signedInListenerSource = integratedAppSource.match(
+  /supabase\.auth\.onAuthStateChange\(\(event\) => \{[\s\S]*?\n\s*\}\);/
+)?.[0] || "";
+assert.ok(signedInListenerSource, "live auth SIGNED_IN listener must remain wired");
+assert.doesNotMatch(signedInListenerSource, /location\.hash\s*=\s*"#\/home"/,
+  "tab-refocus SIGNED_IN events must not replace the current route with Home");
+assert.match(signedInListenerSource, /await renderWithFeedback\(\);[\s\S]*?await maybeRedirectToApply\(\);/,
+  "SIGNED_IN must refresh the current route before checking pending-applicant routing");
 assert.match(integratedViewSource, /data-route-not-found/,
   "not-found output must expose a stable route-commit guard");
 console.log("ok  app launch, route commit and resume are wired to route handoff storage");

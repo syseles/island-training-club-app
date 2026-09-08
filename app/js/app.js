@@ -1831,15 +1831,15 @@ async function boot() {
     }
   });
 
-  // Live-mode auth listener: when Supabase completes sign-in, route the
-  // pending user to /apply (if they have not yet submitted an application).
+  // Supabase may emit SIGNED_IN again when an existing session regains focus.
+  // Refresh identity without replacing the current route; only a pending
+  // applicant still needs the follow-up redirect to /apply.
   if (isLive() && supabase) {
     supabase.auth.onAuthStateChange((event) => {
       if (event !== "SIGNED_IN") return;
       setTimeout(async () => {
         try {
           await store.getCurrentUser();
-          location.hash = "#/home";
           await renderWithFeedback();
           await maybeRedirectToApply();
         } catch (err) {
