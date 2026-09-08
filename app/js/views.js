@@ -2465,6 +2465,36 @@ function adminPaymentRoster({ id, label, dateISO, venue, bookings, memberUsers }
         ${rows.length ? rows.map((booking) => `<div class="admin-roster-row"><strong>${esc(displayName(booking))}</strong><span class="badge ${badgeClass}">${esc(text)}</span></div>`).join("") : `<p class="muted small">No members in this state.</p>`}
       </details>`;
     }).join("")}
+  </details><!-- payment-roster-end:${esc(id)} -->`;
+}
+
+function adminAttendanceSession(session, memberUsers) {
+  const directory = new Map((memberUsers || []).map((member) => [member.id, member]));
+  const displayName = (booking) => {
+    const member = directory.get(booking.userId);
+    return member ? (member.fullName || member.preferredName || "Member") : "Member";
+  };
+  const bookings = store.attendanceBookingsForSession(session.id);
+  const expected = bookings.filter((booking) => booking.status === "confirmed")
+    .sort((a, b) => displayName(a).localeCompare(displayName(b)));
+  const arrived = bookings.filter((booking) => booking.status === "attended")
+    .sort((a, b) => displayName(a).localeCompare(displayName(b)));
+  const window = store.attendanceWindowForSession(session);
+  const timingCopy = window.state === "upcoming"
+    ? "Check-in opens 15 minutes before the session."
+    : window.state === "locked"
+      ? "Attendance locked."
+      : "Attendance check-in is open.";
+  const row = (booking, isArrived) => `<div class="admin-roster-row">
+    <span class="admin-attendance-name"><strong>${esc(displayName(booking))}</strong><span class="badge ${isArrived ? "free" : "neutral"}">${isArrived ? "Arrived" : "Expected"}</span></span>
+    ${window.state === "open" ? `<button class="btn ${isArrived ? "ghost " : ""}sm" type="button" data-action="attendance-toggle" data-booking="${esc(booking.id)}" data-arrived="${isArrived ? "0" : "1"}">${isArrived ? "Undo" : "Mark Arrived"}</button>` : ""}
+  </div>`;
+  return `<details class="admin-attendance-session" data-attendance-session="${esc(session.id)}" open>
+    <summary><span><strong>Expected arrivals</strong><span class="muted small">${esc(fmtTime(session.time))} · ${esc(session.location || "Venue pending")}</span></span><span>${arrived.length} arrived · ${expected.length} still expected</span></summary>
+    <p class="muted small admin-attendance-copy">${timingCopy}</p>
+    ${expected.map((booking) => row(booking, false)).join("")}
+    ${arrived.map((booking) => row(booking, true)).join("")}
+    ${bookings.length ? "" : `<p class="muted small admin-attendance-empty">No confirmed-paid arrivals.</p>`}
   </details>`;
 }
 
@@ -2576,6 +2606,7 @@ function adminHyroxCycleCards(memberUsers) {
     const allocationCounts = cycle.venuePlan === "both"
       ? `<p class="muted small">BFT assignments: ${confirmed.filter((b) => b.sessionId === cycle.bftSessionId).length} · Midtown assignments: ${confirmed.filter((b) => b.sessionId === cycle.midtownSessionId).length} · switch queue: ${queues.venueSwitches.length}</p>`
       : "";
+    const cycleFinancialBookings = financialBookings.filter((booking) => booking.cycleId === cycle.id);
     const paymentRoster = adminPaymentRoster({
       id: cycle.id,
       label: "ITC HYROX weekly cycle",
@@ -2583,9 +2614,22 @@ function adminHyroxCycleCards(memberUsers) {
       venue: active.some((booking) => !booking.sessionId)
         ? "Venue allocation pending"
         : cycle.venuePlan === "both" ? "BFT + Midtown 28" : "BFT",
-      bookings: financialBookings.filter((booking) => booking.cycleId === cycle.id),
+      bookings: cycleFinancialBookings,
       memberUsers,
     });
+    const attendanceSessionIds = cycle.venuePlan === "pending"
+      ? []
+      : cycle.venuePlan === "both"
+        ? [cycle.bftSessionId, cycle.midtownSessionId]
+        : [cycle.bftSessionId];
+    const attendanceRoster = attendanceSessionIds.filter(Boolean)
+      .map((sessionId) => store.getSession(sessionId))
+      .filter(Boolean)
+      .map((session) => adminAttendanceSession(session, memberUsers))
+      .join("");
+    const allocationPending = cycleFinancialBookings.some((booking) =>
+      !booking.sessionId && ["confirmed", "attended"].includes(booking.status)
+    ) || (cycle.venuePlan === "pending" && cycleFinancialBookings.some((booking) => !booking.sessionId));
     const pendingClaims = claims.map((booking) => `
       <div class="member-row"><div class="who"><strong>${esc(booking.snapshot?.name || "Member")}</strong><span>${esc(booking.paymentRef || "No reference")}</span></div>
         <button class="btn sm" type="button" data-action="confirm-payment" data-booking="${esc(booking.id)}">Confirm received</button></div>
@@ -2607,6 +2651,8 @@ function adminHyroxCycleCards(memberUsers) {
         <div class="admin-hyrox-count"><strong>${queues.weeklyWaitlist.length}</strong><span>Weekly waitlist</span></div>
       </div>
       ${paymentRoster}
+      ${allocationPending ? `<p class="muted small mt16">Expected-arrivals roster available after venue allocation.</p>` : ""}
+      ${attendanceRoster}
       ${claims.length ? `<details id="hyrox-status-${esc(cycle.id)}-claims" class="admin-claims-section admin-status-anchor" open>
         <summary><span class="kicker dim">Payment claims to review</span><span class="badge warn">${claims.length}</span></summary>
         ${pendingClaims}
@@ -2759,7 +2805,7 @@ function adminFinalizeGymCard(s, cardClass = "", memberUsers = []) {
     heading: `ITC HYROX - ${venueName}`,
     subheading: "Payment reconciliation",
     cardClass: venueCardClass,
-    extra: `${paymentRoster}${isMid
+    extra: `${paymentRoster}${adminAttendanceSession(s, memberUsers)}${isMid
       ? `<p class="muted small mt8">Registration: <strong>${open ? "Open" : "Closed"}</strong></p>
          <button class="btn ghost sm" type="button" data-action="midtown-toggle" data-session="${esc(s.id)}" data-open="${open ? "0" : "1"}">${open ? "Close Midtown" : "Open Midtown"}</button>`
       : ""}`,

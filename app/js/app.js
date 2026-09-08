@@ -1069,6 +1069,28 @@ document.addEventListener("click", async (e) => {
       break;
     }
 
+    case "attendance-toggle": {
+      const bookingId = String(el.dataset.booking || "");
+      if (!bookingId || !["0", "1"].includes(el.dataset.arrived)) break;
+      const arrived = el.dataset.arrived === "1";
+      try {
+        await withBusyControl(el, arrived ? "Marking…" : "Undoing…", async () => {
+          await store.setBookingAttendance(bookingId, arrived);
+          toast(arrived ? "Marked Arrived" : "Attendance reset to Expected");
+          await renderWithFeedback();
+        });
+      } catch (err) {
+        toast(err.message || "Unable to update attendance", true);
+        try {
+          await store.hydrateLiveOperations({ force: true });
+          await renderWithFeedback();
+        } catch (refreshError) {
+          console.warn("Unable to refresh attendance after mutation failure", refreshError);
+        }
+      }
+      break;
+    }
+
     case "hyrox-plan-retry":
       if (controlBusy.has(el)) break;
       try {

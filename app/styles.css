@@ -432,6 +432,27 @@ a.admin-hyrox-count-link:focus-visible {
 }
 
 .admin-payment-group > p { padding: 0 14px 12px; }
+
+.admin-attendance-session {
+  margin-top: 14px;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+.admin-attendance-session > summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px;
+  background: var(--surface-2);
+  font-size: 12px;
+}
+.admin-attendance-session > summary > span:first-child { display: grid; gap: 3px; }
+.admin-attendance-copy,
+.admin-attendance-empty { padding: 10px 14px; }
+.admin-attendance-name { display: flex; align-items: center; gap: 8px; min-width: 0; }
+
 .admin-roster-row {
   display: flex;
   align-items: center;
@@ -444,9 +465,11 @@ a.admin-hyrox-count-link:focus-visible {
 .admin-roster-row strong { min-width: 0; overflow-wrap: anywhere; }
 
 @media (max-width: 600px) {
-  .admin-payment-roster > summary { align-items: flex-start; flex-direction: column; }
+  .admin-payment-roster > summary,
+  .admin-attendance-session > summary { align-items: flex-start; flex-direction: column; }
   .admin-roster-counts { justify-content: flex-start; }
   .admin-roster-row { align-items: stretch; flex-direction: column; }
+  .admin-attendance-name { justify-content: space-between; }
   .admin-roster-row .btn { width: 100%; }
 }
 

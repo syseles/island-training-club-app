@@ -4420,6 +4420,117 @@ const delayedClickMutation = async ({
     `${action} must report success after settlement`);
 };
 
+const attendanceActionSessionRow = {
+  id: "attendance-action-session",
+  activity_id: "hyrox-bft",
+  session_date: "2026-08-05",
+  start_time: "10:10:00",
+  duration_minutes: 60,
+  venue: "BFT Causeway Bay",
+  capacity: 20,
+  price_hkd: 180,
+  is_open: true,
+  venue_tbc: false,
+  notice: null,
+  cancelled_at: null,
+  cancelled_by: null,
+  cancelled_source: null,
+  cancel_reason: null,
+  gym_confirmed_at: null,
+  gym_confirmed_by: null,
+  gym_note: null,
+  created_at: fixedIso,
+  updated_at: fixedIso,
+};
+const attendanceActionBookingRow = {
+  id: "attendance-action-booking",
+  profile_id: "approved-member",
+  session_id: attendanceActionSessionRow.id,
+  status: "confirmed",
+  reserved_at: fixedIso,
+  pay_deadline_at: fixedIso,
+  payment_marked_at: fixedIso,
+  payment_method: "payme",
+  payment_reference: "ATTEND-ACTION",
+  paid_at: fixedIso,
+  confirmed_by: authUser.id,
+  attended_at: null,
+  attended_by: null,
+  deferred_from_booking_id: null,
+  deferred_to_booking_id: null,
+  snapshot: {
+    name: "ITC HYROX", session_date: "2026-08-05", start_time: "10:10:00",
+    venue: "BFT Causeway Bay", price_hkd: 180,
+  },
+  created_at: fixedIso,
+  updated_at: fixedIso,
+};
+operationalTableRows.operational_sessions.push(attendanceActionSessionRow);
+operationalTableRows.operational_bookings.push(attendanceActionBookingRow);
+await operations.refreshOperationalState();
+location.hash = "#/admin/payments";
+await windowListeners.get("hashchange")();
+assert.match(viewEl.innerHTML,
+  /data-action="attendance-toggle"[^>]*data-booking="attendance-action-booking"[^>]*data-arrived="1"/);
+
+await delayedClickMutation({
+  action: "attendance-toggle",
+  dataset: { booking: attendanceActionBookingRow.id, arrived: "1" },
+  rpcName: "set_operational_attendance",
+  expectedArgs: { p_booking_id: attendanceActionBookingRow.id, p_arrived: true },
+  result: attendanceActionBookingRow,
+  beforeResolve: () => Object.assign(attendanceActionBookingRow, {
+    status: "attended", attended_at: fixedIso, attended_by: authUser.id,
+  }),
+  successToast: "Marked Arrived",
+});
+assert.equal(location.hash, "#/admin/payments");
+assert.equal(store.getBooking(attendanceActionBookingRow.id)?.status, "attended");
+assert.match(viewEl.innerHTML,
+  /data-action="attendance-toggle"[^>]*data-booking="attendance-action-booking"[^>]*data-arrived="0"/);
+
+await delayedClickMutation({
+  action: "attendance-toggle",
+  dataset: { booking: attendanceActionBookingRow.id, arrived: "0" },
+  rpcName: "set_operational_attendance",
+  expectedArgs: { p_booking_id: attendanceActionBookingRow.id, p_arrived: false },
+  result: attendanceActionBookingRow,
+  beforeResolve: () => Object.assign(attendanceActionBookingRow, {
+    status: "confirmed", attended_at: null, attended_by: null,
+  }),
+  successToast: "Attendance reset to Expected",
+});
+assert.equal(location.hash, "#/admin/payments");
+assert.equal(store.getBooking(attendanceActionBookingRow.id)?.status, "confirmed");
+
+operationalRpcHandler = (name, args) => {
+  if (name === "set_operational_attendance") {
+    operationalRpcCalls.push({ name, args: structuredClone(args) });
+    return Promise.resolve({ data: null, error: { message: "Attendance is outside the check-in window." } });
+  }
+  return delegatedBaseOperationalRpcHandler(name, args);
+};
+const rejectedAttendanceControl = operationControl("BUTTON", "", "Mark Arrived");
+rejectedAttendanceControl.dataset = {
+  action: "attendance-toggle", booking: attendanceActionBookingRow.id, arrived: "1",
+};
+rejectedAttendanceControl.closest = () => rejectedAttendanceControl;
+Object.assign(attendanceActionBookingRow, {
+  status: "attended", attended_at: fixedIso, attended_by: authUser.id,
+});
+toastStack.children.length = 0;
+await click({ target: rejectedAttendanceControl, preventDefault() {} });
+assert.equal(location.hash, "#/admin/payments");
+assert.equal(store.getBooking(attendanceActionBookingRow.id)?.status, "attended",
+  "failed attendance mutations must refresh a concurrent authoritative server row");
+assert.match(viewEl.innerHTML,
+  /data-action="attendance-toggle"[^>]*data-booking="attendance-action-booking"[^>]*data-arrived="0"/);
+assert.deepEqual(toastStack.children.map((item) => [item.textContent, item.getAttribute("role")]), [
+  ["Attendance is outside the check-in window.", "alert"],
+]);
+operationalRpcHandler = delegatedBaseOperationalRpcHandler;
+console.log("ok  delegated attendance controls await, dedupe, rerender, undo, and recover errors");
+
 const queueMidtown = store.upcomingSessions(28).find((session) => store.isMidtown(session) && !session.cancelled);
 assert.ok(queueMidtown, "adjacent async audit needs a Midtown session");
 const interestRow = {

@@ -4503,35 +4503,69 @@ console.log("ok  reset");
     { id: "roster-due", role: "member", status: "approved", fullName: "Due Member", preferredName: "Due", email: "due-private@example.test", phone: "+852 6111 1001", donorId: "DUE-1001" },
     { id: "roster-awaiting", role: "member", status: "approved", fullName: "Claim Member", preferredName: "Claim", email: "claim-private@example.test", phone: "+852 6222 2002", donorId: "CLAI-2002" },
     { id: "roster-paid", role: "member", status: "approved", fullName: "Paid Member", preferredName: "Paid", email: "paid-private@example.test", phone: "+852 6333 3003", donorId: "PAID-3003" },
+    { id: "roster-expected", role: "member", status: "approved", fullName: "Expected Member", preferredName: "Expected", email: "expected-private@example.test", phone: "+852 6444 4004", donorId: "EXPE-4004" },
   );
   rosterRaw.bookings.push(
     { id: "roster-due-booking", userId: "roster-due", sessionId: paidSessions[0].id, status: "reserved", paymentMarkedAt: null, attendedAt: null, attendedBy: null, snapshot: { name: "ITC HYROX", dateISO: paidSessions[0].dateISO, time: paidSessions[0].time, price: 180 } },
     { id: "roster-awaiting-booking", userId: "roster-awaiting", sessionId: paidSessions[0].id, status: "reserved", paymentMarkedAt: 10, paymentRef: "PRIVATE-REF", attendedAt: null, attendedBy: null, snapshot: { name: "ITC HYROX", dateISO: paidSessions[0].dateISO, time: paidSessions[0].time, price: 180 } },
     { id: "roster-paid-booking", userId: "roster-paid", sessionId: paidSessions[0].id, status: "attended", paymentMarkedAt: 10, paidAt: 20, attendedAt: 30, attendedBy: "fixture-admin", snapshot: { name: "ITC HYROX", dateISO: paidSessions[0].dateISO, time: paidSessions[0].time, price: 180 } },
+    { id: "roster-expected-booking", userId: "roster-expected", sessionId: paidSessions[0].id, status: "confirmed", paymentMarkedAt: 10, paidAt: 20, attendedAt: null, attendedBy: null, snapshot: { name: "ITC HYROX", dateISO: paidSessions[0].dateISO, time: paidSessions[0].time, price: 180 } },
   );
   localStorage.setItem("itc.prototype.v1", JSON.stringify(rosterRaw));
   store.load();
   const rosterAdminHtml = await views.viewAdmin("payments");
   const rosterStart = rosterAdminHtml.indexOf(`data-payment-roster="${paidSessions[0].id}"`);
-  const nextRosterStart = rosterAdminHtml.indexOf('data-payment-roster="', rosterStart + 1);
+  const rosterEnd = rosterAdminHtml.indexOf(`<!-- payment-roster-end:${paidSessions[0].id} -->`, rosterStart);
   const rosterHtml = rosterStart < 0 ? "" : rosterAdminHtml.slice(
-    rosterStart, nextRosterStart < 0 ? undefined : nextRosterStart
+    rosterStart, rosterEnd < 0 ? undefined : rosterEnd
   );
   for (const marker of [
     "Payment roster", "Payment due", "Awaiting confirmation", "Paid",
-    "Due Member", "Claim Member", "Paid Member",
+    "Due Member", "Claim Member", "Paid Member", "Expected Member",
     'data-payment-state="payment_due"',
     'data-payment-state="awaiting_confirmation"',
     'data-payment-state="paid"',
   ]) assert.ok(rosterHtml.includes(marker), `Admin payment roster missing ${marker}`);
   for (const secret of [
     "due-private@example.test", "claim-private@example.test", "paid-private@example.test",
-    "+852 6111 1001", "+852 6222 2002", "+852 6333 3003",
-    "DUE-1001", "CLAI-2002", "PAID-3003", "PRIVATE-REF",
+    "expected-private@example.test", "+852 6111 1001", "+852 6222 2002",
+    "+852 6333 3003", "+852 6444 4004",
+    "DUE-1001", "CLAI-2002", "PAID-3003", "EXPE-4004", "PRIVATE-REF",
   ]) assert.equal(rosterHtml.includes(secret), false, `Admin name roster leaked ${secret}`);
-  for (const name of ["Due Member", "Claim Member", "Paid Member"]) {
+  for (const name of ["Due Member", "Claim Member", "Paid Member", "Expected Member"]) {
     assert.equal((rosterHtml.match(new RegExp(name, "g")) || []).length, 1,
       `${name} must occur once in its financial group`);
+  }
+
+  const attendanceTimes = store.attendanceWindowForSession(paidSessions[0], 0);
+  const originalDateNow = Date.now;
+  try {
+    Date.now = () => attendanceTimes.opensAt - 1;
+    const beforeWindowHtml = await views.viewAdmin("payments");
+    assert.match(beforeWindowHtml, /Expected arrivals/);
+    assert.match(beforeWindowHtml, /Check-in opens 15 minutes before the session/);
+    assert.doesNotMatch(beforeWindowHtml, /data-action="attendance-toggle"/);
+
+    Date.now = () => attendanceTimes.opensAt;
+    const openWindowHtml = await views.viewAdmin("payments");
+    assert.match(openWindowHtml, /1 arrived · 1 still expected/);
+    assert.match(openWindowHtml, /data-action="attendance-toggle"[^>]*data-booking="roster-expected-booking"[^>]*data-arrived="1"/);
+    assert.match(openWindowHtml, /data-action="attendance-toggle"[^>]*data-booking="roster-paid-booking"[^>]*data-arrived="0"/);
+    assert.match(openWindowHtml, />Mark Arrived<\/button>/);
+    assert.match(openWindowHtml, />Undo<\/button>/);
+
+    Date.now = () => attendanceTimes.closesAt;
+    const closingBoundaryHtml = await views.viewAdmin("payments");
+    assert.match(closingBoundaryHtml, /data-action="attendance-toggle"/);
+
+    Date.now = () => attendanceTimes.closesAt + 1;
+    const lockedWindowHtml = await views.viewAdmin("payments");
+    assert.match(lockedWindowHtml, /Attendance locked/);
+    assert.match(lockedWindowHtml, /Expected Member/);
+    assert.match(lockedWindowHtml, /Paid Member/);
+    assert.doesNotMatch(lockedWindowHtml, /data-action="attendance-toggle"/);
+  } finally {
+    Date.now = originalDateNow;
   }
 
   const rosterStates = store.paymentRosterBookings()
@@ -5069,6 +5103,7 @@ console.log("ok  reset");
   const preAllocationRoster = preAllocationRosterStart < 0 ? "" : preAllocationAdmin.slice(preAllocationRosterStart);
   if (!preAllocationRoster.includes("Test Member")
       || !preAllocationRoster.includes("Venue allocation pending")
+      || !preAllocationRoster.includes("Expected-arrivals roster available after venue allocation")
       || !preAllocationRoster.includes('data-payment-state="paid"')) {
     throw new Error("pre-allocation pooled financial roster must retain paid member names under the parent cycle");
   }
@@ -5080,6 +5115,16 @@ console.log("ok  reset");
     throw new Error("allocated pooled booking surfaces should show one final venue and its receipt");
   }
   const allocatedBooking = store.getBooking(booking.id);
+  store.signOut();
+  store.signIn("admin@example.test");
+  const allocatedAdmin = await views.viewAdmin("payments");
+  if (!allocatedAdmin.includes(`data-attendance-session="${allocatedBooking.sessionId}"`)
+      || !allocatedAdmin.includes("Expected arrivals")
+      || !allocatedAdmin.includes("Test Member")) {
+    throw new Error("allocated pooled bookings must join the concrete venue arrival roster");
+  }
+  store.signOut();
+  store.signIn("member@example.test");
   const originalSessionId = allocatedBooking.sessionId;
   allocatedBooking.sessionId = "missing-session-metadata";
   const snapshotOnlyHtml = views.viewBooking(booking.id);
