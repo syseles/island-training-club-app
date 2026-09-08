@@ -2130,7 +2130,7 @@ declare
     + 252;
   v_cycle_id text;
   v_cycle public.operational_hyrox_cycles;
-  v_thu_17 timestamptz;
+  v_thu_16 timestamptz;
   v_thu_18 timestamptz;
   v_thu_19 timestamptz;
   v_thu_20 timestamptz;
@@ -2143,7 +2143,7 @@ begin
   select * into v_cycle from public.schedule_hyrox_cycle(v_cycle_id);
   reset role;
 
-  v_thu_17 := v_cycle.payment_deadline_at - interval '1 hour';
+  v_thu_16 := v_cycle.payment_deadline_at - interval '2 hours';
   v_thu_18 := v_cycle.payment_deadline_at;
   v_thu_19 := v_cycle.holder_grace_deadline_at;
   v_thu_20 := v_cycle.promoted_payment_deadline_at;
@@ -2177,21 +2177,29 @@ begin
     (v_cycle_id, '70000000-0000-0000-0000-000000000006', 'weekly_waitlist',
      'either', v_cycle.registration_opens_at, v_cycle.registration_opens_at + interval '5 seconds');
 
-  perform public.sweep_hyrox_cycle_deadlines(v_thu_17);
+  perform public.send_hyrox_member_payment_reminders(v_thu_16);
+  perform public.sweep_hyrox_cycle_deadlines(v_thu_16);
   perform pg_temp.op_assert(
-    (select payment_reminder_sent_at = v_thu_17
+    (select payment_reminder_sent_at = v_thu_16
        from public.operational_hyrox_cycles where id = v_cycle_id)
       and (select count(*) from public.notifications
             where kind = 'operational_hyrox_payment_reminder'
               and body like '%' || v_date::text || '%') = 2,
-    'Thursday 17:00 reminds each unmarked original holder once'
+    'Thursday 16:00 reminds each unmarked original holder once'
   );
-  perform public.sweep_hyrox_cycle_deadlines(v_thu_17 + interval '1 minute');
+  perform public.send_hyrox_member_payment_reminders(v_thu_16 + interval '1 minute');
+  perform public.send_hyrox_collector_payment_reminder(v_thu_16);
   perform pg_temp.op_assert(
     (select count(*) from public.notifications
       where kind = 'operational_hyrox_payment_reminder'
         and body like '%' || v_date::text || '%') = 2,
-    'repeated Thursday 17:00 sweep does not duplicate reminders'
+    'repeated Thursday 16:00 sweep does not duplicate member reminders'
+  );
+  perform pg_temp.op_assert(
+    (select count(*) from public.notifications
+      where kind = 'operational_hyrox_collector_payment_reminder'
+        and body like '%' || v_date::text || '%') = 1,
+    'Thursday 16:00 collector reminder is aggregate and idempotent'
   );
 
   perform public.sweep_hyrox_cycle_deadlines(v_thu_18);

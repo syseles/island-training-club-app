@@ -626,9 +626,9 @@ git commit -m "feat(hyrox): add pooled member registration RPCs"
 Add SQL assertions for:
 
 - scheduling creates a cycle only for matching future BFT/Midtown sessions and rejects active legacy child bookings/queues;
-- opening is Monday 18:00 HKT; reminders/transitions occur Thursday 17:00, 18:00, 19:00 and 20:00; venue choice closes Friday 21:00;
+- opening is Monday 18:00 HKT; reminders/transitions occur Thursday 16:00, 18:00, 19:00 and 20:00; venue choice closes Friday 21:00;
 - the Monday sweep opens once and notifies approved members, while a repeated sweep creates no duplicate notifications;
-- the Thursday 17:00 sweep reminds unmarked holders once;
+- the Thursday 16:00 sweep reminds unmarked holders once;
 - the Thursday 18:00 sweep keeps unmarked originals booked, starts grace, notifies them and sends collector totals;
 - the Thursday 19:00 sweep demotes still-unmarked originals to the back of the non-payable waitlist and promotes only the oldest pre-existing entries with a 20:00 hard deadline;
 - the Thursday 20:00 sweep expires unmarked promoted bookings without another promotion, dissolves remaining weekly entries and sends updated collector totals;
@@ -1129,7 +1129,7 @@ Use pure helpers for IDs/checkpoints. A local cycle shape must match `buildHyrox
 
 - [x] **Step 5: Implement automatic opening and Thursday checkpoint sweep**
 
-Before Thursday 6 PM, unpaid cancellation promotes the oldest weekly entry with holder grace to 7 PM. `sweepHyroxCycleDeadlines` opens due Monday cycles, sends one Thursday 5 PM reminder, starts holder grace and sends collector/member notices at 6 PM, demotes still-unmarked originals and promotes only the pre-existing oldest waitlist cohort at 7 PM, then expires unmarked promoted bookings without further promotion and dissolves remaining weekly entries at 8 PM. Persist each checkpoint timestamp before sending notifications so repeated calls are idempotent. Do not call the legacy `nextPayDeadline` helper for pooled bookings.
+Before Thursday 6 PM, unpaid cancellation promotes the oldest weekly entry with holder grace to 7 PM. `sweepHyroxCycleDeadlines` opens due Monday cycles, sends one Thursday 4 PM reminder, starts holder grace and sends collector/member notices at 6 PM, demotes still-unmarked originals and promotes only the pre-existing oldest waitlist cohort at 7 PM, then expires unmarked promoted bookings without further promotion and dissolves remaining weekly entries at 8 PM. Persist each checkpoint timestamp before sending notifications so repeated calls are idempotent. Do not call the legacy `nextPayDeadline` helper for pooled bookings.
 
 - [x] **Step 6: Add live branches and verify no fallback**
 
@@ -1574,7 +1574,7 @@ Use one Admin and multiple approved member profiles against the same disposable/
 3. verify combined Schedule card and separate Quarry Bay;
 4. reserve/pay/confirm and inspect pending venue state;
 5. verify member #33 sees weekly waitlist with no payment action;
-6. exercise Thursday 5 PM reminder, 6 PM grace warning, 7 PM demotion/promotion and 8 PM closure;
+6. exercise Thursday 4 PM reminder, 6 PM grace warning, 7 PM demotion/promotion and 8 PM closure;
 7. verify exactly 20 derives BFT-only and 21 derives both automatically;
 8. fill BFT, join its switch queue and confirm the Midtown assignment remains guaranteed;
 9. match an opposite swap and observe Realtime in the second browser;

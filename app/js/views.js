@@ -1241,6 +1241,8 @@ async function hydrateLiveUser(user) {
       guardianPhone: app.guardian_phone ?? user.guardianPhone ?? "",
       mediaConsent: app.photo_consent !== undefined ? !!app.photo_consent : user.mediaConsent,
       whatsappReminders: app.whatsapp_reminders !== undefined ? !!app.whatsapp_reminders : user.whatsappReminders,
+      hyroxPaymentReminders: app.hyrox_payment_reminders !== undefined
+        ? !!app.hyrox_payment_reminders : user.hyroxPaymentReminders !== false,
       emailReceipts: app.email_receipts !== undefined ? !!app.email_receipts : user.emailReceipts,
       communityNews: app.community_news !== undefined ? !!app.community_news : user.communityNews,
       indemnityAcceptedAt: app.waiver_accepted_at ?? user.indemnityAcceptedAt,
@@ -1658,6 +1660,8 @@ async function accountPrivacyEdit(user) {
       <div class="line"><span>Privacy policy accepted</span><strong>${hydrated.privacyAcceptedAt ? fmtDay(hydrated.privacyAcceptedAt) : "To be accepted"}</strong></div>
       <label class="check"><input type="checkbox" name="photo_consent" ${hydrated.mediaConsent ? "checked" : ""}> Photos and video at sessions</label>
       <label class="check"><input type="checkbox" name="whatsapp_reminders" ${hydrated.whatsappReminders ? "checked" : ""}> WhatsApp session reminders</label>
+      <label class="check"><input type="checkbox" name="hyrox_payment_reminders" ${hydrated.hyroxPaymentReminders !== false ? "checked" : ""}> HYROX payment reminders</label>
+      <p class="muted small">Thursday payment reminders for unpaid HYROX reservations. You can still check payment status in the app.</p>
       <label class="check"><input type="checkbox" name="email_receipts" ${hydrated.emailReceipts ? "checked" : ""}> Email receipts</label>
       <label class="check"><input type="checkbox" name="community_news" ${hydrated.communityNews ? "checked" : ""}> Community news</label>
       <div class="actions">
@@ -1679,11 +1683,12 @@ async function accountPrivacy(user) {
         <div class="line"><span>Photo/video consent</span><strong>${hydrated.mediaConsent ? "Allowed" : "Not allowed"}</strong></div>
         <div class="line"><span>Privacy policy accepted</span><strong>${hydrated.privacyAcceptedAt ? fmtDay(hydrated.privacyAcceptedAt) : "To be accepted"}</strong></div>
         <div class="line"><span>WhatsApp session reminders</span><strong>${onOff(hydrated.whatsappReminders)}</strong></div>
+        <div class="line"><span>HYROX payment reminders</span><strong>${onOff(hydrated.hyroxPaymentReminders !== false)}</strong></div>
         <div class="line"><span>Email receipts</span><strong>${onOff(hydrated.emailReceipts)}</strong></div>
         <div class="line"><span>Community news</span><strong>${onOff(hydrated.communityNews)}</strong></div>
       </div>
       <a class="btn ghost sm mt16" href="#/account/privacy/edit">Edit privacy preferences</a>
-      <p class="muted small mt16">Privacy and notification settings are stubbed for setup — they’ll be configurable here before launch.</p>
+      <p class="muted small mt16">You can update these communication preferences at any time.</p>
     </div></div>`;
 }
 

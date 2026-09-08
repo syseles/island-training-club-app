@@ -43,7 +43,7 @@ const STORAGE_KEY = "itc.prototype.v1";
 const APPLY_DEVICE_KEY = "itc.device.id";
 const APPLY_DRAFT_KEY = "itc.apply.draft.v1";
 const APPLY_DRAFT_VERSION = 1;
-const STATE_VERSION = 19;
+const STATE_VERSION = 20;
 
 // Live-mode (Supabase) session cache. Avoids hammering the DB on every
 // page load. The TTL is short so role flips and welcome notifications
@@ -228,6 +228,20 @@ function migrate() {
             "$1hyrox-bft-$2"
           );
         }
+      }
+    }
+  }
+  if (v < 20) {
+    // v20: HYROX payment reminders are enabled by default and each cycle
+    // tracks the separate collector reminder independently of member notices.
+    for (const user of state.users) {
+      if (!Object.prototype.hasOwnProperty.call(user, "hyroxPaymentReminders")) {
+        user.hyroxPaymentReminders = true;
+      }
+    }
+    for (const cycle of Object.values(state.hyroxCycles || {})) {
+      if (!Object.prototype.hasOwnProperty.call(cycle, "collectorPaymentReminderSentAt")) {
+        cycle.collectorPaymentReminderSentAt = null;
       }
     }
   }
@@ -1393,6 +1407,7 @@ export function scheduleHyroxCycle(dateISO) {
     venueChoiceDeadlineAt: hyroxChoiceDeadline(dateISO),
     capacityWarningSentAt: null,
     paymentReminderSentAt: null,
+    collectorPaymentReminderSentAt: null,
     holderGraceStartedAt: null,
     waitlistPromotedAt: null,
     reconciliationStartedAt: null,
@@ -1567,9 +1582,31 @@ export function sweepHyroxCycleDeadlines(now = Date.now()) {
       cycle.paymentReminderSentAt = now;
       dirty = true;
       state.bookings.filter((booking) => booking.cycleId === cycle.id
-        && booking.status === "reserved" && !booking.paymentMarkedAt)
-        .forEach((booking) => notify(booking.userId, "hyrox-payment-reminder",
-          "HYROX payment reminder — mark payment by Thursday at 6 PM HKT.", `#/pay/${booking.id}`));
+        && booking.status === "reserved" && !booking.paymentMarkedAt
+        && !booking.promotedFromWaitlistAt)
+        .forEach((booking) => {
+          const user = state.users.find((candidate) => candidate.id === booking.userId);
+          if (user?.hyroxPaymentReminders !== false) {
+            notify(booking.userId, "hyrox-payment-reminder",
+              "HYROX payment reminder — mark payment by Thursday at 6 PM HKT.", `#/pay/${booking.id}`);
+          }
+        });
+    }
+    if (now >= hyroxPaymentReminderAt(cycle.dateISO) && !cycle.collectorPaymentReminderSentAt) {
+      const collector = collectorFor(cycle.bftSessionId || cycle.midtownSessionId);
+      if (collector?.id) {
+        const bookings = state.bookings.filter((booking) => booking.cycleId === cycle.id
+          && booking.status === "reserved" && !booking.promotedFromWaitlistAt);
+        const queues = hyroxQueueEntries(cycle.id).filter((entry) => entry.kind === "weekly_waitlist"
+          && entry.status === "active");
+        const marked = bookings.filter((booking) => booking.paymentMarkedAt).length;
+        const unmarked = bookings.length - marked;
+        notify(collector.id, "hyrox-collector-payment-reminder",
+          `HYROX payments due at 6 PM HKT — ${marked} payment claims, ${unmarked} unmarked holders, ${queues.length} weekly waitlist for ${cycle.dateISO}.`,
+          "#/admin/payments");
+        cycle.collectorPaymentReminderSentAt = now;
+        dirty = true;
+      }
     }
     if (now >= cycle.paymentDeadlineAt && !cycle.holderGraceStartedAt) {
       cycle.holderGraceStartedAt = now;
@@ -3334,6 +3371,7 @@ function localApplication(user) {
     whatsapp_reminders: !!user.whatsappReminders,
     email_receipts: !!user.emailReceipts,
     community_news: !!user.communityNews,
+    hyrox_payment_reminders: user.hyroxPaymentReminders !== false,
   };
 }
 
@@ -3369,6 +3407,7 @@ function privacyPatch(form) {
     whatsapp_reminders: !!form.whatsapp_reminders,
     email_receipts: !!form.email_receipts,
     community_news: !!form.community_news,
+    hyrox_payment_reminders: !!form.hyrox_payment_reminders,
   };
 }
 
@@ -3481,6 +3520,7 @@ export async function updateMyPrivacyPreferences(form) {
     user.whatsappReminders = patch.whatsapp_reminders;
     user.emailReceipts = patch.email_receipts;
     user.communityNews = patch.community_news;
+    user.hyroxPaymentReminders = patch.hyrox_payment_reminders;
     save();
     return localApplication(user);
   }

@@ -32,7 +32,7 @@ export function hyroxRegistrationOpensAt(dateISO) {
 }
 
 export function hyroxPaymentReminderAt(dateISO) {
-  return Date.parse(`${shiftISO(dateISO, -2)}T17:00:00+08:00`);
+  return Date.parse(`${shiftISO(dateISO, -2)}T16:00:00+08:00`);
 }
 
 export function hyroxPaymentDeadline(dateISO) {

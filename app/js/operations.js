@@ -99,6 +99,7 @@ function buildHyroxCycleRow(row) {
     promotedPaymentDeadlineAt: parseTimestamp(row.promoted_payment_deadline_at),
     capacityWarningSentAt: parseTimestamp(row.capacity_warning_sent_at),
     paymentReminderSentAt: parseTimestamp(row.payment_reminder_sent_at),
+    collectorPaymentReminderSentAt: parseTimestamp(row.collector_payment_reminder_sent_at),
     holderGraceStartedAt: parseTimestamp(row.holder_grace_started_at),
     waitlistPromotedAt: parseTimestamp(row.waitlist_promoted_at),
     reconciliationStartedAt: parseTimestamp(row.reconciliation_started_at),
@@ -826,7 +827,23 @@ export function liveReceiptById(id) {
 export async function liveSweepHyroxDeadlines({ refresh = true, now = Date.now() } = {}) {
   try {
     const pNow = now instanceof Date ? now.toISOString() : new Date(now).toISOString();
-    return await runOperationalRpc("sweep_hyrox_cycle_deadlines", { p_now: pNow }, { skipRefresh: !refresh });
+    await runOperationalRpc(
+      "send_hyrox_member_payment_reminders",
+      { p_now: pNow },
+      { skipRefresh: true }
+    );
+    const result = await runOperationalRpc(
+      "sweep_hyrox_cycle_deadlines",
+      { p_now: pNow },
+      { skipRefresh: true }
+    );
+    await runOperationalRpc(
+      "send_hyrox_collector_payment_reminder",
+      { p_now: pNow },
+      { skipRefresh: true }
+    );
+    if (refresh) await refreshOperationalState();
+    return result;
   } catch (error) {
     liveCache.error = operationalProblem(error);
     notifyListeners();
