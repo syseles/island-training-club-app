@@ -100,7 +100,7 @@ localStorage.setItem("itc.prototype.v1", JSON.stringify({
     location: "10/F, 633 King's Road, Quarry Bay, Hong Kong",
     mapsQuery: "10/F, 633 King's Road, Quarry Bay, Hong Kong",
   }],
-  users: [],
+  users: [{ id: "legacy-member", hyroxPaymentReminders: undefined }],
   bookings: [{
     id: "legacy-bft-booking", userId: "legacy-member",
     sessionId: "hyrox-2099-01-03", status: "confirmed",
@@ -120,7 +120,9 @@ localStorage.setItem("itc.prototype.v1", JSON.stringify({
   duty: {},
 }));
 const renamedState = store.load();
-assert.equal(renamedState.version, 19, "legacy state must advance through the HYROX identifier, venue and pooled-cycle migrations");
+assert.equal(renamedState.version, 21, "legacy state must advance through the HYROX identifier, venue and reminder migrations");
+assert.equal(renamedState.users.find((user) => user.id === "legacy-member").hyroxPaymentReminders, true);
+assert.equal(renamedState.hyroxCycles["legacy-cycle"]?.collectorPaymentReminderSentAt ?? null, null);
 assert.ok(renamedState.activities.some((activity) => activity.id === "hyrox-bft"));
 assert.ok(renamedState.activities.some((activity) => activity.id === "hyrox-quarry-bay"));
 assert.equal(renamedState.activities.some((activity) => activity.id === "hyrox"), false);
@@ -167,6 +169,8 @@ for (const relativePath of [
   "../supabase/migrations/20260903000003_hyrox_cycle_reconciliation.sql",
   "../supabase/migrations/20260903000004_hyrox_cycle_allocation.sql",
   "../supabase/migrations/20260904000001_hyrox_cycle_auto_provision.sql",
+  "../supabase/migrations/20260908000001_collector_payment_reminders.sql",
+  "../supabase/migrations/20260908000002_hyrox_venue_reminders.sql",
 ]) {
   const absolutePath = resolve(__dirnameSmoke, relativePath);
   if (!existsSync(absolutePath)) {
@@ -195,6 +199,48 @@ const quarryBayVenueMigrationSource = readFileSync(
   resolve(__dirnameSmoke, "../supabase/migrations/20260902000002_quarry_bay_island_ecc.sql"),
   "utf8"
 );
+const collectorPaymentReminderMigrationSource = readFileSync(
+  resolve(__dirnameSmoke, "../supabase/migrations/20260908000001_collector_payment_reminders.sql"),
+  "utf8"
+);
+const hyroxVenueReminderMigrationSource = readFileSync(
+  resolve(__dirnameSmoke, "../supabase/migrations/20260908000002_hyrox_venue_reminders.sql"),
+  "utf8"
+);
+for (const marker of [
+  "venue_choice_reminder_sent_at",
+  "venue_finalization_reminder_sent_at",
+  "send_hyrox_venue_reminders",
+  "Friday at 9 PM HKT",
+  "gym_confirmed_at",
+  "#/admin/payments",
+  "for update skip locked",
+]) {
+  assert.ok(
+    hyroxVenueReminderMigrationSource.toLowerCase().includes(marker.toLowerCase()),
+    `HYROX venue reminder migration missing ${marker}`
+  );
+}
+console.log("ok  HYROX venue reminder migration keeps member and collector audiences scoped");
+for (const marker of [
+  "hyrox_payment_reminders",
+  "collector_payment_reminder_sent_at",
+  "send_hyrox_member_payment_reminders",
+  "send_hyrox_collector_payment_reminder",
+  "suppress_opted_out_hyrox_payment_reminder",
+  "NEW.kind = 'operational_hyrox_payment_reminder'",
+  "a.hyrox_payment_reminders = false",
+  "security definer",
+  "#/admin/payments",
+  "for update skip locked",
+  "interval '2 hours'",
+]) {
+  assert.ok(
+    collectorPaymentReminderMigrationSource.toLowerCase().includes(marker.toLowerCase()),
+    `collector payment reminder migration missing ${marker}`
+  );
+}
+console.log("ok  collector payment reminder migration preserves opt-out and least-privilege delivery");
 for (const marker of [
   "10/F, Island ECC, Quarry Bay",
   "Island ECC, Quarry Bay, Hong Kong",
@@ -835,6 +881,8 @@ assert.match(integratedViewSource, /function adminVenueStatusMetrics\(session\)/
 assert.match(readFileSync(resolve(__dirnameSmoke, "js/app.js"), "utf8"),
   /closest\("a\[href\^='#'\][^"]*"\)/,
   "App click delegate must intercept hash-only anchor links before the router runs");
+assert.match(integratedAppSource, /form\.id === "form-privacy"[\s\S]*?updateMyPrivacyPreferences\(/,
+  "Privacy & Notifications must persist reminder preferences through the form delegate");
 assert.equal(typeof store.attendeeCountFor, "function",
   "store must export attendeeCountFor for identity-independent RSVP counts");
 assert.equal((integratedViewSource.match(/store\.attendeeCountFor\(s\)/g) || []).length, 4,
@@ -1977,6 +2025,25 @@ await check("profile > details", () => views.viewAccount("details"));
 await check("profile > indemnity", () => views.viewAccount("indemnity"));
 await check("profile > payments", () => views.viewAccount("payments"));
 await check("profile > privacy", () => views.viewAccount("privacy"));
+const privacyEditHtml = await views.viewAccount("privacy", "edit");
+if (!privacyEditHtml.includes('name="hyrox_payment_reminders"')
+    || !privacyEditHtml.includes("Thursday payment reminders for unpaid HYROX reservations")) {
+  failures++;
+  console.error("FAIL Privacy & Notifications edit missing HYROX reminder preference");
+} else console.log("ok  Privacy & Notifications exposes HYROX reminder preference");
+const privacyUser = store.currentUser();
+const privacyPreferenceBase = {
+  photo_consent: !!privacyUser?.mediaConsent,
+  whatsapp_reminders: !!privacyUser?.whatsappReminders,
+  email_receipts: !!privacyUser?.emailReceipts,
+  community_news: !!privacyUser?.communityNews,
+};
+await store.updateMyPrivacyPreferences({ ...privacyPreferenceBase, hyrox_payment_reminders: false });
+if (store.currentUser()?.hyroxPaymentReminders !== false) {
+  failures++;
+  console.error("FAIL local Privacy & Notifications update did not persist HYROX opt-out");
+} else console.log("ok  local Privacy & Notifications update persists HYROX opt-out");
+await store.updateMyPrivacyPreferences({ ...privacyPreferenceBase, hyrox_payment_reminders: true });
 const membershipDetailsHtml = await views.viewAccount("details");
 const membershipDetailsEditHtml = await views.viewAccount("details", "edit");
 for (const marker of ["Emergency contact relationship", "Donor ID"]) {
@@ -2672,7 +2739,7 @@ store.resetLocalData();
   );
   assert.equal(
     hyroxCycle.hyroxPaymentReminderAt(saturday),
-    Date.parse("2026-09-03T17:00:00+08:00"),
+    Date.parse("2026-09-03T16:00:00+08:00"),
   );
   assert.equal(
     hyroxCycle.hyroxPaymentDeadline(saturday),
@@ -2685,6 +2752,10 @@ store.resetLocalData();
   assert.equal(
     hyroxCycle.hyroxPromotedPaymentDeadline(saturday),
     Date.parse("2026-09-03T20:00:00+08:00"),
+  );
+  assert.equal(
+    hyroxCycle.hyroxChoiceDeadline(saturday) - 2 * 3600 * 1000,
+    Date.parse("2026-09-04T19:00:00+08:00"),
   );
   assert.equal(
     hyroxCycle.hyroxChoiceDeadline(saturday),
@@ -2793,8 +2864,8 @@ store.resetLocalData();
   localStorage.setItem("itc.prototype.v1", JSON.stringify(locationV13));
   store.load();
   const migratedV13 = JSON.parse(localStorage.getItem("itc.prototype.v1"));
-  if (migratedV13.version !== 19) {
-    throw new Error("v19 migration must persist version 19");
+  if (migratedV13.version !== 21) {
+    throw new Error("v21 migration must persist version 21");
   }
   const repairedWater = store.activities().find((activity) => activity.id === "water");
   if (repairedWater.location !== "TBC" || repairedWater.mapsQuery !== ""
@@ -4218,10 +4289,10 @@ console.log("ok  reset");
     failures++;
     console.error("FAIL v10 migration must clear session tied to a removed demo user");
   } else console.log("ok  v10 migration clears removed session");
-  if (migrated.version !== 19) {
+  if (migrated.version !== 21) {
     failures++;
-    console.error(`FAIL integrated migration must advance version to 19, got ${migrated.version}`);
-  } else console.log("ok  integrated migration advances genuine v9 state to v19");
+    console.error(`FAIL integrated migration must advance version to 21, got ${migrated.version}`);
+  } else console.log("ok  integrated migration advances genuine v9 state to v21");
 }
 
 {
@@ -4240,7 +4311,7 @@ console.log("ok  reset");
   store.load();
   const v14 = JSON.parse(mem.get("itc.prototype.v1"));
   const migratedUser = v14.users.find((user) => user.id === "real-v13-member");
-  if (v14.version !== 19 || !migratedUser) throw new Error("v19 migration lost the genuine member");
+  if (v14.version !== 21 || !migratedUser) throw new Error("v21 migration lost the genuine member");
   for (const field of ["indemnitySignature", "indemnitySignedAt", "indemnityFormVersion", "emergencyRelationship"]) {
     if (!(field in migratedUser) || migratedUser[field] !== null) {
       throw new Error(`v14 migration should initialize ${field} to null`);
@@ -4267,11 +4338,11 @@ console.log("ok  reset");
   }];
   localStorage.setItem("itc.prototype.v1", JSON.stringify(v18));
   const migrated = store.load();
-  if (migrated.version !== 19 || !migrated.hyroxCycles || !migrated.hyroxCycleQueues
+  if (migrated.version !== 21 || !migrated.hyroxCycles || !migrated.hyroxCycleQueues
       || migrated.bookings[0]?.id !== "v18-booking") {
-    throw new Error("v19 migration must add pooled collections without losing v18 bookings");
+    throw new Error("v21 migration must preserve pooled collections and v18 bookings");
   }
-  console.log("ok  v19 migration preserves bookings and initializes pooled collections");
+  console.log("ok  v21 migration preserves bookings and initializes reminder fields");
 }
 {
   store.resetLocalData();
@@ -4354,22 +4425,45 @@ console.log("ok  reset");
   installLocalFixtures();
   const local = JSON.parse(localStorage.getItem("itc.prototype.v1"));
   const fixtureTemplate = local.users.find((user) => user.id === "fixture-member");
-  local.users.push({
-    ...structuredClone(fixtureTemplate), id: "hyrox-sweep-waitlist",
-    email: "hyrox-sweep-waitlist@example.test", fullName: "Sweep Waitlist",
-  });
+  local.users.push(
+    { ...structuredClone(fixtureTemplate), id: "hyrox-sweep-waitlist",
+      email: "hyrox-sweep-waitlist@example.test", fullName: "Sweep Waitlist" },
+    { ...structuredClone(fixtureTemplate), id: "hyrox-reminder-optout",
+      email: "hyrox-reminder-optout@example.test", fullName: "Reminder Opt Out",
+      hyroxPaymentReminders: false },
+  );
   localStorage.setItem("itc.prototype.v1", JSON.stringify(local));
   store.load();
   const cycle = store.scheduleHyroxCycle("2099-01-03");
   const opening = cycle.registrationOpensAt;
   store.reserveHyroxCycle("fixture-member", cycle.id, "either", true, opening + 1000);
-  store.sweepHyroxCycleDeadlines(cycle.paymentDeadlineAt - 1);
+  store.reserveHyroxCycle("hyrox-reminder-optout", cycle.id, "either", true, opening + 1001);
+  const reminderAt = cycle.paymentDeadlineAt - 2 * 3600 * 1000;
+  store.sweepHyroxCycleDeadlines(reminderAt);
   const reminderCount = store.notificationsFor("fixture-member")
     .filter((note) => note.kind === "hyrox-payment-reminder").length;
-  store.sweepHyroxCycleDeadlines(cycle.paymentDeadlineAt - 1);
-  if (!cycle.paymentReminderSentAt || reminderCount !== store.notificationsFor("fixture-member")
-    .filter((note) => note.kind === "hyrox-payment-reminder").length) {
-    throw new Error("HYROX payment reminders should be timestamped and idempotent");
+  const optOutReminderCount = store.notificationsFor("hyrox-reminder-optout")
+    .filter((note) => note.kind === "hyrox-payment-reminder").length;
+  const collectorReminderCount = store.notificationsFor("fixture-admin")
+    .filter((note) => note.kind === "hyrox-collector-payment-reminder").length;
+  store.sweepHyroxCycleDeadlines(reminderAt);
+  if (cycle.paymentReminderSentAt !== reminderAt
+    || reminderCount !== store.notificationsFor("fixture-member")
+    .filter((note) => note.kind === "hyrox-payment-reminder").length
+    || optOutReminderCount !== 0) {
+    throw new Error("Thursday 4 PM HYROX payment reminders should respect opt-out and remain idempotent");
+  }
+  if (collectorReminderCount !== 1
+      || collectorReminderCount !== store.notificationsFor("fixture-admin")
+        .filter((note) => note.kind === "hyrox-collector-payment-reminder").length) {
+    throw new Error("Thursday 4 PM collector should receive one aggregate HYROX payment reminder");
+  }
+  const collectorReminder = store.notificationsFor("fixture-admin")
+    .find((note) => note.kind === "hyrox-collector-payment-reminder");
+  if (!collectorReminder?.body.includes("2 unmarked holders")
+      || collectorReminder.body.includes("Reminder Opt Out")
+      || collectorReminder.link !== "#/admin/payments") {
+    throw new Error("collector reminder should contain aggregate counts only and link to payments");
   }
   store.sweepHyroxCycleDeadlines(cycle.paymentDeadlineAt + 1);
   if (!cycle.holderGraceStartedAt || cycle.registrationState !== "reconciling") {
@@ -4398,6 +4492,59 @@ console.log("ok  reset");
     throw new Error("8 PM should expire unmarked promotions without cascading promotion");
   }
   console.log("ok  local HYROX checkpoint sweep is idempotent and uses one promotion round");
+}
+{
+  store.resetLocalData();
+  installLocalFixtures();
+  const cycle = store.scheduleHyroxCycle("2099-01-17");
+  const booking = store.reserveHyroxCycle("fixture-member", cycle.id, "either", true, cycle.registrationOpensAt + 1000);
+  booking.status = "confirmed";
+  booking.paymentMarkedAt = cycle.paymentDeadlineAt - 1000;
+  booking.paidAt = booking.paymentMarkedAt;
+  booking.sessionId = cycle.bftSessionId;
+  booking.allocationState = "provisional";
+  cycle.registrationState = "closed";
+  cycle.venuePlan = "both";
+  cycle.planConfirmedAt = cycle.paymentDeadlineAt;
+  const fridaySeven = cycle.venueChoiceDeadlineAt - 2 * 3600 * 1000;
+  store.sweepHyroxCycleDeadlines(fridaySeven);
+  const memberVenueReminder = store.notificationsFor("fixture-member")
+    .filter((note) => note.kind === "hyrox-venue-choice-reminder");
+  const collectorVenueReminderAtSeven = store.notificationsFor("fixture-admin")
+    .filter((note) => note.kind === "hyrox-venue-finalization-reminder");
+  store.sweepHyroxCycleDeadlines(fridaySeven);
+  if (memberVenueReminder.length !== 1
+      || !memberVenueReminder[0].body.includes("Friday at 9 PM HKT")
+      || memberVenueReminder[0].link !== `#/booking/${booking.id}`
+      || collectorVenueReminderAtSeven.length !== 0
+      || cycle.venueChoiceReminderSentAt !== fridaySeven) {
+    throw new Error("Friday 7 PM should notify provisional members once without notifying the collector");
+  }
+  store.sweepHyroxCycleDeadlines(cycle.venueChoiceDeadlineAt);
+  const collectorVenueReminder = store.notificationsFor("fixture-admin")
+    .filter((note) => note.kind === "hyrox-venue-finalization-reminder");
+  store.sweepHyroxCycleDeadlines(cycle.venueChoiceDeadlineAt);
+  if (collectorVenueReminder.length !== 1
+      || !collectorVenueReminder[0].body.includes("confirm each enabled venue")
+      || collectorVenueReminder[0].link !== "#/admin/payments"
+      || cycle.venueFinalizationReminderSentAt !== cycle.venueChoiceDeadlineAt
+      || collectorVenueReminder.length !== store.notificationsFor("fixture-admin")
+        .filter((note) => note.kind === "hyrox-venue-finalization-reminder").length) {
+    throw new Error("Friday 9 PM should remind the collector once when venue confirmation is incomplete");
+  }
+  const finalizedCycle = store.scheduleHyroxCycle("2099-01-24");
+  finalizedCycle.registrationState = "closed";
+  finalizedCycle.venuePlan = "bft_only";
+  finalizedCycle.planConfirmedAt = finalizedCycle.paymentDeadlineAt;
+  finalizedCycle.allocationClosedAt = finalizedCycle.venueChoiceDeadlineAt;
+  store.confirmGymBooking(finalizedCycle.bftSessionId, "confirmed");
+  store.sweepHyroxCycleDeadlines(finalizedCycle.venueChoiceDeadlineAt);
+  if (store.notificationsFor("fixture-admin")
+    .some((note) => note.kind === "hyrox-venue-finalization-reminder"
+      && note.body.includes(finalizedCycle.dateISO))) {
+    throw new Error("Friday 9 PM should not remind a collector after every enabled venue is confirmed");
+  }
+  console.log("ok  Friday venue reminders target provisional members and incomplete collector handoffs");
 }
 {
   store.resetLocalData();
@@ -5141,11 +5288,11 @@ for (const fixture of sourceSnapshots) {
     && !Array.isArray(migrated.paymentPayouts);
   const suppliedPayoutsPreserved = fixture.version !== 12
     || migrated.paymentPayouts["real-admin"]?.fpsPhone === "+852 6000 0000";
-  if (migrated.version !== 19 || suppliedIds.some((id) => !serialized.includes(id))
+  if (migrated.version !== 21 || suppliedIds.some((id) => !serialized.includes(id))
       || !payoutMapValid || !suppliedPayoutsPreserved) {
     failures++;
-    console.error(`FAIL genuine v${fixture.version} fixture must reach v19 intact`);
-  } else console.log(`ok  genuine v${fixture.version} fixture reaches v19 intact`);
+    console.error(`FAIL genuine v${fixture.version} fixture must reach v21 intact`);
+  } else console.log(`ok  genuine v${fixture.version} fixture reaches v21 intact`);
 }
 
 for (const invalidCounter of [null, -1, 1.5, "broken"]) {

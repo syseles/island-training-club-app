@@ -3102,6 +3102,7 @@ for (const label of [
   "Photo/video consent",
   "Privacy policy accepted",
   "WhatsApp session reminders",
+  "HYROX payment reminders",
   "Email receipts",
   "Community news",
 ]) {
@@ -3132,7 +3133,7 @@ if (!privacyEdit.includes('href="#/account/privacy"')) {
 if (!privacyEdit.includes("Privacy policy accepted") || !privacyEdit.includes(confirmedDay)) {
   throw new Error("Live privacy edit route should show privacy acceptance read-only");
 }
-for (const name of ["photo_consent", "whatsapp_reminders", "email_receipts", "community_news"]) {
+for (const name of ["photo_consent", "whatsapp_reminders", "hyrox_payment_reminders", "email_receipts", "community_news"]) {
   if (!privacyEdit.includes(`name="${name}"`)) {
     throw new Error(`Live privacy edit route missing ${name}`);
   }
@@ -3214,6 +3215,7 @@ for (const banned of [
 await store.updateMyPrivacyPreferences({
   photo_consent: false,
   whatsapp_reminders: true,
+  hyrox_payment_reminders: false,
   email_receipts: false,
   community_news: false,
 });
@@ -3222,7 +3224,7 @@ if (!privacyPatch) throw new Error("privacy update missing");
 const privacyKeys = Object.keys(privacyPatch).sort().join(",");
 if (
   privacyKeys !==
-  ["community_news", "email_receipts", "photo_consent", "whatsapp_reminders"].join(",")
+  ["community_news", "email_receipts", "hyrox_payment_reminders", "photo_consent", "whatsapp_reminders"].join(",")
 ) {
   throw new Error(`privacy patch leaked fields: ${privacyKeys}`);
 }

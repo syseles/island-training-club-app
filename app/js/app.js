@@ -1267,6 +1267,23 @@ document.addEventListener("submit", async (e) => {
     return;
   }
 
+  if (form.id === "form-privacy") {
+    e.preventDefault();
+    if (!form.reportValidity()) return;
+    const control = form.querySelector('[type="submit"]');
+    await withBusyControl(control, "Saving…", async () => {
+      try {
+        await store.updateMyPrivacyPreferences(Object.fromEntries(new FormData(form).entries()));
+        toast("Privacy preferences saved");
+        location.hash = "#/account/privacy";
+        await renderWithFeedback();
+      } catch (err) {
+        toast(err.message || "Unable to save privacy preferences", true);
+      }
+    });
+    return;
+  }
+
   const formAction = form.id || form.dataset.action;
 
   switch (formAction) {
