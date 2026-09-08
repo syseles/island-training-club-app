@@ -1933,67 +1933,79 @@ if (!approvedCommunity.includes("Connect and grow with us.")) {
   console.error("FAIL approved Community heading is not personalized");
 } else console.log("ok  approved Community heading is personalized");
 
-// Profile sections are tappable rows that open sub-pages; row faces carry
-// a one-line description, not live details
+// Profile sections are tappable rows, while the neon stats link to the
+// canonical booking views. Donor details live under Membership Details and
+// History is not duplicated as a Profile row.
 const newMemberAcct = await views.viewAccount();
-let cardsOk = true;
 for (const link of [
+  "#/account/bookings",
+  "#/account/bookings/attended",
   "#/account/details",
   "#/account/indemnity",
-  "#/account/donor",
   "#/account/payments",
   "#/account/privacy",
-  "#/account/history",
 ]) {
   if (!newMemberAcct.includes(`href="${link}"`)) {
     failures++;
-    cardsOk = false;
-    console.error(`FAIL Profile missing ${link} row`);
+    console.error(`FAIL Profile missing ${link} link`);
   }
 }
-if (cardsOk) console.log("ok  Profile shows the six section rows");
-if (newMemberAcct.includes("#/account/about")) {
-  failures++;
-  console.error("FAIL About card should have moved to the Community tab");
-} else console.log("ok  About card moved off Profile");
+for (const redundantLink of ["#/account/donor", "#/account/history", "#/account/about"]) {
+  if (newMemberAcct.includes(`href="${redundantLink}"`)) {
+    failures++;
+    console.error(`FAIL Profile should not show redundant ${redundantLink} row`);
+  }
+}
 for (const sub of [
-  "Contact and emergency information",
-  "Donor ID and e-receipt details",
+  "Contact, emergency and donor information",
   "Bookings, donations and orders",
   "Consent and communication choices",
-  "Activity history",
 ]) {
   if (!newMemberAcct.includes(sub)) {
     failures++;
     console.error(`FAIL Profile row missing subtext "${sub}"`);
   }
 }
-console.log("ok  Profile rows show descriptive subtexts");
+console.log("ok  Profile exposes booking stats and four focused section rows");
+for (const selector of [".ph-stats > .ph-stat", ".ph-stats > .ph-stat:hover", ".ph-stats > .ph-stat:focus-visible"]) {
+  if (!integratedStyleSource.includes(selector)) {
+    failures++;
+    console.error(`FAIL clickable Profile stats missing style ${selector}`);
+  }
+}
 await check("profile > details", () => views.viewAccount("details"));
 await check("profile > indemnity", () => views.viewAccount("indemnity"));
-await check("profile > donor", () => views.viewAccount("donor"));
 await check("profile > payments", () => views.viewAccount("payments"));
 await check("profile > privacy", () => views.viewAccount("privacy"));
-await check("profile > history", () => views.viewAccount("history"));
 const membershipDetailsHtml = await views.viewAccount("details");
 const membershipDetailsEditHtml = await views.viewAccount("details", "edit");
-if (!membershipDetailsHtml.includes("Emergency contact relationship")) {
-  failures++;
-  console.error("FAIL Membership Details summary missing emergency contact relationship");
+for (const marker of ["Emergency contact relationship", "Donor ID"]) {
+  if (!membershipDetailsHtml.includes(marker)) {
+    failures++;
+    console.error(`FAIL Membership Details summary missing ${marker}`);
+  }
 }
-if (!membershipDetailsEditHtml.includes('name="emergency_relationship"')) {
+for (const field of ['name="emergency_relationship"', 'name="donorId"']) {
+  if (!membershipDetailsEditHtml.includes(field)) {
+    failures++;
+    console.error(`FAIL Membership Details edit form missing ${field}`);
+  }
+}
+if (!(await views.viewAccount("donor")).includes("Membership Details.")) {
   failures++;
-  console.error("FAIL Membership Details edit form missing emergency_relationship field");
-} else console.log("ok  Membership Details summary and edit include emergency relationship");
+  console.error("FAIL legacy Donor Profile route should render Membership Details");
+}
+if (!integratedViewSource.includes('donor: "Membership Details"')) {
+  failures++;
+  console.error("FAIL unavailable live legacy donor route should retain Membership Details context");
+} else console.log("ok  Membership Details owns emergency and donor information");
 
 // sub-page headings are title-cased to match the row titles
 for (const [section, title] of [
   ["details", "Membership Details."],
   ["indemnity", "Indemnity."],
-  ["donor", "Donor Profile."],
   ["payments", "Payments &amp; Receipts."],
   ["privacy", "Privacy &amp; Notifications."],
-  ["history", "History."],
 ]) {
   if (!(await views.viewAccount(section)).includes(title)) {
     failures++;
@@ -2476,7 +2488,7 @@ if ((await views.viewAccount()).includes(">Upcoming<")) {
 } else console.log("ok  Profile drops redundant upcoming list");
 
 // donor ID skipped at signup ("Not applicable" above) can be added later;
-// it lives inside the Donor Profile sub-page, not on the card face
+// it lives inside Membership Details, not on the Profile card face
 store.updateDonorId(signIn.user.id, "IECC-99999");
 if (store.currentUser().donorId !== "IECC-99999") throw new Error("donor ID not saved");
 if ((await views.viewAccount()).includes("IECC-99999")) {
@@ -2485,35 +2497,91 @@ if ((await views.viewAccount()).includes("IECC-99999")) {
 } else console.log("ok  Profile card face carries no donor details");
 if (!(await views.viewAccount("donor")).includes("IECC-99999")) {
   failures++;
-  console.error("FAIL donor ID missing from Donor Profile sub-page");
-} else console.log("ok  donor ID shows on Donor Profile sub-page");
+  console.error("FAIL donor ID missing from legacy donor route's Membership Details content");
+} else console.log("ok  donor ID shows in Membership Details");
 store.updateDonorId(signIn.user.id, "wong 1234");
 if (store.currentUser().donorId !== "WONG-1234") {
   failures++;
   console.error("FAIL donor ID should be stored uppercase with a hyphen");
 } else console.log("ok  donor ID stored uppercase with hyphen");
+await store.updateMyMembershipDetails({
+  mobile: store.currentUser().phone,
+  age_over_18: "yes",
+  emergency_name: store.currentUser().emergencyName,
+  emergency_relationship: store.currentUser().emergencyRelationship,
+  emergency_phone: store.currentUser().emergencyPhone,
+  heard_source: store.currentUser().heard,
+  preferred_name: store.currentUser().preferredName,
+  donorId: "chui 8879",
+});
+if (store.currentUser().donorId !== "CHUI-8879") {
+  failures++;
+  console.error("FAIL Membership Details save should normalize and persist Donor ID");
+} else console.log("ok  Membership Details save includes Donor ID");
 
-// the member's only booking is an upcoming confirmed session, so History
-// is empty — past bookings live behind the History card, not inline on Profile
-if ((await views.viewAccount()).includes("booking-card")) {
+// The stats and linked pages use the same canonical booking collection, so
+// each stat must equal the number of cards rendered by its destination.
+const countBookingCards = (html) => (html.match(/class="card booking-card"/g) || []).length;
+const statCount = (html, href) => {
+  const escapedHref = href.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const match = html.match(new RegExp(`href="${escapedHref}"[^>]*>\\s*<strong>(\\d+)</strong>`));
+  return match ? Number(match[1]) : null;
+};
+const bookingProfileHtml = await views.viewAccount();
+const allBookingsHtml = await views.viewAccount("bookings");
+const attendedBookingsHtml = await views.viewAccount("bookings", "attended");
+if (!allBookingsHtml.includes("All bookings") || !allBookingsHtml.includes("Upcoming")) {
   failures++;
-  console.error("FAIL Profile should not list history inline");
-} else console.log("ok  Profile keeps history behind the card");
-const histHtml = await views.viewAccount("history");
-if (histHtml.includes("booking-card") || !histHtml.includes("Past sessions will appear here")) {
+  console.error("FAIL Bookings link should render the grouped all-bookings view");
+}
+if (!attendedBookingsHtml.includes("Attended sessions will appear here.")) {
   failures++;
-  console.error("FAIL History sub-page should hide upcoming confirmed bookings");
-} else console.log("ok  History sub-page hides upcoming bookings");
+  console.error("FAIL Attended link should render the attended-only view");
+}
+if (statCount(bookingProfileHtml, "#/account/bookings") !== countBookingCards(allBookingsHtml)) {
+  failures++;
+  console.error("FAIL Bookings neon count should match its linked booking cards");
+}
+if (statCount(bookingProfileHtml, "#/account/bookings/attended") !== countBookingCards(attendedBookingsHtml)) {
+  failures++;
+  console.error("FAIL Attended neon count should match its linked booking cards");
+}
+try {
+  booking.status = "attended";
+  const attendedProfile = await views.viewAccount();
+  const attendedPage = await views.viewAccount("bookings", "attended");
+  if (statCount(attendedProfile, "#/account/bookings/attended") !== 1
+      || countBookingCards(attendedPage) !== 1) {
+    failures++;
+    console.error("FAIL positive Attended count should match its linked card");
+  }
+  booking.status = "cancelled";
+  const cancelledProfile = await views.viewAccount();
+  const cancelledPage = await views.viewAccount("bookings");
+  if (statCount(cancelledProfile, "#/account/bookings") !== 1
+      || countBookingCards(cancelledPage) !== 1
+      || !cancelledPage.includes("Cancelled")) {
+    failures++;
+    console.error("FAIL paid cancellation should count once and remain visible in Bookings");
+  }
+} finally {
+  booking.status = "confirmed";
+}
+if (!(await views.viewAccount("history")).includes("All bookings")) {
+  failures++;
+  console.error("FAIL legacy History route should render the canonical Bookings view");
+} else console.log("ok  Profile stats and linked booking views share matching counts");
 
 // --- Seeded member view ---
 installLocalFixtures(); store.signIn("member@example.test");
 await check("account (seeded member)", () => views.viewAccount());
 const memberAcct = await views.viewAccount();
-// fixture-member has donorId TEST-1234
+// fixture-member has donorId TEST-1234; the legacy donor route now lands on
+// the combined Membership Details content.
 if (!(await views.viewAccount("donor")).includes("TEST-1234")) {
   failures++;
-  console.error("FAIL seeded member donor ID not shown in Donor Profile");
-} else console.log("ok  seeded member donor ID shown in Donor Profile");
+  console.error("FAIL seeded member donor ID not shown in Membership Details");
+} else console.log("ok  seeded member donor ID shown in Membership Details");
 if (memberAcct.includes("TEST-1234")) {
   failures++;
   console.error("FAIL donor ID should not appear on the Profile card face");
@@ -3960,19 +4028,17 @@ installLocalFixtures();
   const repeatedRsvp = await store.rsvpSession("fixture-member", lunch.id, rsvp.createdAt + 1000);
   await store.withdrawRsvp(repeatedRsvp.id);
   repeatedRsvp.snapshot = { dateISO: lunch.dateISO };
-  const repeatedRsvpHistoryHtml = await views.viewAccount("history");
-  if ((repeatedRsvpHistoryHtml.match(/class="card booking-card"/g) || []).length !== 1
-      || !repeatedRsvpHistoryHtml.includes(`href="#/booking/${repeatedRsvp.id}"`)
-      || repeatedRsvpHistoryHtml.includes(`href="#/booking/${rsvp.id}"`)
-      || !repeatedRsvpHistoryHtml.includes("Cancelled")
-      || !repeatedRsvpHistoryHtml.includes("RSVP")
-      || repeatedRsvpHistoryHtml.includes("paid HK$0")) {
-    throw new Error("History must deduplicate RSVP join/withdraw records, retain cancellation, and show RSVP");
+  const repeatedRsvpBookingsHtml = await views.viewAccount("bookings");
+  if ((repeatedRsvpBookingsHtml.match(/class="card booking-card"/g) || []).length !== 0
+      || repeatedRsvpBookingsHtml.includes(`href="#/booking/${repeatedRsvp.id}"`)
+      || repeatedRsvpBookingsHtml.includes(`href="#/booking/${rsvp.id}"`)) {
+    throw new Error("Bookings must deduplicate and hide withdrawn RSVP records");
   }
-  if (!repeatedRsvpHistoryHtml.includes("75 min")) {
-    throw new Error("History must fill a local RSVP snapshot gap from the authoritative session");
+  const repeatedRsvpProfileHtml = await views.viewAccount();
+  if (statCount(repeatedRsvpProfileHtml, "#/account/bookings") !== 0) {
+    throw new Error("Bookings neon count must also exclude withdrawn RSVP records");
   }
-  console.log("ok  History deduplicates repeated local RSVPs and fills snapshot gaps");
+  console.log("ok  Bookings and its neon count deduplicate and hide withdrawn RSVPs");
   const schedHtml = views.viewSchedule();
   if (!schedHtml.includes(">Socials<"))
     throw new Error("Schedule should offer a Socials filter chip");

@@ -3358,6 +3358,11 @@ function membershipPatch(form) {
     heard_detail: String(form.heard_detail || "").trim() || null,
     preferred_name: String(form.preferred_name || "").trim() || null,
   };
+  if (Object.prototype.hasOwnProperty.call(form, "donorId")) {
+    const rawDonorId = String(form.donorId || "").trim();
+    if (donorIdProblem(rawDonorId)) throw new Error("Enter a valid Donor ID");
+    patch.donor_id = rawDonorId ? normalizeDonorId(rawDonorId) : null;
+  }
   if (!patch.mobile) throw new Error("Enter mobile number");
   if (!patch.heard_source) throw new Error("Choose how you heard about ITC");
   return patch;
@@ -3457,6 +3462,7 @@ export async function updateMyMembershipDetails(form) {
     user.heard = patch.heard_source;
     user.heardDetail = patch.heard_detail;
     user.preferredName = patch.preferred_name;
+    if (Object.prototype.hasOwnProperty.call(patch, "donor_id")) user.donorId = patch.donor_id;
     save();
     return localApplication(user);
   }
