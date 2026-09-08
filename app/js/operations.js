@@ -221,6 +221,8 @@ function buildBookingRow(row, sessionsById = null) {
     paymentRejectedAt: parseTimestamp(row.payment_rejected_at),
     paymentRejectedBy: row.payment_rejected_by || null,
     paymentRejectionReason: row.payment_rejection_reason || null,
+    attendedAt: parseTimestamp(row.attended_at),
+    attendedBy: row.attended_by || null,
     snapshot: {
       ...snapshot,
       price: snapshot.price_hkd ?? snapshot.price ?? session?.price ?? null,
@@ -880,6 +882,14 @@ export const liveRejectHyroxPayment = (bookingId, reason) =>
     p_booking_id: bookingId,
     p_reason: reason,
   });
+
+export async function liveSetOperationalAttendance(bookingId, arrived) {
+  await runOperationalRpc("set_operational_attendance", {
+    p_booking_id: bookingId,
+    p_arrived: !!arrived,
+  });
+  return liveBookingById(bookingId);
+}
 
 export const liveScheduleHyroxCycle = (cycleId) =>
   runOperationalRpc("schedule_hyrox_cycle", { p_cycle_id: cycleId });

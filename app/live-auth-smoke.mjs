@@ -174,6 +174,7 @@ let operationalAuthSubOverride = null;
 let operationalVenueOverrideReadError = null;
 let operationalRsvpCountError = null;
 let operationalRsvpCountRowsOverride = null;
+let operationalAttendanceError = null;
 const operationalRpcCalls = [];
 const operationalPayoutDirectReads = [];
 const operationalSessionQueries = [];
@@ -250,6 +251,8 @@ const operationalTableRows = {
     payment_rejected_at: null,
     payment_rejected_by: null,
     payment_rejection_reason: null,
+    attended_at: null,
+    attended_by: null,
     snapshot: {
       name: "ITC HYROX",
       booking_mode: "weekly_pool",
@@ -1038,6 +1041,23 @@ operationalRpcHandler = (name, args) => {
     row.status = "cancelled";
     return Promise.resolve({ data: row, error: null });
   }
+  if (name === "set_operational_attendance") {
+    if (operationalAttendanceError) {
+      return Promise.resolve({ data: null, error: operationalAttendanceError });
+    }
+    const row = operationalTableRows.operational_bookings.find((b) => b.id === args.p_booking_id);
+    if (!row) return Promise.resolve({ data: null, error: { message: "Booking not found." } });
+    if (args.p_arrived && row.status === "confirmed") {
+      row.status = "attended";
+      row.attended_at = now;
+      row.attended_by = actingProfile;
+    } else if (!args.p_arrived && row.status === "attended") {
+      row.status = "confirmed";
+      row.attended_at = null;
+      row.attended_by = null;
+    }
+    return Promise.resolve({ data: structuredClone(row), error: null });
+  }
   if (name === "mark_operational_payment") {
     const row = operationalTableRows.operational_bookings.find((b) => b.id === args.p_booking_id);
     if (row) {
@@ -1162,6 +1182,41 @@ assert.equal(
   fixtureMember.id,
 );
 assert.equal(store.getBooking("pooled-booking")?.venuePreference, "midtown");
+const attendanceRow = operationalTableRows.operational_bookings
+  .find((booking) => booking.id === "pooled-booking");
+attendanceRow.status = "attended";
+attendanceRow.attended_at = "2026-08-05T02:01:00.000Z";
+attendanceRow.attended_by = "approved-admin";
+await operations.hydrateOperationalState({ force: true, authenticated: true });
+assert.equal(store.getBooking("pooled-booking")?.status, "attended");
+assert.equal(store.getBooking("pooled-booking")?.attendedAt, RealDate.parse("2026-08-05T02:01:00.000Z"));
+assert.equal(store.getBooking("pooled-booking")?.attendedBy, "approved-admin");
+attendanceRow.status = "confirmed";
+attendanceRow.attended_at = null;
+attendanceRow.attended_by = null;
+await operations.hydrateOperationalState({ force: true, authenticated: true });
+const attendanceCallsBefore = operationalRpcCalls.length;
+await operations.liveSetOperationalAttendance("pooled-booking", true);
+assert.deepEqual(operationalRpcCalls[attendanceCallsBefore], {
+  name: "set_operational_attendance",
+  args: { p_booking_id: "pooled-booking", p_arrived: true },
+});
+assert.equal(store.getBooking("pooled-booking")?.status, "attended",
+  "successful attendance RPC must refresh the authoritative booking cache");
+assert.equal(store.getBooking("pooled-booking")?.attendedBy, authUser.id);
+operationalAttendanceError = { message: "Attendance is outside the check-in window." };
+await assert.rejects(
+  () => operations.liveSetOperationalAttendance("pooled-booking", false),
+  /Attendance is outside the check-in window/,
+);
+assert.equal(store.getBooking("pooled-booking")?.status, "attended",
+  "a rejected attendance RPC must leave the authoritative cache unchanged");
+operationalAttendanceError = null;
+await operations.liveSetOperationalAttendance("pooled-booking", false);
+assert.equal(store.getBooking("pooled-booking")?.status, "confirmed");
+assert.equal(store.getBooking("pooled-booking")?.attendedAt, null);
+assert.equal(store.getBooking("pooled-booking")?.attendedBy, null);
+console.log("ok  live attendance rows map and RPC mutations refresh authoritative state");
 assert.equal(
   operationalRpcCalls.filter((call) => call.name === "sweep_hyrox_cycle_deadlines").length,
   1,
