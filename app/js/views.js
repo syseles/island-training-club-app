@@ -2533,18 +2533,25 @@ function adminVenueHandoff(session, { message, override, meta = "", extra = "", 
     ${meta}
     <div class="section-head"><div><h3>${esc(heading)}</h3>${subheading ? `<p class="muted small hyrox-card-subtitle">${esc(subheading)}</p>` : ""}</div>${override.gymConfirmedAt ? `<span class="badge free">Confirmed</span>` : `<span class="badge neutral">Venue handoff</span>`}</div>
     ${extra}
-    ${override.gymConfirmedAt
-      ? `<p class="badge free mt8">Confirmed with ${esc(venueName)} · ${new Date(override.gymConfirmedAt).toLocaleDateString("en-HK", { day: "numeric", month: "short" })}${override.gymNote ? ` — ${esc(override.gymNote)}` : ""}</p>`
-      : ready
-        ? `<div class="btn-row mt8">
-            <a class="btn sm" href="https://wa.me/?text=${encodeURIComponent(message)}" target="_blank" rel="noopener">Send via WhatsApp</a>
-            <button class="btn ghost sm" type="button" data-action="copy-gym" data-msg="${esc(message)}">Copy message</button>
-          </div>
-          <form id="form-gym-note" data-session="${esc(session.id)}" class="mt8">
-            <div class="field"><label>Note (optional)</label><input name="note" placeholder="e.g. confirmed 16 with ${esc(venueName)}"></div>
-            <button class="btn sm" type="submit">Mark confirmed with ${esc(venueName)}</button>
-          </form>`
-        : `<p class="badge neutral mt8">${blockedCopy}</p>`}
+    <section class="admin-venue-finalization${override.gymConfirmedAt ? " is-finalized" : ""}" aria-labelledby="venue-finalization-${esc(session.id)}">
+      <div class="section-head">
+        <div><span class="kicker dim">Venue operations</span><h4 id="venue-finalization-${esc(session.id)}">${override.gymConfirmedAt ? "Venue finalized" : "Finalize with venue"}</h4></div>
+        ${override.gymConfirmedAt ? '<span class="badge free">Complete</span>' : ""}
+      </div>
+      ${override.gymConfirmedAt
+        ? `<p class="badge free mt8">Confirmed with ${esc(venueName)} · ${new Date(override.gymConfirmedAt).toLocaleDateString("en-HK", { day: "numeric", month: "short" })}${override.gymNote ? ` — ${esc(override.gymNote)}` : ""}</p>`
+        : ready
+          ? `<p class="muted small mt8">Send the confirmed headcount to the venue, then record their confirmation.</p>
+             <div class="btn-row mt16">
+              <a class="btn sm" href="https://wa.me/?text=${encodeURIComponent(message)}" target="_blank" rel="noopener">Send via WhatsApp</a>
+              <button class="btn ghost sm" type="button" data-action="copy-gym" data-msg="${esc(message)}">Copy message</button>
+            </div>
+            <form id="form-gym-note" data-session="${esc(session.id)}" class="mt8">
+              <div class="field"><label>Note (optional)</label><input name="note" placeholder="e.g. confirmed 16 with ${esc(venueName)}"></div>
+              <button class="btn sm" type="submit">Mark confirmed with ${esc(venueName)}</button>
+            </form>`
+          : `<p class="badge neutral mt8">${blockedCopy}</p>`}
+    </section>
   </div></div>`;
 }
 

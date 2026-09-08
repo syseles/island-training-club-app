@@ -3848,6 +3848,11 @@ store.signIn("member@example.test");
   console.log("ok  ops lists pending payments for the collector");
   if (!ops.includes("HYROX weekly booking setup") || !ops.includes("Venue handoff") || !ops.includes("wa.me"))
     throw new Error("ops should include the HYROX booking and payment card with a WhatsApp link");
+  assert.match(ops, /Finalize with venue/);
+  assert.match(ops, /Send the confirmed headcount to the venue, then record their confirmation\./);
+  assert.match(ops, /admin-venue-finalization/);
+  assert.match(ops, /data-action="copy-gym"/);
+  assert.match(ops, /form-gym-note/);
   const islandEccCard = ops.indexOf("ITC HYROX - Island ECC");
   assert.match(ops, /class="admin-roster-disclosures"/,
     "Payment states must use compact inline disclosures rather than duplicate metric tiles");

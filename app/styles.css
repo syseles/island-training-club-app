@@ -444,6 +444,17 @@ a.admin-hyrox-count-link:focus-visible {
 }
 .admin-roster-context { padding: 10px 14px; }
 .admin-capacity-line { margin-top: 12px; }
+.admin-venue-finalization {
+  margin-top: 20px;
+  padding: 16px;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--surface-2) 65%, transparent);
+}
+.admin-venue-finalization .section-head { margin: 0; }
+.admin-venue-finalization h4 { margin-top: 4px; }
+.admin-venue-finalization.is-finalized { border-color: color-mix(in srgb, var(--accent) 45%, var(--line-soft)); }
+.admin-venue-finalization .field { margin-top: 12px; }
 .admin-payment-group { border-top: 1px solid var(--line-soft); }
 .admin-payment-group > summary { min-height: 48px; cursor: pointer; }
 .admin-payment-group > summary::after { content: "›"; font-size: 20px; }
