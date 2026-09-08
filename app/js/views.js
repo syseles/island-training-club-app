@@ -2335,7 +2335,7 @@ export function viewReceipt(receiptId) {
 }
 
 export function viewNotFound(msg = "Page not found.") {
-  return `<div class="card"><div class="card-body">
+  return `<div class="card" data-route-not-found><div class="card-body">
     <span class="kicker">404</span>
     <h2 class="mt8">${esc(msg)}</h2>
     <a class="btn mt16" href="#/home">Back to home</a>

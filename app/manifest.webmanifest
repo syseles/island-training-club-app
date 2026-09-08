@@ -2,7 +2,7 @@
   "name": "Island Training Club",
   "short_name": "ITC",
   "description": "Island Training Club community app — activities, bookings and community.",
-  "start_url": "./index.html#/home",
+  "start_url": "./index.html",
   "scope": "./",
   "display": "standalone",
   "orientation": "portrait",

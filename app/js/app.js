@@ -153,6 +153,10 @@ function parseHash() {
     .filter(Boolean);
 }
 
+function replaceRoute(route) {
+  history.replaceState(history.state, "", `${location.pathname}${location.search}${route}`);
+}
+
 const NAV_FOR = {
   home: "home",
   schedule: "schedule",
@@ -488,6 +492,9 @@ async function render(generation = renderGeneration) {
   if (notificationsActive) notificationRouteRows = nextNotificationRouteRows;
   viewEl.innerHTML = out;
   const user = store.currentUser();
+  if (!viewEl.querySelector("[data-route-not-found]")) {
+    store.rememberLastRoute(location.hash, user?.id);
+  }
   navEl.innerHTML = views.navHTML(NAV_FOR[page] ?? "home", user);
   avatarEl.classList.toggle("is-empty", !user);
   avatarEl.innerHTML = views.avatarHTML(user);
@@ -1761,7 +1768,8 @@ async function boot() {
       toast(bootError.message || "Application read failed", true);
     }
   }
-  if (!location.hash) location.hash = "#/home";
+  const startup = store.startupRoute(location.hash, store.currentUser()?.id);
+  if (startup !== location.hash) replaceRoute(startup);
   window.addEventListener("hashchange", async () => {
     const generation = ++renderGeneration;
     // The Payment/Auth baseline hydrates identity before rendering. Commit
@@ -1806,15 +1814,20 @@ async function boot() {
     }
   });
 
-  // Assigned collector payout changes can be RLS-suppressed from an ordinary
-  // member's Realtime stream. Restoring an open Payment route reruns the same
-  // forced, least-privilege hydration used on route entry.
+  // Mobile app switching can relaunch the installed app without its hash.
+  // Recover the last committed route in that case. An intact non-Payment
+  // route needs no work; Payment still refreshes its least-privilege collector
+  // details whenever the member returns from PayMe.
   document.addEventListener("visibilitychange", async () => {
-    if (document.visibilityState !== "visible" || parseHash()[0] !== "pay") return;
+    if (document.visibilityState !== "visible") return;
+    const resumedRoute = store.startupRoute(location.hash, store.currentUser()?.id);
+    const recoveredRoute = resumedRoute !== location.hash;
+    if (recoveredRoute) replaceRoute(resumedRoute);
+    if (!recoveredRoute && parseHash()[0] !== "pay") return;
     try {
       await renderWithFeedback();
     } catch (err) {
-      toast(err.message || "Unable to refresh payment details", true);
+      toast(err.message || "Unable to refresh the current page", true);
     }
   });
 

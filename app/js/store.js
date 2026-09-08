@@ -43,7 +43,20 @@ const STORAGE_KEY = "itc.prototype.v1";
 const APPLY_DEVICE_KEY = "itc.device.id";
 const APPLY_DRAFT_KEY = "itc.apply.draft.v1";
 const APPLY_DRAFT_VERSION = 1;
+const LAST_ROUTE_KEY = "itc.last-route.v1";
+const LAST_ROUTE_VERSION = 1;
 const STATE_VERSION = 21;
+
+const ROUTE_ID = "[A-Za-z0-9._~-]+";
+const RESTORABLE_ROUTE_PATTERNS = [
+  /^#\/(?:home|schedule|giving|notifications|apply)$/,
+  /^#\/community(?:\/(?:prayers|fellowship|meals|announcements|about))?$/,
+  /^#\/account(?:\/(?:details(?:\/edit)?|indemnity|donor|payments|privacy(?:\/edit)?|bookings(?:\/attended)?|history))?$/,
+  new RegExp(`^#/(?:activity|checkout|pay|booking|receipt)/${ROUTE_ID}$`),
+  new RegExp(`^#/hyrox/${ROUTE_ID}(?:/register)?$`),
+  /^#\/admin(?:\/(?:members|activities|giving|payments))?$/,
+  new RegExp(`^#/admin/(?:activity|campaign)/${ROUTE_ID}$`),
+];
 
 // Live-mode (Supabase) session cache. Avoids hammering the DB on every
 // page load. The TTL is short so role flips and welcome notifications
@@ -58,6 +71,55 @@ let livePaymentDirectory = new Map();
 const LIVE_PROFILE_TTL_MS = 30_000;
 
 let state = null;
+
+export function isRestorableRoute(route) {
+  return typeof route === "string"
+    && route.length <= 240
+    && RESTORABLE_ROUTE_PATTERNS.some((pattern) => pattern.test(route));
+}
+
+function routeOwner(userId) {
+  return userId ? `user:${String(userId)}` : "visitor";
+}
+
+export function rememberLastRoute(route, userId = null) {
+  if (!isRestorableRoute(route)) return false;
+  try {
+    localStorage.setItem(LAST_ROUTE_KEY, JSON.stringify({
+      version: LAST_ROUTE_VERSION,
+      owner: routeOwner(userId),
+      route,
+    }));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function lastRouteFor(userId = null) {
+  try {
+    const raw = localStorage.getItem(LAST_ROUTE_KEY);
+    if (!raw) return null;
+    const record = JSON.parse(raw);
+    if (record?.version !== LAST_ROUTE_VERSION || !isRestorableRoute(record?.route)) {
+      localStorage.removeItem(LAST_ROUTE_KEY);
+      return null;
+    }
+    return record.owner === routeOwner(userId) ? record.route : null;
+  } catch {
+    try { localStorage.removeItem(LAST_ROUTE_KEY); } catch {}
+    return null;
+  }
+}
+
+export function clearLastRoute() {
+  try { localStorage.removeItem(LAST_ROUTE_KEY); } catch {}
+}
+
+export function startupRoute(currentHash, userId = null) {
+  const explicitRoute = typeof currentHash === "string" ? currentHash.trim() : "";
+  return explicitRoute || lastRouteFor(userId) || "#/home";
+}
 
 function freshState() {
   return {

@@ -18,6 +18,57 @@ const views = await import("./js/views.js");
 const data = await import("./js/data.js");
 const hyroxCycle = await import("./js/hyrox-cycle.js");
 
+// --- Route handoff persistence --------------------------------------------------------------
+const LAST_ROUTE_KEY = "itc.last-route.v1";
+for (const route of [
+  "#/home",
+  "#/schedule",
+  "#/activity/wnt-2099-01-01",
+  "#/hyrox/hyrox-pool-2099-01-03/register",
+  "#/community/announcements",
+  "#/giving",
+  "#/notifications",
+  "#/account/bookings/attended",
+  "#/account/privacy/edit",
+  "#/apply",
+  "#/checkout/hyrox-bft-2099-01-03",
+  "#/pay/booking-123",
+  "#/booking/booking-123",
+  "#/receipt/receipt-123",
+  "#/admin/payments",
+  "#/admin/activity/hyrox-bft",
+  "#/admin/campaign/campaign-123",
+]) {
+  assert.equal(store.rememberLastRoute(route, "member-a"), true, `${route} should be restorable`);
+  assert.equal(store.lastRouteFor("member-a"), route, `${route} should round-trip`);
+}
+assert.equal(store.lastRouteFor("member-b"), null,
+  "one signed-in user must not restore another user's route");
+store.rememberLastRoute("#/account/bookings", "member-a");
+assert.equal(store.startupRoute("", "member-a"), "#/account/bookings",
+  "an empty app launch should restore the current user's last route");
+assert.equal(store.startupRoute("#/home", "member-a"), "#/home",
+  "an explicit Home route must override a stored route");
+assert.equal(store.startupRoute("#/community/about", "member-a"), "#/community/about",
+  "an explicit deep link must override a stored route");
+assert.equal(store.startupRoute("", "member-b"), "#/home",
+  "an identity mismatch must fall back to Home");
+for (const invalidRoute of [
+  "https://example.com/steal",
+  "javascript:alert(1)",
+  "#/unknown",
+  "#/pay/booking-123?next=https://example.com",
+  "#/account/not-a-page",
+]) {
+  assert.equal(store.rememberLastRoute(invalidRoute, "member-a"), false,
+    `${invalidRoute} must not be persisted`);
+}
+localStorage.setItem(LAST_ROUTE_KEY, "not json");
+assert.equal(store.lastRouteFor("member-a"), null, "malformed route records must not restore");
+assert.equal(localStorage.getItem(LAST_ROUTE_KEY), null, "malformed route records should be cleared");
+store.clearLastRoute();
+console.log("ok  route handoff storage validates, isolates and round-trips app routes");
+
 const hktRolloverInstant = Date.parse("2026-08-05T16:30:00.000Z");
 assert.equal(data.todayHktISO(hktRolloverInstant), "2026-08-06",
   "current HKT date must not depend on the browser timezone");
@@ -863,6 +914,24 @@ console.log("ok  integration source-tip provenance is explicit");
 const integratedViewSource = readFileSync(resolve(__dirnameSmoke, "js/views.js"), "utf8");
 const integratedAppSource = readFileSync(resolve(__dirnameSmoke, "js/app.js"), "utf8");
 const integratedStyleSource = readFileSync(resolve(__dirnameSmoke, "styles.css"), "utf8");
+const manifest = JSON.parse(readFileSync(resolve(__dirnameSmoke, "manifest.webmanifest"), "utf8"));
+assert.equal(manifest.start_url, "./index.html",
+  "installed app launches must leave the hash empty so the last committed route can restore");
+assert.match(integratedAppSource,
+  /store\.startupRoute\(location\.hash, store\.currentUser\(\)\?\.id\)/,
+  "boot must resolve an empty launch against the current user's last route");
+assert.match(integratedAppSource,
+  /store\.rememberLastRoute\(location\.hash, user\?\.id\)/,
+  "successful route commits must persist the exact internal hash for the current identity");
+assert.match(integratedAppSource,
+  /viewEl\.querySelector\("\[data-route-not-found\]"\)/,
+  "not-found route output must not overwrite the last successful route");
+assert.match(integratedAppSource,
+  /visibilitychange[\s\S]*?store\.startupRoute\(location\.hash, store\.currentUser\(\)\?\.id\)/,
+  "resume must recover an unexpectedly empty hash before refreshing the route");
+assert.match(integratedViewSource, /data-route-not-found/,
+  "not-found output must expose a stable route-commit guard");
+console.log("ok  app launch, route commit and resume are wired to route handoff storage");
 assert.match(integratedViewSource, /export async function viewAdmin\(tab = "members"\)/,
   "Admin must default to Members");
 assert.doesNotMatch(integratedViewSource, /\["approvals", "Approvals"\]/,
