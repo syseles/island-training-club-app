@@ -1843,10 +1843,10 @@ section.hyrox-admin-cycle + .hyrox-island-ecc-card { margin-top: 12px; }
 .hyrox-venue-card h3 { overflow-wrap: anywhere; }
 .hyrox-preference-grid { display: grid; gap: 8px; border: 0; padding: 0; margin: 0 0 18px; }
 .hyrox-preference-grid legend { font-weight: 700; margin-bottom: 8px; }
-.hyrox-preference-grid .hyrox-radio,
+.hyrox-preference-grid .hyrox-radio { min-height: 44px; }
 .hyrox-pool-card .check-row { min-height: 44px; display: flex; align-items: center; gap: 10px; }
-.hyrox-preference-grid .hyrox-radio input,
 .hyrox-pool-card .check-row input { width: 20px; height: 20px; flex: 0 0 auto; position: static; opacity: 1; pointer-events: auto; }
+.hyrox-booking-preference { margin-bottom: 0; }
 .hyrox-reserve-card .check-row { margin-bottom: 18px; }
 .hyrox-reserve-card .hyrox-preference-grid { margin-bottom: 18px; }
 .hyrox-threshold-rule {

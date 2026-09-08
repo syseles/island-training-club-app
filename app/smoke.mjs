@@ -4524,6 +4524,8 @@ console.log("ok  reset");
   if (!confirmingHtml.includes("Payment being confirmed")) {
     throw new Error("pooled marked payment should show collector confirmation state");
   }
+  assert.match(confirmingHtml, /Venue preference[\s\S]*Either venue/,
+    "payment-pending HYROX booking details should show the chosen venue preference");
   store.signOut();
   store.signIn("admin@example.test");
   store.confirmBookingPayment(booking.id, cycle.registrationOpensAt + 2);
@@ -4556,6 +4558,13 @@ console.log("ok  reset");
       || !store.receiptForBooking(booking.id)) {
     throw new Error("allocated pooled booking surfaces should show one final venue and its receipt");
   }
+  const allocatedBooking = store.getBooking(booking.id);
+  const originalSessionId = allocatedBooking.sessionId;
+  allocatedBooking.sessionId = "missing-session-metadata";
+  const snapshotOnlyHtml = views.viewBooking(booking.id);
+  assert.match(snapshotOnlyHtml, /Venue preference[\s\S]*Either venue[\s\S]*assigned to <strong>BFT Causeway Bay<\/strong>/,
+    "booking details should use the allocation snapshot when assigned session metadata is unavailable");
+  allocatedBooking.sessionId = originalSessionId;
   store.signOut();
   store.signIn("admin@example.test");
   const adminHtml = await views.viewAdmin("payments");
