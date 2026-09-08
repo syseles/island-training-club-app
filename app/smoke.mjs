@@ -251,6 +251,7 @@ for (const relativePath of [
   "../supabase/migrations/20260904000001_hyrox_cycle_auto_provision.sql",
   "../supabase/migrations/20260908000001_collector_payment_reminders.sql",
   "../supabase/migrations/20260908000002_hyrox_venue_reminders.sql",
+  "../supabase/migrations/20260909000001_operational_attendance.sql",
 ]) {
   const absolutePath = resolve(__dirnameSmoke, relativePath);
   if (!existsSync(absolutePath)) {
@@ -287,6 +288,25 @@ const hyroxVenueReminderMigrationSource = readFileSync(
   resolve(__dirnameSmoke, "../supabase/migrations/20260908000002_hyrox_venue_reminders.sql"),
   "utf8"
 );
+const attendanceMigrationSource = readFileSync(
+  resolve(__dirnameSmoke, "../supabase/migrations/20260909000001_operational_attendance.sql"),
+  "utf8"
+);
+for (const marker of [
+  "attended_at", "attended_by", "'attended'", "set_operational_attendance",
+  "operational_assert_admin('set_attendance')", "for update", "Asia/Hong_Kong",
+  "interval '15 minutes'", "interval '24 hours'", "price_hkd <= 0",
+  "cancelled_at is not null", "p_arrived is null",
+  "revoke all on function public.set_operational_attendance(uuid, boolean)",
+  "grant execute on function public.set_operational_attendance(uuid, boolean) to authenticated",
+]) {
+  assert.ok(attendanceMigrationSource.toLowerCase().includes(marker.toLowerCase()),
+    `attendance migration missing ${marker}`);
+}
+assert.match(attendanceMigrationSource,
+  /security definer[\s\S]*?set search_path = public/i);
+assert.doesNotMatch(attendanceMigrationSource,
+  /grant execute on function public\.set_operational_attendance\(uuid, boolean\) to anon/i);
 for (const marker of [
   "venue_choice_reminder_sent_at",
   "venue_finalization_reminder_sent_at",

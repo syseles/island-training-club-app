@@ -51,7 +51,7 @@ All mutations are routed through `SECURITY DEFINER` RPCs:
 
 The deployment is intentionally manual. First apply the repository’s
 pre-existing migrations through `20260902000001_hyrox_bft_quarry_bay.sql`.
-Then apply these five pooled-HYROX migrations in this exact order, in the
+Then apply these six pooled-HYROX migrations in this exact order, in the
 Supabase SQL Editor (or via `supabase db push` from a trusted workstation):
 
 1. Apply the pre-existing operational migrations in filename order:
@@ -73,8 +73,13 @@ Supabase SQL Editor (or via `supabase db push` from a trusted workstation):
    and cancellation carry-forward;
    `20260904000001_hyrox_quarry_bay_capacity.sql` — Quarry Bay’s 30-place
    capacity; and
-   `20260904000002_hyrox_cycle_auto_provision.sql` — automatic recurring
+   `20260904000001_hyrox_cycle_auto_provision.sql` — automatic recurring
    parent-cycle provisioning.
+4. Apply the later Admin operations migrations in filename order, ending with:
+   `20260908000001_collector_payment_reminders.sql` — Thursday payment reminders;
+   `20260908000002_hyrox_venue_reminders.sql` — Friday allocation reminders; and
+   `20260909000001_operational_attendance.sql` — paid-session attendance state
+   and the time-gated Admin mutation RPC.
 
 Apply each migration on its own. Resolve any error before moving to the
 next migration. The verified `feature/shared-operations` branch uses
@@ -283,7 +288,8 @@ live Supabase; never fall back to local state.
 ## Pre-deployment checklist
 
 - [ ] Disposable database verifier passes on an explicitly acknowledged disposable database.
-- [ ] All four pooled migrations applied in order after the pre-existing operational migrations.
+- [ ] All pooled migrations applied in order after the pre-existing operational migrations.
+- [ ] `20260909000001_operational_attendance.sql` applied after both reminder migrations.
 - [ ] Post-deployment SQL checks executed and match the expected output.
 - [ ] 15 August 2026 sessions render with the canonical cancellation copy
       in two separate browsers.
