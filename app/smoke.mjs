@@ -166,6 +166,7 @@ localStorage.setItem("itc.prototype.v1", JSON.stringify(v19ReplacementFixture));
 const migratedReplacement = store.load();
 assert.equal(migratedReplacement.version, 20, "v20 replacement migration must advance the current v19 state");
 assert.ok(Array.isArray(migratedReplacement.replacementRequests));
+assert.ok(Array.isArray(migratedReplacement.replacementAudit));
 assert.ok(migratedReplacement.bookings.every((booking) =>
   booking.replacementUserId === null
   && booking.replacementConfirmedAt === null
@@ -5984,6 +5985,56 @@ if (renderingExceptionResult !== false
   throw new Error("Leaflet rendering exceptions must return false with fallback copy");
 }
 console.log("ok  inline free-event map renders fallback for lookup, loader, and rendering failures");
+
+// Manual HYROX replacement lifecycle: local mode preserves payer ownership
+// until an approved member is claimed and an Admin confirms the handover.
+installLocalFixtures({ withMemberBooking: true });
+const replacementFixture = JSON.parse(mem.get("itc.prototype.v1"));
+replacementFixture.users.push({
+  id: "replacement-member", role: "member", status: "approved", fullName: "Replacement Member",
+  preferredName: "Replacement", email: "replacement@example.test",
+});
+mem.set("itc.prototype.v1", JSON.stringify(replacementFixture));
+store.load();
+store.signIn("member@example.test");
+const replacementBooking = store.getBooking("fixture-booking");
+assert.ok(replacementBooking, "replacement lifecycle needs a confirmed HYROX booking");
+const payerId = replacementBooking.userId;
+const payerPaymentRef = replacementBooking.paymentRef;
+const replacementRequest = await store.createReplacementRequest(replacementBooking.id, Date.now());
+assert.equal(replacementRequest.status, "pending");
+assert.ok(replacementRequest.inviteToken);
+assert.equal(store.replacementInviteForToken(replacementRequest.inviteToken).inviteToken, undefined);
+await assert.rejects(
+  () => store.createReplacementRequest(replacementBooking.id, Date.now()),
+  /already active/i,
+);
+store.signIn("replacement@example.test");
+const acceptedReplacement = await store.acceptReplacement(replacementRequest.inviteToken, Date.now());
+assert.equal(acceptedReplacement.status, "accepted");
+assert.equal(store.getBooking(replacementBooking.id).replacementUserId, null,
+  "accepted replacement must not change the attendee before Admin confirmation");
+await assert.rejects(
+  () => store.acceptReplacement(replacementRequest.inviteToken, Date.now()),
+  /no longer available/i,
+);
+store.signIn("admin@example.test");
+const confirmedReplacement = await store.decideReplacement(
+  replacementRequest.id, true, null, Date.now()
+);
+assert.equal(confirmedReplacement.status, "confirmed");
+const confirmedBooking = store.getBooking(replacementBooking.id);
+assert.equal(confirmedBooking.userId, payerId, "replacement must preserve payer ownership");
+assert.equal(confirmedBooking.paymentRef, payerPaymentRef, "replacement must preserve payment reference");
+assert.equal(confirmedBooking.replacementUserId, "replacement-member");
+assert.equal(store.effectiveAttendeeId(confirmedBooking), "replacement-member");
+assert.equal(store.replacementAuditForRequest(replacementRequest.id).length, 3);
+assert.equal(
+  (await store.decideReplacement(replacementRequest.id, true, null, Date.now())).status,
+  "confirmed",
+  "repeated Admin confirmation must be idempotent",
+);
+console.log("ok  local HYROX replacement claim, audit, confirmation, and payer preservation");
 
 console.log(failures ? `\n${failures} FAILURE(S)` : "\nAll smoke tests passed.");
 process.exit(failures ? 1 : 0);

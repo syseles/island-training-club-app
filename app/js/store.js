@@ -78,6 +78,7 @@ function freshState() {
     hyroxCycles: {},
     hyroxCycleQueues: {},
     replacementRequests: [],
+    replacementAudit: [],
     notifications: [],
     duty: {},
   };
@@ -151,6 +152,7 @@ function migrate() {
   if (!state.hyroxCycleQueues || typeof state.hyroxCycleQueues !== "object"
       || Array.isArray(state.hyroxCycleQueues)) state.hyroxCycleQueues = {};
   if (!Array.isArray(state.replacementRequests)) state.replacementRequests = [];
+  if (!Array.isArray(state.replacementAudit)) state.replacementAudit = [];
   // v14 carries forward the additive UUID-keyed operations map for every
   // accepted v9-v13 snapshot.
   for (const user of state.users) {
@@ -161,6 +163,11 @@ function migrate() {
     };
   }
   normalizeReceiptCounter();
+  for (const booking of state.bookings) {
+    booking.replacementUserId ??= null;
+    booking.replacementConfirmedAt ??= null;
+    booking.replacementConfirmedBy ??= null;
+  }
 
   const v = state.version || 0;
   if (v >= STATE_VERSION) return;
@@ -245,6 +252,7 @@ function migrate() {
     // remains payer/receipt owner; replacement fields affect identity only
     // after an Admin confirms the handover.
     if (!Array.isArray(state.replacementRequests)) state.replacementRequests = [];
+    if (!Array.isArray(state.replacementAudit)) state.replacementAudit = [];
     for (const booking of state.bookings) {
       booking.replacementUserId ??= null;
       booking.replacementConfirmedAt ??= null;
@@ -997,7 +1005,9 @@ export function getBooking(id) {
 
 export function replacementRequestForBooking(bookingId) {
   if (isLive()) return liveOps.liveReplacementRequestForBooking?.(bookingId) ?? null;
-  return state.replacementRequests.find((request) => request.bookingId === bookingId) ?? null;
+  return state.replacementRequests
+    .filter((request) => request.bookingId === bookingId)
+    .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0))[0] ?? null;
 }
 
 export function replacementRequestByToken(token) {
@@ -1026,6 +1036,223 @@ export function replacementEligible(booking, now = Date.now()) {
   if (!Number.isFinite(startsAt) || startsAt <= now) return { ok: false, reason: "started" };
   const expiresAt = Math.min(startsAt, now + 24 * 60 * 60 * 1000);
   return { ok: true, expiresAt };
+}
+
+export function replacementInviteForToken(token) {
+  if (isLive()) return null;
+  const request = replacementRequestByToken(token);
+  if (!request) return null;
+  const { inviteToken, ...redacted } = request;
+  return redacted;
+}
+
+export function replacementAuditForRequest(requestId) {
+  if (isLive()) return [];
+  return state.replacementAudit.filter((entry) => entry.requestId === requestId);
+}
+
+function replacementActor() {
+  const actor = currentUser();
+  if (!actor || actor.status !== "approved") throw new Error("Approved membership required.");
+  return actor;
+}
+
+function replacementIsHyrox(booking) {
+  return booking?.snapshot?.kind === "paid"
+    && (String(booking.snapshot?.name || "").toUpperCase().includes("HYROX")
+      || String(booking.sessionId || "").startsWith("hyrox-"));
+}
+
+function replacementDuplicateForUser(userId, booking) {
+  return state.bookings.some((candidate) => candidate.id !== booking.id
+    && candidate.userId === userId
+    && ["reserved", "confirmed"].includes(candidate.status)
+    && replacementIsHyrox(candidate)
+    && candidate.snapshot?.dateISO === booking.snapshot?.dateISO);
+}
+
+function recordReplacementAudit(request, action, actorId, reason = null, now = Date.now()) {
+  state.replacementAudit.push({
+    id: uid("replacement-audit"),
+    requestId: request.id,
+    bookingId: request.bookingId,
+    action,
+    originalUserId: request.originalUserId,
+    replacementUserId: request.replacementUserId || null,
+    actorUserId: actorId || null,
+    reason,
+    createdAt: now,
+  });
+}
+
+function replacementRequestError(message) {
+  throw new Error(message);
+}
+
+export async function createReplacementRequest(bookingId, now = Date.now()) {
+  const booking = getBooking(bookingId);
+  if (!booking) replacementRequestError("Booking not found.");
+  const eligibility = replacementEligible(booking, now);
+  if (!eligibility.ok) replacementRequestError("This booking cannot arrange a replacement.");
+  if (isLive()) {
+    requireAuthorizedPaymentOwner(booking.userId);
+    const token = globalThis.crypto?.randomUUID?.() || uid("replacement-invite");
+    const hash = await liveOps.hashReplacementToken(token);
+    const request = await liveOps.liveCreateReplacementRequest(bookingId, hash, eligibility.expiresAt);
+    return { ...request, inviteToken: token };
+  }
+  requireAuthorizedPaymentOwner(booking.userId);
+  if (currentUser()?.id !== booking.userId) replacementRequestError("Payment mutation not authorized");
+  const active = replacementRequestForBooking(booking.id);
+  if (active && ["pending", "accepted"].includes(active.status)) {
+    replacementRequestError("A replacement invite is already active for this booking.");
+  }
+  const request = {
+    id: uid("replacement-request"),
+    bookingId: booking.id,
+    originalUserId: booking.userId,
+    replacementUserId: null,
+    inviteToken: uid("replacement-invite"),
+    status: "pending",
+    createdAt: now,
+    expiresAt: eligibility.expiresAt,
+    acceptedAt: null,
+    acceptedBy: null,
+    declinedAt: null,
+    declinedBy: null,
+    cancelledAt: null,
+    cancelledBy: null,
+    rejectedAt: null,
+    rejectedBy: null,
+    confirmedAt: null,
+    confirmedBy: null,
+    decisionReason: null,
+  };
+  state.replacementRequests.push(request);
+  recordReplacementAudit(request, "created", booking.userId, null, now);
+  save();
+  return request;
+}
+
+export async function acceptReplacement(token, now = Date.now()) {
+  if (isLive()) {
+    const hash = await liveOps.hashReplacementToken(token);
+    return liveOps.liveAcceptReplacement(hash);
+  }
+  const actor = replacementActor();
+  const request = replacementRequestByToken(token);
+  if (!request || request.status !== "pending") replacementRequestError("This replacement invite is no longer available.");
+  if (request.expiresAt <= now) {
+    request.status = "expired";
+    request.decisionReason = "Invite expired.";
+    recordReplacementAudit(request, "expired", actor.id, request.decisionReason, now);
+    save();
+    replacementRequestError("This replacement invite has expired.");
+  }
+  if (actor.id === request.originalUserId) replacementRequestError("The original member cannot accept their own replacement invite.");
+  const booking = getBooking(request.bookingId);
+  if (!booking || !replacementEligible(booking, now).ok || replacementDuplicateForUser(actor.id, booking)) {
+    replacementRequestError("This booking is no longer available for replacement.");
+  }
+  request.status = "accepted";
+  request.replacementUserId = actor.id;
+  request.acceptedAt = now;
+  request.acceptedBy = actor.id;
+  recordReplacementAudit(request, "accepted", actor.id, null, now);
+  notify(request.originalUserId, "hyrox-replacement-accepted",
+    "An approved member accepted your replacement invite. ITC must confirm the handover before the attendee changes.",
+    `#/booking/${request.bookingId}`);
+  state.users.filter((user) => ["admin", "super_admin"].includes(user.role)
+    && user.status === "approved").forEach((user) => notify(
+      user.id, "hyrox-replacement-review",
+      "A HYROX replacement needs Admin confirmation.", "#/admin/ops"));
+  save();
+  return request;
+}
+
+export async function declineReplacement(token, now = Date.now()) {
+  if (isLive()) {
+    const hash = await liveOps.hashReplacementToken(token);
+    return liveOps.liveDeclineReplacement(hash);
+  }
+  const actor = replacementActor();
+  const request = replacementRequestByToken(token);
+  if (!request || request.status !== "pending") replacementRequestError("This replacement invite is no longer available.");
+  if (request.expiresAt <= now) replacementRequestError("This replacement invite has expired.");
+  request.status = "declined";
+  request.declinedAt = now;
+  request.declinedBy = actor.id;
+  recordReplacementAudit(request, "declined", actor.id, null, now);
+  notify(request.originalUserId, "hyrox-replacement-declined",
+    "The approved member declined your replacement invite.", `#/booking/${request.bookingId}`);
+  save();
+  return request;
+}
+
+export async function cancelReplacement(requestId, now = Date.now()) {
+  if (isLive()) return liveOps.liveCancelReplacement(requestId);
+  const request = state.replacementRequests.find((item) => item.id === requestId);
+  if (!request) return null;
+  requireAuthorizedPaymentOwner(request.originalUserId);
+  if (currentUser()?.id !== request.originalUserId) replacementRequestError("Payment mutation not authorized");
+  if (request.status !== "pending") replacementRequestError("Only an unclaimed replacement invite can be cancelled.");
+  request.status = "cancelled";
+  request.cancelledAt = now;
+  request.cancelledBy = request.originalUserId;
+  recordReplacementAudit(request, "cancelled", request.originalUserId, null, now);
+  save();
+  return request;
+}
+
+export async function decideReplacement(requestId, confirm, reason = null, now = Date.now()) {
+  if (isLive()) return liveOps.liveDecideReplacement(requestId, confirm, reason);
+  const actor = requirePaymentAdminActor();
+  const request = state.replacementRequests.find((item) => item.id === requestId);
+  if (!request) replacementRequestError("Replacement request not found.");
+  if (request.status === "confirmed" && confirm) return request;
+  if (request.status === "rejected" && !confirm) return request;
+  if (confirm) {
+    if (request.status !== "accepted") replacementRequestError("Only an accepted replacement can be confirmed.");
+    if (request.expiresAt <= now) replacementRequestError("This replacement request has expired.");
+    const booking = getBooking(request.bookingId);
+    if (!booking || !replacementEligible(booking, now).ok || replacementDuplicateForUser(request.replacementUserId, booking)) {
+      replacementRequestError("This booking is no longer available for replacement.");
+    }
+    booking.replacementUserId = request.replacementUserId;
+    booking.replacementConfirmedAt = now;
+    booking.replacementConfirmedBy = actor.id;
+    request.status = "confirmed";
+    request.confirmedAt = now;
+    request.confirmedBy = actor.id;
+    request.decisionReason = reason || null;
+    recordReplacementAudit(request, "confirmed", actor.id, request.decisionReason, now);
+    notify(request.originalUserId, "hyrox-replacement-confirmed",
+      "ITC confirmed the replacement. You remain the payer and receipt owner; the approved member is now the attendee.",
+      `#/booking/${request.bookingId}`);
+    notify(request.replacementUserId, "hyrox-replacement-confirmed",
+      "ITC confirmed your HYROX replacement. Check the session details before attending.",
+      `#/booking/${request.bookingId}`);
+  } else {
+    if (!["pending", "accepted"].includes(request.status)) return request;
+    request.status = "rejected";
+    request.rejectedAt = now;
+    request.rejectedBy = actor.id;
+    request.decisionReason = reason || "Admin rejected the replacement request.";
+    recordReplacementAudit(request, "rejected", actor.id, request.decisionReason, now);
+    notify(request.originalUserId, "hyrox-replacement-rejected",
+      "ITC did not confirm the replacement. Your original booking remains unchanged.",
+      `#/booking/${request.bookingId}`);
+    if (request.replacementUserId) notify(request.replacementUserId, "hyrox-replacement-rejected",
+      "ITC did not confirm this replacement request. The original booking remains unchanged.",
+      `#/booking/${request.bookingId}`);
+  }
+  save();
+  return request;
+}
+
+export function effectiveAttendeeForBooking(booking) {
+  if (isLive()) return paymentUserById(effectiveAttendeeId(booking));
+  return state.users.find((user) => user.id === effectiveAttendeeId(booking)) || null;
 }
 
 export function listHyroxCycles() {
