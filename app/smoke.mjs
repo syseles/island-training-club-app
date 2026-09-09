@@ -3507,10 +3507,10 @@ store.signIn("member@example.test");
   assert.equal(typeof store.deferBooking, "function", "store must keep deferBooking for store-level callers");
   // Lock the exact booking-detail disclaimer copy. Any wording change must
   // update this test so documentation, leadership review, and code stay in sync.
-  assert.match(html, /Once paid, this booking is final — no refund and no deferral/,
-    "booking detail must show the agreed no-refund, no-deferral disclaimer");
-  assert.match(html, /swap the spot with your fellow ITC friend/,
-    "booking detail must invite the member to swap with another ITC friend");
+  assert.match(html, /I can.t attend — arrange a replacement/,
+    "booking detail must offer an intuitive manual replacement action");
+  assert.match(html, /Your paid booking is final — no refund or deferral\.[\s\S]*approved ITC friend[\s\S]*Admin can record and confirm the manual replacement/,
+    "booking detail must explain the manual replacement process");
   assert.doesNotMatch(html, /credit.followup|credit for the missed|sort your credit|follow up about your credit/i,
     "booking detail must not promise any credit follow-up");
   // The swap-with-a-friend line is only for active member-driven bookings.
@@ -3531,8 +3531,8 @@ store.signIn("member@example.test");
   assert.equal(typeof checkoutHtml, "string", "checkout page must render a string when the member has no prior reservation");
   assert.match(checkoutHtml, /Once paid, this booking is final — no refund and no deferral/,
     "checkout page must show the agreed no-refund, no-deferral disclaimer");
-  assert.match(checkoutHtml, /swap the spot with your fellow ITC friend/,
-    "checkout page must invite the member to swap with another ITC friend");
+  assert.match(checkoutHtml, /arrange a manual replacement with an approved ITC friend/,
+    "checkout page must explain the manual replacement option");
   assert.doesNotMatch(checkoutHtml, /credit.followup|credit for the missed|sort your credit|follow up about your credit/i,
     "checkout page must not promise any credit follow-up");
   assert.doesNotMatch(
@@ -4621,8 +4621,8 @@ console.log("ok  reset");
     "HYROX registration must include the agreed no-refund, no-deferral disclaimer opener");
   assert.match(registration, /no refund and no deferral/,
     "HYROX registration must include the agreed no-refund, no-deferral clause");
-  assert.match(registration, /swap the spot with your fellow ITC friend/,
-    "HYROX registration must invite the member to swap with another ITC friend");
+  assert.match(registration, /arrange a manual replacement with an approved ITC friend/,
+    "HYROX registration must explain the manual replacement option");
   assert.doesNotMatch(registration, /credit.followup|credit for the missed|sort your credit|follow up about your credit/i,
     "HYROX registration must not promise any credit follow-up");
   // Lock the registration page horizontal padding so the left margin never
