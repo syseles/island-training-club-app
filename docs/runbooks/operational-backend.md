@@ -4,7 +4,8 @@ This runbook covers applying the shared-pool HYROX operational backend
 migrations to the disposable/staging or production Supabase project,
 verifying the result, and executing the Admin two-browser acceptance test
 before merging to `testing`. Live Supabase remains the source of truth;
-the local v19 engine is prototype parity only.
+the local v20 engine is prototype parity only. Manual HYROX replacements are
+recorded and confirmed in-app; they never move payment or receipt ownership.
 
 ## What lives in Supabase
 
@@ -25,6 +26,12 @@ operational workflow:
   numbers `ITC-YYYY-NNNN`.
 - `collector_assignments` — one row per Saturday.
 - `collector_payout_profiles` — collector PayMe/FPS destinations.
+- `operational_booking_replacement_requests` — single-use, expiring HYROX
+  replacement requests with redacted Admin list access.
+- `operational_booking_replacement_audit` — immutable lifecycle history for
+  create, claim, decline, cancel, reject, expire, and confirm actions.
+- `operational_bookings.replacement_profile_id` and confirmation fields — the
+  effective attendee only; `profile_id` remains the payer/receipt owner.
 
 All mutations are routed through `SECURITY DEFINER` RPCs:
 
@@ -36,13 +43,17 @@ All mutations are routed through `SECURITY DEFINER` RPCs:
   `set_operational_notice`, `set_operational_midtown_open`,
   `finalize_operational_gym`, `set_collector_assignment`,
   `update_collector_payout_profile`, `sweep_operational_deadlines`, plus
+  `admin_decide_operational_replacement`, `list_operational_replacement_requests`,
   `schedule_hyrox_cycle`, `sweep_hyrox_cycle_deadlines`,
   `finalize_hyrox_venue_plan`, `reject_hyrox_cycle_payment`,
   `close_hyrox_venue_allocation`, and `cancel_hyrox_cycle`.
 - Pooled member RPCs: `reserve_hyrox_cycle`,
   `join_hyrox_cycle_waitlist`, `leave_hyrox_cycle_queue`,
   `select_hyrox_cycle_venue`, `join_hyrox_venue_switch_queue`, and
-  `leave_hyrox_venue_switch_queue`.
+  `leave_hyrox_venue_switch_queue`. Replacement member RPCs are
+  `create_operational_replacement_request`, `get_operational_replacement_invite`,
+  `accept_operational_replacement_request`, `decline_operational_replacement_request`,
+  and `cancel_operational_replacement_request`.
 - Both: `ensure_operational_sessions` (idempotent rolling window) and
   `ensure_hyrox_cycles` (idempotent parent-cycle provisioning for clean future
   BFT + Midtown Saturdays).
@@ -51,7 +62,7 @@ All mutations are routed through `SECURITY DEFINER` RPCs:
 
 The deployment is intentionally manual. First apply the repository’s
 pre-existing migrations through `20260902000001_hyrox_bft_quarry_bay.sql`.
-Then apply these six pooled-HYROX migrations in this exact order, in the
+Then apply the pooled-HYROX, attendee-name, replacement, and Admin operations migrations in this exact order, in the
 Supabase SQL Editor (or via `supabase db push` from a trusted workstation):
 
 1. Apply the pre-existing operational migrations in filename order:
@@ -76,10 +87,15 @@ Supabase SQL Editor (or via `supabase db push` from a trusted workstation):
    `20260904000001_hyrox_cycle_auto_provision.sql` — automatic recurring
    parent-cycle provisioning.
 4. Apply the later Admin operations migrations in filename order, ending with:
+   `20260905000001_operational_attendee_names.sql` — approved-member,
+   names-only operational roster access;
    `20260908000001_collector_payment_reminders.sql` — Thursday payment reminders;
    `20260908000002_hyrox_venue_reminders.sql` — Friday allocation reminders; and
    `20260909000001_operational_attendance.sql` — paid-session attendance state
    and the time-gated Admin mutation RPC.
+5. Apply `20260910000001_operational_replacement_requests.sql` for replacement
+   requests, audit history, locked RPCs, effective-attendee mapping, and
+   Realtime publication entries.
 
 Apply each migration on its own. Resolve any error before moving to the
 next migration. The verified `feature/shared-operations` branch uses
@@ -102,8 +118,8 @@ or explicitly migrated; this prevents orphaning member reservations.
 Run the following read-only checks in the SQL Editor to confirm a clean
 deployment. Compare the output of each query against the expected shape.
 
-Verify the operational tables exist with RLS enabled, including the two
-pooled HYROX tables:
+Verify the operational tables exist with RLS enabled, including the pooled
+HYROX and replacement tables:
 
 ```sql
 select c.relname, c.relrowsecurity
@@ -119,7 +135,9 @@ select c.relname, c.relrowsecurity
      'collector_assignments',
      'collector_payout_profiles',
      'operational_hyrox_cycles',
-     'operational_hyrox_queue_entries'
+     'operational_hyrox_queue_entries',
+     'operational_booking_replacement_requests',
+     'operational_booking_replacement_audit'
    )
  order by c.relname;
 ```
@@ -141,13 +159,15 @@ select tablename
      'collector_assignments',
      'collector_payout_profiles',
      'operational_hyrox_cycles',
-     'operational_hyrox_queue_entries'
+     'operational_hyrox_queue_entries',
+     'operational_booking_replacement_requests',
+     'operational_booking_replacement_audit'
    )
  order by tablename;
 ```
 
-Expected: eight rows, including `operational_hyrox_cycles` and
-`operational_hyrox_queue_entries`.
+Expected: ten rows, including `operational_hyrox_cycles`,
+`operational_hyrox_queue_entries`, and the two replacement tables.
 
 Verify the pooled RPCs are executable only through their intended role grants:
 
@@ -267,6 +287,14 @@ two separate browsers signed in as different administrators.
    disappear from the HYROX queue.
 10. Confirm a paid booking was deferred to the next available session
     and the corresponding queued notification appeared for the member.
+11. For a paid HYROX booking, have the original member create a replacement
+    invite and share it through the user-initiated WhatsApp link. An approved
+    member accepts it; verify the booking still shows the original member as
+    attendee until Admin → Payments confirmation.
+12. Confirm the replacement in Admin → Payments. Verify the effective roster
+    shows the replacement, while the original `profile_id`, payment reference,
+    receipt owner, amount, and allocation remain unchanged. Reject a separate
+    accepted request and verify the original roster remains unchanged.
 
 If any of the above fail, do not merge. The likely causes are:
 
@@ -288,9 +316,12 @@ live Supabase; never fall back to local state.
 ## Pre-deployment checklist
 
 - [ ] Disposable database verifier passes on an explicitly acknowledged disposable database.
-- [ ] All pooled migrations applied in order after the pre-existing operational migrations.
+- [ ] Pooled-HYROX, attendee-name, Admin operations, and replacement migrations applied in order after the pre-existing operational migrations.
 - [ ] `20260909000001_operational_attendance.sql` applied after both reminder migrations.
+- [ ] Replacement tables are RLS-protected and present in the Realtime publication.
 - [ ] Post-deployment SQL checks executed and match the expected output.
+- [ ] Replacement acceptance/rejection test passes without payment or receipt transfer.
+- [ ] SQL integration verification was run only against an explicitly disposable database, or explicitly marked not run.
 - [ ] 15 August 2026 sessions render with the canonical cancellation copy
       in two separate browsers.
 - [ ] Two-browser cross-admin acceptance test passes.

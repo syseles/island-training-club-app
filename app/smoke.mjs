@@ -223,6 +223,38 @@ assert.equal(
   "existing Quarry Bay booking snapshots must show the corrected venue"
 );
 store.resetLocalData();
+
+assert.equal(store.effectiveAttendeeId({ userId: "payer" }), "payer");
+assert.equal(
+  store.effectiveAttendeeId({ userId: "payer", replacementUserId: "friend" }),
+  "friend",
+);
+assert.equal(store.replacementEligible({ status: "reserved" }, Date.now()).ok, false);
+assert.equal(store.replacementEligible({ status: "attended" }, Date.now()).ok, false);
+assert.equal(store.replacementEligible({
+  status: "confirmed",
+  userId: "payer",
+  snapshot: { kind: "paid", name: "ITC HYROX", dateISO: "2099-01-10", time: "11:15" },
+}, Date.now()).ok, true);
+const v19ReplacementFixture = structuredClone(store.load());
+v19ReplacementFixture.version = 19;
+for (const booking of v19ReplacementFixture.bookings) {
+  delete booking.replacementUserId;
+  delete booking.replacementConfirmedAt;
+  delete booking.replacementConfirmedBy;
+}
+delete v19ReplacementFixture.replacementRequests;
+localStorage.setItem("itc.prototype.v1", JSON.stringify(v19ReplacementFixture));
+const migratedReplacement = store.load();
+assert.equal(migratedReplacement.version, 22, "replacement migration must preserve the current v22 state version");
+assert.ok(Array.isArray(migratedReplacement.replacementRequests));
+assert.ok(Array.isArray(migratedReplacement.replacementAudit));
+assert.ok(migratedReplacement.bookings.every((booking) =>
+  booking.replacementUserId === null
+  && booking.replacementConfirmedAt === null
+  && booking.replacementConfirmedBy === null
+));
+store.resetLocalData();
 const { existsSync, readFileSync } = await import("node:fs");
 const { resolve, dirname } = await import("node:path");
 const { fileURLToPath } = await import("node:url");
@@ -458,6 +490,41 @@ if (!existsSync(attendeeNamesMigrationPath)) {
   throw new Error("approved attendee names migration must exist");
 }
 const attendeeNamesMigrationSource = readFileSync(attendeeNamesMigrationPath, "utf8");
+const replacementMigrationPath = resolve(
+  __dirnameSmoke, "../supabase/migrations/20260910000001_operational_replacement_requests.sql"
+);
+if (!existsSync(replacementMigrationPath)) {
+  throw new Error("HYROX replacement migration must exist");
+}
+const replacementMigrationSource = readFileSync(replacementMigrationPath, "utf8");
+for (const marker of [
+  "operational_booking_replacement_requests",
+  "replacement_profile_id",
+  "replacement_confirmed_at",
+  "replacement_confirmed_by",
+  "create_operational_replacement_request",
+  "get_operational_replacement_invite",
+  "accept_operational_replacement_request",
+  "decline_operational_replacement_request",
+  "cancel_operational_replacement_request",
+  "admin_decide_operational_replacement",
+  "security definer",
+  "set search_path = public",
+  "for update",
+  "revoke all",
+]) {
+  assert.ok(replacementMigrationSource.toLowerCase().includes(marker.toLowerCase()),
+    `replacement migration missing ${marker}`);
+}
+assert.match(replacementMigrationSource,
+  /create unique index[\s\S]*?where status in \('pending', 'accepted'\)/i,
+  "replacement requests must allow only one active request per booking");
+assert.match(replacementMigrationSource,
+  /select[\s\S]*?for update[\s\S]*?operational_bookings/i,
+  "replacement mutations must lock the booking before changing identity");
+assert.doesNotMatch(replacementMigrationSource,
+  /grant (?:all|select|insert|update|delete)[^\n]*on (?:table )?public\.operational_booking_replacement_requests/i,
+  "browser roles must not receive direct replacement-table writes");
 const operationalIntegrationSource = readFileSync(
   resolve(__dirnameSmoke, "../supabase/tests/operational_backend_integration.sql"),
   "utf8"
@@ -1044,12 +1111,14 @@ for (const marker of [
   }
 }
 console.log("ok  composed Payment/Auth UI markers coexist");
-for (const marker of ['case "pay"', 'case "form-reserve"', 'case "form-mark-paid"', "store.reserveSession", "store.markBookingPaid"]) {
+for (const marker of ['case "pay"', 'case "form-reserve"', 'case "form-mark-paid"', 'case "replacement"', 'case "replacement-accept"', "store.reserveSession", "store.markBookingPaid", "store.createReplacementRequest"]) {
   if (!integratedAppSource.includes(marker)) {
     throw new Error(`integrated Payment router missing ${marker}`);
   }
 }
-console.log("ok  Payment reserve and mark-paid routes remain delegated");
+assert.ok(integratedAppSource.includes('location.hash = /^#\\/replacement\\/[^/?#]+$/.test'),
+  "sign-in handoff must preserve the private replacement route");
+console.log("ok  Payment reserve, replacement, and mark-paid routes remain delegated");
 for (const marker of ['case "release-reservation"', 'case "defer-to"', 'case "copy-fps"']) {
   if (!integratedAppSource.includes(marker)) {
     throw new Error(`integrated Payment router missing ${marker}`);
@@ -6516,6 +6585,101 @@ if (renderingExceptionResult !== false
   throw new Error("Leaflet rendering exceptions must return false with fallback copy");
 }
 console.log("ok  inline free-event map renders fallback for lookup, loader, and rendering failures");
+
+// Manual HYROX replacement lifecycle: local mode preserves payer ownership
+// until an approved member is claimed and an Admin confirms the handover.
+installLocalFixtures({ withMemberBooking: true });
+const replacementFixture = JSON.parse(mem.get("itc.prototype.v1"));
+replacementFixture.users.push({
+  id: "replacement-member", role: "member", status: "approved", fullName: "Replacement Member",
+  preferredName: "Replacement", email: "replacement@example.test",
+});
+mem.set("itc.prototype.v1", JSON.stringify(replacementFixture));
+store.load();
+store.signIn("member@example.test");
+const replacementBooking = store.getBooking("fixture-booking");
+assert.ok(replacementBooking, "replacement lifecycle needs a confirmed HYROX booking");
+const payerId = replacementBooking.userId;
+const payerPaymentRef = replacementBooking.paymentRef;
+const replacementRequest = await store.createReplacementRequest(replacementBooking.id, Date.now());
+assert.equal(replacementRequest.status, "pending");
+assert.ok(replacementRequest.inviteToken);
+assert.equal(store.replacementInviteForToken(replacementRequest.inviteToken).inviteToken, undefined);
+const pendingBookingHtml = views.viewBooking(replacementBooking.id);
+assert.match(pendingBookingHtml, /Share via WhatsApp/);
+assert.match(pendingBookingHtml, /wa\.me/);
+assert.match(pendingBookingHtml, /I can’t attend — arrange a replacement/);
+await assert.rejects(
+  () => store.createReplacementRequest(replacementBooking.id, Date.now()),
+  /already active/i,
+);
+store.signIn("replacement@example.test");
+const pendingInviteHtml = await views.viewReplacementInvite(replacementRequest.inviteToken);
+assert.match(pendingInviteHtml, /Accept replacement/);
+assert.doesNotMatch(pendingInviteHtml, /@example/);
+const acceptedReplacement = await store.acceptReplacement(replacementRequest.inviteToken, Date.now());
+assert.equal(acceptedReplacement.status, "accepted");
+assert.equal(store.getBooking(replacementBooking.id).replacementUserId, null,
+  "accepted replacement must not change the attendee before Admin confirmation");
+store.signIn("admin@example.test");
+const pendingAdminRequests = await store.replacementRequestsForAdmin();
+assert.equal(pendingAdminRequests.length, 1);
+assert.equal(pendingAdminRequests[0].status, "accepted");
+assert.equal(pendingAdminRequests[0].originalDisplayName, "Tester");
+assert.equal(pendingAdminRequests[0].replacementDisplayName, "Replacement");
+assert.equal("inviteToken" in pendingAdminRequests[0], false);
+assert.equal("email" in pendingAdminRequests[0], false);
+assert.equal("paymentReference" in (pendingAdminRequests[0].snapshot || {}), false);
+assert.equal("privateSecret" in (pendingAdminRequests[0].snapshot || {}), false);
+const pendingAdminPayments = await views.viewAdmin("payments");
+assert.match(pendingAdminPayments, /Pending Admin confirmation/);
+assert.match(pendingAdminPayments, /Replacement/);
+assert.match(pendingAdminPayments, /Confirm replacement/);
+assert.match(pendingAdminPayments, /Reject replacement/);
+store.signIn("member@example.test");
+const memberAdminView = await views.viewAdmin("payments");
+assert.deepEqual(memberAdminView, { redirect: "#/account" });
+store.signIn("replacement@example.test");
+await assert.rejects(
+  () => store.acceptReplacement(replacementRequest.inviteToken, Date.now()),
+  /no longer available/i,
+);
+store.signIn("admin@example.test");
+const confirmedReplacement = await store.decideReplacement(
+  replacementRequest.id, true, null, Date.now()
+);
+assert.equal(confirmedReplacement.status, "confirmed");
+const confirmedBooking = store.getBooking(replacementBooking.id);
+assert.equal(confirmedBooking.userId, payerId, "replacement must preserve payer ownership");
+assert.equal(confirmedBooking.paymentRef, payerPaymentRef, "replacement must preserve payment reference");
+assert.equal(confirmedBooking.replacementUserId, "replacement-member");
+assert.equal(store.effectiveAttendeeId(confirmedBooking), "replacement-member");
+assert.deepEqual(store.attendeesFor(store.getSession(confirmedBooking.sessionId)), ["Replacement M."]);
+store.signIn("replacement@example.test");
+assert.match(views.viewBooking(replacementBooking.id), /You’re booked in/);
+assert.match(views.viewBooking(replacementBooking.id), /HK\$180/);
+assert.equal(store.receiptsForUser("replacement-member").length, 0);
+assert.equal(store.replacementAuditForRequest(replacementRequest.id).length, 3);
+store.signIn("admin@example.test");
+assert.equal(
+  (await store.decideReplacement(replacementRequest.id, true, null, Date.now())).status,
+  "confirmed",
+  "repeated Admin confirmation must be idempotent",
+);
+console.log("ok  local HYROX replacement claim, audit, confirmation, and payer preservation");
+
+store.signIn("member@example.test");
+const confirmedBookingHtml = views.viewBooking(replacementBooking.id);
+assert.match(confirmedBookingHtml, /Replacement confirmed/);
+assert.match(confirmedBookingHtml, /payer and receipt owner/);
+assert.doesNotMatch(confirmedBookingHtml, /Create private invite/);
+assert.equal(views.replacementShareUrl("invite-token"), "#/replacement/invite-token");
+const confirmedInviteHtml = await views.viewReplacementInvite(replacementRequest.inviteToken);
+assert.match(confirmedInviteHtml, /Replacement confirmed/);
+assert.doesNotMatch(confirmedInviteHtml, new RegExp(replacementRequest.inviteToken));
+store.signOut();
+assert.match(await views.viewReplacementInvite(replacementRequest.inviteToken), /Sign in to view this invite/);
+console.log("ok  replacement route preserves sign-in gate, privacy, and confirmed-member copy");
 
 console.log(failures ? `\n${failures} FAILURE(S)` : "\nAll smoke tests passed.");
 process.exit(failures ? 1 : 0);

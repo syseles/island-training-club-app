@@ -4456,6 +4456,123 @@ select pg_temp.op_assert(
   'migration must preserve a custom Midtown booking snapshot'
 );
 
+-- =====================================================================
+-- Manual HYROX replacement requests
+-- =====================================================================
+
+do $$
+declare
+  v_booking_id constant uuid := '13000000-0000-0000-0000-000000000001';
+  v_receipt_id constant uuid := '14000000-0000-0000-0000-000000000001';
+  v_session_id constant text := concat('hyrox', '-bft-', '2099-01-03');
+  v_token constant text := repeat('a', 64);
+  v_created jsonb;
+  v_invite jsonb;
+  v_accepted jsonb;
+  v_confirmed jsonb;
+  v_request_id uuid;
+begin
+  perform ensure_operational_sessions(date '2099-01-03', 1);
+  insert into public.operational_bookings (
+    id, profile_id, session_id, status, pay_deadline_at, payment_method,
+    payment_reference, paid_at, snapshot
+  ) values (
+    v_booking_id,
+    'bb000000-0000-0000-0000-00000000b001',
+    v_session_id,
+    'confirmed', now() + interval '1 day', 'payme', 'REPLACEMENT-TEST', now(),
+    '{"name":"ITC HYROX","kind":"paid","price_hkd":180}'::jsonb
+  );
+  insert into public.operational_receipts (
+    id, receipt_number, booking_id, profile_id, session_id,
+    amount_hkd, payment_method, issued_by
+  ) values (
+    v_receipt_id, 'ITC-2099-9901', v_booking_id,
+    'bb000000-0000-0000-0000-00000000b001', v_session_id,
+    180, 'payme', 'aa000000-0000-0000-0000-00000000a001'
+  );
+
+  perform set_config('request.jwt.claim.sub', 'dd000000-0000-0000-0000-00000000d001', true);
+  set local role authenticated;
+  begin
+    select public.create_operational_replacement_request(
+      v_booking_id, v_token, now() + interval '12 hours'
+    ) into v_created;
+    raise exception 'non-owner should not create a replacement';
+  exception when others then
+    if sqlerrm not like '%Booking not found%' then raise; end if;
+  end;
+  reset role;
+
+  perform set_config('request.jwt.claim.sub', 'bb000000-0000-0000-0000-00000000b001', true);
+  set local role authenticated;
+  select public.create_operational_replacement_request(
+    v_booking_id, v_token, now() + interval '12 hours'
+  ) into v_created;
+  perform pg_temp.op_assert(v_created ->> 'status' = 'pending', 'replacement create should be pending');
+  v_request_id := (v_created ->> 'requestId')::uuid;
+  begin
+    select public.create_operational_replacement_request(
+      v_booking_id, repeat('b', 64), now() + interval '12 hours'
+    ) into v_created;
+    raise exception 'second active replacement should fail';
+  exception when others then
+    if sqlerrm not like '%already active%' then raise; end if;
+  end;
+  reset role;
+
+  perform set_config('request.jwt.claim.sub', 'dd000000-0000-0000-0000-00000000d001', true);
+  set local role authenticated;
+  select public.get_operational_replacement_invite(v_token) into v_invite;
+  perform pg_temp.op_assert(not (v_invite ? 'tokenHash'), 'invite payload must not expose token hash');
+  select public.accept_operational_replacement_request(v_token) into v_accepted;
+  perform pg_temp.op_assert(v_accepted ->> 'status' = 'accepted', 'first approved claimant should win');
+  begin
+    select public.accept_operational_replacement_request(v_token) into v_accepted;
+    raise exception 'second claim should fail';
+  exception when others then
+    if sqlerrm not like '%no longer available%' then raise; end if;
+  end;
+  reset role;
+
+  perform set_config('request.jwt.claim.sub', 'aa000000-0000-0000-0000-00000000a001', true);
+  set local role authenticated;
+  perform public.list_operational_replacement_requests();
+  select public.admin_decide_operational_replacement(v_request_id, true, null) into v_confirmed;
+  perform pg_temp.op_assert(v_confirmed ->> 'status' = 'confirmed', 'Admin should confirm accepted replacement');
+  perform pg_temp.op_assert(
+    (select profile_id = 'bb000000-0000-0000-0000-00000000b001'::uuid
+            and replacement_profile_id = 'dd000000-0000-0000-0000-00000000d001'::uuid
+            and payment_reference = 'REPLACEMENT-TEST'
+       from public.operational_bookings where id = v_booking_id),
+    'confirmation must preserve payer and payment fields'
+  );
+  perform pg_temp.op_assert(
+    (select profile_id = 'bb000000-0000-0000-0000-00000000b001'::uuid
+       from public.operational_receipts where id = v_receipt_id),
+    'confirmation must preserve receipt owner'
+  );
+  perform pg_temp.op_assert(
+    (select count(*) = 3
+       from public.operational_booking_replacement_audit where request_id = v_request_id),
+    'replacement audit must preserve each lifecycle action'
+  );
+  perform pg_temp.op_assert(
+    (select count(*) = 1
+       from public.get_operational_attendee_names(v_session_id)
+      where display_name = 'Other T.'),
+    'confirmed replacement should appear as the effective attendee'
+  );
+  perform pg_temp.op_assert(
+    not exists (
+      select 1 from public.get_operational_attendee_names(v_session_id)
+       where display_name = 'Member T.'
+    ),
+    'original payer should leave the effective attendee roster'
+  );
+  reset role;
+end $$;
+
 rollback;
 
 -- =====================================================================

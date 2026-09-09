@@ -26,6 +26,8 @@ const LIVE_TABLES = [
   "operational_rsvp_counts",
   "operational_hyrox_cycles",
   "operational_hyrox_queue_entries",
+  "operational_booking_replacement_requests",
+  "operational_booking_replacement_audit",
 ];
 
 const cutoverMarker = "itc.live.operations.backend.v1";
@@ -48,6 +50,7 @@ const liveCache = {
   rsvpCounts: new Map(),
   hyroxCycles: new Map(),
   hyroxQueues: [],
+  replacementRequests: [],
   rsvpCountError: null,
   loaded: false,
   loading: null,
@@ -189,6 +192,47 @@ function parseTimestamp(value) {
   return Number.isFinite(timestamp) ? timestamp : null;
 }
 
+function buildReplacementRequestRow(row) {
+  if (!row) return null;
+  const value = Array.isArray(row) ? row[0] : row;
+  if (!value) return null;
+  const rawSnapshot = value.snapshot || {};
+  const snapshot = {
+    name: rawSnapshot.name || null,
+    dateISO: rawSnapshot.dateISO || rawSnapshot.session_date || null,
+    time: rawSnapshot.time || rawSnapshot.start_time || null,
+    location: rawSnapshot.location || rawSnapshot.venue || null,
+    price: rawSnapshot.price ?? rawSnapshot.price_hkd ?? null,
+  };
+  return {
+    requestId: value.requestId ?? value.request_id ?? null,
+    bookingId: value.bookingId ?? value.booking_id ?? null,
+    status: value.status || null,
+    originalDisplayName: value.originalDisplayName ?? value.original_display_name ?? null,
+    replacementDisplayName: value.replacementDisplayName ?? value.replacement_display_name ?? null,
+    sessionId: value.sessionId ?? value.session_id ?? null,
+    cycleId: value.cycleId ?? value.cycle_id ?? null,
+    snapshot: Object.values(snapshot).some((item) => item !== null) ? snapshot : null,
+    createdAt: parseTimestamp(value.createdAt ?? value.created_at),
+    expiresAt: parseTimestamp(value.expiresAt ?? value.expires_at),
+    acceptedAt: parseTimestamp(value.acceptedAt ?? value.accepted_at),
+    declinedAt: parseTimestamp(value.declinedAt ?? value.declined_at),
+    cancelledAt: parseTimestamp(value.cancelledAt ?? value.cancelled_at),
+    rejectedAt: parseTimestamp(value.rejectedAt ?? value.rejected_at),
+    confirmedAt: parseTimestamp(value.confirmedAt ?? value.confirmed_at),
+    decisionReason: value.decisionReason ?? value.decision_reason ?? null,
+  };
+}
+
+function cacheReplacementRequest(row) {
+  const request = buildReplacementRequestRow(row);
+  if (!request?.requestId) return request;
+  const index = liveCache.replacementRequests.findIndex((item) => item.requestId === request.requestId);
+  if (index >= 0) liveCache.replacementRequests[index] = request;
+  else liveCache.replacementRequests.push(request);
+  return request;
+}
+
 function buildBookingRow(row, sessionsById = null) {
   const snapshot = row.snapshot || {};
   const session = sessionsById?.get(row.session_id) || null;
@@ -223,6 +267,9 @@ function buildBookingRow(row, sessionsById = null) {
     paymentRejectionReason: row.payment_rejection_reason || null,
     attendedAt: parseTimestamp(row.attended_at),
     attendedBy: row.attended_by || null,
+    replacementUserId: row.replacement_profile_id || null,
+    replacementConfirmedAt: parseTimestamp(row.replacement_confirmed_at),
+    replacementConfirmedBy: row.replacement_confirmed_by || null,
     snapshot: {
       ...snapshot,
       price: snapshot.price_hkd ?? snapshot.price ?? session?.price ?? null,
@@ -311,6 +358,10 @@ function replaceState(payload) {
     (payload.hyroxCycles || []).map((row) => [row.id, row])
   );
   liveCache.hyroxQueues = payload.hyroxQueues || [];
+  if (payload.replacementRequests) {
+    liveCache.replacementRequests = payload.replacementRequests
+      .map(buildReplacementRequestRow).filter(Boolean);
+  }
   liveCache.templates = payload.templates || [];
   liveCache.bookings = payload.bookings;
   liveCache.queues = payload.queues;
@@ -407,7 +458,10 @@ function operationalProblem(error) {
   if (message.includes("Waitlist is only for full sessions")) return new Error("Waitlist is only for full sessions.");
   if (message.includes("Session is not full")) return new Error("Session is not full.");
   if (message.includes("Interest list is only")) return new Error("Interest list is only for closed Midtown sessions.");
-  if (message.includes("Activity venue is fixed.")) return new Error("Activity venue is fixed.");
+  if (message.includes("Activity venue is fixed.")
+      || message.includes("replacement invite")
+      || message.includes("replacement request")
+      || message.includes("replacement")) return new Error(message);
   return new Error(message || "Unable to save — try again.");
 }
 
@@ -652,6 +706,12 @@ export async function startOperationalRealtime() {
     .on("postgres_changes",
       { event: "*", schema: "public", table: "operational_hyrox_queue_entries" },
       () => scheduleRealtimeRefresh())
+    .on("postgres_changes",
+      { event: "*", schema: "public", table: "operational_booking_replacement_requests" },
+      () => scheduleRealtimeRefresh())
+    .on("postgres_changes",
+      { event: "*", schema: "public", table: "operational_booking_replacement_audit" },
+      () => scheduleRealtimeRefresh())
     .subscribe();
   subscription = channel;
   return channel;
@@ -825,8 +885,90 @@ export function liveBookingById(id) {
   return liveCache.bookings.find((b) => b.id === id) || null;
 }
 
+export function liveReplacementRequestForBooking(bookingId) {
+  return liveCache.replacementRequests
+    .filter((request) => request.bookingId === bookingId)
+    .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0))[0] || null;
+}
+
+export function liveReplacementRequestByToken() {
+  // Raw invite tokens are intentionally never cached in memory or localStorage.
+  return null;
+}
+
 export function liveReceiptById(id) {
   return liveCache.receipts.find((r) => r.id === id) || null;
+}
+
+export async function hashReplacementToken(token) {
+  const value = String(token || "");
+  if (!value || !globalThis.crypto?.subtle) {
+    throw new Error("Secure replacement invite hashing is unavailable.");
+  }
+  const bytes = new TextEncoder().encode(value);
+  const digest = await globalThis.crypto.subtle.digest("SHA-256", bytes);
+  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+function replacementExpiryISO(expiresAt) {
+  const timestamp = expiresAt instanceof Date ? expiresAt.getTime() : Number(expiresAt);
+  if (Number.isFinite(timestamp)) return new Date(timestamp).toISOString();
+  const parsed = Date.parse(expiresAt);
+  if (!Number.isFinite(parsed)) throw new Error("Replacement invite expiry is invalid.");
+  return new Date(parsed).toISOString();
+}
+
+export async function liveCreateReplacementRequest(bookingId, tokenHash, expiresAt) {
+  const row = await runOperationalRpc("create_operational_replacement_request", {
+    p_booking_id: bookingId,
+    p_token_hash: tokenHash,
+    p_expires_at: replacementExpiryISO(expiresAt),
+  });
+  return cacheReplacementRequest(row);
+}
+
+export async function liveReplacementInvite(tokenHash) {
+  const row = await runOperationalRpc("get_operational_replacement_invite", {
+    p_token_hash: tokenHash,
+  }, { skipRefresh: true });
+  return buildReplacementRequestRow(row);
+}
+
+export async function liveAcceptReplacement(tokenHash) {
+  const row = await runOperationalRpc("accept_operational_replacement_request", {
+    p_token_hash: tokenHash,
+  });
+  return cacheReplacementRequest(row);
+}
+
+export async function liveDeclineReplacement(tokenHash) {
+  const row = await runOperationalRpc("decline_operational_replacement_request", {
+    p_token_hash: tokenHash,
+  });
+  return cacheReplacementRequest(row);
+}
+
+export async function liveCancelReplacement(requestId) {
+  const row = await runOperationalRpc("cancel_operational_replacement_request", {
+    p_request_id: requestId,
+  });
+  return cacheReplacementRequest(row);
+}
+
+export async function liveListReplacementRequests() {
+  const rows = await runOperationalRpc("list_operational_replacement_requests", {}, { skipRefresh: true });
+  const requests = (rows || []).map(buildReplacementRequestRow).filter(Boolean);
+  liveCache.replacementRequests = requests;
+  return requests;
+}
+
+export async function liveDecideReplacement(requestId, confirm, reason) {
+  const row = await runOperationalRpc("admin_decide_operational_replacement", {
+    p_request_id: requestId,
+    p_confirm: !!confirm,
+    p_reason: String(reason || "").trim() || null,
+  });
+  return cacheReplacementRequest(row);
 }
 
 export async function liveSweepHyroxDeadlines({ refresh = true, now = Date.now() } = {}) {

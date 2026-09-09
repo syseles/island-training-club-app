@@ -69,6 +69,10 @@ const esc = (s) =>
 
 const todayISO = () => todayHktISO();
 
+export function replacementShareUrl(token) {
+  return `#/replacement/${encodeURIComponent(String(token || ""))}`;
+}
+
 const fmtDay = (ts) =>
   new Date(ts).toLocaleDateString("en-HK", {
     timeZone: "Asia/Hong_Kong",
@@ -2182,6 +2186,88 @@ export function viewPay(bookingId) {
     </form>`;
 }
 
+// --- Manual HYROX replacement invite -----------------------------------------------------------
+
+export async function viewReplacementInvite(token) {
+  let inviteToken = "";
+  try {
+    inviteToken = decodeURIComponent(String(token || "")).trim();
+  } catch {
+    inviteToken = "";
+  }
+  const user = store.currentUser();
+  if (!user) {
+    return `<div class="kicker">HYROX replacement</div>
+      <h1 class="display sm mt16">Sign in to view this invite.</h1>
+      <p class="subcopy mt8">This private link can only be accepted by an approved ITC member.</p>
+      <a class="btn mt16" href="#/account">Sign in</a>`;
+  }
+  if (user.status !== "approved") {
+    return `<div class="kicker">HYROX replacement</div>
+      <h1 class="display sm mt16">Approved membership required.</h1>
+      <p class="subcopy mt8">Ask an ITC leader to approve your membership before accepting a replacement invite.</p>
+      <a class="btn mt16" href="#/account">Go to Account</a>`;
+  }
+
+  let request = null;
+  try {
+    request = isLive()
+      ? await liveOps.liveReplacementInvite(await liveOps.hashReplacementToken(inviteToken))
+      : store.replacementInviteForToken(inviteToken);
+  } catch {
+    request = null;
+  }
+  if (!request) {
+    return `<div class="kicker">HYROX replacement</div>
+      <h1 class="display sm mt16">Invite unavailable.</h1>
+      <p class="subcopy mt8">This private invite may be invalid, expired, already claimed, or no longer available.</p>
+      <a class="btn ghost mt16" href="#/schedule">Back to Schedule</a>`;
+  }
+
+  const snapshot = request.snapshot || {};
+  const session = request.sessionId ? store.getSession(request.sessionId) : null;
+  const dateISO = session?.dateISO || snapshot.dateISO || snapshot.session_date;
+  const time = session?.time || snapshot.time || snapshot.start_time;
+  const venue = session?.location || snapshot.location || snapshot.venue || "Venue pending";
+  const when = dateISO ? `${fmtDate(dateISO)}${time ? ` · ${fmtTime(String(time).slice(0, 5))}` : ""}` : "HYROX session";
+  const isOriginal = request.originalUserId && request.originalUserId === user.id;
+  let stateCopy = "";
+  let actions = "";
+  if (request.status === "pending") {
+    stateCopy = isOriginal
+      ? "Share this single-use invite with an approved ITC member."
+      : "Accepting this does not transfer payment. An Admin must confirm the handover first.";
+    actions = isOriginal
+      ? `<a class="btn mt16" href="#/booking/${esc(request.bookingId)}">View booking</a>`
+      : `<div class="btn-row mt16"><button class="btn" type="button" data-action="replacement-accept" data-token="${esc(inviteToken)}">Accept replacement</button><button class="btn ghost" type="button" data-action="replacement-decline" data-token="${esc(inviteToken)}">Decline</button></div>`;
+  } else if (request.status === "accepted") {
+    stateCopy = "An approved member accepted this invite. ITC is reviewing the handover; the original attendee remains in place until confirmation.";
+  } else if (request.status === "confirmed") {
+    stateCopy = "ITC confirmed this replacement. The approved member is now the attendee; the original member remains payer and receipt owner.";
+  } else {
+    stateCopy = `This invite is ${request.status || "unavailable"}.`;
+  }
+
+  const inviteHeading = request.status === "confirmed"
+    ? "Replacement confirmed."
+    : request.status === "accepted" ? "Pending Admin confirmation."
+      : "Take this ITC place.";
+  return `<a class="back-link" href="#/schedule">← Schedule</a>
+    <div class="kicker mt16">HYROX replacement</div>
+    <h1 class="display sm mt16">${inviteHeading}</h1>
+    <p class="subcopy mt8">${esc(stateCopy)}</p>
+    <div class="card mt16"><div class="card-body">
+      <div class="receipt-lines" style="margin-top:0;border-top:0">
+        <div class="line"><span>Session</span><strong>ITC HYROX</strong></div>
+        <div class="line"><span>When</span><strong>${esc(when)}</strong></div>
+        <div class="line"><span>Where</span><strong>${esc(venue)}</strong></div>
+        <div class="line total"><span>Payment</span><strong>Already paid by original member</strong></div>
+      </div>
+    </div></div>
+    ${actions}
+    <p class="muted small mt16">The place stays on the same HYROX session and venue. No refund, payment transfer, or new charge is created.</p>`;
+}
+
 // --- Booking confirmation / manage ------------------------------------------------------------
 
 function currentBookingFor(userId, sessionId) {
@@ -2193,7 +2279,8 @@ function currentBookingFor(userId, sessionId) {
 export function viewBooking(bookingId) {
   const b = store.getBooking(bookingId);
   const user = store.currentUser();
-  if (!b || !user || (b.userId !== user.id && !isAdminRole(user.role))) {
+  const isConfirmedAttendee = !!b?.replacementConfirmedAt && b.replacementUserId === user?.id;
+  if (!b || !user || (b.userId !== user.id && !isAdminRole(user.role) && !isConfirmedAttendee)) {
     return viewNotFound("Booking not found.");
   }
   const s = b.snapshot;
@@ -2272,18 +2359,42 @@ export function viewBooking(bookingId) {
             <button class="btn ghost sm" type="button" data-action="join-hyrox-switch-queue" data-booking="${b.id}" data-session="${target?.id}">${esc(queueName)}</button></div>`}
       </div></div>`;
     }
-    if (targets.length) {
-      // No-deferral policy: confirmed paid bookings do not offer self-service
-      // deferral. Members who can't attend should contact ITC so the
-      // collector can adjust headcount and arrange credit follow-up. The
-      // store still exposes `deferBooking` for store-level callers (Admin
-      // cycle cancellation uses it), but the booking detail screen no
-      // longer surfaces the action.
-      actions += `
-      <div class="card mt16"><div class="card-body">
-        <h3>I can’t attend — arrange a replacement</h3>
-        <p class="muted small">Your paid booking is final — no refund or deferral. If an approved ITC friend is taking your place, contact ITC so an Admin can record and confirm the manual replacement.</p>
-      </div></div>`;
+    // No-deferral policy: confirmed paid bookings do not offer self-service
+    // deferral. Members who can't attend can arrange a manual replacement.
+    const replacement = store.replacementRequestForBooking(b.id);
+    if (mine && Number(s.price) > 0
+        && (replacement?.status === "confirmed" || store.replacementEligible(b).ok)) {
+      const inviteToken = store.replacementInviteTokenForBooking(b.id);
+      const shareUrl = inviteToken ? replacementShareUrl(inviteToken) : "";
+      const shareText = shareUrl
+        ? `I have an ITC HYROX place available for ${fmtDate(s.dateISO)} at ${assignedSession?.location || s.location || "Venue pending"}. If you’re an approved ITC member and can take it, accept it here: ${shareUrl}`
+        : "";
+      const shareHref = shareText ? `https://wa.me/?text=${encodeURIComponent(shareText)}` : "";
+      if (!replacement || ["declined", "cancelled", "rejected", "expired"].includes(replacement.status)) {
+        actions += `<div class="card mt16 replacement-panel"><div class="card-body">
+          <h3>I can’t attend — arrange a replacement</h3>
+          <p class="muted small">Your paid booking is final — no refund or deferral. If an approved ITC friend is taking your place, contact ITC so an Admin can record and confirm the manual replacement. Payment and receipt ownership stay with you.</p>
+          <button class="btn mt12" type="button" data-action="replacement-create" data-booking="${esc(b.id)}">Create private invite</button>
+        </div></div>`;
+      } else if (replacement.status === "pending") {
+        actions += `<div class="card mt16 replacement-panel"><div class="card-body">
+          <h3>I can’t attend — arrange a replacement</h3>
+          <p class="muted small">Share this single-use invite before ${esc(fmtDay(replacement.expiresAt))}. Your booking remains yours until Admin confirmation.</p>
+          ${shareHref ? `<a class="btn mt12" href="${esc(shareHref)}" target="_blank" rel="noopener">Share via WhatsApp</a>` : `<p class="muted small mt12">The private link is available immediately after creating the invite.</p>`}
+          <button class="btn ghost mt8" type="button" data-action="replacement-cancel" data-request="${esc(replacement.id || replacement.requestId)}">Cancel invite</button>
+        </div></div>`;
+      } else if (replacement.status === "accepted") {
+        actions += `<div class="card mt16 replacement-panel"><div class="card-body">
+          <h3>Pending Admin confirmation</h3>
+          <p class="muted small">${esc(replacement.replacementDisplayName || "An approved member")} accepted the invite. Your booking and attendance remain unchanged until Admin confirmation.</p>
+        </div></div>`;
+      } else if (replacement.status === "confirmed") {
+        const attendee = b.replacementUserId ? store.effectiveAttendeeForBooking(b) : null;
+        actions += `<div class="card mt16 replacement-panel"><div class="card-body">
+          <h3>Replacement confirmed</h3>
+          <p class="muted small">${esc(attendee?.preferredName || attendee?.fullName || replacement.replacementDisplayName || "The approved member")} is now the attendee. You remain the payer and receipt owner.</p>
+        </div></div>`;
+      }
     }
   } else {
     const label =
@@ -2416,7 +2527,7 @@ export async function viewAdmin(tab = "members") {
     } catch (error) {
       console.warn("Unable to load Membership Details phone for payout form", error);
     }
-    body = adminOps(user, memberUsers, profilePhone);
+    body = await adminOps(user, memberUsers, profilePhone);
   }
 
   return `
@@ -2486,7 +2597,8 @@ function adminPaymentRoster({ id, label, dateISO, venue, bookings, memberUsers, 
 function adminAttendanceSession(session, memberUsers) {
   const directory = new Map((memberUsers || []).map((member) => [member.id, member]));
   const displayName = (booking) => {
-    const member = directory.get(booking.userId);
+    const attendeeId = store.effectiveAttendeeId(booking);
+    const member = directory.get(attendeeId);
     return member ? (member.fullName || member.preferredName || "Member") : "Member";
   };
   const bookings = store.attendanceBookingsForSession(session.id);
@@ -2677,7 +2789,7 @@ function adminHyroxWeeklyBookingSetup(memberUsers) {
   </details>`;
 }
 
-function adminOps(viewer, memberUsers, profilePhone = "") {
+async function adminOps(viewer, memberUsers, profilePhone = "") {
   const upcoming = store.upcomingSessions(21).filter((s) => s.category === "HYROX" && !sessionStarted(s));
   const thisWeekSat = upcoming[0]?.dateISO;
   const dutyUser = thisWeekSat ? store.collectorFor(`hyrox-bft-${thisWeekSat}`) : null;
@@ -2711,6 +2823,7 @@ function adminOps(viewer, memberUsers, profilePhone = "") {
     </div></div>
     </details>`;
 
+  const replacementCard = await adminReplacementReview();
   const pendingCard = `
     <details class="admin-section mt24">
       <summary><h2>Pending payments</h2></summary>
@@ -2733,7 +2846,29 @@ function adminOps(viewer, memberUsers, profilePhone = "") {
   return `
     ${dutyCard}
     ${pendingCard}
+    ${replacementCard}
     ${adminHyroxWeeklyBookingSetup(memberUsers)}`;
+}
+
+async function adminReplacementReview() {
+  const requests = await store.replacementRequestsForAdmin();
+  const active = requests.filter((request) => ["pending", "accepted"].includes(request.status));
+  const rows = active.map((request) => {
+    const waiting = request.status === "pending";
+    const session = request.snapshot || {};
+    return `<div class="replacement-admin-row">
+      <div class="who"><strong>${esc(request.originalDisplayName)}${request.replacementDisplayName ? ` → ${esc(request.replacementDisplayName)}` : ""}</strong>
+        <span>${esc(session.name || "ITC HYROX")} · ${esc(session.dateISO || "Date pending")}</span></div>
+      <div class="replacement-admin-status"><span class="badge ${waiting ? "neutral" : "warn"}">${waiting ? "Waiting for member" : "Pending Admin confirmation"}</span>
+        ${waiting ? `<span class="muted small">Private invite has not been claimed.</span>` : `<div class="btn-row two"><button class="btn sm" type="button" data-action="replacement-decision" data-request="${esc(request.requestId)}" data-confirmed="1">Confirm replacement</button><button class="btn danger ghost sm" type="button" data-action="replacement-decision" data-request="${esc(request.requestId)}" data-confirmed="0">Reject replacement</button></div>`}
+      </div>
+    </div>`;
+  }).join("");
+  return `<details class="admin-section mt24" open>
+    <summary><h2>HYROX replacements${active.length ? ` <span class="badge warn">${active.length}</span>` : ""}</h2></summary>
+    <p class="muted small mt8">Review accepted handovers. The original member remains payer and receipt owner; only confirmation changes the attendee.</p>
+    ${rows || `<div class="empty mt8">No HYROX replacement requests waiting for review.</div>`}
+  </details>`;
 }
 
 // Weekly paid-session setup controls (time, note, venue TBC) live

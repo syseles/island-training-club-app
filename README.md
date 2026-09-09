@@ -12,7 +12,7 @@ The prototype implements the selected "Night Circuit" direction and the confirme
 
 - Free vs paid activity classification everywhere (home, schedule, detail).
 - Wednesday Night Training is free, open attendance — no booking, no capacity, no checkout. Actions are Add to Calendar (.ics download) and Get Directions.
-- Weekly HYROX uses one shared 32-place BFT/Midtown pool at a fixed price, with automatic recurring parent-card provisioning, Monday opening, venue allocation, confirmation, receipt, and member-area management. Quarry Bay remains a separate direct-booking session.
+- Weekly HYROX uses one shared 32-place BFT/Midtown pool at a fixed price, with automatic recurring parent-card provisioning, Monday opening, venue allocation, confirmation, receipt, and member-area management. Quarry Bay remains a separate direct-booking session. A manual replacement workflow lets an approved member accept a single-use invite; Admin confirmation changes only the effective attendee, never the original payer or receipt owner. A manual replacement workflow lets an approved member accept a single-use invite; Admin confirmation changes only the effective attendee, never the original payer or receipt owner.
 - Account lifecycle: public visitor → application → leader approval → member. Pending applicants keep public access only.
 - Member area: upcoming bookings, receipts, payment history, profile.
 - Admin area: combined member/application management, activity controls, Giving operations, and Payments with compact, expandable financial-state and waitlist rows plus time-gated paid-session attendance check-in. BFT/Midtown share one financial roster and weekly waitlist; allocated venues show their incoming switch queues separately. Island ECC uses the same layout for its independent session waitlist. Weekly setup keeps this Saturday prominent and groups the next three Saturdays under a collapsed Upcoming weeks preview, with Hong Kong registration-opening dates and matching Island ECC cards.
@@ -36,10 +36,10 @@ The design review remains available at `http://127.0.0.1:4173/references/itc-mob
 
 - Zero dependencies, no build step. Plain ES modules so the codebase stays easy to refine; the production stack is still an open decision.
 - The combined Testing candidate has explicit ownership boundaries:
-  - **Supabase in configured live mode:** identity, roles, applications, notifications, Giving campaigns, donor profiles, and operational sessions, bookings, queues, collector assignments, payout profiles, confirmations, RSVP totals, and receipts. Browser mutations use scoped RPCs; no real money is moved.
+  - **Supabase in configured live mode:** identity, roles, applications, notifications, Giving campaigns, donor profiles, operational sessions, bookings, queues, collector assignments, payout profiles, confirmations, RSVP totals, receipts, and manual HYROX replacement requests/audit history. Browser mutations use scoped RPCs; no real money is moved.
   - **`localStorage`:** local-mode prototype state plus device-local Community interactions, application drafts, and the last successfully rendered route for mobile handoff recovery. In live mode it may retain that identity-scoped route and a UUID-keyed payout handoff cache only after an authoritative Supabase save; forced hydration remains authoritative.
 - Navigation combines the Notification bell with a signed-in-only Giving tab. Admin navigation contains Members, Activities, Giving, and Payments. Dated free/RSVP and paid session administration is grouped under **Activities → Weekly Event Controls**; Admin → Payments keeps financial reconciliation and time-gated attendance together.
-- Persisted prototype state is **v22** and accepts/migrates existing **v9–v21** snapshots without discarding genuine domain records. Local pooled HYROX state is only a prototype parity seam; configured live Supabase remains authoritative.
+- Persisted prototype state is **v22** and accepts/migrates existing **v9–v21** snapshots without discarding genuine domain records. Local pooled HYROX and replacement state are prototype parity seams; configured live Supabase remains authoritative.
 - With Supabase configured, a new Google profile remains `pending` until its application is submitted and an Admin approves it. Pending and declined profiles cannot use Payment or Giving controls.
 - Without Supabase configuration, local state starts empty. Apply through the membership flow to create a local pending profile, which can then sign in again by email (no password).
 - `app/js/store.js` remains the backend seam across both ownership domains until a production backend is selected.
@@ -51,7 +51,7 @@ The design review remains available at `http://127.0.0.1:4173/references/itc-mob
 ### Deliberately not in the prototype
 
 - Merchandise shop (deferred in the phase-one brief).
-- Real payments, delivered email receipts, outbound messages, and a service worker (manifest is included; a cache layer would fight the refinement loop). Live in-app notifications are Supabase-backed when configured.
+- Real payments, delivered email receipts, automated WhatsApp/email delivery, and a service worker (manifest is included; a cache layer would fight the refinement loop). Replacement sharing opens a user-initiated WhatsApp link; live in-app notifications are Supabase-backed when configured.
 - Final privacy/guidelines copy and any post-workshop legal/policy revisions. The supplied Hyrox indemnity source is implemented; privacy and guidelines remain provisional.
 
 ## Selected Direction
