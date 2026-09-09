@@ -5825,3 +5825,69 @@ if (lateMounted) {
   throw new Error("stale activity host must not load Leaflet");
 }
 console.log("ok  inline map mount respects stale generation ownership");
+
+// Manual HYROX replacement RPC bridge: hashes stay client-side and live
+// mutations cache only redacted request metadata after authoritative refresh.
+const replacementBaseHandler = operationalRpcHandler;
+const replacementCalls = [];
+let replacementRow = {
+  requestId: "replacement-request-1",
+  bookingId: "booking-replacement-1",
+  status: "pending",
+  originalDisplayName: "Payer Member",
+  replacementDisplayName: null,
+  sessionId: "hyrox-bft-2099-01-03",
+  snapshot: { name: "ITC HYROX", kind: "paid", dateISO: "2099-01-03", time: "11:15" },
+  createdAt: "2098-12-31T00:00:00.000Z",
+  expiresAt: "2099-01-01T00:00:00.000Z",
+};
+operationalRpcHandler = (name, args) => {
+  if (!name.includes("replacement")) return replacementBaseHandler(name, args);
+  replacementCalls.push({ name, args: structuredClone(args) });
+  if (name === "admin_decide_operational_replacement") {
+    return Promise.resolve({ data: null, error: { message: "replacement decision unavailable" } });
+  }
+  if (name === "list_operational_replacement_requests") {
+    return Promise.resolve({ data: [replacementRow], error: null });
+  }
+  if (name === "accept_operational_replacement_request") {
+    replacementRow = { ...replacementRow, status: "accepted", replacementDisplayName: "Friend Member" };
+  }
+  return Promise.resolve({ data: replacementRow, error: null });
+};
+const replacementHash = await operations.hashReplacementToken("invite-token");
+assert.equal(
+  replacementHash,
+  "f9e3c47d452a8fab2dc56ef07d766534cb2cd31c5f63de7107412acc65daa5b8",
+  "replacement token hashing must use SHA-256",
+);
+const replacementExpiry = Date.parse("2099-01-01T00:00:00.000Z");
+const createdReplacement = await operations.liveCreateReplacementRequest(
+  "booking-replacement-1", replacementHash, replacementExpiry
+);
+assert.equal(createdReplacement.status, "pending");
+assert.deepEqual(replacementCalls.at(-1), {
+  name: "create_operational_replacement_request",
+  args: {
+    p_booking_id: "booking-replacement-1",
+    p_token_hash: replacementHash,
+    p_expires_at: "2099-01-01T00:00:00.000Z",
+  },
+});
+const invite = await operations.liveReplacementInvite(replacementHash);
+assert.equal(invite.originalDisplayName, "Payer Member");
+assert.equal(invite.tokenHash, undefined, "live invite mapping must omit token hashes");
+const acceptedReplacement = await operations.liveAcceptReplacement(replacementHash);
+assert.equal(acceptedReplacement.status, "accepted");
+const listedReplacements = await operations.liveListReplacementRequests();
+assert.equal(listedReplacements[0].status, "accepted");
+await assert.rejects(
+  () => operations.liveDecideReplacement("replacement-request-1", true, ""),
+  /replacement decision unavailable/,
+);
+assert.equal(
+  operations.liveReplacementRequestForBooking("booking-replacement-1").status,
+  "accepted",
+  "failed live replacement mutations must not overwrite the cache",
+);
+console.log("ok  live HYROX replacement hashing, RPC payloads, redaction, and failure preservation");
