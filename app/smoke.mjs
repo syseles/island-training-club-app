@@ -2608,6 +2608,13 @@ installLocalFixtures();
   const goingHtml = views.viewActivity(lunch.id);
   if (!goingHtml.includes("You're going") || !goingHtml.includes("rsvp-withdraw"))
     throw new Error("RSVP'd member should see the Going state and a withdraw action");
+  assert.match(goingHtml, /Who’s coming/);
+  assert.match(goingHtml, /Tester M\./);
+  store.signOut();
+  const visitorLunchHtml = views.viewActivity(lunch.id);
+  assert.match(visitorLunchHtml, /Member-only: the attendee list is visible after approval/);
+  assert.doesNotMatch(visitorLunchHtml, /Tester M\./);
+  store.signIn("member@example.test");
   const bookingPage = views.viewBooking(rsvp.id);
   if (!bookingPage.includes("You’re going") || bookingPage.includes("Can’t make it? Defer")
       || bookingPage.includes("View receipt"))

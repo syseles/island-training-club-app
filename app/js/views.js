@@ -593,7 +593,7 @@ export function viewActivity(sessionId) {
       : "";
 
   const attendees =
-    s.kind === "paid"
+    (s.kind === "paid" || s.kind === "rsvp")
       ? isMember
         ? `
       <div class="section-head"><h2>Who’s coming</h2></div>
