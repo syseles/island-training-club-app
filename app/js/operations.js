@@ -23,6 +23,7 @@ const LIVE_TABLES = [
   "collector_assignments",
   "collector_payout_profiles",
   "operational_session_venue_overrides",
+  "operational_rsvp_counts",
 ];
 
 const cutoverMarker = "itc.live.operations.backend.v1";
@@ -42,6 +43,8 @@ const liveCache = {
   assignments: new Map(),
   payout: new Map(),
   venueOverrides: new Map(),
+  rsvpCounts: new Map(),
+  rsvpCountError: null,
   loaded: false,
   loading: null,
   error: null,
@@ -69,15 +72,20 @@ function buildTemplateRow(row) {
     price_hkd: row.price_hkd,
     default_open: row.default_open,
     active: row.active,
+    category: row.category || null,
+    maps_query: row.maps_query || null,
+    requires_rsvp: !!row.requires_rsvp,
   };
 }
 
-function buildSessionRow(row) {
+function buildSessionRow(row, templatesById = null) {
   const dateISO = typeof row.session_date === "string"
     ? row.session_date.slice(0, 10)
     : new Date(row.session_date).toISOString().slice(0, 10);
   const date = new Date(`${dateISO}T00:00:00`);
   const metadata = PAID_ACTIVITY_METADATA.get(row.activity_id);
+  const template = templatesById?.get(row.activity_id) ?? null;
+  const oneOff = String(row.activity_id).startsWith("event-");
   const legacyMidtown = row.activity_id === "hyrox-midtown"
     && row.venue === "Midtown 28";
   const venue = legacyMidtown
@@ -85,14 +93,20 @@ function buildSessionRow(row) {
     : row.venue;
   const mapsQuery = legacyMidtown
     ? (metadata?.mapsQuery || row.venue)
-    : row.venue;
+    : (template?.maps_query || row.venue);
   return {
     id: row.id,
     activityId: row.activity_id,
-    name: row.activity_id === "hyrox-midtown" ? "ITC HYROX" : "ITC HYROX",
-    kind: "paid",
-    category: "HYROX",
-    weekday: 6,
+    // One-off events take their display name/category from their template;
+    // the recurring HYROX templates keep the historical labels.
+    name: template?.name || "ITC HYROX",
+    // Paid sessions take the reserve/pay pipeline; price-0 sessions are RSVP
+    // (headcount needed, e.g. the post-training lunch) when the template says
+    // so, otherwise plain free show-up events.
+    kind: Number(row.price_hkd) > 0 ? "paid" : (template?.requires_rsvp ? "rsvp" : "free"),
+    category: template?.category || (oneOff ? "Other" : "HYROX"),
+    weekday: date.getDay(),
+    oneOff,
     dateISO,
     date,
     time: String(row.start_time || "").slice(0, 5),
@@ -142,6 +156,13 @@ function buildBookingRow(row) {
       price: row.snapshot?.price_hkd ?? row.snapshot?.price ?? null,
       location: row.snapshot?.venue ?? row.snapshot?.location ?? null,
       name: row.snapshot?.name || (row.snapshot?.activity_id === "hyrox-midtown" ? "ITC HYROX" : "ITC HYROX"),
+      // DB snapshots store start_time ("HH:MM:SS"); the UI expects time
+      // ("HH:MM"). Map it or fmtTime crashes on undefined.
+      time: row.snapshot?.start_time
+        ? String(row.snapshot.start_time).slice(0, 5)
+        : row.snapshot?.time ?? null,
+      durationMin: row.snapshot?.duration_min ?? row.snapshot?.durationMin ?? null,
+      kind: row.snapshot?.kind ?? "paid",
       dateISO,
     },
     dateISO,
@@ -225,6 +246,19 @@ function replaceState(payload) {
   liveCache.venueOverrides = new Map(
     (payload.venueOverrides || []).map((row) => [row.sessionId, row])
   );
+  liveCache.rsvpCounts = new Map();
+  liveCache.rsvpCountError = payload.rsvpCountError || null;
+  if (!liveCache.rsvpCountError) {
+    for (const session of payload.sessions) {
+      if (session.kind === "rsvp") liveCache.rsvpCounts.set(session.id, 0);
+    }
+    for (const row of payload.rsvpCounts || []) {
+      const count = Number(row.going_count);
+      if (row.session_id && Number.isInteger(count) && count >= 0) {
+        liveCache.rsvpCounts.set(row.session_id, count);
+      }
+    }
+  }
   liveCache.loaded = true;
   liveCache.error = null;
   liveCache.updatedAt = Date.now();
@@ -270,10 +304,20 @@ function operationalProblem(error) {
 
 let hydrationPromise = null;
 
+async function fetchRsvpCounts() {
+  try {
+    const { data, error } = await supabase.rpc("get_operational_rsvp_counts");
+    if (error) throw operationalProblem(error);
+    return { rows: data || [], error: null };
+  } catch (err) {
+    return { rows: [], error: operationalProblem(err) };
+  }
+}
+
 async function fetchOperationalState() {
   if (!isLive() || !supabase) return null;
   const since = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
-  const [sessions, bookings, queues, receipts, assignments, payouts, templates, venueOverrides] = await Promise.all([
+  const [sessions, bookings, queues, receipts, assignments, payouts, templates, venueOverrides, rsvpCounts] = await Promise.all([
     supabase.from("operational_sessions").select("*").gte("session_date", since).order("session_date"),
     supabase.from("operational_bookings").select("*"),
     supabase.from("operational_queue_entries").select("*")
@@ -282,21 +326,28 @@ async function fetchOperationalState() {
     supabase.from("operational_receipts").select("*").order("issued_at", { ascending: false }),
     supabase.from("collector_assignments").select("*"),
     supabase.from("collector_payout_profiles").select("*"),
-    supabase.from("operational_activity_templates").select("*").eq("active", true).order("activity_id"),
+    supabase.from("operational_activity_templates").select("*").order("activity_id"),
     supabase.from("operational_session_venue_overrides").select("*"),
+    fetchRsvpCounts(),
   ]);
   for (const result of [sessions, bookings, queues, receipts, assignments, payouts, templates, venueOverrides]) {
     if (result.error) throw operationalProblem(result.error);
   }
+  // Templates hydrate before sessions so one-off event rows (inactive
+  // templates) can lend their name, category and maps query to the session.
+  const templateRows = (templates.data || []).map(buildTemplateRow);
+  const templatesById = new Map(templateRows.map((t) => [t.activity_id, t]));
   return {
-    sessions: (sessions.data || []).map(buildSessionRow),
-    templates: (templates.data || []).map(buildTemplateRow),
+    sessions: (sessions.data || []).map((row) => buildSessionRow(row, templatesById)),
+    templates: templateRows,
     bookings: (bookings.data || []).map(buildBookingRow),
     queues: (queues.data || []).map(buildQueueRow),
     receipts: (receipts.data || []).map(buildReceiptRow),
     assignments: (assignments.data || []).map(buildAssignmentRow),
     payouts: (payouts.data || []).map(buildPayoutRow),
     venueOverrides: (venueOverrides.data || []).map(buildVenueOverrideRow),
+    rsvpCounts: rsvpCounts.rows,
+    rsvpCountError: rsvpCounts.error,
   };
 }
 
@@ -318,7 +369,13 @@ export async function ensureLiveSessionWindow() {
 export async function hydrateOperationalState({ force = false } = {}) {
   if (!isLive() || !supabase) return null;
   if (liveCache.loaded && !force) return liveCache;
-  if (hydrationPromise) return hydrationPromise;
+  if (hydrationPromise) {
+    const pending = hydrationPromise;
+    if (!force) return pending;
+    try { await pending; } catch {}
+    if (hydrationPromise && hydrationPromise !== pending) return hydrationPromise;
+    if (hydrationPromise === pending) hydrationPromise = null;
+  }
   liveCache.loading = Promise.resolve().then(async () => {
     try {
       const payload = await fetchOperationalState();
@@ -334,11 +391,12 @@ export async function hydrateOperationalState({ force = false } = {}) {
       liveCache.loading = null;
     }
   });
-  hydrationPromise = liveCache.loading;
+  const pending = liveCache.loading;
+  hydrationPromise = pending;
   try {
-    return await hydrationPromise;
+    return await pending;
   } finally {
-    hydrationPromise = null;
+    if (hydrationPromise === pending) hydrationPromise = null;
   }
 }
 
@@ -357,6 +415,9 @@ export function operationalStateStatus() {
     loading: !!liveCache.loading,
     loaded: liveCache.loaded,
     error: liveCache.error ? String(liveCache.error.message || liveCache.error) : null,
+    rsvpCountError: liveCache.rsvpCountError
+      ? String(liveCache.rsvpCountError.message || liveCache.rsvpCountError)
+      : null,
     updatedAt: liveCache.updatedAt,
   };
 }
@@ -385,6 +446,9 @@ export async function startOperationalRealtime() {
       () => scheduleRealtimeRefresh())
     .on("postgres_changes",
       { event: "*", schema: "public", table: "operational_session_venue_overrides" },
+      () => scheduleRealtimeRefresh())
+    .on("postgres_changes",
+      { event: "*", schema: "public", table: "operational_rsvp_counts" },
       () => scheduleRealtimeRefresh())
     .subscribe();
   subscription = channel;
@@ -417,12 +481,34 @@ export async function runOperationalRpc(name, args, options = {}) {
   return data;
 }
 
+// Weekly venue overrides apply to live sessions too (e.g. the RSVP lunch),
+// not just locally-seeded free events. Read paths merge the override in so
+// every surface sees the current venue.
+function applyLiveVenueOverride(session) {
+  if (!session) return session;
+  const o = liveCache.venueOverrides.get(session.id);
+  if (!o) return session;
+  const out = { ...session };
+  if (o.location) out.location = o.location;
+  if (o.mapsQuery) out.mapsQuery = o.mapsQuery;
+  if (o.meetingLat != null && o.meetingLng != null) {
+    out.meetingLat = o.meetingLat;
+    out.meetingLng = o.meetingLng;
+  }
+  const display = String(out.location || "").trim();
+  const query = String(out.mapsQuery || "").trim();
+  if (display && display.toUpperCase() !== "TBC" && query && query.toUpperCase() !== "TBC") {
+    out.venueTBC = false;
+  }
+  return out;
+}
+
 export function getLiveSession(id) {
-  return liveCache.sessions.get(id) || null;
+  return applyLiveVenueOverride(liveCache.sessions.get(id)) || null;
 }
 
 export function listLiveSessions() {
-  return [...liveCache.sessions.values()];
+  return [...liveCache.sessions.values()].map(applyLiveVenueOverride);
 }
 
 export function liveActivityTemplates() {
@@ -457,6 +543,12 @@ export function liveConfirmedBookingsForSession(sessionId) {
   return liveCache.bookings.filter(
     (b) => b.sessionId === sessionId && b.status === "confirmed"
   );
+}
+
+export function liveRsvpCountFor(sessionId) {
+  return liveCache.rsvpCounts.has(sessionId)
+    ? liveCache.rsvpCounts.get(sessionId)
+    : null;
 }
 
 export function liveQueueForSession(sessionId) {
@@ -510,6 +602,43 @@ export async function liveCancelSession(sessionId, reason) {
   return runOperationalRpc("cancel_operational_session", {
     p_session_id: sessionId,
     p_reason: reason,
+  });
+}
+
+export async function liveReopenRsvp(sessionId) {
+  return runOperationalRpc("reopen_operational_rsvp", {
+    p_session_id: sessionId,
+  });
+}
+
+// One-off events: an inactive template + a single session row, created and
+// removed atomically server-side. Deletion is only allowed while the event
+// has no active bookings; afterwards admins cancel instead.
+export async function liveCreateEvent(payload) {
+  const row = await runOperationalRpc("create_operational_event", {
+    p_name: payload.name,
+    p_session_date: payload.dateISO,
+    p_start_time: payload.time,
+    p_duration_minutes: payload.durationMin,
+    p_venue: payload.location,
+    p_maps_query: payload.mapsQuery || null,
+    p_category: payload.category || "Other",
+    p_price_hkd: payload.price ?? 0,
+    p_capacity: payload.capacity ?? 20,
+  });
+  return row;
+}
+
+export async function liveDeleteEvent(sessionId) {
+  return runOperationalRpc("delete_operational_event", {
+    p_session_id: sessionId,
+  });
+}
+
+// RSVP withdraw is member self-service on price-0 sessions only.
+export async function liveWithdrawRsvp(bookingId) {
+  return runOperationalRpc("withdraw_operational_rsvp", {
+    p_booking_id: bookingId,
   });
 }
 

@@ -265,6 +265,42 @@ input, select, textarea { font: inherit; }
 
 .section-head a { font-size: 12px; color: var(--muted); }
 
+/* Collapsible Admin sub-sections — headers reveal their content on click */
+
+.admin-section > summary {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 30px 0 12px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.admin-section > summary::-webkit-details-marker { display: none; }
+
+.admin-section > summary h2 {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: 20px;
+  font-weight: 900;
+  letter-spacing: -.02em;
+}
+
+.admin-section > summary::after {
+  content: "";
+  width: 10px;
+  height: 10px;
+  border-right: 2px solid var(--muted);
+  border-bottom: 2px solid var(--muted);
+  transform: rotate(45deg);
+  transition: transform .15s ease;
+  flex: none;
+  align-self: center;
+}
+
+.admin-section[open] > summary::after { transform: rotate(-135deg); }
+
 /* ---- Badges ----------------------------------------------------------- */
 
 .badge {
