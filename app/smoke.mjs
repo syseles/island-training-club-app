@@ -5192,6 +5192,13 @@ if (restoredLegacyRun.location !== "Recurring Run Venue" || restoredLegacyRun.ve
   throw new Error("save then reset must not expose a legacy venueTBC flag");
 }
 
+store.setWeekVenue(wntSession.id, { location: null, mapsQuery: null });
+store.signIn("member@example.test");
+const wntTbcDetail = views.viewActivity(wntSession.id);
+if (!wntTbcDetail.includes("Meeting point to be confirmed — check back before Wednesday. Bring water and a friend.")) {
+  throw new Error("WNT TBC detail must include the complete meeting-point note");
+}
+store.signIn("admin@example.test");
 store.setWeekVenue(wntSession.id, {
   location: "Central Harbourfront — 7pm sharp",
   mapsQuery: "Central Harbourfront, Hong Kong",
@@ -5202,6 +5209,19 @@ if (decorated.location !== "Central Harbourfront — 7pm sharp"
     || decorated.venueTBC) {
   throw new Error("weekly venue must decorate the dated free session");
 }
+store.signIn("member@example.test");
+const wntConfirmedDetail = views.viewActivity(wntSession.id);
+if (!wntConfirmedDetail.includes("Bring water and a friend.")
+    || wntConfirmedDetail.includes("Meeting point to be confirmed")) {
+  throw new Error("confirmed WNT detail must remove the TBC meeting-point wording");
+}
+store.signIn("admin@example.test");
+const wntActivity = store.getActivity("wnt");
+store.saveActivity({ ...wntActivity, memberNote: "Meet by the red flag." });
+if (store.getSession(wntSession.id).memberNote !== "Meet by the red flag.") {
+  throw new Error("custom WNT leader notes must not be overwritten by venue text");
+}
+store.saveActivity({ ...wntActivity, memberNote: "Meeting point to be confirmed — check back before Wednesday. Bring water." });
 const venueNotesFor = (userId, sessionId) => store.notificationsFor(userId).filter(
   (n) => n.kind === "operational_session_venue_updated"
     && n.link === `#/activity/${sessionId}`
