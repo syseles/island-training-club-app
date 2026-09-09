@@ -43,7 +43,7 @@ const STORAGE_KEY = "itc.prototype.v1";
 const APPLY_DEVICE_KEY = "itc.device.id";
 const APPLY_DRAFT_KEY = "itc.apply.draft.v1";
 const APPLY_DRAFT_VERSION = 1;
-const STATE_VERSION = 19;
+const STATE_VERSION = 20;
 
 // Live-mode (Supabase) session cache. Avoids hammering the DB on every
 // page load. The TTL is short so role flips and welcome notifications
@@ -77,6 +77,7 @@ function freshState() {
     queues: {},
     hyroxCycles: {},
     hyroxCycleQueues: {},
+    replacementRequests: [],
     notifications: [],
     duty: {},
   };
@@ -149,6 +150,7 @@ function migrate() {
       || Array.isArray(state.hyroxCycles)) state.hyroxCycles = {};
   if (!state.hyroxCycleQueues || typeof state.hyroxCycleQueues !== "object"
       || Array.isArray(state.hyroxCycleQueues)) state.hyroxCycleQueues = {};
+  if (!Array.isArray(state.replacementRequests)) state.replacementRequests = [];
   // v14 carries forward the additive UUID-keyed operations map for every
   // accepted v9-v13 snapshot.
   for (const user of state.users) {
@@ -237,6 +239,17 @@ function migrate() {
     // remain untouched until a cycle explicitly references them.
     if (!state.hyroxCycles || Array.isArray(state.hyroxCycles)) state.hyroxCycles = {};
     if (!state.hyroxCycleQueues || Array.isArray(state.hyroxCycleQueues)) state.hyroxCycleQueues = {};
+  }
+  if (v < 20) {
+    // v20: manual HYROX replacement requests are additive. The booking owner
+    // remains payer/receipt owner; replacement fields affect identity only
+    // after an Admin confirms the handover.
+    if (!Array.isArray(state.replacementRequests)) state.replacementRequests = [];
+    for (const booking of state.bookings) {
+      booking.replacementUserId ??= null;
+      booking.replacementConfirmedAt ??= null;
+      booking.replacementConfirmedBy ??= null;
+    }
   }
   if (v < 16) {
     // v16: the recurring post-training lunch (RSVP kind, Meals category)
@@ -982,6 +995,39 @@ export function getBooking(id) {
   return state.bookings.find((b) => b.id === id) ?? null;
 }
 
+export function replacementRequestForBooking(bookingId) {
+  if (isLive()) return liveOps.liveReplacementRequestForBooking?.(bookingId) ?? null;
+  return state.replacementRequests.find((request) => request.bookingId === bookingId) ?? null;
+}
+
+export function replacementRequestByToken(token) {
+  const value = String(token || "").trim();
+  if (!value) return null;
+  if (isLive()) return liveOps.liveReplacementRequestByToken?.(value) ?? null;
+  return state.replacementRequests.find((request) => request.inviteToken === value) ?? null;
+}
+
+export function effectiveAttendeeId(booking) {
+  return booking?.replacementUserId || booking?.userId || null;
+}
+
+export function replacementEligible(booking, now = Date.now()) {
+  if (!booking?.userId) return { ok: false, reason: "missing-owner" };
+  if (booking.status !== "confirmed") return { ok: false, reason: "not-confirmed" };
+  if (booking.replacementUserId) return { ok: false, reason: "already-replaced" };
+  const snapshot = booking.snapshot || {};
+  const isHyrox = snapshot.kind === "paid"
+    && (String(snapshot.name || "").toUpperCase().includes("HYROX")
+      || String(booking.sessionId || "").startsWith("hyrox-"));
+  if (!isHyrox) return { ok: false, reason: "not-paid-hyrox" };
+  const session = booking.sessionId ? getSession(booking.sessionId) : null;
+  if (session?.cancelled) return { ok: false, reason: "cancelled" };
+  const startsAt = hktEventStartMs(snapshot.dateISO, snapshot.time);
+  if (!Number.isFinite(startsAt) || startsAt <= now) return { ok: false, reason: "started" };
+  const expiresAt = Math.min(startsAt, now + 24 * 60 * 60 * 1000);
+  return { ok: true, expiresAt };
+}
+
 export function listHyroxCycles() {
   if (isLive()) return liveOps.listLiveHyroxCycles();
   return [];
@@ -1149,6 +1195,9 @@ function reserveApprovedSession(userId, sessionOrId, now = Date.now()) {
     deferredTo: null,
     deferredFrom: null,
     reminderSentAt: null,
+    replacementUserId: null,
+    replacementConfirmedAt: null,
+    replacementConfirmedBy: null,
     snapshot: snapshotFor(session),
   };
   state.bookings.push(booking);
@@ -1445,6 +1494,7 @@ export function reserveHyroxCycle(userId, cycleId, preference, fallbackAcknowled
     createdAt: now, reservedAt: now, payDeadlineAt: cycle.holderGraceDeadlineAt,
     paymentMarkedAt: null, paidAt: null, paidMethod: null, paymentRef: null,
     confirmedBy: null, deferredTo: null, deferredFrom: null,
+    replacementUserId: null, replacementConfirmedAt: null, replacementConfirmedBy: null,
     venuePreference: preference, fallbackAcknowledgedAt: now,
     promotedFromWaitlistAt: null, allocationState: null, allocationSource: null,
     allocatedAt: null, allocationSnapshot: null, paymentRejectedAt: null,
@@ -1463,6 +1513,7 @@ function createHyroxWaitlistBooking(cycle, entry, now, deadline, promoted = fals
     status: "reserved", createdAt: now, reservedAt: now, payDeadlineAt: deadline,
     paymentMarkedAt: null, paidAt: null, paidMethod: null, paymentRef: null,
     confirmedBy: null, deferredTo: null, deferredFrom: null,
+    replacementUserId: null, replacementConfirmedAt: null, replacementConfirmedBy: null,
     venuePreference: entry.venuePreference, fallbackAcknowledgedAt: entry.fallbackAcknowledgedAt,
     promotedFromWaitlistAt: promoted ? now : null, allocationState: null,
     allocationSource: null, allocatedAt: null, allocationSnapshot: null,
@@ -2575,6 +2626,9 @@ export async function rsvpSession(userId, sessionOrId, now = Date.now()) {
     deferredTo: null,
     deferredFrom: null,
     reminderSentAt: null,
+    replacementUserId: null,
+    replacementConfirmedAt: null,
+    replacementConfirmedBy: null,
     snapshot: snapshotFor(session),
   };
   state.bookings.push(booking);

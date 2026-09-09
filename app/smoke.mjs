@@ -120,7 +120,7 @@ localStorage.setItem("itc.prototype.v1", JSON.stringify({
   duty: {},
 }));
 const renamedState = store.load();
-assert.equal(renamedState.version, 19, "legacy state must advance through the HYROX identifier, venue and pooled-cycle migrations");
+assert.equal(renamedState.version, 20, "legacy state must advance through the HYROX identifier, venue, pooled-cycle, and replacement migrations");
 assert.ok(renamedState.activities.some((activity) => activity.id === "hyrox-bft"));
 assert.ok(renamedState.activities.some((activity) => activity.id === "hyrox-quarry-bay"));
 assert.equal(renamedState.activities.some((activity) => activity.id === "hyrox"), false);
@@ -140,6 +140,37 @@ assert.equal(
   "10/F, Island ECC, Quarry Bay",
   "existing Quarry Bay booking snapshots must show the corrected venue"
 );
+store.resetLocalData();
+
+assert.equal(store.effectiveAttendeeId({ userId: "payer" }), "payer");
+assert.equal(
+  store.effectiveAttendeeId({ userId: "payer", replacementUserId: "friend" }),
+  "friend",
+);
+assert.equal(store.replacementEligible({ status: "reserved" }, Date.now()).ok, false);
+assert.equal(store.replacementEligible({ status: "attended" }, Date.now()).ok, false);
+assert.equal(store.replacementEligible({
+  status: "confirmed",
+  userId: "payer",
+  snapshot: { kind: "paid", name: "ITC HYROX", dateISO: "2099-01-10", time: "11:15" },
+}, Date.now()).ok, true);
+const v19ReplacementFixture = structuredClone(store.load());
+v19ReplacementFixture.version = 19;
+for (const booking of v19ReplacementFixture.bookings) {
+  delete booking.replacementUserId;
+  delete booking.replacementConfirmedAt;
+  delete booking.replacementConfirmedBy;
+}
+delete v19ReplacementFixture.replacementRequests;
+localStorage.setItem("itc.prototype.v1", JSON.stringify(v19ReplacementFixture));
+const migratedReplacement = store.load();
+assert.equal(migratedReplacement.version, 20, "v20 replacement migration must advance the current v19 state");
+assert.ok(Array.isArray(migratedReplacement.replacementRequests));
+assert.ok(migratedReplacement.bookings.every((booking) =>
+  booking.replacementUserId === null
+  && booking.replacementConfirmedAt === null
+  && booking.replacementConfirmedBy === null
+));
 store.resetLocalData();
 const { existsSync, readFileSync } = await import("node:fs");
 const { resolve, dirname } = await import("node:path");
@@ -2725,8 +2756,8 @@ store.resetLocalData();
   localStorage.setItem("itc.prototype.v1", JSON.stringify(locationV13));
   store.load();
   const migratedV13 = JSON.parse(localStorage.getItem("itc.prototype.v1"));
-  if (migratedV13.version !== 19) {
-    throw new Error("v19 migration must persist version 19");
+  if (migratedV13.version !== 20) {
+    throw new Error("v20 migration must persist version 20");
   }
   const repairedWater = store.activities().find((activity) => activity.id === "water");
   if (repairedWater.location !== "TBC" || repairedWater.mapsQuery !== ""
@@ -4264,10 +4295,10 @@ console.log("ok  reset");
     failures++;
     console.error("FAIL v10 migration must clear session tied to a removed demo user");
   } else console.log("ok  v10 migration clears removed session");
-  if (migrated.version !== 19) {
+  if (migrated.version !== 20) {
     failures++;
-    console.error(`FAIL integrated migration must advance version to 19, got ${migrated.version}`);
-  } else console.log("ok  integrated migration advances genuine v9 state to v19");
+    console.error(`FAIL integrated migration must advance version to 20, got ${migrated.version}`);
+  } else console.log("ok  integrated migration advances genuine v9 state to v20");
 }
 
 {
@@ -4286,7 +4317,7 @@ console.log("ok  reset");
   store.load();
   const v14 = JSON.parse(mem.get("itc.prototype.v1"));
   const migratedUser = v14.users.find((user) => user.id === "real-v13-member");
-  if (v14.version !== 19 || !migratedUser) throw new Error("v19 migration lost the genuine member");
+  if (v14.version !== 20 || !migratedUser) throw new Error("v20 migration lost the genuine member");
   for (const field of ["indemnitySignature", "indemnitySignedAt", "indemnityFormVersion", "emergencyRelationship"]) {
     if (!(field in migratedUser) || migratedUser[field] !== null) {
       throw new Error(`v14 migration should initialize ${field} to null`);
@@ -4313,11 +4344,12 @@ console.log("ok  reset");
   }];
   localStorage.setItem("itc.prototype.v1", JSON.stringify(v18));
   const migrated = store.load();
-  if (migrated.version !== 19 || !migrated.hyroxCycles || !migrated.hyroxCycleQueues
+  if (migrated.version !== 20 || !migrated.hyroxCycles || !migrated.hyroxCycleQueues
+      || !Array.isArray(migrated.replacementRequests)
       || migrated.bookings[0]?.id !== "v18-booking") {
-    throw new Error("v19 migration must add pooled collections without losing v18 bookings");
+    throw new Error("v20 migration must add pooled and replacement collections without losing v18 bookings");
   }
-  console.log("ok  v19 migration preserves bookings and initializes pooled collections");
+  console.log("ok  v20 migration preserves bookings and initializes pooled/replacement collections");
 }
 {
   store.resetLocalData();
@@ -5180,11 +5212,11 @@ for (const fixture of sourceSnapshots) {
     && !Array.isArray(migrated.paymentPayouts);
   const suppliedPayoutsPreserved = fixture.version !== 12
     || migrated.paymentPayouts["real-admin"]?.fpsPhone === "+852 6000 0000";
-  if (migrated.version !== 19 || suppliedIds.some((id) => !serialized.includes(id))
+  if (migrated.version !== 20 || suppliedIds.some((id) => !serialized.includes(id))
       || !payoutMapValid || !suppliedPayoutsPreserved) {
     failures++;
-    console.error(`FAIL genuine v${fixture.version} fixture must reach v19 intact`);
-  } else console.log(`ok  genuine v${fixture.version} fixture reaches v19 intact`);
+    console.error(`FAIL genuine v${fixture.version} fixture must reach v20 intact`);
+  } else console.log(`ok  genuine v${fixture.version} fixture reaches v20 intact`);
 }
 
 for (const invalidCounter of [null, -1, 1.5, "broken"]) {
