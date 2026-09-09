@@ -738,3 +738,27 @@ revoke all on function public.get_operational_attendee_names(text)
   from public, anon, authenticated;
 grant execute on function public.get_operational_attendee_names(text)
   to authenticated;
+
+-- Realtime is additive so Admin/member views refresh after request decisions.
+do $$
+begin
+  if exists (select 1 from pg_publication where pubname = 'supabase_realtime')
+     and not exists (
+       select 1 from pg_publication_tables
+        where pubname = 'supabase_realtime'
+          and schemaname = 'public'
+          and tablename = 'operational_booking_replacement_requests'
+     ) then
+    alter publication supabase_realtime add table public.operational_booking_replacement_requests;
+  end if;
+  if exists (select 1 from pg_publication where pubname = 'supabase_realtime')
+     and not exists (
+       select 1 from pg_publication_tables
+        where pubname = 'supabase_realtime'
+          and schemaname = 'public'
+          and tablename = 'operational_booking_replacement_audit'
+     ) then
+    alter publication supabase_realtime add table public.operational_booking_replacement_audit;
+  end if;
+end;
+$$;
