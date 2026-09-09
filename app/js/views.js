@@ -544,7 +544,7 @@ export function viewHyroxRegistration(cycleId) {
     <p class="lede">Two gyms. One epic Saturday. Tell us which one feels right and we’ll do the rest.</p>
     <aside class="hyrox-no-deferral" aria-label="Booking policy">
       <span class="hyrox-no-deferral-icon" aria-hidden="true">${ICONS.shield}</span>
-      <p><strong>Once paid, this booking is final</strong> — no refund and no deferral. If you can’t attend, you may swap the spot with your fellow ITC friend.</p>
+      <p><strong>Once paid, this booking is final</strong> — no refund and no deferral. If you can’t attend, arrange a manual replacement with an approved ITC friend. No refund or payment transfer is processed in the app; an Admin must confirm the handover.</p>
     </aside>
     <form id="form-hyrox-reserve" class="card hyrox-reserve-card" data-cycle="${esc(cycle.id)}">
       <fieldset class="hyrox-preference-grid"><legend>Venue preference</legend>
@@ -2086,7 +2086,7 @@ export function viewCheckout(sessionId) {
     </div>
     <form id="form-reserve" class="mt16" data-session="${s.id}">
       <button class="btn" type="submit">Reserve spot · pay later</button>
-      <p class="muted small mt8 center">Once confirmed, this week is final. If you can’t attend, message the collector — ITC will follow up about credit for the missed session.</p>
+      <p class="muted small mt8 center">Once paid, this booking is final — no refund and no deferral. If you can’t attend, arrange a manual replacement with an approved ITC friend. No refund or payment transfer is processed in the app; an Admin must confirm the handover.</p>
     </form>`;
 }
 
@@ -2281,8 +2281,8 @@ export function viewBooking(bookingId) {
       // longer surfaces the action.
       actions += `
       <div class="card mt16"><div class="card-body">
-        <h3>Can’t make it?</h3>
-        <p class="muted small">This week is final once payment is confirmed. If you can’t attend, message the collector — ITC will adjust headcount and follow up about credit for the missed session.</p>
+        <h3>I can’t attend — arrange a replacement</h3>
+        <p class="muted small">Your paid booking is final — no refund or deferral. If an approved ITC friend is taking your place, contact ITC so an Admin can record and confirm the manual replacement.</p>
       </div></div>`;
     }
   } else {

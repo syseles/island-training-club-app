@@ -3772,7 +3772,41 @@ store.signIn("member@example.test");
   assert.doesNotMatch(html, /Can.t make it\? Defer/, "no-deferral: defer card heading must not render");
   assert.equal(typeof store.deferTargetsFor, "function", "store must keep deferTargetsFor for store-level callers");
   assert.equal(typeof store.deferBooking, "function", "store must keep deferBooking for store-level callers");
-  console.log("ok  no-deferral policy hides defer UI while keeping store hooks");
+  // Lock the exact booking-detail disclaimer copy. Any wording change must
+  // update this test so documentation, leadership review, and code stay in sync.
+  assert.match(html, /I can.t attend — arrange a replacement/,
+    "booking detail must offer an intuitive manual replacement action");
+  assert.match(html, /Your paid booking is final — no refund or deferral\.[\s\S]*approved ITC friend[\s\S]*Admin can record and confirm the manual replacement/,
+    "booking detail must explain the manual replacement process");
+  assert.doesNotMatch(html, /credit.followup|credit for the missed|sort your credit|follow up about your credit/i,
+    "booking detail must not promise any credit follow-up");
+  // The swap-with-a-friend line is only for active member-driven bookings.
+  // Admin cancellation notifications must NOT carry that line.
+  assert.doesNotMatch(
+    html, /ITC cancelled this HYROX session|contact the collector/,
+    "active booking detail must not include the admin-cancellation wording",
+  );
+  // Lock the checkout (sign-up) page copy. The viewCheckout helper redirects
+  // to the booking page once a member already has a confirmed booking, so we
+  // pick a fresh paid session the fixture member has not yet reserved.
+  store.signOut();
+  const checkoutPaid = store.upcomingSessions(14).find(
+    (s) => s.kind === "paid" && s.id !== paid.id && !store.isMidtown(s) && !data.sessionStarted(s),
+  );
+  store.signIn("member@example.test");
+  const checkoutHtml = views.viewCheckout(checkoutPaid.id);
+  assert.equal(typeof checkoutHtml, "string", "checkout page must render a string when the member has no prior reservation");
+  assert.match(checkoutHtml, /Once paid, this booking is final — no refund and no deferral/,
+    "checkout page must show the agreed no-refund, no-deferral disclaimer");
+  assert.match(checkoutHtml, /arrange a manual replacement with an approved ITC friend/,
+    "checkout page must explain the manual replacement option");
+  assert.doesNotMatch(checkoutHtml, /credit.followup|credit for the missed|sort your credit|follow up about your credit/i,
+    "checkout page must not promise any credit follow-up");
+  assert.doesNotMatch(
+    checkoutHtml, /ITC cancelled this HYROX session|contact the collector/,
+    "checkout (sign-up) page must not include the admin-cancellation wording",
+  );
+  console.log("ok  no-deferral policy clarifies the manual replacement path");
 }
 
 // --- Admin upcoming weeks: visible planning must not open registration ---
@@ -5131,6 +5165,21 @@ console.log("ok  reset");
   }
   assert.doesNotMatch(registration, /\b11:15(?:am|pm)\b/,
     "registration copy must use the uppercase '11:15AM' form, not a lowercase suffix");
+  // Lock the agreed no-deferral disclaimer copy on the registration page.
+  assert.match(registration, /Once paid, this booking is final/,
+    "HYROX registration must include the agreed no-refund, no-deferral disclaimer opener");
+  assert.match(registration, /no refund and no deferral/,
+    "HYROX registration must include the agreed no-refund, no-deferral clause");
+  assert.match(registration, /arrange a manual replacement with an approved ITC friend/,
+    "HYROX registration must explain the manual replacement option");
+  assert.doesNotMatch(registration, /credit.followup|credit for the missed|sort your credit|follow up about your credit/i,
+    "HYROX registration must not promise any credit follow-up");
+  // Lock the registration page horizontal padding so the left margin never
+  // regresses back to flush-with-edge. Enforced at the CSS layer because
+  // the rendered HTML doesn't carry the padding values.
+  const registrationCss = readFileSync(resolve(__dirnameSmoke, "styles.css"), "utf8");
+  assert.match(registrationCss, /\.hyrox-registration\s*\{[^{}]*padding(?:-inline)?:\s*[^;]*\b(?:4px|6px|8px|10px|12px|14px|16px|18px|20px|24px)\b/,
+    "HYROX registration block must declare explicit non-zero horizontal padding so the page never flushes against the left edge");
   console.log("ok  pooled HYROX Schedule and registration views explain the automatic venue plan");
 }
 {
