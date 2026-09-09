@@ -116,6 +116,7 @@ git commit -m "feat(replacements): add local eligibility and state migration"
   - `decline_operational_replacement_request(text)`
   - `cancel_operational_replacement_request(uuid)`
   - `admin_decide_operational_replacement(uuid, boolean, text)`
+  - `list_operational_replacement_requests()` — Admin-only redacted rows with no token hash.
 
 - [ ] **Step 1: Write failing SQL contract assertions**
 
@@ -180,6 +181,7 @@ git commit -m "feat(replacements): add live request schema and RPCs"
 - `liveAcceptReplacement(tokenHash)` and `liveDeclineReplacement(tokenHash)` → Promise<request>.
 - `liveCancelReplacement(requestId)` → Promise<request>.
 - `liveDecideReplacement(requestId, confirm, reason)` → Promise<request>.
+- `liveListReplacementRequests()` → Promise<redacted request[]> for Admin Payments.
 
 - [ ] **Step 1: Write failing live/mock tests**
 
