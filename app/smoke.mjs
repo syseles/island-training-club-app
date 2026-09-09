@@ -490,6 +490,13 @@ if (!existsSync(attendeeNamesMigrationPath)) {
   throw new Error("approved attendee names migration must exist");
 }
 const attendeeNamesMigrationSource = readFileSync(attendeeNamesMigrationPath, "utf8");
+const rsvpAttendeeNamesMigrationPath = resolve(
+  __dirnameSmoke, "../supabase/migrations/20260910000002_operational_attendee_names_rsvp.sql"
+);
+assert.ok(existsSync(rsvpAttendeeNamesMigrationPath), "RSVP attendee-name migration must be present");
+const rsvpAttendeeNamesMigrationSource = readFileSync(rsvpAttendeeNamesMigrationPath, "utf8");
+assert.match(rsvpAttendeeNamesMigrationSource, /get_operational_attendee_names/);
+assert.match(rsvpAttendeeNamesMigrationSource, /requires_rsvp/);
 const replacementMigrationPath = resolve(
   __dirnameSmoke, "../supabase/migrations/20260910000001_operational_replacement_requests.sql"
 );
