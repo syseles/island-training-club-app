@@ -2647,7 +2647,7 @@ export function interestPosition(userId, sessionId) {
 export function getSession(sessionId) {
   if (isLive()) {
     const live = liveOps.getLiveSession(sessionId);
-    if (live) return live;
+    if (live) return applyWntLeaderNote({ ...live });
     // Free events live only in local state; the live cache has no row.
     const local = findSession(state.activities, sessionId);
     if (local) return decorateFreeSession(local);
@@ -2669,10 +2669,30 @@ function hasConfirmedVenue(location, mapsQuery) {
     && query && query.toUpperCase() !== "TBC");
 }
 
+const WNT_TBC_NOTE = "Meeting point to be confirmed — check back before Wednesday. Bring water and a friend.";
+const WNT_CONFIRMED_NOTE = "Bring water and a friend.";
+const WNT_CANONICAL_NOTES = new Set([
+  "Meeting point to be confirmed — check back before Wednesday. Bring water.",
+  WNT_TBC_NOTE,
+  WNT_CONFIRMED_NOTE,
+]);
+
+function applyWntLeaderNote(session) {
+  if (session?.activityId !== "wnt" || !WNT_CANONICAL_NOTES.has(String(session.memberNote || ""))) {
+    return session;
+  }
+  return {
+    ...session,
+    memberNote: hasConfirmedVenue(session.location, session.mapsQuery)
+      ? WNT_CONFIRMED_NOTE
+      : WNT_TBC_NOTE,
+  };
+}
+
 function decorateSession(s) {
   const o = state.sessionOverrides[s.id];
-  if (!o) return s;
   const out = { ...s };
+  if (!o) return applyWntLeaderNote(out);
   if (o.time) out.time = o.time;
   if (o.cancelled) { out.cancelled = true; out.cancelReason = o.cancelled; }
   if (o.venueTBC) { out.venueTBC = true; out.location = "TBC"; }
@@ -2685,19 +2705,19 @@ function decorateSession(s) {
   const point = normalizeMeetingPoint(o.meetingLat, o.meetingLng);
   if (point) Object.assign(out, { meetingLat: point.lat, meetingLng: point.lng });
   if (hasConfirmedVenue(out.location, out.mapsQuery)) out.venueTBC = false;
-  return out;
+  return applyWntLeaderNote(out);
 }
 
 function decorateFreeSession(s) {
   const o = liveOps.getLiveVenueOverride(s.id);
-  if (!o) return s;
   const out = { ...s };
+  if (!o) return applyWntLeaderNote(out);
   if (o.location) out.location = o.location;
   if (o.mapsQuery) out.mapsQuery = o.mapsQuery;
   const point = normalizeMeetingPoint(o.meetingLat, o.meetingLng);
   if (point) Object.assign(out, { meetingLat: point.lat, meetingLng: point.lng });
   if (hasConfirmedVenue(out.location, out.mapsQuery)) out.venueTBC = false;
-  return out;
+  return applyWntLeaderNote(out);
 }
 
 export function weekVenueOverride(sessionId) {
