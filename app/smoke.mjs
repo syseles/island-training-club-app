@@ -341,6 +341,41 @@ if (!existsSync(attendeeNamesMigrationPath)) {
   throw new Error("approved attendee names migration must exist");
 }
 const attendeeNamesMigrationSource = readFileSync(attendeeNamesMigrationPath, "utf8");
+const replacementMigrationPath = resolve(
+  __dirnameSmoke, "../supabase/migrations/20260910000001_operational_replacement_requests.sql"
+);
+if (!existsSync(replacementMigrationPath)) {
+  throw new Error("HYROX replacement migration must exist");
+}
+const replacementMigrationSource = readFileSync(replacementMigrationPath, "utf8");
+for (const marker of [
+  "operational_booking_replacement_requests",
+  "replacement_profile_id",
+  "replacement_confirmed_at",
+  "replacement_confirmed_by",
+  "create_operational_replacement_request",
+  "get_operational_replacement_invite",
+  "accept_operational_replacement_request",
+  "decline_operational_replacement_request",
+  "cancel_operational_replacement_request",
+  "admin_decide_operational_replacement",
+  "security definer",
+  "set search_path = public",
+  "for update",
+  "revoke all",
+]) {
+  assert.ok(replacementMigrationSource.toLowerCase().includes(marker.toLowerCase()),
+    `replacement migration missing ${marker}`);
+}
+assert.match(replacementMigrationSource,
+  /create unique index[\s\S]*?where status in \('pending', 'accepted'\)/i,
+  "replacement requests must allow only one active request per booking");
+assert.match(replacementMigrationSource,
+  /select[\s\S]*?for update[\s\S]*?operational_bookings/i,
+  "replacement mutations must lock the booking before changing identity");
+assert.doesNotMatch(replacementMigrationSource,
+  /grant (?:all|select|insert|update|delete)[^\n]*on (?:table )?public\.operational_booking_replacement_requests/i,
+  "browser roles must not receive direct replacement-table writes");
 const operationalIntegrationSource = readFileSync(
   resolve(__dirnameSmoke, "../supabase/tests/operational_backend_integration.sql"),
   "utf8"
