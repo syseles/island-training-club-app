@@ -108,6 +108,13 @@ const sept5LunchCleanupMigrationSource = readFileSync(
   resolve(__dirnameSmoke, "../supabase/migrations/20260905000003_cleanup_sept5_lunch_duplicate.sql"),
   "utf8"
 );
+const attendeeNamesMigrationPath = resolve(
+  __dirnameSmoke, "../supabase/migrations/20260910000002_operational_attendee_names_rsvp.sql"
+);
+assert.ok(existsSync(attendeeNamesMigrationPath), "RSVP attendee-name migration must be present");
+const attendeeNamesMigrationSource = readFileSync(attendeeNamesMigrationPath, "utf8");
+assert.match(attendeeNamesMigrationSource, /get_operational_attendee_names/);
+assert.match(attendeeNamesMigrationSource, /requires_rsvp/);
 const operationalIntegrationSource = readFileSync(
   resolve(__dirnameSmoke, "../supabase/tests/operational_backend_integration.sql"),
   "utf8"
