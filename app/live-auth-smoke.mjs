@@ -5884,6 +5884,7 @@ assert.equal(listedReplacements[0].status, "accepted");
 assert.equal("tokenHash" in listedReplacements[0], false, "Admin replacement rows must not expose token hashes");
 assert.equal("email" in listedReplacements[0], false, "Admin replacement rows must not expose contact fields");
 assert.equal("paymentReference" in listedReplacements[0], false, "Admin replacement rows must not expose payment references");
+assert.equal("paymentReference" in (listedReplacements[0].snapshot || {}), false, "Admin replacement snapshots must be redacted");
 await assert.rejects(
   () => operations.liveDecideReplacement("replacement-request-1", true, ""),
   /replacement decision unavailable/,

@@ -193,6 +193,14 @@ function buildReplacementRequestRow(row) {
   if (!row) return null;
   const value = Array.isArray(row) ? row[0] : row;
   if (!value) return null;
+  const rawSnapshot = value.snapshot || {};
+  const snapshot = {
+    name: rawSnapshot.name || null,
+    dateISO: rawSnapshot.dateISO || rawSnapshot.session_date || null,
+    time: rawSnapshot.time || rawSnapshot.start_time || null,
+    location: rawSnapshot.location || rawSnapshot.venue || null,
+    price: rawSnapshot.price ?? rawSnapshot.price_hkd ?? null,
+  };
   return {
     requestId: value.requestId ?? value.request_id ?? null,
     bookingId: value.bookingId ?? value.booking_id ?? null,
@@ -201,7 +209,7 @@ function buildReplacementRequestRow(row) {
     replacementDisplayName: value.replacementDisplayName ?? value.replacement_display_name ?? null,
     sessionId: value.sessionId ?? value.session_id ?? null,
     cycleId: value.cycleId ?? value.cycle_id ?? null,
-    snapshot: value.snapshot || null,
+    snapshot: Object.values(snapshot).some((item) => item !== null) ? snapshot : null,
     createdAt: parseTimestamp(value.createdAt ?? value.created_at),
     expiresAt: parseTimestamp(value.expiresAt ?? value.expires_at),
     acceptedAt: parseTimestamp(value.acceptedAt ?? value.accepted_at),

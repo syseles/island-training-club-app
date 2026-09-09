@@ -6031,6 +6031,8 @@ assert.equal(pendingAdminRequests[0].originalDisplayName, "Tester");
 assert.equal(pendingAdminRequests[0].replacementDisplayName, "Replacement");
 assert.equal("inviteToken" in pendingAdminRequests[0], false);
 assert.equal("email" in pendingAdminRequests[0], false);
+assert.equal("paymentReference" in (pendingAdminRequests[0].snapshot || {}), false);
+assert.equal("privateSecret" in (pendingAdminRequests[0].snapshot || {}), false);
 const pendingAdminPayments = await views.viewAdmin("payments");
 assert.match(pendingAdminPayments, /Pending Admin confirmation/);
 assert.match(pendingAdminPayments, /Replacement/);
