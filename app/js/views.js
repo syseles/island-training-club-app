@@ -757,7 +757,7 @@ export function viewActivity(sessionId, attendeeNames) {
       : "";
 
   const attendees =
-    s.kind === "paid"
+    (s.kind === "paid" || s.kind === "rsvp")
       ? isMember
         ? (() => {
             const names = attendeeNames === undefined ? store.attendeesFor(s) : attendeeNames;
