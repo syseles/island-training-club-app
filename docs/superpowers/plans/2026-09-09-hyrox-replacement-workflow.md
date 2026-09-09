@@ -172,6 +172,7 @@ git commit -m "feat(replacements): add live request schema and RPCs"
 
 **Files:**
 - Modify: `app/js/operations.js`.
+- Create: `app/replacement-operations-smoke.mjs` — focused live bridge contract test that is not blocked by unrelated auth-view regressions.
 - Test: `app/live-auth-smoke.mjs` and `app/smoke.mjs`.
 
 **Interfaces:**
@@ -199,7 +200,7 @@ Map replacement rows without exposing token hashes to views. Route all live muta
 
 - [ ] **Step 4: Run GREEN**
 
-Run both smoke suites, syntax-check `app/js/operations.js`, and run `git diff --check`.
+Run `node app/smoke.mjs`, `node app/replacement-operations-smoke.mjs`, and `node app/live-auth-smoke.mjs`; the focused bridge suite must pass even when the inherited live-auth suite is blocked. Syntax-check `app/js/operations.js`, and run `git diff --check`.
 
 - [ ] **Step 5: Commit**
 
