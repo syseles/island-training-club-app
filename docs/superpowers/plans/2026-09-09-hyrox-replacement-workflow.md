@@ -136,7 +136,6 @@ security definer
 set search_path = public
 for update
 revoke all
-p_arrived is null
 ```
 
 Add SQL integration cases for owner-only creation, approved-member claim, first-claim locking, duplicate-session rejection, Admin-only decision, payment/receipt preservation, and replacement fields after confirmation.
