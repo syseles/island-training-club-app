@@ -935,12 +935,14 @@ for (const marker of [
   }
 }
 console.log("ok  composed Payment/Auth UI markers coexist");
-for (const marker of ['case "pay"', 'case "form-reserve"', 'case "form-mark-paid"', "store.reserveSession", "store.markBookingPaid"]) {
+for (const marker of ['case "pay"', 'case "form-reserve"', 'case "form-mark-paid"', 'case "replacement"', 'case "replacement-accept"', "store.reserveSession", "store.markBookingPaid", "store.createReplacementRequest"]) {
   if (!integratedAppSource.includes(marker)) {
     throw new Error(`integrated Payment router missing ${marker}`);
   }
 }
-console.log("ok  Payment reserve and mark-paid routes remain delegated");
+assert.ok(integratedAppSource.includes('location.hash = /^#\\/replacement\\/[^/?#]+$/.test'),
+  "sign-in handoff must preserve the private replacement route");
+console.log("ok  Payment reserve, replacement, and mark-paid routes remain delegated");
 for (const marker of ['case "release-reservation"', 'case "defer-to"', 'case "copy-fps"']) {
   if (!integratedAppSource.includes(marker)) {
     throw new Error(`integrated Payment router missing ${marker}`);
@@ -6005,11 +6007,18 @@ const replacementRequest = await store.createReplacementRequest(replacementBooki
 assert.equal(replacementRequest.status, "pending");
 assert.ok(replacementRequest.inviteToken);
 assert.equal(store.replacementInviteForToken(replacementRequest.inviteToken).inviteToken, undefined);
+const pendingBookingHtml = views.viewBooking(replacementBooking.id);
+assert.match(pendingBookingHtml, /Share via WhatsApp/);
+assert.match(pendingBookingHtml, /wa\.me/);
+assert.match(pendingBookingHtml, /I can’t attend — arrange a replacement/);
 await assert.rejects(
   () => store.createReplacementRequest(replacementBooking.id, Date.now()),
   /already active/i,
 );
 store.signIn("replacement@example.test");
+const pendingInviteHtml = await views.viewReplacementInvite(replacementRequest.inviteToken);
+assert.match(pendingInviteHtml, /Accept replacement/);
+assert.doesNotMatch(pendingInviteHtml, /@example/);
 const acceptedReplacement = await store.acceptReplacement(replacementRequest.inviteToken, Date.now());
 assert.equal(acceptedReplacement.status, "accepted");
 assert.equal(store.getBooking(replacementBooking.id).replacementUserId, null,
@@ -6035,6 +6044,19 @@ assert.equal(
   "repeated Admin confirmation must be idempotent",
 );
 console.log("ok  local HYROX replacement claim, audit, confirmation, and payer preservation");
+
+store.signIn("member@example.test");
+const confirmedBookingHtml = views.viewBooking(replacementBooking.id);
+assert.match(confirmedBookingHtml, /Replacement confirmed/);
+assert.match(confirmedBookingHtml, /payer and receipt owner/);
+assert.doesNotMatch(confirmedBookingHtml, /Create private invite/);
+assert.equal(views.replacementShareUrl("invite-token"), "#/replacement/invite-token");
+const confirmedInviteHtml = await views.viewReplacementInvite(replacementRequest.inviteToken);
+assert.match(confirmedInviteHtml, /Replacement confirmed/);
+assert.doesNotMatch(confirmedInviteHtml, new RegExp(replacementRequest.inviteToken));
+store.signOut();
+assert.match(await views.viewReplacementInvite(replacementRequest.inviteToken), /Sign in to view this invite/);
+console.log("ok  replacement route preserves sign-in gate, privacy, and confirmed-member copy");
 
 console.log(failures ? `\n${failures} FAILURE(S)` : "\nAll smoke tests passed.");
 process.exit(failures ? 1 : 0);

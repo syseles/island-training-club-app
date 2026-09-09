@@ -872,7 +872,9 @@ export function liveBookingById(id) {
 }
 
 export function liveReplacementRequestForBooking(bookingId) {
-  return liveCache.replacementRequests.find((request) => request.bookingId === bookingId) || null;
+  return liveCache.replacementRequests
+    .filter((request) => request.bookingId === bookingId)
+    .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0))[0] || null;
 }
 
 export function liveReplacementRequestByToken() {

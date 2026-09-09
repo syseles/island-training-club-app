@@ -1766,6 +1766,12 @@ a.profile-row:hover .pr-text strong { color: var(--accent); }
   justify-content: center;
 }
 .hyrox-no-deferral-icon svg { width: 100%; height: 100%; }
+.replacement-panel { border-color: var(--line); background: rgba(202, 255, 49, 0.035); }
+.replacement-panel h3 { margin: 0; }
+.replacement-panel .btn { min-height: 44px; }
+@media (max-width: 420px) {
+  .replacement-panel .btn-row { grid-template-columns: 1fr; }
+}
 .hyrox-pool-card { display: grid; gap: 18px; padding: 4px; }
 .hyrox-cycle-row h3 { margin-bottom: 4px; }
 .hyrox-venue-options { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; padding: 0; }

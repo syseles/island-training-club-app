@@ -166,6 +166,7 @@ const NAV_FOR = {
   checkout: "account",
   pay: "account",
   booking: "account",
+  replacement: "account",
   receipt: "account",
   admin: "admin",
 };
@@ -458,6 +459,9 @@ async function render(generation = renderGeneration) {
       break;
     case "booking":
       out = views.viewBooking(arg);
+      break;
+    case "replacement":
+      out = await views.viewReplacementInvite(arg);
       break;
     case "receipt":
       out = views.viewReceipt(arg);
@@ -879,6 +883,43 @@ document.addEventListener("click", async (e) => {
       }
       break;
 
+    case "replacement-create":
+      if (controlBusy.has(el)) break;
+      try {
+        await withBusyControl(el, "Creating invite…", async () => {
+          await store.createReplacementRequest(el.dataset.booking, Date.now());
+          toast("Private replacement invite created — share it via WhatsApp");
+          await renderWithFeedback();
+        });
+      } catch (err) { toast(err.message || "Unable to create replacement invite", true); }
+      break;
+
+    case "replacement-accept":
+    case "replacement-decline": {
+      if (controlBusy.has(el)) break;
+      const accepting = action === "replacement-accept";
+      try {
+        await withBusyControl(el, accepting ? "Accepting…" : "Declining…", async () => {
+          if (accepting) await store.acceptReplacement(el.dataset.token, Date.now());
+          else await store.declineReplacement(el.dataset.token, Date.now());
+          toast(accepting ? "Replacement accepted — awaiting Admin confirmation" : "Replacement declined");
+          await renderWithFeedback();
+        });
+      } catch (err) { toast(err.message || "Unable to update replacement invite", true); }
+      break;
+    }
+
+    case "replacement-cancel":
+      if (controlBusy.has(el)) break;
+      try {
+        await withBusyControl(el, "Cancelling…", async () => {
+          await store.cancelReplacement(el.dataset.request, Date.now());
+          toast("Replacement invite cancelled");
+          await renderWithFeedback();
+        });
+      } catch (err) { toast(err.message || "Unable to cancel replacement invite", true); }
+      break;
+
     case "release-reservation":
       if (controlBusy.has(el)) break;
       if (confirm("Cancel this unpaid booking? Your spot will be released.")) {
@@ -1280,7 +1321,9 @@ document.addEventListener("submit", async (e) => {
         return;
       }
       toast(`Welcome back, ${res.user.preferredName || res.user.fullName}`);
-      location.hash = "#/home";
+      location.hash = /^#\/replacement\/[^/?#]+$/.test(location.hash)
+        ? location.hash
+        : "#/home";
       render();
       break;
     }
@@ -1829,7 +1872,7 @@ async function boot() {
       setTimeout(async () => {
         try {
           await store.getCurrentUser();
-          location.hash = "#/home";
+          if (!/^#\/replacement\/[^/?#]+$/.test(location.hash)) location.hash = "#/home";
           await renderWithFeedback();
           await maybeRedirectToApply();
         } catch (err) {

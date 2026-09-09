@@ -55,6 +55,7 @@ let liveGivingCampaign = null;
 // Supabase remains the identity directory. Payment Ops caches live profiles
 // in memory only; device-local persistence stores UUID-keyed operations.
 let livePaymentDirectory = new Map();
+const liveReplacementTokens = new Map();
 const LIVE_PROFILE_TTL_MS = 30_000;
 
 let state = null;
@@ -1010,6 +1011,11 @@ export function replacementRequestForBooking(bookingId) {
     .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0))[0] ?? null;
 }
 
+export function replacementInviteTokenForBooking(bookingId) {
+  if (isLive()) return liveReplacementTokens.get(bookingId) || null;
+  return replacementRequestForBooking(bookingId)?.inviteToken || null;
+}
+
 export function replacementRequestByToken(token) {
   const value = String(token || "").trim();
   if (!value) return null;
@@ -1099,6 +1105,7 @@ export async function createReplacementRequest(bookingId, now = Date.now()) {
     const token = globalThis.crypto?.randomUUID?.() || uid("replacement-invite");
     const hash = await liveOps.hashReplacementToken(token);
     const request = await liveOps.liveCreateReplacementRequest(bookingId, hash, eligibility.expiresAt);
+    liveReplacementTokens.set(bookingId, token);
     return { ...request, inviteToken: token };
   }
   requireAuthorizedPaymentOwner(booking.userId);
