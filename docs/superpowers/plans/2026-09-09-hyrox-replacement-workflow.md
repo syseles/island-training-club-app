@@ -74,7 +74,7 @@ assert.equal(store.replacementEligible({
 }, Date.now()).ok, true);
 ```
 
-Add a v22 fixture with an existing booking and assert v23 adds only `replacementUserId`, `replacementConfirmedAt`, and `replacementConfirmedBy` as null plus an empty `replacementRequests` collection.
+Add a v19 fixture with an existing booking and assert v20 adds only `replacementUserId`, `replacementConfirmedAt`, and `replacementConfirmedBy` as null plus an empty `replacementRequests` collection.
 
 - [ ] **Step 2: Run RED**
 
@@ -84,7 +84,7 @@ Expected failure: missing effective-attendee/eligibility helpers or v23 migratio
 
 - [ ] **Step 3: Implement minimal local seam**
 
-Bump `STATE_VERSION` to 23. Add the fields to every booking constructor and initialize `state.replacementRequests = []` during migration. Reject reserved, attended, cancelled, expired, deferred, RSVP/free, started, and non-owner-ineligible records. Permit confirmed paid HYROX bookings, including pooled bookings with `sessionId === null`, until the calculated expiry.
+Bump `STATE_VERSION` to 20. Add the fields to every booking constructor and initialize `state.replacementRequests = []` during migration. Reject reserved, attended, cancelled, expired, deferred, RSVP/free, started, and non-owner-ineligible records. Permit confirmed paid HYROX bookings, including pooled bookings with `sessionId === null`, until the calculated expiry.
 
 - [ ] **Step 4: Run GREEN**
 
