@@ -6023,6 +6023,23 @@ const acceptedReplacement = await store.acceptReplacement(replacementRequest.inv
 assert.equal(acceptedReplacement.status, "accepted");
 assert.equal(store.getBooking(replacementBooking.id).replacementUserId, null,
   "accepted replacement must not change the attendee before Admin confirmation");
+store.signIn("admin@example.test");
+const pendingAdminRequests = await store.replacementRequestsForAdmin();
+assert.equal(pendingAdminRequests.length, 1);
+assert.equal(pendingAdminRequests[0].status, "accepted");
+assert.equal(pendingAdminRequests[0].originalDisplayName, "Tester");
+assert.equal(pendingAdminRequests[0].replacementDisplayName, "Replacement");
+assert.equal("inviteToken" in pendingAdminRequests[0], false);
+assert.equal("email" in pendingAdminRequests[0], false);
+const pendingAdminPayments = await views.viewAdmin("payments");
+assert.match(pendingAdminPayments, /Pending Admin confirmation/);
+assert.match(pendingAdminPayments, /Replacement/);
+assert.match(pendingAdminPayments, /Confirm replacement/);
+assert.match(pendingAdminPayments, /Reject replacement/);
+store.signIn("member@example.test");
+const memberAdminView = await views.viewAdmin("payments");
+assert.deepEqual(memberAdminView, { redirect: "#/account" });
+store.signIn("replacement@example.test");
 await assert.rejects(
   () => store.acceptReplacement(replacementRequest.inviteToken, Date.now()),
   /no longer available/i,
@@ -6037,7 +6054,13 @@ assert.equal(confirmedBooking.userId, payerId, "replacement must preserve payer 
 assert.equal(confirmedBooking.paymentRef, payerPaymentRef, "replacement must preserve payment reference");
 assert.equal(confirmedBooking.replacementUserId, "replacement-member");
 assert.equal(store.effectiveAttendeeId(confirmedBooking), "replacement-member");
+assert.deepEqual(store.attendeesFor(store.getSession(confirmedBooking.sessionId)), ["Replacement M."]);
+store.signIn("replacement@example.test");
+assert.match(views.viewBooking(replacementBooking.id), /You’re booked in/);
+assert.match(views.viewBooking(replacementBooking.id), /HK\$180/);
+assert.equal(store.receiptsForUser("replacement-member").length, 0);
 assert.equal(store.replacementAuditForRequest(replacementRequest.id).length, 3);
+store.signIn("admin@example.test");
 assert.equal(
   (await store.decideReplacement(replacementRequest.id, true, null, Date.now())).status,
   "confirmed",

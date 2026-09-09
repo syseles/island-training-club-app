@@ -4361,6 +4361,19 @@ begin
        from public.operational_booking_replacement_audit where request_id = v_request_id),
     'replacement audit must preserve each lifecycle action'
   );
+  perform pg_temp.op_assert(
+    (select count(*) = 1
+       from public.get_operational_attendee_names(v_session_id)
+      where display_name = 'Other T.'),
+    'confirmed replacement should appear as the effective attendee'
+  );
+  perform pg_temp.op_assert(
+    not exists (
+      select 1 from public.get_operational_attendee_names(v_session_id)
+       where display_name = 'Member T.'
+    ),
+    'original payer should leave the effective attendee roster'
+  );
   reset role;
 end $$;
 

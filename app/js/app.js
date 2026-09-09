@@ -920,6 +920,18 @@ document.addEventListener("click", async (e) => {
       } catch (err) { toast(err.message || "Unable to cancel replacement invite", true); }
       break;
 
+    case "replacement-decision":
+      if (controlBusy.has(el)) break;
+      try {
+        const confirming = el.dataset.confirmed === "1";
+        await withBusyControl(el, confirming ? "Confirming…" : "Rejecting…", async () => {
+          await store.decideReplacement(el.dataset.request, confirming, null, Date.now());
+          toast(confirming ? "Replacement confirmed — attendee roster updated" : "Replacement rejected — original booking unchanged");
+          await renderWithFeedback();
+        });
+      } catch (err) { toast(err.message || "Unable to update replacement request", true); }
+      break;
+
     case "release-reservation":
       if (controlBusy.has(el)) break;
       if (confirm("Cancel this unpaid booking? Your spot will be released.")) {

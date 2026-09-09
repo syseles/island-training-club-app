@@ -2210,7 +2210,8 @@ function currentBookingFor(userId, sessionId) {
 export function viewBooking(bookingId) {
   const b = store.getBooking(bookingId);
   const user = store.currentUser();
-  if (!b || !user || (b.userId !== user.id && !isAdminRole(user.role))) {
+  const isConfirmedAttendee = !!b?.replacementConfirmedAt && b.replacementUserId === user?.id;
+  if (!b || !user || (b.userId !== user.id && !isAdminRole(user.role) && !isConfirmedAttendee)) {
     return viewNotFound("Booking not found.");
   }
   const s = b.snapshot;
@@ -2447,7 +2448,7 @@ export async function viewAdmin(tab = "members") {
     } catch (error) {
       console.warn("Unable to load Membership Details phone for payout form", error);
     }
-    body = adminOps(user, memberUsers, profilePhone);
+    body = await adminOps(user, memberUsers, profilePhone);
   }
 
   return `
@@ -2598,7 +2599,7 @@ function adminHyroxWeeklyBookingSetup() {
   </details>`;
 }
 
-function adminOps(viewer, memberUsers, profilePhone = "") {
+async function adminOps(viewer, memberUsers, profilePhone = "") {
   const upcoming = store.upcomingSessions(21).filter((s) => s.category === "HYROX" && !sessionStarted(s));
   const thisWeekSat = upcoming[0]?.dateISO;
   const dutyUser = thisWeekSat ? store.collectorFor(`hyrox-bft-${thisWeekSat}`) : null;
@@ -2632,6 +2633,7 @@ function adminOps(viewer, memberUsers, profilePhone = "") {
     </div></div>
     </details>`;
 
+  const replacementCard = await adminReplacementReview();
   const pendingCard = `
     <details class="admin-section mt24">
       <summary><h2>Pending payments</h2></summary>
@@ -2654,7 +2656,29 @@ function adminOps(viewer, memberUsers, profilePhone = "") {
   return `
     ${dutyCard}
     ${pendingCard}
+    ${replacementCard}
     ${adminHyroxWeeklyBookingSetup()}`;
+}
+
+async function adminReplacementReview() {
+  const requests = await store.replacementRequestsForAdmin();
+  const active = requests.filter((request) => ["pending", "accepted"].includes(request.status));
+  const rows = active.map((request) => {
+    const waiting = request.status === "pending";
+    const session = request.snapshot || {};
+    return `<div class="replacement-admin-row">
+      <div class="who"><strong>${esc(request.originalDisplayName)}${request.replacementDisplayName ? ` → ${esc(request.replacementDisplayName)}` : ""}</strong>
+        <span>${esc(session.name || "ITC HYROX")} · ${esc(session.dateISO || "Date pending")}</span></div>
+      <div class="replacement-admin-status"><span class="badge ${waiting ? "neutral" : "warn"}">${waiting ? "Waiting for member" : "Pending Admin confirmation"}</span>
+        ${waiting ? `<span class="muted small">Private invite has not been claimed.</span>` : `<div class="btn-row two"><button class="btn sm" type="button" data-action="replacement-decision" data-request="${esc(request.requestId)}" data-confirmed="1">Confirm replacement</button><button class="btn danger ghost sm" type="button" data-action="replacement-decision" data-request="${esc(request.requestId)}" data-confirmed="0">Reject replacement</button></div>`}
+      </div>
+    </div>`;
+  }).join("");
+  return `<details class="admin-section mt24" open>
+    <summary><h2>HYROX replacements${active.length ? ` <span class="badge warn">${active.length}</span>` : ""}</h2></summary>
+    <p class="muted small mt8">Review accepted handovers. The original member remains payer and receipt owner; only confirmation changes the attendee.</p>
+    ${rows || `<div class="empty mt8">No HYROX replacement requests waiting for review.</div>`}
+  </details>`;
 }
 
 // Weekly paid-session setup controls (time, note, venue TBC) live

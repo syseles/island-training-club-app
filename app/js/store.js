@@ -945,7 +945,9 @@ export function attendeeCountFor(session) {
 export function attendeesFor(session) {
   const names = [];
   for (const b of activeBookingsForSession(session.id)) {
-    const u = state.users.find((x) => x.id === b.userId);
+    const u = isLive()
+      ? paymentUserById(effectiveAttendeeId(b))
+      : state.users.find((x) => x.id === effectiveAttendeeId(b));
     if (u) names.push(`${u.preferredName || u.fullName} ${u.fullName.split(" ").pop()[0]}.`);
   }
   return names;
@@ -1055,6 +1057,38 @@ export function replacementInviteForToken(token) {
 export function replacementAuditForRequest(requestId) {
   if (isLive()) return [];
   return state.replacementAudit.filter((entry) => entry.requestId === requestId);
+}
+
+export async function replacementRequestsForAdmin() {
+  requirePaymentAdminActor();
+  if (isLive()) {
+    return (await liveOps.liveListReplacementRequests()).filter((request) =>
+      ["pending", "accepted", "confirmed", "rejected"].includes(request.status)
+    );
+  }
+  return state.replacementRequests
+    .filter((request) => ["pending", "accepted", "confirmed", "rejected"].includes(request.status))
+    .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0))
+    .map((request) => {
+      const original = state.users.find((user) => user.id === request.originalUserId);
+      const replacement = state.users.find((user) => user.id === request.replacementUserId);
+      const booking = state.bookings.find((item) => item.id === request.bookingId);
+      return {
+        requestId: request.id,
+        bookingId: request.bookingId,
+        status: request.status,
+        originalDisplayName: original?.preferredName || original?.fullName || "ITC member",
+        replacementDisplayName: replacement?.preferredName || replacement?.fullName || null,
+        sessionId: booking?.sessionId || null,
+        cycleId: booking?.cycleId || null,
+        snapshot: booking?.snapshot ? { ...booking.snapshot } : null,
+        createdAt: request.createdAt || null,
+        expiresAt: request.expiresAt || null,
+        acceptedAt: request.acceptedAt || null,
+        confirmedAt: request.confirmedAt || null,
+        decisionReason: request.decisionReason || null,
+      };
+    });
 }
 
 function replacementActor() {
@@ -1212,7 +1246,10 @@ export async function cancelReplacement(requestId, now = Date.now()) {
 }
 
 export async function decideReplacement(requestId, confirm, reason = null, now = Date.now()) {
-  if (isLive()) return liveOps.liveDecideReplacement(requestId, confirm, reason);
+  if (isLive()) {
+    requirePaymentAdminActor();
+    return liveOps.liveDecideReplacement(requestId, confirm, reason);
+  }
   const actor = requirePaymentAdminActor();
   const request = state.replacementRequests.find((item) => item.id === requestId);
   if (!request) replacementRequestError("Replacement request not found.");

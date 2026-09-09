@@ -1769,6 +1769,16 @@ a.profile-row:hover .pr-text strong { color: var(--accent); }
 .replacement-panel { border-color: var(--line); background: rgba(202, 255, 49, 0.035); }
 .replacement-panel h3 { margin: 0; }
 .replacement-panel .btn { min-height: 44px; }
+.replacement-admin-row { display: grid; gap: 12px; padding: 14px 0; border-top: 1px solid var(--line-soft); }
+.replacement-admin-row:first-child { border-top: 0; }
+.replacement-admin-row .who { min-width: 0; }
+.replacement-admin-row .who strong,
+.replacement-admin-row .who span { display: block; overflow-wrap: anywhere; }
+.replacement-admin-status { display: grid; gap: 8px; }
+.replacement-admin-status .btn-row { margin-top: 0; }
+@media (min-width: 600px) {
+  .replacement-admin-row { grid-template-columns: minmax(0, 1fr) minmax(260px, .9fr); align-items: center; }
+}
 @media (max-width: 420px) {
   .replacement-panel .btn-row { grid-template-columns: 1fr; }
 }

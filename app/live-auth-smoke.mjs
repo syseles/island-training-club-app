@@ -5881,6 +5881,9 @@ const acceptedReplacement = await operations.liveAcceptReplacement(replacementHa
 assert.equal(acceptedReplacement.status, "accepted");
 const listedReplacements = await operations.liveListReplacementRequests();
 assert.equal(listedReplacements[0].status, "accepted");
+assert.equal("tokenHash" in listedReplacements[0], false, "Admin replacement rows must not expose token hashes");
+assert.equal("email" in listedReplacements[0], false, "Admin replacement rows must not expose contact fields");
+assert.equal("paymentReference" in listedReplacements[0], false, "Admin replacement rows must not expose payment references");
 await assert.rejects(
   () => operations.liveDecideReplacement("replacement-request-1", true, ""),
   /replacement decision unavailable/,
