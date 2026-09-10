@@ -69,8 +69,18 @@ const esc = (s) =>
 
 const todayISO = () => todayHktISO();
 
-export function replacementShareUrl(token) {
-  return `#/replacement/${encodeURIComponent(String(token || ""))}`;
+export function replacementShareUrl(token, baseHref = globalThis.location?.href) {
+  const route = `#/replacement/${encodeURIComponent(String(token || ""))}`;
+  if (!baseHref) return route;
+  try {
+    const url = new URL(baseHref);
+    if (!new Set(["http:", "https:"]).has(url.protocol)) return route;
+    url.search = "";
+    url.hash = route.slice(1);
+    return url.href;
+  } catch {
+    return route;
+  }
 }
 
 const fmtDay = (ts) =>
