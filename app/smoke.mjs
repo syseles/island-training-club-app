@@ -534,6 +534,18 @@ assert.doesNotMatch(replacementMigrationSource,
   "browser roles must not receive direct replacement-table writes");
 assert.match(replacementMigrationSource, /notify pgrst, 'reload schema'/i,
   "replacement migration must reload the PostgREST schema cache after creating RPCs");
+const replacementEligibilityMigrationPath = resolve(
+  __dirnameSmoke, "../supabase/migrations/20260910000003_replacement_authoritative_eligibility.sql"
+);
+assert.ok(existsSync(replacementEligibilityMigrationPath),
+  "replacement eligibility repair migration must be present");
+const replacementEligibilityMigrationSource = readFileSync(replacementEligibilityMigrationPath, "utf8");
+assert.match(replacementEligibilityMigrationSource,
+  /operational_activity_templates[\s\S]*?price_hkd[\s\S]*?activity_id/i,
+  "replacement eligibility must use authoritative session/template metadata");
+assert.doesNotMatch(replacementEligibilityMigrationSource,
+  /snapshot\s*->>\s*'kind'/i,
+  "replacement eligibility must not require the absent legacy snapshot kind");
 const operationalIntegrationSource = readFileSync(
   resolve(__dirnameSmoke, "../supabase/tests/operational_backend_integration.sql"),
   "utf8"

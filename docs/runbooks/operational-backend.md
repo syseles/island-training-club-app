@@ -4,7 +4,7 @@ This runbook covers applying the shared-pool HYROX operational backend
 migrations to the disposable/staging or production Supabase project,
 verifying the result, and executing the Admin two-browser acceptance test
 before merging to `testing`. Live Supabase remains the source of truth;
-the local v20 engine is prototype parity only. Manual HYROX replacements are
+the local v22 engine is prototype parity only. Manual HYROX replacements are
 recorded and confirmed in-app; they never move payment or receipt ownership.
 
 ## What lives in Supabase
@@ -96,6 +96,12 @@ Supabase SQL Editor (or via `supabase db push` from a trusted workstation):
 5. Apply `20260910000001_operational_replacement_requests.sql` for replacement
    requests, audit history, locked RPCs, effective-attendee mapping, and
    Realtime publication entries.
+6. Apply the replacement follow-ups in filename order:
+   `20260910000002_operational_attendee_names_rsvp.sql` — names-only RSVP
+   rosters; and
+   `20260910000003_replacement_authoritative_eligibility.sql` — paid HYROX
+   eligibility from authoritative session/template metadata for legacy booking
+   snapshots that do not contain `kind`.
 
 Apply each migration on its own. Resolve any error before moving to the
 next migration. The verified `feature/shared-operations` branch uses

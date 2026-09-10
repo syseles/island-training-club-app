@@ -4481,7 +4481,13 @@ begin
     'bb000000-0000-0000-0000-00000000b001',
     v_session_id,
     'confirmed', now() + interval '1 day', 'payme', 'REPLACEMENT-TEST', now(),
-    '{"name":"ITC HYROX","kind":"paid","price_hkd":180}'::jsonb
+    jsonb_build_object(
+      'name', 'hyrox-bft',
+      'session_date', date '2099-01-03',
+      'start_time', time '11:15',
+      'venue', 'BFT Causeway Bay',
+      'price_hkd', 180
+    )
   );
   insert into public.operational_receipts (
     id, receipt_number, booking_id, profile_id, session_id,
@@ -4490,6 +4496,10 @@ begin
     v_receipt_id, 'ITC-2099-9901', v_booking_id,
     'bb000000-0000-0000-0000-00000000b001', v_session_id,
     180, 'payme', 'aa000000-0000-0000-0000-00000000a001'
+  );
+  perform pg_temp.op_assert(
+    not (select snapshot ? 'kind' from public.operational_bookings where id = v_booking_id),
+    'replacement fixture must preserve the legacy operational snapshot shape'
   );
 
   perform set_config('request.jwt.claim.sub', 'dd000000-0000-0000-0000-00000000d001', true);
