@@ -6075,7 +6075,15 @@ const confirmedBookingHtml = views.viewBooking(replacementBooking.id);
 assert.match(confirmedBookingHtml, /Replacement confirmed/);
 assert.match(confirmedBookingHtml, /payer and receipt owner/);
 assert.doesNotMatch(confirmedBookingHtml, /Create private invite/);
-assert.equal(views.replacementShareUrl("invite-token"), "#/replacement/invite-token");
+assert.equal(
+  views.replacementShareUrl(
+    "invite token/with details",
+    "https://testing.itc.example/app/?auth_callback=1#/booking/original"
+  ),
+  "https://testing.itc.example/app/#/replacement/invite%20token%2Fwith%20details",
+  "WhatsApp replacement shares must use a complete clickable app URL without query data",
+);
+assert.equal(views.replacementShareUrl("invite-token", "not a URL"), "#/replacement/invite-token");
 const confirmedInviteHtml = await views.viewReplacementInvite(replacementRequest.inviteToken);
 assert.match(confirmedInviteHtml, /Replacement confirmed/);
 assert.doesNotMatch(confirmedInviteHtml, new RegExp(replacementRequest.inviteToken));
