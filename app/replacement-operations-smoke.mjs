@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 
 const calls = [];
+let failReplacementCreate = false;
 let request = {
   requestId: "replacement-request-1",
   bookingId: "booking-replacement-1",
@@ -33,6 +34,15 @@ const fakeSupabase = {
     if (name === "get_assigned_collector_payout_profiles"
         || name === "get_operational_rsvp_counts") {
       return Promise.resolve({ data: [], error: null });
+    }
+    if (name === "create_operational_replacement_request" && failReplacementCreate) {
+      return Promise.resolve({
+        data: null,
+        error: {
+          code: "PGRST202",
+          message: "Could not find the function public.create_operational_replacement_request(p_booking_id, p_expires_at, p_token_hash) in the schema cache",
+        },
+      });
     }
     if (name === "admin_decide_operational_replacement") {
       return Promise.resolve({ data: null, error: { message: "replacement decision unavailable" } });
@@ -87,5 +97,12 @@ await assert.rejects(
 assert.equal(
   operations.liveReplacementRequestForBooking("booking-replacement-1").status,
   "accepted",
+);
+failReplacementCreate = true;
+await assert.rejects(
+  () => operations.liveCreateReplacementRequest(
+    "booking-replacement-1", hash, Date.parse("2099-01-01T00:00:00.000Z")
+  ),
+  /Replacement setup is temporarily unavailable\. Please contact ITC\./,
 );
 console.log("replacement operations smoke passed");

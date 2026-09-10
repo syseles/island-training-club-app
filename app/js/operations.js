@@ -397,6 +397,9 @@ function replaceState(payload) {
 function operationalProblem(error) {
   if (!error) return new Error("Unable to save — try again.");
   const message = String(error.message || error);
+  if (error.code === "PGRST202" && message.includes("operational_replacement")) {
+    return new Error("Replacement setup is temporarily unavailable. Please contact ITC.");
+  }
   if (message.includes("Session is cancelled")) return new Error("Session is cancelled.");
   if (message.includes("Session is full")) return new Error("Session is full.");
   if (message.includes("Session is not open")) return new Error("Session is not open.");

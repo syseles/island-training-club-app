@@ -532,6 +532,8 @@ assert.match(replacementMigrationSource,
 assert.doesNotMatch(replacementMigrationSource,
   /grant (?:all|select|insert|update|delete)[^\n]*on (?:table )?public\.operational_booking_replacement_requests/i,
   "browser roles must not receive direct replacement-table writes");
+assert.match(replacementMigrationSource, /notify pgrst, 'reload schema'/i,
+  "replacement migration must reload the PostgREST schema cache after creating RPCs");
 const operationalIntegrationSource = readFileSync(
   resolve(__dirnameSmoke, "../supabase/tests/operational_backend_integration.sql"),
   "utf8"

@@ -762,3 +762,7 @@ begin
   end if;
 end;
 $$;
+
+-- Supabase/PostgREST may retain its pre-migration function catalog until it
+-- receives an explicit reload notification.
+notify pgrst, 'reload schema';
