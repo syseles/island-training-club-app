@@ -557,6 +557,20 @@ assert.match(replacementConflictMigrationSource,
   /other_session\.session_date\s*=\s*v_session_date[\s\S]*?other_session\.activity_id\s+ilike\s+'hyrox%'/i,
   "same-day replacement conflicts must be limited to HYROX sessions");
 assert.match(replacementConflictMigrationSource, /notify pgrst, 'reload schema'/i);
+const replacementAdminNotificationMigrationPath = resolve(
+  __dirnameSmoke, "../supabase/migrations/20260910000005_replacement_admin_notification_roles.sql"
+);
+assert.ok(existsSync(replacementAdminNotificationMigrationPath),
+  "replacement Admin-notification repair migration must be present");
+const replacementAdminNotificationMigrationSource = readFileSync(
+  replacementAdminNotificationMigrationPath, "utf8"
+);
+assert.match(replacementAdminNotificationMigrationSource,
+  /p\.role\s+in\s*\('admin',\s*'super_admin'\)/i,
+  "replacement reviews must notify operational Admin roles");
+assert.doesNotMatch(replacementAdminNotificationMigrationSource, /p\.status/i,
+  "replacement acceptance must not query the nonexistent profiles.status column");
+assert.match(replacementAdminNotificationMigrationSource, /notify pgrst, 'reload schema'/i);
 const operationalIntegrationSource = readFileSync(
   resolve(__dirnameSmoke, "../supabase/tests/operational_backend_integration.sql"),
   "utf8"
