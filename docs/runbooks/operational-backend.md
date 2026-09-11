@@ -90,7 +90,9 @@ the Supabase SQL Editor (or via `supabase db push` from a trusted workstation):
    names-only operational roster access; and
    `20260910000001_operational_replacement_requests.sql` — replacement
    requests, audit history, locked RPCs, effective-attendee mapping, and
-   Realtime publication entries.
+   Realtime publication entries; and
+   `20260910000004_replacement_hyrox_conflict_scope.sql` — same-day replacement
+   conflict checks limited to authoritative HYROX sessions and cycles.
 
 Apply each migration on its own. Resolve any error before moving to the
 next migration. The verified `feature/shared-operations` branch uses

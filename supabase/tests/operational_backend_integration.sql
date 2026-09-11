@@ -4277,6 +4277,16 @@ declare
   v_request_id uuid;
 begin
   perform ensure_operational_sessions(date '2099-01-03', 1);
+  -- A same-day non-HYROX RSVP must not prevent this member from accepting
+  -- the HYROX replacement.
+  insert into public.operational_bookings (
+    profile_id, session_id, status, pay_deadline_at, paid_at, snapshot
+  ) values (
+    'dd000000-0000-0000-0000-00000000d001',
+    'lunch-2099-01-03',
+    'confirmed', now(), now(),
+    '{"name":"Post-Training Lunch","kind":"free","price_hkd":0}'::jsonb
+  );
   insert into public.operational_bookings (
     id, profile_id, session_id, status, pay_deadline_at, payment_method,
     payment_reference, paid_at, snapshot

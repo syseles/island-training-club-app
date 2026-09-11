@@ -377,6 +377,17 @@ assert.match(replacementMigrationSource,
 assert.doesNotMatch(replacementMigrationSource,
   /grant (?:all|select|insert|update|delete)[^\n]*on (?:table )?public\.operational_booking_replacement_requests/i,
   "browser roles must not receive direct replacement-table writes");
+const replacementConflictMigrationPath = resolve(
+  __dirnameSmoke, "../supabase/migrations/20260910000004_replacement_hyrox_conflict_scope.sql"
+);
+assert.ok(existsSync(replacementConflictMigrationPath),
+  "replacement HYROX-conflict repair migration must be present");
+const replacementConflictMigrationSource = readFileSync(replacementConflictMigrationPath, "utf8");
+assert.match(replacementConflictMigrationSource, /accept_operational_replacement_request/i);
+assert.match(replacementConflictMigrationSource,
+  /other_session\.session_date\s*=\s*v_session_date[\s\S]*?other_session\.activity_id\s+ilike\s+'hyrox%'/i,
+  "same-day replacement conflicts must be limited to HYROX sessions");
+assert.match(replacementConflictMigrationSource, /notify pgrst, 'reload schema'/i);
 const operationalIntegrationSource = readFileSync(
   resolve(__dirnameSmoke, "../supabase/tests/operational_backend_integration.sql"),
   "utf8"
