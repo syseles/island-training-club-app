@@ -402,6 +402,22 @@ assert.match(replacementAdminNotificationMigrationSource,
 assert.doesNotMatch(replacementAdminNotificationMigrationSource, /p\.status/i,
   "replacement acceptance must not query the nonexistent profiles.status column");
 assert.match(replacementAdminNotificationMigrationSource, /notify pgrst, 'reload schema'/i);
+const replacementAdminConflictMigrationPath = resolve(
+  __dirnameSmoke, "../supabase/migrations/20260910000006_replacement_admin_hyrox_conflict_scope.sql"
+);
+assert.ok(existsSync(replacementAdminConflictMigrationPath),
+  "replacement Admin conflict repair migration must be present");
+const replacementAdminConflictMigrationSource = readFileSync(
+  replacementAdminConflictMigrationPath, "utf8"
+);
+assert.match(replacementAdminConflictMigrationSource, /admin_decide_operational_replacement/i);
+assert.match(replacementAdminConflictMigrationSource,
+  /other_session\.session_date\s*=\s*v_session_date[\s\S]*?other_session\.activity_id\s+ilike\s+'hyrox%'/i,
+  "Admin confirmation conflicts must be limited to HYROX sessions");
+assert.match(replacementAdminConflictMigrationSource,
+  /other_cycle\.session_date\s*=\s*v_session_date/i,
+  "Admin confirmation must still detect pooled HYROX conflicts");
+assert.match(replacementAdminConflictMigrationSource, /notify pgrst, 'reload schema'/i);
 const operationalIntegrationSource = readFileSync(
   resolve(__dirnameSmoke, "../supabase/tests/operational_backend_integration.sql"),
   "utf8"

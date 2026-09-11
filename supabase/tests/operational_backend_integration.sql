@@ -4363,7 +4363,10 @@ begin
   set local role authenticated;
   perform public.list_operational_replacement_requests();
   select public.admin_decide_operational_replacement(v_request_id, true, null) into v_confirmed;
-  perform pg_temp.op_assert(v_confirmed ->> 'status' = 'confirmed', 'Admin should confirm accepted replacement');
+  perform pg_temp.op_assert(
+    v_confirmed ->> 'status' = 'confirmed',
+    'Admin should confirm an accepted replacement despite a same-day non-HYROX booking'
+  );
   perform pg_temp.op_assert(
     (select profile_id = 'bb000000-0000-0000-0000-00000000b001'::uuid
             and replacement_profile_id = 'dd000000-0000-0000-0000-00000000d001'::uuid
