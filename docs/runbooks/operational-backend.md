@@ -105,7 +105,9 @@ Supabase SQL Editor (or via `supabase db push` from a trusted workstation):
    `20260910000004_replacement_hyrox_conflict_scope.sql` — same-day replacement
    conflict checks limited to authoritative HYROX sessions and cycles; and
    `20260910000005_replacement_admin_notification_roles.sql` — Admin review
-   notifications selected through the authoritative profile role.
+   notifications selected through the authoritative profile role; and
+   `20260910000006_replacement_admin_hyrox_conflict_scope.sql` — HYROX-only
+   conflict checks during final Admin confirmation.
 
 Apply each migration on its own. Resolve any error before moving to the
 next migration. The verified `feature/shared-operations` branch uses
