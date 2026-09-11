@@ -92,7 +92,9 @@ the Supabase SQL Editor (or via `supabase db push` from a trusted workstation):
    requests, audit history, locked RPCs, effective-attendee mapping, and
    Realtime publication entries; and
    `20260910000004_replacement_hyrox_conflict_scope.sql` — same-day replacement
-   conflict checks limited to authoritative HYROX sessions and cycles.
+   conflict checks limited to authoritative HYROX sessions and cycles; and
+   `20260910000005_replacement_admin_notification_roles.sql` — Admin review
+   notifications selected through the authoritative profile role.
 
 Apply each migration on its own. Resolve any error before moving to the
 next migration. The verified `feature/shared-operations` branch uses

@@ -4341,6 +4341,16 @@ begin
   perform pg_temp.op_assert(not (v_invite ? 'tokenHash'), 'invite payload must not expose token hash');
   select public.accept_operational_replacement_request(v_token) into v_accepted;
   perform pg_temp.op_assert(v_accepted ->> 'status' = 'accepted', 'first approved claimant should win');
+  perform pg_temp.op_assert(
+    exists (
+      select 1
+        from public.notifications n
+        join public.profiles p on p.id = n.profile_id
+       where n.kind = 'hyrox_replacement_review'
+         and p.role in ('admin', 'super_admin')
+    ),
+    'accepted replacement should notify an operational Admin role'
+  );
   begin
     select public.accept_operational_replacement_request(v_token) into v_accepted;
     raise exception 'second claim should fail';
