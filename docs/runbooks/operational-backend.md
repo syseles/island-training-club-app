@@ -98,10 +98,12 @@ Supabase SQL Editor (or via `supabase db push` from a trusted workstation):
    Realtime publication entries.
 6. Apply the replacement follow-ups in filename order:
    `20260910000002_operational_attendee_names_rsvp.sql` — names-only RSVP
-   rosters; and
+   rosters;
    `20260910000003_replacement_authoritative_eligibility.sql` — paid HYROX
    eligibility from authoritative session/template metadata for legacy booking
-   snapshots that do not contain `kind`.
+   snapshots that do not contain `kind`; and
+   `20260910000004_replacement_hyrox_conflict_scope.sql` — same-day replacement
+   conflict checks limited to authoritative HYROX sessions and cycles.
 
 Apply each migration on its own. Resolve any error before moving to the
 next migration. The verified `feature/shared-operations` branch uses
