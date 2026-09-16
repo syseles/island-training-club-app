@@ -57,8 +57,8 @@ Use this safe deployment process:
 3. Edit only those two assignments in `app/index.html` with the
    **deployment-specific values**. An anon key is public by design; RLS is the
    security boundary. Do not duplicate the values in this runbook.
-4. Configure every exact OAuth redirect URL as described below, including the
-   deployed `/app/` path.
+4. Configure every exact authentication redirect URL as described below,
+   including the deployed `/app/` path.
 5. Serve the candidate locally, inspect `window.SUPABASE_URL` in the browser,
    sign in to the intended project, and run the smoke suites before committing
    and deploying that exact revision.
@@ -70,9 +70,10 @@ Use this safe deployment process:
 For localStorage-only operation, set both assignments to empty strings in a
 local, uncommitted copy.
 
-## Google OAuth redirect URL
+## Authentication redirect URLs
 
-The prototype requests the callback with:
+Google OAuth and email magic links request the callback with the exact deployed
+origin and pathname:
 
 ```js
 `${location.origin}${location.pathname}`
@@ -81,12 +82,71 @@ The prototype requests the callback with:
 In Supabase Dashboard → Authentication → URL Configuration → Redirect URLs,
 add the exact deployed Testing candidate URL ending in `/app/`. Preview and
 production domains are different origins, so add every deployed URL that will
-be tested. The callback must remain the exact origin plus deployed pathname;
-a missing or mismatched trailing `/app/` path causes Google to return to an
-unapproved URL.
+be tested. A missing or mismatched trailing `/app/` path causes an OAuth or
+magic-link callback to return to an unapproved URL.
 
-For local OAuth testing, also add `http://127.0.0.1:4173/app/` (and the exact
-`localhost` form separately if you use it).
+For local authentication testing, also add `http://127.0.0.1:4173/app/` (and
+the exact `localhost` form separately if you use it).
+
+## Email magic links and custom SMTP
+
+Google remains the primary sign-in button. Email magic links are the secondary
+path for members without Google accounts. Supabase Auth creates and verifies
+the token; a custom transactional SMTP provider delivers the email.
+
+Launch configuration:
+
+1. Enable the Email provider in Supabase Authentication settings. Leave new
+   user creation enabled: the database trigger creates a `pending` profile,
+   never an approved member.
+2. Create a transactional-email account on its current free tier. Resend is
+   the initial candidate, but verify its current allowance and terms during
+   setup rather than relying on a hard-coded quota in this repository.
+3. Verify an ITC-controlled sending domain. Publish the provider's SPF and DKIM
+   records and enable DMARC monitoring.
+4. Put the SMTP host, port, username, password/API credential, and sender only
+   in Supabase project SMTP settings. Never add them to `app/index.html`, Git,
+   browser storage, client JavaScript, screenshots, or this runbook.
+5. Add the exact local, preview, and production `/app/` URLs to Supabase's
+   redirect allowlist. Magic links use the same exact callback path as Google.
+6. Target a 15-minute link lifetime where supported and configure Supabase
+   request throttling. The browser already suppresses duplicate in-flight
+   submissions; provider/project limits remain the authoritative abuse control.
+7. Send authentication and essential transactional messages only. Do not use
+   the authentication sender for newsletters or bulk marketing. Monitor quota,
+   bounces, and delivery failures so the service can stay on a free tier while
+   volume permits.
+
+The browser always responds with generic copy — **Check your inbox** on success
+or a generic retry message on failure — and never says whether an address was
+already registered. Phase one supports opening the link on the same device
+that requested it. If a link has expired or was already used, return to Account
+and request a new one. Cross-device callback behavior must be recorded during
+deployment acceptance; a numeric email-code fallback is not implemented.
+
+Before production enablement, test identity continuity against the actual
+Supabase project in both directions:
+
+1. Sign in with Google, record the `auth.users.id`, role, bookings, and receipts,
+   then request a magic link for the same exact verified email. All values must
+   remain attached to the original UUID.
+2. Create a magic-link identity first, record its UUID, then sign in with Google
+   using the same exact verified email. The UUID must remain unchanged.
+
+A Gmail alias, `+tag`, work address, or other different address is a separate
+identity. Do not normalize or merge it in browser code. If the same exact email
+produces a second UUID in either acceptance test, block rollout and correct the
+Supabase identity-linking/provider configuration before continuing.
+
+Production acceptance also covers branded inbox delivery, spam placement,
+expired and reused links, rate limits, and current Safari/iOS, Chrome/Android,
+and desktop Chrome. Free-tier availability is an expectation, not a permanent
+provider guarantee.
+
+Rollback is configuration-first: disable the Supabase Email provider, then
+remove the email form in a follow-up deploy. Google OAuth remains available.
+Do not delete identities, profiles, applications, bookings, or receipts during
+rollback.
 
 ## Local development
 
@@ -209,7 +269,7 @@ operation; confirm the selected project and backups before running
 
 ## Initial Super Admin bootstrap
 
-Every OAuth-created profile starts `pending`, including the first profile in a
+Every Supabase Auth-created profile starts `pending`, including the first profile in a
 fresh project. There is no browser or first-user promotion path. After all
 migrations have run and the intended owner has signed in once, an operator must
 verify that person's identity out of band and promote the **known profile UUID**
@@ -314,7 +374,7 @@ order by rc.created_at desc;
 
 ## Application drafts and approval states
 
-- Google OAuth creates `public.profiles(role = 'pending')`. Until an `applications` row exists, Admin shows the profile under **Awaiting application** and approval controls remain locked.
+- Google OAuth or email magic-link authentication creates `public.profiles(role = 'pending')`. Until an `applications` row exists, Admin shows the profile under **Awaiting application** and approval controls remain locked.
 - The live membership form calls `saveMyApplication()` and upserts `public.applications`. Successful submission moves the profile to **Ready for review**.
 - Unfinished forms auto-save every 500 ms to `itc.apply.draft.v1` on that browser only. Drafts are not uploaded to Supabase and do not appear to administrators.
 - Home, Account, and Apply expose Continue / Discard controls while a local draft exists.

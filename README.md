@@ -40,7 +40,7 @@ The design review remains available at `http://127.0.0.1:4173/references/itc-mob
   - **`localStorage`:** local-mode prototype state plus device-local Community interactions, application drafts, and the last successfully rendered route for mobile handoff recovery. In live mode it may retain that identity-scoped route and a UUID-keyed payout handoff cache only after an authoritative Supabase save; forced hydration remains authoritative.
 - Navigation combines the Notification bell with a signed-in-only Giving tab. Admin navigation contains Members, Activities, Giving, and Payments. Dated free/RSVP and paid session administration is grouped under **Activities → Weekly Event Controls**; Admin → Payments keeps financial reconciliation and time-gated attendance together.
 - Persisted prototype state is **v22** and accepts/migrates existing **v9–v21** snapshots without discarding genuine domain records. Local pooled HYROX and replacement state are prototype parity seams; configured live Supabase remains authoritative.
-- With Supabase configured, a new Google profile remains `pending` until its application is submitted and an Admin approves it. Pending and declined profiles cannot use Payment or Giving controls.
+- With Supabase configured, Google OAuth or email magic-link authentication creates a `pending` profile. The applicant supplies a full name in the membership form and remains pending until an Admin approves it. Pending and declined profiles cannot use Payment or Giving controls.
 - Without Supabase configuration, local state starts empty. Apply through the membership flow to create a local pending profile, which can then sign in again by email (no password).
 - `app/js/store.js` remains the backend seam across both ownership domains until a production backend is selected.
 - Static Vercel deployment has no env-injection/build step. Live Supabase browser configuration is set explicitly in `app/index.html`; deployment steps and credential boundaries are documented in `docs/runbooks/live-auth.md`.
@@ -51,7 +51,7 @@ The design review remains available at `http://127.0.0.1:4173/references/itc-mob
 ### Deliberately not in the prototype
 
 - Merchandise shop (deferred in the phase-one brief).
-- Real payments, delivered email receipts, automated WhatsApp/email delivery, and a service worker (manifest is included; a cache layer would fight the refinement loop). Replacement sharing opens a user-initiated WhatsApp link; live in-app notifications are Supabase-backed when configured.
+- Real payments, delivered email receipts, automated booking/reminder delivery by WhatsApp or email, and a service worker (manifest is included; a cache layer would fight the refinement loop). Supabase may deliver authentication magic links through configured transactional SMTP. Replacement sharing opens a user-initiated WhatsApp link; live in-app notifications are Supabase-backed when configured.
 - Final privacy/guidelines copy and any post-workshop legal/policy revisions. The supplied Hyrox indemnity source is implemented; privacy and guidelines remain provisional.
 
 ## Selected Direction
