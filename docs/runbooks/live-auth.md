@@ -138,11 +138,11 @@ have different messages:
   and does not grant membership approval.
 - **Magic Link** provides secure returning-account access without a password.
 
-Both templates load the optimized approved logo from
-`https://island-training-club-app.vercel.app/assets/itc/itc-email-logo.png`.
-The current production deployment predates that file. Promote the asset first,
-verify the URL returns `image/png` without authentication, and only then paste
-the HTML into Supabase. Keep `{{ .ConfirmationURL }}` unchanged.
+Both templates load the optimized approved logo from an immutable public GitHub
+asset URL pinned in their HTML. This avoids depending on an unpromoted Vercel
+build. Verify the URL returns `image/png` without authentication before pasting
+the templates into Supabase. Move the asset to an ITC-owned public host when one
+is available. Keep `{{ .ConfirmationURL }}` unchanged.
 
 When ITC owns a domain, replace this interim sender with a dedicated domain
 address through a transactional provider and configure SPF, DKIM, and DMARC.

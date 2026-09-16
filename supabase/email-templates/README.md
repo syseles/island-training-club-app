@@ -7,7 +7,7 @@ These email-safe Night Circuit templates are copied manually into the Supabase D
 Both templates use:
 
 ```text
-https://island-training-club-app.vercel.app/assets/itc/itc-email-logo.png
+https://raw.githubusercontent.com/syseles/island-training-club-app/07917dc47f5f1887c69b8fa487421fe4e905f91e/assets/itc/itc-email-logo.png
 ```
 
 `assets/itc/itc-email-logo.png` is an optimized crop derived only from the approved new logo:
@@ -16,9 +16,9 @@ https://island-training-club-app.vercel.app/assets/itc/itc-email-logo.png
 assets/itc/ITC_NewLogo_VOLTGREEN_BlackBG_ForOnline_FINAL-v2.png
 ```
 
-Do not substitute the historical `logo.webp` or `logo-header.png` assets. The current production deployment predates this crop, so promote the asset before activating these templates. Open the absolute URL in a private browser window and confirm it returns the image without authentication.
+Do not substitute the historical `logo.webp` or `logo-header.png` assets. The URL is pinned to the immutable Git commit that introduced the crop, so it is public before the application branch is promoted. Open it in a private browser window and confirm it returns the image without authentication before activating the templates.
 
-If the app's permanent public host changes, replace the image URL in both HTML files before copying them into Supabase.
+Move the asset to ITC's owned public host when one is available, then replace the image URL in both HTML files before copying them into Supabase.
 
 ## Confirm signup
 

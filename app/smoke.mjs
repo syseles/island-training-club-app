@@ -316,7 +316,7 @@ for (const [name, source] of [
   ["Magic link", magicLinkEmailSource],
 ]) {
   assert.match(source, /\{\{ \.ConfirmationURL \}\}/, `${name} must retain Supabase's confirmation URL`);
-  assert.match(source, /https:\/\/island-training-club-app\.vercel\.app\/assets\/itc\/itc-email-logo\.png/,
+  assert.match(source, /https:\/\/raw\.githubusercontent\.com\/syseles\/island-training-club-app\/07917dc47f5f1887c69b8fa487421fe4e905f91e\/assets\/itc\/itc-email-logo\.png/,
     `${name} must use the email crop derived from the approved new logo`);
   assert.match(source, /#CAFF31/i, `${name} must use the ITC volt-green accent`);
   assert.match(source, /expires in 15 minutes/i, `${name} must state the configured expiry`);
