@@ -1804,7 +1804,9 @@ for (const banned of ["spots left", "Book & pay", "capacity", "Confirm booking",
   }
 }
 console.log("ok  free activity has no booking/capacity language");
-const freeCopyWntSession = store.upcomingSessions(14).find((session) => session.activityId === "wnt");
+const freeCopyWntSession = store.upcomingSessions(14).find(
+  (session) => session.activityId === "wnt" && !data.sessionStarted(session)
+);
 const freeCopyWntHtml = views.viewActivity(freeCopyWntSession.id);
 if (!freeCopyWntHtml.includes("Everyone is welcome — just show up.")
     || freeCopyWntHtml.includes("look for the lime ITC flag")) {
@@ -6202,7 +6204,9 @@ if (weekOverride.location !== "Causeway Bay Promenade — 7pm sharp"
   throw new Error("weekVenueOverride must expose the latest saved values");
 }
 
-const tamarSession = store.upcomingSessions(21).find(
+// Use four weeks so this test still has three future Wednesdays after the
+// current week's WNT has already started.
+const tamarSession = store.upcomingSessions(28).find(
   (s) => s.activityId === "wnt" && s.id !== wntSession.id && !data.sessionStarted(s)
 );
 if (!tamarSession) throw new Error("expected another upcoming WNT for dated meeting-point tests");
@@ -6220,7 +6224,7 @@ let tamarOverride = store.weekVenueOverride(tamarSession.id);
 if (tamarOverride.meetingLat !== 22.2825 || tamarOverride.meetingLng !== 114.1659) {
   throw new Error("Admin override read must retain the dated Tamar point");
 }
-const otherWnt = store.upcomingSessions(21).find(
+const otherWnt = store.upcomingSessions(28).find(
   (s) => s.activityId === "wnt"
     && s.id !== wntSession.id && s.id !== tamarSession.id
     && !data.sessionStarted(s)
