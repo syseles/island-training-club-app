@@ -1942,6 +1942,7 @@ function applySelect(name, label, options, required, value = "") {
 function applyFormHtml(cu, draft) {
   const displayName = cu?.profile?.full_name || cu?.email || "";
   const fields = draft?.fields || {};
+  const fullName = fields.full_name || cu?.profile?.full_name || "";
   const savedAge = fields.age_over_18 === "no"
     ? true
     : fields.age_over_18 === "yes"
@@ -1961,6 +1962,7 @@ function applyFormHtml(cu, draft) {
         <button class="btn ghost sm" type="button" data-action="discard-draft">Discard draft</button>
       </div>` : ""}
       <form data-form="apply" class="form-grid mt16">
+        ${applyField("text", "full_name", "Full name", true, fullName, 'autocomplete="name" maxlength="120"')}
         ${applyField("text", "mobile", "Mobile / WhatsApp number", true, fields.mobile)}
         ${ageStatusField(savedAge)}
         <div data-minor-only ${savedAge === true ? "" : "hidden"}>

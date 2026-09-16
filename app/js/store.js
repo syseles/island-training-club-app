@@ -4005,6 +4005,9 @@ export async function saveMyApplication(form) {
   }
   const cu = await getCurrentUser();
   if (!cu) throw new Error("Not signed in");
+  const fullName = String(form.full_name || "").trim();
+  if (!fullName) throw new Error("Enter your full name");
+  if (fullName.length > 120) throw new Error("Full name must be 120 characters or fewer");
   const isMinor = parseAgeOver18(form.age_over_18);
   const guardian = guardianFields(isMinor, form.guardian_name, form.guardian_phone);
   if (!form.waiver) throw new Error("Read and accept the Indemnity");
@@ -4037,6 +4040,18 @@ export async function saveMyApplication(form) {
     privacy_accepted_at: acceptedAt,
     guidelines_accepted_at: acceptedAt,
   };
+  const { data: savedProfile, error: profileError } = await supabase
+    .from("profiles")
+    .update({ full_name: fullName })
+    .eq("id", cu.id)
+    .select("*")
+    .single();
+  if (profileError) throw profileError;
+  if (!savedProfile) throw new Error("Unable to save your full name");
+  liveProfile = savedProfile;
+  liveProfileFetchedAt = Date.now();
+  await getCurrentUser();
+
   const { error } = await supabase.from("applications").upsert(row);
   if (error) throw error;
   clearApplyDraft();

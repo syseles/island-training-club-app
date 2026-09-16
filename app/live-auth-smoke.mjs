@@ -387,7 +387,9 @@ const fakeSupabase = {
               return result;
             },
             select(columns) {
-              if (columns !== "id, role") throw new Error("Profile update must return id and role");
+              if (!["id, role", "*"].includes(columns)) {
+                throw new Error("Unexpected profile update return columns");
+              }
               return {
                 single: async () => {
                   if (profileUpdateGate) await profileUpdateGate;
@@ -401,7 +403,12 @@ const fakeSupabase = {
                   }
                   Object.assign(target, patch);
                   if (profileListErrorAfterUpdate) profileListError = profileListErrorAfterUpdate;
-                  return { data: { id: targetId, role: target.role }, error: null };
+                  return {
+                    data: columns === "*"
+                      ? target
+                      : { id: targetId, role: target.role },
+                    error: null,
+                  };
                 },
               };
             },
@@ -1936,11 +1943,13 @@ console.log("ok  live Admin Payments renders directory-backed financial names");
 
 const originalProfileForApply = structuredClone(profile);
 const originalApplicationForApply = structuredClone(applicationRows.get(authUser.id));
-Object.assign(profile, { role: "pending" });
+Object.assign(profile, { role: "pending", full_name: null });
 applicationRows.delete(authUser.id);
 await store.getCurrentUser();
 const liveApplyHtml = await views.viewApply();
 assert.match(liveApplyHtml, /data-form="apply"/);
+assert.match(liveApplyHtml, /name="full_name"[^>]*required/);
+assert.match(liveApplyHtml, /name="full_name"[^>]*autocomplete="name"/);
 assert.match(liveApplyHtml, /name="mobile"/);
 assert.match(liveApplyHtml, /name="age_over_18"/);
 for (const name of ["emergency_relationship", "waiver_signature_text", "waiver_signed_at"]) {
@@ -1954,6 +1963,7 @@ assert.match(liveApplyHtml, new RegExp(`name="waiver_signed_at"[^>]*max="${today
 assert.doesNotMatch(liveApplyHtml, /name="email"/);
 
 store.saveApplyDraft({ fields: {
+  full_name: "Riley Magic",
   mobile: "+852 6123 4567",
   age_over_18: "yes",
   emergency_name: "Taylor Coach",
@@ -1970,6 +1980,7 @@ store.saveApplyDraft({ fields: {
 } });
 const draftApplyHtml = await views.viewApply();
 assert.match(draftApplyHtml, /data-draft-resume/);
+assert.match(draftApplyHtml, /name="full_name" value="Riley Magic"/);
 assert.match(draftApplyHtml, /value="\+852 6123 4567"/);
 assert.match(draftApplyHtml, /name="age_over_18" value="yes" checked/);
 assert.match(draftApplyHtml, /name="emergency_relationship" value="Coach"/);
@@ -1979,6 +1990,7 @@ assert.match(draftApplyHtml, /data-action="save-draft"/);
 assert.match(draftApplyHtml, /data-action="discard-draft"/);
 
 const liveApplyPayload = {
+  full_name: "  Riley Magic  ",
   mobile: "+852 6123 4567",
   age_over_18: "yes",
   guardian_name: "",
@@ -2004,7 +2016,31 @@ for (const [label, overrides] of [
     `${label} should be rejected during live application submit`
   );
 }
+await assert.rejects(
+  () => store.saveMyApplication({ ...liveApplyPayload, full_name: "   " }),
+  /Enter your full name/
+);
+
+profileUpdateError = new Error("Profile name unavailable");
+await assert.rejects(
+  () => store.saveMyApplication(liveApplyPayload),
+  /Profile name unavailable/
+);
+assert.equal(
+  applicationRows.has(authUser.id),
+  false,
+  "application must not be written after profile-name failure"
+);
+profileUpdateError = null;
+
+const profileUpdatesBeforeApplication = profileUpdates.length;
 await store.saveMyApplication(liveApplyPayload);
+assert.equal(profile.full_name, "Riley Magic");
+assert.ok(profileUpdates.slice(profileUpdatesBeforeApplication).some((update) =>
+  update.id === authUser.id && update.full_name === "Riley Magic"
+));
+assert.equal(applicationRows.get(authUser.id).profile_id, authUser.id);
+assert.equal((await store.getCurrentUser()).fullName, "Riley Magic");
 assert.equal(store.getApplyDraft(), null, "successful live submit must clear its draft");
 
 Object.assign(profile, originalProfileForApply);
