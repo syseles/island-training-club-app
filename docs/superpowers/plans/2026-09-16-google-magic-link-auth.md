@@ -71,7 +71,7 @@ signInWithOtp(options) {
 Extend the signed-out Home/Account assertions:
 
 ```js
-assert.match(signedOutHome, /href="#\/account"[^>]*>Use email instead</);
+assert.match(signedOutHome, /href="#\/account"[^>]*>Use an email link instead</);
 assert.match(signedOutAccount, /id="form-magic-link"/);
 assert.match(signedOutAccount, /name="email"[^>]*type="email"/);
 assert.match(signedOutAccount, /Email me a sign-in link/);
@@ -153,7 +153,7 @@ In live `accountVisitor()`, preserve the Google button and append:
 In the live Home visitor card, keep the Google button and add:
 
 ```html
-<a class="btn ghost mt8" href="#/account">Use email instead</a>
+<a class="btn ghost mt8" href="#/account">Use an email link instead</a>
 ```
 
 - [ ] **Step 5: Run the live auth smoke test**
@@ -497,18 +497,20 @@ Add **Email magic links and custom SMTP** after redirect configuration, covering
 
 Google remains the primary button. Email magic links are the secondary path
 for members without Google accounts. Supabase Auth creates/verifies the token;
-a custom transactional SMTP provider delivers the email.
+interim Gmail SMTP delivers it from `itc.admin.ops@gmail.com`.
 
 1. Enable the Email provider in Supabase Authentication settings.
-2. Create a transactional-email account on its current free tier (Resend is
-   the initial candidate) and verify an ITC-controlled sending domain.
-3. Publish the provider's SPF and DKIM records and enable DMARC monitoring.
-4. Put SMTP host, port, username, password/API credential, and sender only in
-   Supabase project SMTP settings. Never add them to `app/index.html` or Git.
+2. Use **Island Training Club `<itc.admin.ops@gmail.com>`** as the approved
+   interim sender until ITC owns a domain.
+3. Enable two-step verification and generate a dedicated Google App Password
+   for Supabase SMTP; never use the account's normal password.
+4. Configure `smtp.gmail.com`, port 465/SSL or 587/STARTTLS, the complete Gmail
+   username, App Password, and sender name only in Supabase settings.
 5. Configure the exact local, preview, and production `/app/` redirect URLs.
 6. Target a 15-minute link lifetime where supported and configure request
    throttling/cooldown.
-7. Recheck provider quotas at deployment; free-tier terms can change.
+7. Monitor Gmail throttling and delivery; migrate to a dedicated address on an
+   owned domain and configure SPF/DKIM/DMARC when that domain exists.
 ```
 
 Document the generic success copy, same-device phase-one support, expired-link retry, provider disable rollback, and the two required identity-continuity tests. State that rollout is blocked if the same exact email receives a second UUID.
@@ -599,7 +601,7 @@ Report that these require the configured Supabase/SMTP environment and are not c
 3. Google-first then magic-link identity UUID continuity.
 4. Magic-link-first then Google identity UUID continuity.
 5. Safari/iOS, Chrome/Android, and desktop callback behavior.
-6. Free-tier quota and provider terms at deployment time.
+6. Gmail SMTP quota, throttling, and App Password availability at deployment time.
 7. Provider-disable rollback while Google remains available.
 
 Do not claim production readiness until these checks pass.

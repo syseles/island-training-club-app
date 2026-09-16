@@ -363,7 +363,7 @@ export function viewHome() {
       ${visitorDraftActions()}
       ${isLive()
         ? `<button class="btn mt16" type="button" data-action="sign-in-google">Continue with Google</button>
-          <a class="btn ghost mt8" href="#/account">Use email instead</a>`
+          <a class="btn ghost mt8" href="#/account">Use an email link instead</a>`
         : `<a class="btn mt16" href="#/account">Sign in or join</a>`}
       <p class="muted small mt8">New here? You'll be guided through a short application after sign-in.</p>
     </div></div>`

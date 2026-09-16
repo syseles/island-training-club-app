@@ -92,30 +92,42 @@ the exact `localhost` form separately if you use it).
 
 Google remains the primary sign-in button. Email magic links are the secondary
 path for members without Google accounts. Supabase Auth creates and verifies
-the token; a custom transactional SMTP provider delivers the email.
+the token. Until ITC owns a domain, Gmail SMTP delivers it from the approved
+interim operational account.
 
-Launch configuration:
+Interim launch configuration:
 
 1. Enable the Email provider in Supabase Authentication settings. Leave new
    user creation enabled: the database trigger creates a `pending` profile,
    never an approved member.
-2. Create a transactional-email account on its current free tier. Resend is
-   the initial candidate, but verify its current allowance and terms during
-   setup rather than relying on a hard-coded quota in this repository.
-3. Verify an ITC-controlled sending domain. Publish the provider's SPF and DKIM
-   records and enable DMARC monitoring.
-4. Put the SMTP host, port, username, password/API credential, and sender only
-   in Supabase project SMTP settings. Never add them to `app/index.html`, Git,
-   browser storage, client JavaScript, screenshots, or this runbook.
-5. Add the exact local, preview, and production `/app/` URLs to Supabase's
+2. Use sender name **Island Training Club** and sender email
+   `itc.admin.ops@gmail.com`. This shared mailbox also handles approved admin
+   operations, payments, and enquiries; its wider blast radius is accepted
+   temporarily until ITC owns a domain.
+3. Enable two-step verification on the Google account and generate a dedicated
+   Google App Password labelled for Supabase SMTP. Do not use the account's
+   ordinary Google password.
+4. In Supabase custom SMTP settings, configure:
+   - host: `smtp.gmail.com`;
+   - port: `465` with SSL or `587` with STARTTLS, according to the dashboard;
+   - username/sender email: `itc.admin.ops@gmail.com`;
+   - password: the dedicated Google App Password;
+   - sender name: `Island Training Club`.
+5. Keep the App Password only in Supabase project settings. Never add it to
+   `app/index.html`, Git, browser storage, client JavaScript, screenshots, or
+   this runbook. Preserve Google recovery methods and backup codes separately.
+6. Add the exact local, preview, and production `/app/` URLs to Supabase's
    redirect allowlist. Magic links use the same exact callback path as Google.
-6. Target a 15-minute link lifetime where supported and configure Supabase
+7. Target a 15-minute link lifetime where supported and configure Supabase
    request throttling. The browser already suppresses duplicate in-flight
-   submissions; provider/project limits remain the authoritative abuse control.
-7. Send authentication and essential transactional messages only. Do not use
-   the authentication sender for newsletters or bulk marketing. Monitor quota,
-   bounces, and delivery failures so the service can stay on a free tier while
-   volume permits.
+   submissions; Gmail/Supabase limits remain the authoritative abuse control.
+8. Use the account only for its approved low-volume operations and
+   authentication. Do not use it for newsletters or bulk marketing. Monitor
+   Gmail quota, throttling, bounces, and delivery failures; free Gmail SMTP is
+   not a transactional-delivery guarantee.
+
+When ITC owns a domain, replace this interim sender with a dedicated domain
+address through a transactional provider and configure SPF, DKIM, and DMARC.
 
 The browser always responds with generic copy — **Check your inbox** on success
 or a generic retry message on failure — and never says whether an address was
@@ -140,8 +152,8 @@ Supabase identity-linking/provider configuration before continuing.
 
 Production acceptance also covers branded inbox delivery, spam placement,
 expired and reused links, rate limits, and current Safari/iOS, Chrome/Android,
-and desktop Chrome. Free-tier availability is an expectation, not a permanent
-provider guarantee.
+and desktop Chrome. Zero-cost Gmail SMTP is an interim expectation, not a
+permanent availability or delivery guarantee.
 
 Rollback is configuration-first: disable the Supabase Email provider, then
 remove the email form in a follow-up deploy. Google OAuth remains available.

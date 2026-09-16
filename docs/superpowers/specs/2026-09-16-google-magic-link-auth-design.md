@@ -19,7 +19,7 @@ ITC needs a second sign-in route that verifies ownership of any deliverable emai
 - A new account starts as `pending`, completes the existing membership application, and requires leader approval.
 - A magic-link applicant supplies a required full name in the existing membership application.
 - Phone numbers remain profile/contact data, not authentication credentials.
-- Use a transactional-email free tier at launch; provider credentials and DNS configuration remain deployment configuration, not committed code.
+- Use `itc.admin.ops@gmail.com` as the approved interim SMTP sender until ITC owns a domain; its Google App Password remains deployment configuration and is never committed.
 
 ## Goals
 
@@ -61,7 +61,7 @@ The form must not ask for the applicant's name before email verification. New ap
 
 ### Home page
 
-The visitor card keeps **Continue with Google** as its primary action and adds a secondary **Use email instead** link to `#/account`. The complete email form remains on Account rather than being duplicated on Home.
+The visitor card keeps **Continue with Google** as its primary action and adds a secondary **Use an email link instead** link to `#/account`. The complete email form remains on Account rather than being duplicated on Home.
 
 ### Sending a link
 
@@ -108,21 +108,22 @@ The profile update occurs before application submission. If the application upse
 
 ## Email delivery and deployment configuration
 
-Supabase generates and validates the magic link. A custom SMTP provider delivers it.
+Supabase generates and validates the magic link. Gmail SMTP delivers it during the interim period before ITC owns a domain.
 
-Recommended launch configuration:
+Approved interim configuration:
 
-- Use a transactional provider's current free tier, with Resend as the initial candidate.
-- Verify an ITC-controlled sending domain.
-- Configure SPF and DKIM; enable DMARC monitoring.
-- Store SMTP credentials only in Supabase project settings.
-- Send from an address such as `noreply@<ITC-domain>`.
+- Sender: **Island Training Club `<itc.admin.ops@gmail.com>`**.
+- Enable two-step verification on the Google account and create a dedicated Google App Password for Supabase SMTP. Never use or store the account's normal password in Supabase.
+- Configure `smtp.gmail.com` with the full Gmail address as username and the App Password only in Supabase project settings. Use port 465 with SSL or port 587 with STARTTLS according to the Supabase SMTP form.
+- Preserve the account's recovery methods and backup codes outside this repository.
 - Configure the exact production, preview, and local `/app/` redirect URLs in Supabase.
 - Configure a short link lifetime (target: 15 minutes where supported) and a resend/request cooldown.
-- Monitor provider quota and delivery failures. Free-tier terms must be checked at deployment because provider limits can change.
-- Keep authentication and essential transactional mail within the free allowance; do not use this channel for bulk marketing.
+- Monitor Gmail quota, throttling, bounces, and delivery failures. Free Gmail limits are not a transactional-delivery guarantee.
+- Keep the account limited to its approved admin operations, payment enquiries, and low-volume authentication. Do not use it for bulk marketing.
 
-Supabase's default test sender and personal Gmail SMTP are not accepted as the production delivery path. No SMTP API key or password is added to `app/index.html`, Git, browser storage, or client JavaScript.
+The shared operational mailbox increases the blast radius if Google blocks the account or its App Password is exposed; ITC accepts that limitation temporarily. Once ITC owns a domain, migrate the sender to a dedicated address on that domain through a transactional provider, with SPF, DKIM, and DMARC configured.
+
+Supabase's default test sender is not accepted as the live delivery path. No Google password, App Password, SMTP credential, or token is added to `app/index.html`, Git, browser storage, or client JavaScript.
 
 ## Abuse and privacy controls
 
@@ -159,7 +160,7 @@ The UI must:
 ### `app/js/views.js`
 
 - Render Google first and the magic-link form second in `accountVisitor()`.
-- Add the Home **Use email instead** route.
+- Add the Home **Use an email link instead** route.
 - Add required `full_name` to `applyFormHtml()`, prefilled when available.
 - Keep local-mode sign-in and local application behavior unchanged.
 
@@ -220,7 +221,7 @@ Manual acceptance on the configured target project:
 
 Rollout order:
 
-1. Configure and verify the SMTP sending domain.
+1. Secure `itc.admin.ops@gmail.com` with two-step verification, create its dedicated Supabase App Password, and configure Gmail SMTP.
 2. Enable the Supabase Email provider and exact redirect allowlist.
 3. Configure email template, lifetime, and rate limits.
 4. Deploy the UI/store changes to a preview environment.
@@ -236,5 +237,5 @@ Rollback is configuration-first: disable the Supabase Email provider and remove 
 - New email identities are pending, never automatically approved.
 - Full names—not raw emails—appear after application submission.
 - Existing members using the same exact email do not lose role or operational history.
-- Initial recurring email-delivery cost remains HK$0 under the provider's then-current free tier.
+- Initial recurring email-delivery cost remains HK$0 while interim Gmail SMTP remains available within Google's limits.
 - Both smoke suites pass and deployed identity-continuity acceptance is recorded before production launch.
