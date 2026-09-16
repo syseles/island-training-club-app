@@ -118,13 +118,31 @@ Interim launch configuration:
    this runbook. Preserve Google recovery methods and backup codes separately.
 6. Add the exact local, preview, and production `/app/` URLs to Supabase's
    redirect allowlist. Magic links use the same exact callback path as Google.
-7. Target a 15-minute link lifetime where supported and configure Supabase
-   request throttling. The browser already suppresses duplicate in-flight
-   submissions; Gmail/Supabase limits remain the authoritative abuse control.
+7. Set the Email OTP expiry to exactly `900` seconds so the configured lifetime
+   matches the 15-minute security statement in the branded templates. Configure
+   Supabase request throttling as well. The browser already suppresses duplicate
+   in-flight submissions; Gmail/Supabase limits remain the authoritative abuse
+   control.
 8. Use the account only for its approved low-volume operations and
    authentication. Do not use it for newsletters or bulk marketing. Monitor
    Gmail quota, throttling, bounces, and delivery failures; free Gmail SMTP is
    not a transactional-delivery guarantee.
+
+### Branded template deployment
+
+The email-safe Night Circuit bodies, exact subjects, and acceptance checklist
+are in `supabase/email-templates/README.md`. The two templates deliberately
+have different messages:
+
+- **Confirm signup** explains that email confirmation continues an application
+  and does not grant membership approval.
+- **Magic Link** provides secure returning-account access without a password.
+
+Both templates load the optimized approved logo from
+`https://island-training-club-app.vercel.app/assets/itc/itc-email-logo.png`.
+The current production deployment predates that file. Promote the asset first,
+verify the URL returns `image/png` without authentication, and only then paste
+the HTML into Supabase. Keep `{{ .ConfirmationURL }}` unchanged.
 
 When ITC owns a domain, replace this interim sender with a dedicated domain
 address through a transactional provider and configure SPF, DKIM, and DMARC.

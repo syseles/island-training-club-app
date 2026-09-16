@@ -292,6 +292,42 @@ for (const relativePath of [
 }
 console.log("ok  Payment Auth baseline foundation files exist");
 
+const authEmailTemplatePaths = [
+  "../supabase/email-templates/confirm-signup.html",
+  "../supabase/email-templates/magic-link.html",
+  "../supabase/email-templates/README.md",
+  "../assets/itc/itc-email-logo.png",
+];
+for (const relativePath of authEmailTemplatePaths) {
+  if (!existsSync(resolve(__dirnameSmoke, relativePath))) {
+    throw new Error(`Branded auth email asset missing ${relativePath}`);
+  }
+}
+const confirmSignupEmailSource = readFileSync(
+  resolve(__dirnameSmoke, "../supabase/email-templates/confirm-signup.html"),
+  "utf8"
+);
+const magicLinkEmailSource = readFileSync(
+  resolve(__dirnameSmoke, "../supabase/email-templates/magic-link.html"),
+  "utf8"
+);
+for (const [name, source] of [
+  ["Confirm signup", confirmSignupEmailSource],
+  ["Magic link", magicLinkEmailSource],
+]) {
+  assert.match(source, /\{\{ \.ConfirmationURL \}\}/, `${name} must retain Supabase's confirmation URL`);
+  assert.match(source, /https:\/\/island-training-club-app\.vercel\.app\/assets\/itc\/itc-email-logo\.png/,
+    `${name} must use the email crop derived from the approved new logo`);
+  assert.match(source, /#CAFF31/i, `${name} must use the ITC volt-green accent`);
+  assert.match(source, /expires in 15 minutes/i, `${name} must state the configured expiry`);
+  assert.doesNotMatch(source, /logo\.webp|logo-header\.png/i, `${name} must not use an older ITC logo`);
+  assert.doesNotMatch(source, /<script|<form/i, `${name} must remain email-client-safe static HTML`);
+}
+assert.match(confirmSignupEmailSource, /Confirm email and continue/);
+assert.match(confirmSignupEmailSource, /membership requires review and approval/i);
+assert.match(magicLinkEmailSource, /Sign in to Island Training Club/);
+console.log("ok  branded auth emails use the approved new logo and email-safe Night Circuit markup");
+
 const profilesMigrationSource = readFileSync(
   resolve(__dirnameSmoke, "../supabase/migrations/20260804000000_profiles.sql"),
   "utf8"
