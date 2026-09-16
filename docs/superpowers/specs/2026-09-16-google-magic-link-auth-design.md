@@ -1,9 +1,9 @@
 # Google OAuth + Email Magic-Link Authentication — Design
 
-**Date:** 2026-09-16  
-**Branch:** `feature/auth-magic-link`  
-**Base:** `origin/testing` at `d47df9f`  
-**Status:** Proposed for review
+**Date:** 2026-09-16
+**Branch:** `feature/auth-magic-link`
+**Base:** `origin/testing` at `d47df9f`
+**Status:** Approved
 
 ## Problem
 
