@@ -362,7 +362,8 @@ export function viewHome() {
       <p class="hero-meta">Free activities are open to all — just show up. Membership is free too; sign in and an ITC leader approves every application before paid booking unlocks.</p>
       ${visitorDraftActions()}
       ${isLive()
-        ? `<button class="btn mt16" type="button" data-action="sign-in-google">Continue with Google</button>`
+        ? `<button class="btn mt16" type="button" data-action="sign-in-google">Continue with Google</button>
+          <a class="btn ghost mt8" href="#/account">Use email instead</a>`
         : `<a class="btn mt16" href="#/account">Sign in or join</a>`}
       <p class="muted small mt8">New here? You'll be guided through a short application after sign-in.</p>
     </div></div>`
@@ -1328,6 +1329,15 @@ function accountVisitor() {
       ${visitorDraftActions()}
       <div class="card mt24"><div class="card-body">
         <button class="btn mt16" type="button" data-action="sign-in-google">Continue with Google</button>
+        <p class="muted small center mt16">or continue with email</p>
+        <form id="form-magic-link" class="mt16" novalidate>
+          <div class="field">
+            <label for="magic-link-email">Email</label>
+            <input id="magic-link-email" name="email" type="email" autocomplete="email" inputmode="email" placeholder="you@example.com" required>
+          </div>
+          <button class="btn ghost mt16" type="submit">Email me a sign-in link</button>
+          <div class="muted small mt16" data-magic-link-feedback aria-live="polite"></div>
+        </form>
         <p class="muted small mt16">By continuing, you agree to be added to the ITC community roster. An ITC leader will review your application before you can book sessions.</p>
       </div></div>`;
   }

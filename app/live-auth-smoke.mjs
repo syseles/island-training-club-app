@@ -283,6 +283,9 @@ let authCallbackLocked = false;
 let oauthCalls = 0;
 let oauthOptions = null;
 let releaseOAuth = null;
+let magicLinkCalls = 0;
+let magicLinkOptions = null;
+let releaseMagicLink = null;
 let signOutCalls = 0;
 let releaseSignOut = null;
 const deferredAuthTasks = [];
@@ -333,6 +336,11 @@ const fakeSupabase = {
       oauthCalls++;
       oauthOptions = options;
       return new Promise((resolve) => { releaseOAuth = resolve; });
+    },
+    signInWithOtp(options) {
+      magicLinkCalls++;
+      magicLinkOptions = options;
+      return new Promise((resolve) => { releaseMagicLink = resolve; });
     },
     signOut() {
       signOutCalls++;
@@ -1881,12 +1889,21 @@ console.log("ok  live partial venue remains TBC until both values confirm it");
 
 const signedOutHome = views.viewHome();
 assert.match(signedOutHome, /data-action="sign-in-google"[^>]*>Continue with Google</);
+assert.match(signedOutHome, /href="#\/account"[^>]*>Use email instead</);
 assert.doesNotMatch(signedOutHome, /href="#\/account"[^>]*>Sign in or join</);
 store.saveApplyDraft({ fields: { mobile: "+852 6123 4567" } });
 const signedOutAccount = await views.viewAccount();
 assert.match(signedOutAccount, /Continue your application/);
 assert.match(signedOutAccount, /data-action="discard-draft"/);
 assert.match(signedOutAccount, /data-action="sign-in-google"/);
+assert.match(signedOutAccount, /id="form-magic-link"/);
+assert.match(signedOutAccount, /<input(?=[^>]*name="email")(?=[^>]*type="email")[^>]*>/);
+assert.match(signedOutAccount, /Email me a sign-in link/);
+assert.ok(
+  signedOutAccount.indexOf('data-action="sign-in-google"')
+    < signedOutAccount.indexOf('id="form-magic-link"'),
+  "Google must remain before the email alternative"
+);
 store.clearApplyDraft();
 
 await store.getCurrentUser();
@@ -3513,6 +3530,19 @@ globalThis.location = {
   pathname: "/feature/payment-system/app/",
 };
 window.location = globalThis.location;
+
+const directMagicLink = store.signInWithMagicLink("  Runner@Example.com ");
+assert.equal(magicLinkCalls, 1);
+assert.deepEqual(magicLinkOptions, {
+  email: "runner@example.com",
+  options: {
+    shouldCreateUser: true,
+    emailRedirectTo: `${location.origin}${location.pathname}`,
+  },
+});
+releaseMagicLink({ data: {}, error: null });
+assert.deepEqual(await directMagicLink, { ok: true });
+
 window.addEventListener = (event, callback) => windowListeners.set(event, callback);
 window.scrollTo = () => {};
 let nextTimerId = 1;

@@ -3764,7 +3764,7 @@ export async function getCurrentUser() {
 }
 
 export async function signInWithGoogle() {
-  if (!isLive || !supabase) {
+  if (!isLive() || !supabase) {
     throw new Error("signInWithGoogle requires SUPABASE_URL and SUPABASE_ANON_KEY");
   }
   const { error } = await supabase.auth.signInWithOAuth({
@@ -3772,6 +3772,23 @@ export async function signInWithGoogle() {
     options: { redirectTo: `${window.location.origin}${window.location.pathname}` },
   });
   if (error) throw error;
+}
+
+export async function signInWithMagicLink(email) {
+  if (!isLive() || !supabase) {
+    throw new Error("signInWithMagicLink requires SUPABASE_URL and SUPABASE_ANON_KEY");
+  }
+  const normalizedEmail = String(email || "").trim().toLowerCase();
+  if (!normalizedEmail) throw new Error("Enter your email address");
+  const { error } = await supabase.auth.signInWithOtp({
+    email: normalizedEmail,
+    options: {
+      shouldCreateUser: true,
+      emailRedirectTo: `${window.location.origin}${window.location.pathname}`,
+    },
+  });
+  if (error) throw error;
+  return { ok: true };
 }
 
 export async function signOutLive() {
