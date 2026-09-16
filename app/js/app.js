@@ -314,6 +314,13 @@ function showInlineFormError(host, message) {
   host.appendChild(alert);
 }
 
+function showMagicLinkFeedback(form, message, isError = false) {
+  const host = form.querySelector("[data-magic-link-feedback]");
+  if (!host) return;
+  host.textContent = message;
+  host.setAttribute("role", isError ? "alert" : "status");
+}
+
 export async function maybeRedirectToApply() {
   if (!isLive()) return;
   const cu = await store.getCurrentUser();
@@ -1369,6 +1376,31 @@ document.addEventListener("submit", async (e) => {
   const formAction = form.id || form.dataset.action;
 
   switch (formAction) {
+    case "form-magic-link": {
+      e.preventDefault();
+      if (!form.reportValidity()) return;
+      const email = form.querySelector('[name="email"]');
+      const control = form.querySelector('[type="submit"]');
+      const emailValue = new FormData(form).get("email");
+      showMagicLinkFeedback(form, "");
+      await withBusyControl(control, "Sending…", async () => {
+        try {
+          await store.signInWithMagicLink(emailValue);
+          showMagicLinkFeedback(
+            form,
+            "Check your inbox. We sent a private sign-in link. Open it on this device to continue."
+          );
+        } catch {
+          showMagicLinkFeedback(
+            form,
+            "We couldn’t send the link. Wait a moment and try again.",
+            true
+          );
+        }
+      }, { controls: [email, control] });
+      break;
+    }
+
     case "form-signin": {
       e.preventDefault();
       const email = new FormData(form).get("email");

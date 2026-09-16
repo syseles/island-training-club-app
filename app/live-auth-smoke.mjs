@@ -4098,6 +4098,61 @@ for (const [errorType, setError] of [
 const click = domListeners.get("click");
 const change = domListeners.get("change");
 
+const magicForm = new HTMLFormElement();
+magicForm.id = "form-magic-link";
+magicForm.dataset = {};
+magicForm.fields = { email: "  Member@Example.com " };
+magicForm.reportValidity = () => true;
+const magicEmail = makeElement();
+magicEmail.name = "email";
+magicEmail.disabled = false;
+const magicSubmit = makeElement();
+magicSubmit.textContent = "Email me a sign-in link";
+magicSubmit.disabled = false;
+const magicFeedback = makeElement();
+magicForm.nativeControls = [magicEmail, magicSubmit];
+magicForm.querySelector = (selector) => ({
+  '[name="email"]': magicEmail,
+  '[type="submit"]': magicSubmit,
+  "[data-magic-link-feedback]": magicFeedback,
+}[selector] || null);
+
+const firstMagicSubmit = domListeners.get("submit")({
+  target: magicForm,
+  preventDefault() {},
+});
+assert.equal(magicEmail.disabled, true);
+assert.equal(magicSubmit.disabled, true);
+assert.equal(magicSubmit.textContent, "Sending…");
+const duplicateMagicSubmit = domListeners.get("submit")({
+  target: magicForm,
+  preventDefault() {},
+});
+assert.equal(magicLinkCalls, 2, "one direct store test plus one form request");
+releaseMagicLink({ data: {}, error: null });
+await Promise.all([firstMagicSubmit, duplicateMagicSubmit]);
+assert.equal(magicEmail.disabled, false);
+assert.equal(magicSubmit.disabled, false);
+assert.match(magicFeedback.textContent, /Check your inbox/);
+assert.equal(magicFeedback.getAttribute("role"), "status");
+
+const rejectedMagicSubmit = domListeners.get("submit")({
+  target: magicForm,
+  preventDefault() {},
+});
+assert.equal(magicLinkCalls, 3);
+releaseMagicLink({ data: null, error: new Error("User not found") });
+await rejectedMagicSubmit;
+assert.equal(magicFeedback.getAttribute("role"), "alert");
+assert.equal(
+  magicFeedback.textContent,
+  "We couldn’t send the link. Wait a moment and try again."
+);
+assert.doesNotMatch(magicFeedback.textContent, /User not found/);
+assert.equal(magicEmail.disabled, false);
+assert.equal(magicSubmit.disabled, false);
+console.log("ok  delegated magic-link requests dedupe and recover with generic feedback");
+
 // Assigned payout rows for another collector are RLS-suppressed from an
 // ordinary member's Realtime stream. Entering/restoring Payment must therefore
 // force the narrow assigned-payout hydration, and stale completions must not
