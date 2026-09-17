@@ -199,6 +199,17 @@ let oauthOptions = null;
 let releaseOAuth = null;
 let signOutCalls = 0;
 let releaseSignOut = null;
+const avatarFunctionCalls = [];
+const avatarResolveCalls = [];
+let avatarInvokeError = null;
+let avatarResolveStatus = 200;
+let avatarPresentation = {
+  profileId: authUser.id,
+  url: "https://example.supabase.co/storage/v1/object/sign/profile-avatars/live-user-1/google.jpg?token=test-token",
+  source: "google",
+  state: "active",
+  expiresAt: "2026-08-05T02:10:00.000Z",
+};
 const deferredAuthTasks = [];
 const LIVE_TABLES_COUNT = 7;
 const fixedIso = "2026-08-05T02:00:00.000Z";
@@ -251,6 +262,25 @@ const fakeSupabase = {
       signOutCalls++;
       return new Promise((resolve) => { releaseSignOut = resolve; });
     },
+  },
+  functions: {
+    async invoke(name, options = {}) {
+      avatarFunctionCalls.push({ name, options });
+      if (avatarInvokeError) return { data: null, error: avatarInvokeError };
+      const action = options.body instanceof FormData ? options.body.get("action") : options.body?.action;
+      const source = options.method === "DELETE" ? "google" : action === "upload" ? "custom" : "google";
+      avatarPresentation = {
+        ...avatarPresentation,
+        source,
+        url: source === "custom"
+          ? "https://example.supabase.co/storage/v1/object/sign/profile-avatars/live-user-1/custom.jpg?token=custom-token"
+          : "https://example.supabase.co/storage/v1/object/sign/profile-avatars/live-user-1/google.jpg?token=google-token",
+      };
+      return { data: { presentation: structuredClone(avatarPresentation) }, error: null };
+    },
+  },
+  get storage() {
+    throw new Error("Browser avatar code must not use the Supabase Storage client");
   },
   from(table) {
     if (table === "profiles") {
@@ -508,6 +538,21 @@ globalThis.window = {
   SUPABASE_URL: "https://example.supabase.co",
   SUPABASE_ANON_KEY: "test-anon-key",
   supabase: { createClient: () => fakeSupabase },
+};
+
+globalThis.fetch = async (url, options = {}) => {
+  const parsed = new URL(url);
+  if (parsed.pathname !== "/functions/v1/resolve-profile-avatars") {
+    throw new Error(`Unexpected fetch URL: ${url}`);
+  }
+  avatarResolveCalls.push({ url: parsed.toString(), options });
+  const payload = avatarResolveStatus === 200
+    ? { avatars: [structuredClone(avatarPresentation)] }
+    : { error: "sensitive resolver detail" };
+  return new Response(JSON.stringify(payload), {
+    status: avatarResolveStatus,
+    headers: { "content-type": "application/json" },
+  });
 };
 
 // Seed operational fake tables with at least one upcoming paid session so
@@ -909,6 +954,78 @@ assert.match(signedOutAccount, /data-action="sign-in-google"/);
 store.clearApplyDraft();
 
 await store.getCurrentUser();
+
+// Avatar adapters use only authenticated Edge Functions and keep signed URLs
+// in memory. Cache hits avoid resolver traffic; mutations replace that cache.
+const firstAvatar = await store.getOwnAvatar();
+assert.equal(firstAvatar.source, "google");
+assert.equal(avatarResolveCalls.length, 1);
+assert.equal(new URL(avatarResolveCalls[0].url).searchParams.get("scope"), "self");
+assert.equal(avatarResolveCalls[0].options.method, "GET");
+assert.equal(avatarResolveCalls[0].options.headers.Authorization, "Bearer test-access-token");
+assert.equal(avatarResolveCalls[0].options.headers.apikey, "test-anon-key");
+await store.getOwnAvatar();
+assert.equal(avatarResolveCalls.length, 1, "fresh own-avatar cache should suppress duplicate resolution");
+await store.getOwnAvatar({ force: true });
+assert.equal(avatarResolveCalls.length, 2, "forced own-avatar resolution should replace cache");
+
+avatarPresentation.expiresAt = null;
+store.clearAvatarCache();
+const unsignedExpiryResolveCount = avatarResolveCalls.length;
+await store.getOwnAvatar();
+await store.getOwnAvatar();
+assert.equal(avatarResolveCalls.length, unsignedExpiryResolveCount + 2,
+  "a signed URL without expiry metadata must never be cached indefinitely");
+avatarPresentation.expiresAt = "2026-08-05T02:10:00.000Z";
+store.clearAvatarCache();
+
+const uploadedAvatar = await store.uploadMyAvatar(new Blob(["jpeg"], { type: "image/jpeg" }));
+assert.equal(uploadedAvatar.source, "custom");
+const uploadCall = avatarFunctionCalls.at(-1);
+assert.equal(uploadCall.name, "process-profile-avatar");
+assert.equal(uploadCall.options.method, "POST");
+assert.ok(uploadCall.options.body instanceof FormData);
+assert.equal(uploadCall.options.body.get("action"), "upload");
+assert.ok(uploadCall.options.body.get("file") instanceof Blob);
+const resolveCountAfterUpload = avatarResolveCalls.length;
+assert.equal((await store.getOwnAvatar()).source, "custom");
+assert.equal(avatarResolveCalls.length, resolveCountAfterUpload, "upload should replace own cache");
+
+const removedAvatar = await store.removeMyAvatar();
+assert.equal(removedAvatar.source, "google");
+const removeCall = avatarFunctionCalls.at(-1);
+assert.equal(removeCall.name, "process-profile-avatar");
+assert.equal(removeCall.options.method, "DELETE");
+assert.equal((await store.getOwnAvatar()).source, "google");
+
+avatarInvokeError = { message: "sensitive service-role detail", context: { status: 500 } };
+await assert.rejects(
+  store.uploadMyAvatar(new Blob(["jpeg"], { type: "image/jpeg" })),
+  (error) => /could not be saved/i.test(error.message) && !/service-role/i.test(error.message),
+);
+avatarInvokeError = null;
+assert.equal((await store.uploadMyAvatar(new Blob(["jpeg"], { type: "image/jpeg" }))).source, "custom",
+  "avatar mutation must recover after an error");
+
+store.clearAvatarCache();
+avatarResolveStatus = 401;
+await assert.rejects(
+  store.getOwnAvatar(),
+  (error) => /sign in again/i.test(error.message) && !/sensitive/i.test(error.message),
+);
+avatarResolveStatus = 200;
+assert.equal((await store.getOwnAvatar()).source, "custom", "401 must not leave a rejected request cached");
+const syncBefore = avatarFunctionCalls.length;
+await store.syncGoogleAvatar();
+assert.equal(avatarFunctionCalls.length, syncBefore + 1);
+assert.deepEqual(avatarFunctionCalls.at(-1), {
+  name: "process-profile-avatar",
+  options: { method: "POST", body: { action: "sync_google" } },
+});
+const storeSourceForAvatar = readFileSync(resolve(__dirnameSmoke, "js/store.js"), "utf8");
+assert.doesNotMatch(storeSourceForAvatar, /supabase[.]storage|[.]storage[.]from/,
+  "browser avatar adapters must never mutate Storage directly");
+
 const originalProfileForApply = structuredClone(profile);
 const originalApplicationForApply = structuredClone(applicationRows.get(authUser.id));
 Object.assign(profile, { role: "pending" });
@@ -1825,8 +1942,12 @@ globalThis.document = {
 globalThis.HTMLInputElement = class {};
 globalThis.HTMLFormElement = class {};
 globalThis.FormData = class {
-  constructor(form) { this.form = form; }
-  get(name) { return this.form.fields?.[name] ?? null; }
+  constructor(form) {
+    this.form = form;
+    this.values = new Map();
+  }
+  append(name, value) { this.values.set(name, value); }
+  get(name) { return this.values.has(name) ? this.values.get(name) : this.form?.fields?.[name] ?? null; }
 };
 globalThis.location = {
   hash: "#/account",
@@ -2762,6 +2883,58 @@ process.off("unhandledRejection", captureRejection);
 applicationReadError = null;
 profile.role = "super_admin";
 await store.getCurrentUser();
+const approvedSyncBefore = avatarFunctionCalls.filter((call) => call.options.body?.action === "sync_google").length;
+location.hash = "#/account";
+toastStack.children.length = 0;
+await dispatchAuthStateChange("SIGNED_IN");
+const approvedSyncAfter = avatarFunctionCalls.filter((call) => call.options.body?.action === "sync_google").length;
+assert.equal(approvedSyncAfter, approvedSyncBefore + 1,
+  "approved sign-in must request verified Google avatar synchronization");
+assert.equal(store.currentUser().status, "approved");
+const signedInAvatar = await store.getOwnAvatar();
+assert.equal(signedInAvatar.source, "google");
+assert.match(signedInAvatar.url, /google[.]jpg/);
+assert.match(views.avatarHTML(store.currentUser(), signedInAvatar), /avatar__image/);
+app.commitOwnAvatarPresentation(signedInAvatar);
+assert.match(elements.get("top-avatar").innerHTML, /avatar__image/,
+  "top navigation must render the resolved signed presentation");
+
+let managedOptions = null;
+const profileAvatarButton = makeElement();
+const previousViewQuery = viewEl.querySelector;
+viewEl.querySelector = (selector) => selector === '[data-action="manage-profile-photo"]'
+  ? profileAvatarButton
+  : null;
+await app.openOwnAvatarManager((options) => {
+  managedOptions = options;
+  return { close() {} };
+});
+assert.equal(managedOptions.memberName, "Riley Runner");
+assert.equal(typeof managedOptions.onUpload, "function");
+const managedUpload = await managedOptions.onUpload(new Blob(["jpeg"], { type: "image/jpeg" }));
+assert.equal(managedUpload.source, "custom");
+assert.match(elements.get("top-avatar").innerHTML, /custom[.]jpg/);
+assert.match(profileAvatarButton.innerHTML, /custom[.]jpg/,
+  "upload must update Profile avatar without a page reload");
+const managedRemove = await managedOptions.onRemove();
+assert.equal(managedRemove.source, "google");
+assert.match(elements.get("top-avatar").innerHTML, /google[.]jpg/);
+assert.match(profileAvatarButton.innerHTML, /google[.]jpg/,
+  "remove must update Profile avatar without a page reload");
+viewEl.querySelector = previousViewQuery;
+
+const avatarErrorWrapper = makeElement();
+const avatarErrorImage = makeElement();
+avatarErrorImage.className = "avatar__image";
+avatarErrorImage.classList.toggle("avatar__image", true);
+avatarErrorImage.closest = () => avatarErrorWrapper;
+assert.equal(app.revealAvatarInitials(avatarErrorImage), true);
+assert.equal(avatarErrorImage.hidden, true);
+assert.equal(avatarErrorWrapper.classList.contains("is-error"), true,
+  "image failure must reveal the independent initials fallback");
+assert.doesNotMatch(readFileSync(resolve(__dirnameSmoke, "js/app.js"), "utf8"), /location[.]reload/,
+  "avatar updates must not reload the page");
+
 activeGivingCampaignRow = null;
 activeGivingCampaignError = {
   code: "PGRST205",
@@ -2810,6 +2983,12 @@ console.log("ok  stale Giving lookups cannot mutate the owned live campaign cach
 const finalSignOut = store.signOutLive();
 releaseSignOut({ error: null });
 await finalSignOut;
+const avatarResolveCountAfterSignOut = avatarResolveCalls.length;
+const signedOutAvatar = await store.getOwnAvatar({ force: true });
+assert.equal(signedOutAvatar.source, "initials");
+assert.equal(signedOutAvatar.url, null);
+assert.equal(avatarResolveCalls.length, avatarResolveCountAfterSignOut,
+  "sign-out must clear signed URLs and never resolve another avatar anonymously");
 if (!store.getBooking(uuidBooking.id) || store.getBooking(uuidBooking.id).userId !== authUser.id) {
   throw new Error("Live sign-out must preserve device-local Payment records keyed by profile UUID");
 }

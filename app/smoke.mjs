@@ -69,6 +69,18 @@ for (const relativePath of [
 }
 console.log("ok  Payment Auth baseline foundation files exist");
 
+const localAvatarStateBefore = JSON.stringify([...mem.entries()]);
+const localAvatar = await store.getOwnAvatar();
+const localUpload = await store.uploadMyAvatar(new Blob(["local-photo-bytes"], { type: "image/jpeg" }));
+const localRemove = await store.removeMyAvatar();
+if ([localAvatar, localUpload, localRemove].some((item) => item.source !== "initials" || item.url !== null)) {
+  throw new Error("local avatar adapters must return initials only");
+}
+if (JSON.stringify([...mem.entries()]) !== localAvatarStateBefore) {
+  throw new Error("local avatar adapters must never serialize image data");
+}
+console.log("ok  local avatar adapters stay initials-only and memory-safe");
+
 const profilesMigrationSource = readFileSync(
   resolve(__dirnameSmoke, "../supabase/migrations/20260804000000_profiles.sql"),
   "utf8"
@@ -804,7 +816,10 @@ for (const [input, expect] of [
   }
 }
 console.log("ok  donor ID format validation");
-await check("account (pending)", () => views.viewAccount());
+const pendingAccount = await check("account (pending)", () => views.viewAccount());
+if (pendingAccount.includes('data-action="manage-profile-photo"')) {
+  throw new Error("pending Profile must not expose photo management");
+}
 const pendingHome = views.viewHome();
 {
   // Pending applicants see "My Week" filtered to free sessions in the
@@ -973,7 +988,19 @@ console.log("ok  admin approved new applicant");
 // --- Member booking + payment flow ---
 const signIn = store.signIn("test@example.com");
 if (!signIn.ok || signIn.user.status !== "approved") throw new Error("approval did not take effect");
-await check("account (new member)", () => views.viewAccount());
+const approvedAccount = await check("account (new member)", () => views.viewAccount());
+if (!/button[^>]+data-action="manage-profile-photo"[^>]+aria-label="Manage profile photo/.test(approvedAccount)) {
+  throw new Error("approved Profile must expose a labelled manage-photo button");
+}
+const topAvatarWithPhoto = views.avatarHTML(signIn.user, {
+  url: "https://project.supabase.co/storage/v1/object/sign/profile-avatars/member/custom.jpg?token=test",
+  source: "custom",
+  state: "active",
+  expiresAt: "2099-01-01T00:00:00.000Z",
+});
+if (!topAvatarWithPhoto.includes('class="avatar__image"') || topAvatarWithPhoto.includes('loading="lazy"')) {
+  throw new Error("top navigation must use eager resolved avatar presentation markup");
+}
 const approvedCommunity = views.viewCommunity();
 if (!approvedCommunity.includes("Connect and grow with us.")) {
   failures++;

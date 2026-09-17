@@ -21,7 +21,7 @@ import {
   normalizeDonorId,
   donorIdProblem,
 } from "./data.js";
-import { supabase, isLive } from "./config.js";
+import { config, supabase, isLive } from "./config.js";
 import { INDEMNITY_VERSION } from "./documents.js";
 import { normalizeMeetingPoint, normalizeVenueLocation } from "./venue.js";
 import * as liveOps from "./operations.js";
@@ -43,6 +43,10 @@ let liveGivingCampaign = null;
 // in memory only; device-local persistence stores UUID-keyed operations.
 let livePaymentDirectory = new Map();
 const LIVE_PROFILE_TTL_MS = 30_000;
+const AVATAR_CACHE_EXPIRY_SKEW_MS = 30_000;
+let ownAvatarCache = null;
+let ownAvatarRequest = null;
+let avatarRequestGeneration = 0;
 
 let state = null;
 
@@ -466,6 +470,7 @@ export function signIn(email) {
 }
 
 export function signOut() {
+  clearAvatarCache();
   state.sessionUserId = null;
   save();
 }
@@ -2014,14 +2019,207 @@ export { isoDate, todayLocal };
 // --- Live (Supabase) auth helpers (from canonical Auth baseline) ----
 // --- Live (Supabase) auth helpers --------------------------------------------
 
+const initialsAvatar = (profileId = null, state = "active") => ({
+  profileId,
+  url: null,
+  source: "initials",
+  state,
+  expiresAt: null,
+});
+
+const approvedAvatarUser = () => {
+  const user = currentUser();
+  return user?.status === "approved" ? user : null;
+};
+
+const avatarCacheIsFresh = (entry, profileId) => {
+  if (!entry || entry.profileId !== profileId) return false;
+  const expiry = entry.presentation.expiresAt;
+  if (entry.presentation.url && !expiry) return false;
+  return !expiry || Date.parse(expiry) > Date.now() + AVATAR_CACHE_EXPIRY_SKEW_MS;
+};
+
+const serviceAvatarPresentation = (input, profileId) => {
+  if (!input || typeof input !== "object") throw new Error("Invalid profile photo response");
+  const source = ["custom", "google", "initials"].includes(input.source) ? input.source : "initials";
+  const avatarState = ["active", "hidden", "pending_review"].includes(input.state)
+    ? input.state
+    : "active";
+  return {
+    profileId,
+    url: typeof input.url === "string" ? input.url : null,
+    source,
+    state: avatarState,
+    expiresAt: typeof input.expiresAt === "string" ? input.expiresAt : null,
+  };
+};
+
+const cacheOwnAvatar = (presentation, profileId) => {
+  const normalized = serviceAvatarPresentation(presentation, profileId);
+  ownAvatarCache = { profileId, presentation: normalized };
+  avatarRequestGeneration += 1;
+  ownAvatarRequest = null;
+  return normalized;
+};
+
+const avatarFailure = (operation, error) => {
+  const status = Number(error?.context?.status || error?.status || 0);
+  if (status === 401) {
+    clearAvatarCache();
+    return new Error("Profile photo access expired. Please sign in again.");
+  }
+  const messages = {
+    load: "Profile photo could not be loaded. Please try again.",
+    upload: "Profile photo could not be saved. Please try again.",
+    remove: "Profile photo could not be removed. Please try again.",
+    google: "Google profile photo could not be refreshed. Please try again.",
+  };
+  return new Error(messages[operation] || messages.load);
+};
+
+async function avatarAccessToken() {
+  const { data, error } = await supabase.auth.getSession();
+  const token = data?.session?.access_token;
+  if (error || !token) throw avatarFailure("load", { status: 401 });
+  return token;
+}
+
+async function resolveOwnAvatarFromFunction() {
+  const token = await avatarAccessToken();
+  let response;
+  try {
+    const url = new URL("/functions/v1/resolve-profile-avatars", config.url);
+    url.searchParams.set("scope", "self");
+    response = await fetch(url, {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        apikey: config.anonKey,
+      },
+      cache: "no-store",
+    });
+  } catch (error) {
+    throw avatarFailure("load", error);
+  }
+  if (response.status === 401) throw avatarFailure("load", { status: 401 });
+  if (!response.ok) throw avatarFailure("load", { status: response.status });
+  let payload;
+  try {
+    payload = await response.json();
+  } catch {
+    throw avatarFailure("load");
+  }
+  if (!Array.isArray(payload?.avatars) || payload.avatars.length !== 1) {
+    throw avatarFailure("load");
+  }
+  return payload.avatars[0];
+}
+
+async function invokeAvatarMutation(operation, options, profileId) {
+  const { data, error } = await supabase.functions.invoke("process-profile-avatar", options);
+  if (error) throw avatarFailure(operation, error);
+  if (!data?.presentation) throw avatarFailure(operation);
+  return cacheOwnAvatar(data.presentation, profileId);
+}
+
+export function clearAvatarCache() {
+  avatarRequestGeneration += 1;
+  ownAvatarCache = null;
+  ownAvatarRequest = null;
+}
+
+export async function getOwnAvatar({ force = false } = {}) {
+  const user = approvedAvatarUser();
+  if (!isLive() || !supabase) return initialsAvatar(user?.id ?? null);
+  if (!user) {
+    clearAvatarCache();
+    return initialsAvatar();
+  }
+  if (!force && avatarCacheIsFresh(ownAvatarCache, user.id)) return ownAvatarCache.presentation;
+  if (!force && ownAvatarRequest) return ownAvatarRequest;
+
+  const generation = ++avatarRequestGeneration;
+  const request = resolveOwnAvatarFromFunction()
+    .then((presentation) => {
+      const normalized = serviceAvatarPresentation(presentation, user.id);
+      if (generation === avatarRequestGeneration && approvedAvatarUser()?.id === user.id) {
+        ownAvatarCache = { profileId: user.id, presentation: normalized };
+        return normalized;
+      }
+      return ownAvatarCache?.profileId === approvedAvatarUser()?.id
+        ? ownAvatarCache.presentation
+        : initialsAvatar();
+    })
+    .catch((error) => {
+      if (/^Profile photo /.test(error?.message || "")) throw error;
+      throw avatarFailure("load", error);
+    })
+    .finally(() => {
+      if (ownAvatarRequest === request) ownAvatarRequest = null;
+    });
+  ownAvatarRequest = request;
+  return request;
+}
+
+export async function uploadMyAvatar(jpegBlob) {
+  const user = approvedAvatarUser();
+  if (!isLive() || !supabase) return initialsAvatar(user?.id ?? null);
+  if (!user) throw new Error("Approved membership is required to manage a profile photo.");
+  if (!jpegBlob || jpegBlob.type !== "image/jpeg" || jpegBlob.size > 2 * 1024 * 1024) {
+    throw new Error("Choose a valid cropped JPEG under 2 MB.");
+  }
+  const body = new FormData();
+  body.append("action", "upload");
+  body.append("file", jpegBlob, "profile-avatar.jpg");
+  try {
+    return await invokeAvatarMutation("upload", { method: "POST", body }, user.id);
+  } catch (error) {
+    if (/^Profile photo /.test(error?.message || "")) throw error;
+    throw avatarFailure("upload", error);
+  }
+}
+
+export async function removeMyAvatar() {
+  const user = approvedAvatarUser();
+  if (!isLive() || !supabase) return initialsAvatar(user?.id ?? null);
+  if (!user) throw new Error("Approved membership is required to manage a profile photo.");
+  try {
+    return await invokeAvatarMutation("remove", { method: "DELETE" }, user.id);
+  } catch (error) {
+    if (/^Profile photo /.test(error?.message || "")) throw error;
+    throw avatarFailure("remove", error);
+  }
+}
+
+export async function syncGoogleAvatar() {
+  const user = approvedAvatarUser();
+  if (!isLive() || !supabase || !user) return initialsAvatar(user?.id ?? null);
+  try {
+    return await invokeAvatarMutation(
+      "google",
+      { method: "POST", body: { action: "sync_google" } },
+      user.id,
+    );
+  } catch (error) {
+    if (/sign in again|^Google profile photo /i.test(error?.message || "")) throw error;
+    throw avatarFailure("google", error);
+  }
+}
+
 export async function getCurrentUser() {
   if (!isLive() || !supabase) return currentUser();
   const { data: sessData, error: sessErr } = await supabase.auth.getSession();
   if (sessErr || !sessData.session) {
+    clearAvatarCache();
     liveUser = null;
     return null;
   }
   const authUser = sessData.session.user;
+  if (liveUser?.id && liveUser.id !== authUser.id) {
+    clearAvatarCache();
+    liveProfile = null;
+    liveProfileFetchedAt = 0;
+  }
   if (!liveProfile || Date.now() - liveProfileFetchedAt > LIVE_PROFILE_TTL_MS) {
     const { data: prof, error: profErr } = await supabase
       .from("profiles")
@@ -2061,6 +2259,7 @@ export async function getCurrentUser() {
     profile: liveProfile,
   };
   livePaymentDirectory.set(liveUser.id, normalizePaymentUser(liveUser));
+  if (liveUser.status !== "approved") clearAvatarCache();
   return liveUser;
 }
 
@@ -2077,6 +2276,7 @@ export async function signInWithGoogle() {
 
 export async function signOutLive() {
   if (!isLive() || !supabase) return signOut();
+  clearAvatarCache();
   liveProfile = null;
   liveUser = null;
   liveProfileFetchedAt = 0;

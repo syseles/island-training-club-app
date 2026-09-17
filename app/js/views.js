@@ -9,6 +9,7 @@ import * as store from "./store.js";
 import { isLive } from "./config.js";
 import * as liveOps from "./operations.js";
 import { sessionCancellationCopy } from "./operations.js";
+import { avatarMarkup } from "./avatar.js";
 import {
   normalizeMeetingPoint,
   normalizeVenueLocation,
@@ -30,7 +31,6 @@ import {
   fmtDateLong,
   fmtTime,
   fmtMoney,
-  initials,
   weeklyVerse,
   notificationRelativeTime,
   notificationHktTime,
@@ -181,8 +181,28 @@ export function navHTML(routeKey, user) {
     .join("");
 }
 
-export function avatarHTML(user) {
-  return user ? initials(user.fullName) : ICONS.user;
+export function avatarHTML(user, presentation = null) {
+  return user
+    ? avatarMarkup({
+      name: user.fullName,
+      presentation,
+      size: 36,
+      className: "avatar--top",
+      decorative: true,
+      eager: true,
+    })
+    : ICONS.user;
+}
+
+export function profileAvatarHTML(user, presentation = null) {
+  return avatarMarkup({
+    name: user?.fullName,
+    presentation,
+    size: 72,
+    className: "avatar--profile",
+    decorative: true,
+    eager: true,
+  }) + '<span class="ph-avatar-edit" aria-hidden="true">Edit</span>';
 }
 
 export function notificationBellHTML(unreadCount = 0, active = false) {
@@ -1195,6 +1215,7 @@ async function accountMember(user) {
   const normalized = normalizeRole(hydrated.role);
   if (user.role !== normalized) user.role = normalized;
   const isAdmin = isAdminRole(normalized);
+  const avatarPresentation = await store.getOwnAvatar().catch(() => null);
 
   const roleLabel = {
     member: "Active member",
@@ -1210,7 +1231,9 @@ async function accountMember(user) {
 
     <div class="profile-hero">
       <div class="ph-top">
-        <div class="ph-avatar">${esc(initials(user.fullName))}</div>
+        <button class="ph-avatar" type="button" data-action="manage-profile-photo" aria-label="Manage profile photo for ${esc(user.fullName)}">
+          ${profileAvatarHTML(user, avatarPresentation)}
+        </button>
         <div class="ph-id">
           <div class="ph-role">${roleLabel}</div>
           <h1>${esc(user.fullName)}</h1>
