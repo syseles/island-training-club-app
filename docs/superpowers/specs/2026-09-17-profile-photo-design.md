@@ -1,7 +1,7 @@
 # Profile Photo Design
 
 Date: 2026-09-17  
-Status: Approved in conversation; written review pending  
+Status: Approved 2026-09-17
 Branch: `feature/profile-photo`, based on `main`
 
 ## Purpose
@@ -42,7 +42,7 @@ This is a live Supabase feature. Local prototype mode must not store image binar
 
 Use a private Supabase Storage bucket named `profile-avatars`. Authenticated browsers receive no insert, update, or delete access to its objects.
 
-The browser performs the interactive crop for responsiveness, then sends the cropped image to an authenticated Supabase Edge Function. Browser processing is not trusted as validation. The function derives the member ID from the verified JWT, verifies the current profile role, decodes the submitted image, enforces limits, re-encodes a clean 512×512 WebP, and writes it under a server-generated path with the service role.
+The browser performs the interactive crop for responsiveness, then sends the cropped image to an authenticated Supabase Edge Function. Browser processing is not trusted as validation. The function derives the member ID from the verified JWT, verifies the current profile role, decodes the submitted image, enforces limits, re-encodes a clean 512×512 JPEG, and writes it under a server-generated path with the service role.
 
 Use three narrow Edge Function interfaces:
 
@@ -58,7 +58,7 @@ Use three narrow Edge Function interfaces:
 
 Shared image validation, authorization, signed-URL, state-transition, and cleanup code belongs in a small Edge Function shared module rather than being duplicated between handlers.
 
-No Edge Function secret or Supabase service-role key may enter browser code, repository files, logs, or screenshots.
+No Edge Function secret or Supabase service-role key may enter browser code, repository files, logs, or screenshots. Edge endpoints answer CORS preflight explicitly and allow only configured local, preview, and production app origins.
 
 ## Data model
 
@@ -69,7 +69,7 @@ Add `public.profile_avatars`:
 - `active_object_path text null`
 - `pending_object_path text null`
 - `state text not null` constrained to `active`, `hidden`, or `pending_review`
-- `moderated_by uuid null references public.profiles(id)`
+- `moderated_by uuid null references public.profiles(id) on delete set null`
 - `moderation_reason text null`
 - `moderated_at timestamptz null`
 - `created_at timestamptz not null`
@@ -96,9 +96,9 @@ The app must stop treating a client-editable `profiles.avatar_url` as a general 
 
 ### Google fallback
 
-For an approved Google-authenticated member, the processing function reads the verified Google identity, downloads the provider image server-side, validates it, stores a sanitized WebP, and caches its path. Magic-link members or Google accounts without a usable image fall back to initials.
+For an approved Google-authenticated member, the processing function reads the verified Google identity, downloads the provider image server-side, validates it, stores a sanitized JPEG, and caches its path. Magic-link members or Google accounts without a usable image fall back to initials.
 
-The original Google URL is never exposed to other members and is never accepted from request input.
+The original Google URL is never exposed to other members and is never accepted from request input. Provider fetches require HTTPS, an exact `googleusercontent.com` host or subdomain, bounded redirects that remain on that host family, and bounded response reads to prevent SSRF and oversized downloads.
 
 ### Normal custom upload
 
@@ -130,11 +130,12 @@ The Edge Function must:
 - derive identity exclusively from the JWT;
 - accept no caller-controlled object path;
 - cap the submitted cropped payload at 2 MB;
-- accept only successfully decoded JPEG, PNG, or WebP content;
+- allow JPEG, PNG, or WebP source selection in the browser, while sending a cropped JPEG payload to the function;
+- accept only successfully decoded JPEG or PNG payloads at the trusted processing boundary;
 - reject SVG, GIF/animation, malformed data, and excessive decoded dimensions;
 - ignore claimed filename extensions and client MIME values;
 - normalize orientation;
-- output exactly 512×512 WebP;
+- output exactly 512×512 JPEG;
 - strip EXIF, GPS, comments, profiles, and original filenames;
 - use a random version component in the object name;
 - discard the submitted source after processing.
