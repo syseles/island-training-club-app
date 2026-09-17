@@ -1612,6 +1612,12 @@ const uuidBooking = await store.reserveSession(authUser.id, gatedPaidSession, Da
 if (uuidBooking.userId !== authUser.id) {
   throw new Error("Payment records must use the authenticated Supabase profile UUID");
 }
+assert.equal(
+  uuidBooking.snapshot.time,
+  "11:15",
+  "live booking snapshots must normalize database start_time for sessionStarted and views",
+);
+assert.doesNotThrow(() => data.sessionStarted(uuidBooking.snapshot));
 for (const status of ["pending", "declined"]) {
   store.currentUser().role = status;
   store.currentUser().status = status;

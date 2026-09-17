@@ -142,6 +142,7 @@ function buildBookingRow(row) {
       price: row.snapshot?.price_hkd ?? row.snapshot?.price ?? null,
       location: row.snapshot?.venue ?? row.snapshot?.location ?? null,
       name: row.snapshot?.name || (row.snapshot?.activity_id === "hyrox-midtown" ? "ITC HYROX" : "ITC HYROX"),
+      time: String(row.snapshot?.start_time ?? row.snapshot?.time ?? "").slice(0, 5),
       dateISO,
     },
     dateISO,
