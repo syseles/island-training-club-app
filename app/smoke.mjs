@@ -17,6 +17,29 @@ const store = await import("./js/store.js");
 const views = await import("./js/views.js");
 const data = await import("./js/data.js");
 const hyroxCycle = await import("./js/hyrox-cycle.js");
+const { buildIndemnityCsv } = await import("./js/exports.js");
+
+const indemnityExportCsv = buildIndemnityCsv([{
+  fullName: 'O"Connor, Ada',
+  email: "ada@example.test",
+  status: "approved",
+  role: "member",
+  phone: "+852 5555 5555",
+  emergencyName: 'Grace O"Connor',
+  emergencyRelationship: "Parent",
+  emergencyPhone: "+852 6666 6666",
+  indemnityStatus: "Accepted",
+  indemnitySignature: 'Ada O"Connor',
+  indemnitySignedAt: "2026-08-01",
+  indemnityFormVersion: "v1",
+  indemnityAcceptedAt: "2026-08-01T12:00:00.000Z",
+}]);
+if (indemnityExportCsv.charCodeAt(0) !== 0xFEFF
+    || !indemnityExportCsv.includes("Name,Email,Status,Role,Phone,Emergency name,Emergency relationship,Emergency phone,Indemnity status,Signature,Signed date,Form version,Accepted at")
+    || !indemnityExportCsv.includes('O""Connor, Ada')
+    || !indemnityExportCsv.includes('Grace O""Connor')) {
+  throw new Error("indemnity export must be Excel-compatible CSV with escaped values");
+}
 
 // --- Route handoff persistence --------------------------------------------------------------
 const LAST_ROUTE_KEY = "itc.last-route.v1";
@@ -1189,6 +1212,9 @@ for (const marker of [
   "Giving &amp; Fundraising",
   "ITC Anniversary",
   "HYROX",
+  "download-indemnity-list",
+  "listIndemnityRecords",
+  "buildIndemnityCsv",
 ]) {
   if (!combinedRuntimeSource.includes(marker)) {
     throw new Error(`testing integration missing ${marker}`);
@@ -2154,6 +2180,24 @@ for (const tab of ["members", "activities", "giving", "payments"]) {
   }
 }
 console.log("ok  every Admin route exposes exactly one active tab");
+const adminMembersHtml = await views.viewAdmin("members");
+if (!adminMembersHtml.includes('data-action="download-indemnity-list"')) {
+  throw new Error("Admin Members must expose the indemnity list download");
+}
+const indemnityRecords = await store.listIndemnityRecords();
+if (!indemnityRecords.some((record) => record.fullName === "Test Admin")
+    || !indemnityRecords.some((record) => record.fullName === "Test Member")) {
+  throw new Error("indemnity export must include all local profiles");
+}
+store.signIn("member@example.test");
+try {
+  await store.listIndemnityRecords();
+  throw new Error("non-admin should not download indemnity records");
+} catch (err) {
+  if (!/Approved Admin access required/.test(err.message)) throw err;
+}
+store.signIn("admin@example.test");
+console.log("ok  Admin Members exposes a gated all-profile indemnity export");
 const adminScheduleHtml = await views.viewAdmin("payments");
 if (!adminScheduleHtml.includes("HYROX weekly booking setup")
     || adminScheduleHtml.includes("created automatically")
@@ -2514,7 +2558,8 @@ console.log("ok  document registry scopes provisional watermarks by document");
 const indemnityBody = DOCS.indemnity?.renderBody?.() || "";
 for (const marker of [
   "ITC Hyrox Training - Liability Release &amp; Data Privacy Form",
-  "Hyrox Training from the date of signing to 31 December 2026",
+  "Hyrox Training from the date of signing to 30 June 2027",
+  "and for this purpose, the data shall be owned by IECC and ITC",
 ]) {
   if (!indemnityBody.includes(marker)) {
     failures++;
