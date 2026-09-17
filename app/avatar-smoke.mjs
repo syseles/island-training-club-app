@@ -129,7 +129,7 @@ class FakeDocument {
       });
       element.toBlob = (callback, type, quality) => {
         this.lastBlobRequest = { canvas: element, type, quality };
-        callback(new Blob(["jpeg"], { type }));
+        callback(this.blobFactory ? this.blobFactory(type) : new Blob(["jpeg"], { type }));
       };
     }
     return element;
@@ -305,6 +305,8 @@ test("manager uses the standard picker and suppresses duplicate saves", async ()
   });
 
   const overlay = documentRef.body.children.at(-1);
+  assert.equal(overlay.querySelector('[data-avatar-title="manager"]').textContent, "Manage Profile Photo");
+  assert.match(overlay.querySelector('[data-avatar-fallback="copy"]').textContent, /initials/i);
   const picker = overlay.querySelector('[data-avatar-action="picker"]');
   assert.equal(picker.getAttribute("accept"), AVATAR_FILE_ACCEPT);
   assert.equal(picker.getAttribute("capture"), null);
@@ -325,6 +327,20 @@ test("manager uses the standard picker and suppresses duplicate saves", async ()
   assert.equal(releaseCount, 1);
   assert.equal(trigger.focusCount, 2);
   assert.equal(documentRef.body.children.includes(overlay), false);
+});
+
+test("Google-only presentation explains fallback and cannot offer custom removal", () => {
+  const documentRef = new FakeDocument();
+  const manager = openAvatarManager({
+    memberName: "Grace Hopper",
+    presentation: { url: SIGNED_URL, source: "google", state: "active" },
+    onUpload: async () => null,
+    onRemove: async () => { throw new Error("must not run"); },
+  }, { documentRef });
+  const overlay = documentRef.body.children.at(-1);
+  assert.match(overlay.querySelector('[data-avatar-fallback="copy"]').textContent, /Google account photo/i);
+  assert.equal(overlay.querySelector('[data-avatar-action="remove"]').disabled, true);
+  manager.close();
 });
 
 test("manager close cleans decoded image resources and restores focus", async () => {
@@ -355,6 +371,17 @@ test("manager close cleans decoded image resources and restores focus", async ()
   assert.equal(releaseCount, 1);
   assert.equal(trigger.focusCount, 2);
   assert.equal(documentRef.body.style.overflow, "");
+});
+
+test("crop renderer rejects missing or oversized JPEG output", async () => {
+  const crop = fitCrop({ imageWidth: 512, imageHeight: 512, viewportSize: 280 });
+  const missing = new FakeDocument();
+  missing.blobFactory = () => null;
+  await assert.rejects(renderCropToJpeg({ image: {}, crop, documentRef: missing }), /could not be created/);
+
+  const oversized = new FakeDocument();
+  oversized.blobFactory = (type) => new Blob([new Uint8Array(2 * 1024 * 1024 + 1)], { type });
+  await assert.rejects(renderCropToJpeg({ image: {}, crop, documentRef: oversized }), /larger than 2 MB/);
 });
 
 test("cropper source never persists image bytes or embeds base64 data", () => {

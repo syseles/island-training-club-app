@@ -128,8 +128,8 @@ export function openAvatarManager({
   const header = makeElement(documentRef, "header", { className: "avatar-manager-header" });
   const heading = makeElement(documentRef, "h2", {
     className: "display",
-    text: "Manage Photo",
-    attrs: { id: "avatar-manager-title" },
+    text: "Manage Profile Photo",
+    attrs: { id: "avatar-manager-title", "data-avatar-title": "manager" },
   });
   const closeButton = makeElement(documentRef, "button", {
     className: "avatar-manager-close",
@@ -149,13 +149,31 @@ export function openAvatarManager({
     attrs: { id: "avatar-manager-help" },
   });
   const moderationState = presentation?.state;
+  const fallbackCopy = moderationState === "hidden"
+    ? "Your initials are shown while your photo is hidden."
+    : moderationState === "pending_review"
+    ? "Other members see your initials until this replacement is approved."
+    : presentation?.source === "google"
+    ? "Using your Google account photo. Choose a custom photo to replace it."
+    : presentation?.source === "custom"
+    ? "Using your custom photo. Removing it restores your Google photo when available, otherwise your initials."
+    : "Your initials are shown until you add a photo.";
+  const fallback = makeElement(documentRef, "p", {
+    className: "avatar-manager-note",
+    text: fallbackCopy,
+    attrs: { "data-avatar-fallback": "copy" },
+  });
   const moderationCopy = moderationState === "hidden"
-    ? "Your current photo is hidden. A replacement will be sent to Admin for approval."
-    : moderationState === "pending_review" || moderated
-    ? "Your replacement will appear after Admin approval."
-    : "Your saved photo will appear on your profile and member-only attendee lists.";
+    ? "A replacement will be sent to Admin for approval."
+    : moderationState === "pending_review"
+    ? "Your replacement is awaiting Admin approval."
+    : moderated
+    ? "Future replacements will appear after Admin approval."
+    : "Your saved photo appears only on your profile and member-only attendee lists.";
   const moderation = makeElement(documentRef, "p", {
-    className: moderationState === "hidden" || moderated ? "avatar-manager-note is-moderated" : "avatar-manager-note",
+    className: moderationState === "hidden" || moderationState === "pending_review" || moderated
+      ? "avatar-manager-note is-moderated"
+      : "avatar-manager-note",
     text: moderationCopy,
   });
 
@@ -215,7 +233,8 @@ export function openAvatarManager({
     attrs: { type: "button", "data-avatar-action": "remove" },
   });
   saveButton.disabled = true;
-  removeButton.disabled = !presentation?.url;
+  const canRemoveCustom = presentation?.source === "custom";
+  removeButton.disabled = !canRemoveCustom;
   actions.append(chooseButton, saveButton, removeButton);
 
   const status = makeElement(documentRef, "p", {
@@ -223,7 +242,7 @@ export function openAvatarManager({
     text: "No new photo selected.",
     attrs: { id: "avatar-manager-status", "aria-live": "polite" },
   });
-  body.append(member, help, moderation, preview, zoomLabel, picker, actions, status);
+  body.append(member, help, fallback, moderation, preview, zoomLabel, picker, actions, status);
   dialog.append(header, body);
   overlay.append(dialog);
 
@@ -235,7 +254,7 @@ export function openAvatarManager({
     picker.disabled = value;
     zoom.disabled = value || !selected;
     saveButton.disabled = value || !selected;
-    removeButton.disabled = value || !presentation?.url;
+    removeButton.disabled = value || !canRemoveCustom;
     dialog.setAttribute("aria-busy", value ? "true" : "false");
     if (message) status.textContent = message;
   };
@@ -355,7 +374,7 @@ export function openAvatarManager({
   });
 
   removeButton.addEventListener("click", async () => {
-    if (busy || !presentation?.url) return;
+    if (busy || !canRemoveCustom) return;
     setBusy(true, "Removing photo…");
     try {
       await onRemove();
