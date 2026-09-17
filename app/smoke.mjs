@@ -79,6 +79,10 @@ if ([localAvatar, localUpload, localRemove].some((item) => item.source !== "init
 if (JSON.stringify([...mem.entries()]) !== localAvatarStateBefore) {
   throw new Error("local avatar adapters must never serialize image data");
 }
+const signedOutPaidSession = store.upcomingSessions(60).find((session) => session.kind === "paid");
+if (!signedOutPaidSession || (await store.getSessionAvatars(signedOutPaidSession.id)).length !== 0) {
+  throw new Error("local attendee adapter must stay closed without an approved viewer");
+}
 console.log("ok  local avatar adapters stay initials-only and memory-safe");
 
 const profilesMigrationSource = readFileSync(
@@ -1486,6 +1490,11 @@ const memberActivityFallback = views.viewActivity(paid.id, { avatarRows: null })
 if (!memberActivityFallback.includes("Who’s coming") || /object_path|pending_object|google_object/.test(memberActivityFallback)) {
   throw new Error("attendee resolver failure must retain safe attendee copy without internal paths");
 }
+store.signOut();
+if ((await store.getSessionAvatars(paid.id)).length !== 0) {
+  throw new Error("signed-out local attendee adapter must not return booked-member rows");
+}
+if (!store.signIn("test@example.com").ok) throw new Error("member fixture must sign back in after attendee authorization test");
 
 // the booked class is badged on Home "My week" and on the Schedule row;
 // "My week" shows booked sessions only, so unbooked ones stay out

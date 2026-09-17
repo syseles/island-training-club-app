@@ -2426,7 +2426,9 @@ function adminMembers(viewer, users, avatarRows = null, { avatarLoadFailed = fal
   const pendingQueue = `
     <section class="avatar-review-queue" aria-labelledby="avatar-review-title">
       <div class="section-head"><h2 id="avatar-review-title">Profile photo review</h2></div>
-      ${pendingRows.length ? pendingRows.map((row) => `
+      ${avatarLoadFailed
+        ? '<div class="empty">Photo review status unavailable — try again.</div>'
+        : pendingRows.length ? pendingRows.map((row) => `
         <div class="avatar-review-card" data-avatar-moderation-card data-profile-id="${esc(row.profileId)}">
           ${avatarMarkup({
             name: row.displayName,

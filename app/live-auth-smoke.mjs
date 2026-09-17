@@ -1122,6 +1122,12 @@ assert.match(adminAvatarHtml, /data-action="avatar-hide"/);
 assert.match(adminAvatarHtml, /data-action="avatar-approve"/);
 assert.match(adminAvatarHtml, /data-action="avatar-reject"/);
 assert.match(adminAvatarHtml, /data-avatar-moderation-reason/);
+store.clearAvatarCache();
+avatarResolveStatus = 500;
+const unavailableAdminAvatarHtml = await views.viewAdmin("members");
+avatarResolveStatus = 200;
+assert.match(unavailableAdminAvatarHtml, /Photo review status unavailable/);
+assert.doesNotMatch(unavailableAdminAvatarHtml, /No profile photos awaiting review/);
 assert.doesNotMatch(await views.viewAccount(), /data-action="avatar-(?:hide|approve|reject)"/,
   "member Profile must never contain moderation controls");
 
@@ -3124,7 +3130,7 @@ const makeAvatarModerationControl = (action, profileId, reason) => {
   const secondary = makeElement();
   const card = makeElement();
   card.querySelector = (selector) => selector === "[data-avatar-moderation-reason]" ? reasonInput : null;
-  card.querySelectorAll = () => [primary, secondary];
+  card.querySelectorAll = () => [primary, secondary, reasonInput];
   primary.closest = () => card;
   return { primary, secondary, reasonInput, card };
 };
@@ -3150,6 +3156,9 @@ assert.equal(
 );
 assert.equal(approveControl.primary.disabled, true);
 assert.equal(approveControl.secondary.disabled, true);
+assert.equal(approveControl.reasonInput.disabled, true);
+assert.equal(approveControl.primary.getAttribute("aria-busy"), "true");
+assert.equal(approveControl.primary.textContent, "Approving…");
 moderationGate.resolve();
 assert.equal(await firstModeration, true);
 avatarModerationGate = null;
@@ -3168,6 +3177,9 @@ assert.equal(viewEl.innerHTML, "moderation-failure-preserved",
 assert.equal(rejectControl.reasonInput.value, "Keep this reason");
 assert.equal(rejectControl.primary.disabled, false);
 assert.equal(rejectControl.secondary.disabled, false);
+assert.equal(rejectControl.reasonInput.disabled, false);
+assert.equal(rejectControl.primary.hasAttribute("aria-busy"), false);
+assert.equal(rejectControl.primary.textContent, "");
 const missingReasonControl = makeAvatarModerationControl("avatar-reject", "approved-member", "   ");
 const callsBeforeMissingReason = avatarFunctionCalls.length;
 assert.equal(await app.runAvatarModeration(missingReasonControl.primary), false);

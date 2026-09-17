@@ -680,8 +680,12 @@ export async function runAvatarModeration(control) {
   }
 
   avatarModerationBusy.add(profileId);
-  const controls = [...(card?.querySelectorAll?.("button") || [control])];
+  const controls = [...(card?.querySelectorAll?.("button, input") || [control])];
+  const originalLabel = control.textContent;
+  const busyLabel = action === "approve" ? "Approving…" : action === "reject" ? "Rejecting…" : "Hiding…";
   controls.forEach((item) => { item.disabled = true; });
+  control.textContent = busyLabel;
+  control.setAttribute?.("aria-busy", "true");
   let mutationSucceeded = false;
   let refreshed = false;
   try {
@@ -701,6 +705,8 @@ export async function runAvatarModeration(control) {
     return false;
   } finally {
     avatarModerationBusy.delete(profileId);
+    control.textContent = originalLabel;
+    control.removeAttribute?.("aria-busy");
     if (!mutationSucceeded || refreshed) controls.forEach((item) => { item.disabled = false; });
   }
 }

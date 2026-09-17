@@ -2254,6 +2254,7 @@ export async function getSessionAvatars(sessionId, { force = false } = {}) {
     throw new Error("Invalid session for attendee photos.");
   }
   const user = approvedAvatarUser();
+  if (!user) return [];
   if (!isLive() || !supabase) {
     const session = getSession(id);
     return session
@@ -2263,7 +2264,6 @@ export async function getSessionAvatars(sessionId, { force = false } = {}) {
       }))
       : [];
   }
-  if (!user) return [];
   const cached = sessionAvatarCache.get(id);
   if (!force && avatarRowsCacheIsFresh(cached, user.id)) return cached.rows;
   let payload;
