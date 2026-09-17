@@ -99,6 +99,8 @@ function testHarness(options: {
       });
       return Promise.resolve({ avatar: current, replacedObjectPaths });
     },
+    listSessionAttendees: () => Promise.resolve([]),
+    listAdminMembers: () => Promise.resolve([]),
   };
   const storage: AvatarStorageAdapter = {
     upload(path, bytes) {

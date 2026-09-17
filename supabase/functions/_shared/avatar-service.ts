@@ -43,6 +43,12 @@ export type AvatarTransition = {
   replacedObjectPaths: string[];
 };
 
+export type AvatarMemberRow = {
+  profileId: string;
+  displayName: string;
+  avatar: AvatarRecord;
+};
+
 export interface AvatarAuthAdapter {
   getUser(token: string): Promise<AuthUser | null>;
 }
@@ -58,6 +64,8 @@ export interface AvatarDatabaseAdapter {
   submitReview(profileId: string, path: string): Promise<AvatarTransition>;
   setGoogle(profileId: string, path: string): Promise<AvatarTransition>;
   removeCustom(profileId: string): Promise<AvatarTransition>;
+  listSessionAttendees(sessionId: string): Promise<AvatarMemberRow[]>;
+  listAdminMembers(): Promise<AvatarMemberRow[]>;
 }
 
 export interface AvatarStorageAdapter {
@@ -325,6 +333,32 @@ export function createDefaultAvatarDependencies(): ProcessAvatarDependencies {
     auth: { persistSession: false, autoRefreshToken: false },
   });
 
+  const hydrateMemberRows = async (
+    profileIds: string[],
+  ): Promise<AvatarMemberRow[]> => {
+    const ids = [...new Set(profileIds)];
+    if (!ids.length) return [];
+    const [{ data: profiles, error: profilesError }, { data: avatars, error: avatarsError }] =
+      await Promise.all([
+        service.from('profiles').select('id, full_name').in('id', ids),
+        service.from('profile_avatars').select(
+          'profile_id, state, google_object_path, active_object_path, pending_object_path, moderation_reason, moderated_at',
+        ).in('profile_id', ids),
+      ]);
+    if (profilesError || avatarsError) throw new Error('Avatar member lookup failed');
+    const profilesById = new Map((profiles ?? []).map((profile) => [profile.id, profile]));
+    const avatarsById = new Map((avatars ?? []).map((item) => [item.profile_id, item]));
+    return ids.flatMap((profileId) => {
+      const profile = profilesById.get(profileId);
+      if (!profile) return [];
+      return [{
+        profileId,
+        displayName: profile.full_name?.trim() || 'ITC Member',
+        avatar: avatarRecord(avatarsById.get(profileId) ?? null, profileId),
+      }];
+    });
+  };
+
   const database: AvatarDatabaseAdapter = {
     async getProfile(profileId) {
       const { data: profile, error: profileError } = await service
@@ -393,6 +427,24 @@ export function createDefaultAvatarDependencies(): ProcessAvatarDependencies {
       });
       if (error) throw new Error('Avatar removal failed');
       return rpcTransition(data, profileId);
+    },
+    async listSessionAttendees(sessionId) {
+      const { data, error } = await service
+        .from('operational_bookings')
+        .select('profile_id, created_at')
+        .eq('session_id', sessionId)
+        .eq('status', 'confirmed')
+        .order('created_at', { ascending: true });
+      if (error) throw new Error('Session attendee lookup failed');
+      return await hydrateMemberRows((data ?? []).map((booking) => booking.profile_id));
+    },
+    async listAdminMembers() {
+      const { data, error } = await service
+        .from('profiles')
+        .select('id, created_at')
+        .order('created_at', { ascending: true });
+      if (error) throw new Error('Admin member lookup failed');
+      return await hydrateMemberRows((data ?? []).map((profile) => profile.id));
     },
   };
 
