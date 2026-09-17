@@ -82,6 +82,19 @@ update public.profiles set full_name = 'Avatar Member', role = 'member'
 update public.profiles set full_name = 'Avatar Pending', role = 'pending'
  where id = '33000000-0000-0000-0000-000000000003';
 
+insert into public.profile_avatar_audit (profile_id, actor_id, action)
+values (
+  '11000000-0000-0000-0000-000000000001',
+  '11000000-0000-0000-0000-000000000001',
+  'upload_attempt'
+);
+insert into storage.objects (bucket_id, name, owner)
+values (
+  'profile-avatars',
+  '22000000-0000-0000-0000-000000000002/seed.jpg',
+  '22000000-0000-0000-0000-000000000002'
+);
+
 -- Authenticated callers cannot mutate either metadata table or this bucket.
 do $$
 begin
@@ -121,6 +134,20 @@ begin
   end;
 
   begin
+    update public.profile_avatar_audit set reason = 'browser tamper'
+     where profile_id = '11000000-0000-0000-0000-000000000001';
+    raise exception 'authenticated direct audit update unexpectedly succeeded';
+  exception when insufficient_privilege then null;
+  end;
+
+  begin
+    delete from public.profile_avatar_audit
+     where profile_id = '11000000-0000-0000-0000-000000000001';
+    raise exception 'authenticated direct audit delete unexpectedly succeeded';
+  exception when insufficient_privilege then null;
+  end;
+
+  begin
     insert into storage.objects (bucket_id, name, owner)
     values (
       'profile-avatars',
@@ -131,7 +158,35 @@ begin
   exception when insufficient_privilege then null;
   end;
 
+  begin
+    update storage.objects set name = 'browser-tamper.jpg'
+     where bucket_id = 'profile-avatars';
+    raise exception 'authenticated direct storage update unexpectedly succeeded';
+  exception when insufficient_privilege then null;
+  end;
+
+  begin
+    delete from storage.objects where bucket_id = 'profile-avatars';
+    raise exception 'authenticated direct storage delete unexpectedly succeeded';
+  exception when insufficient_privilege then null;
+  end;
+
   reset role;
+end $$;
+
+-- Authorization helpers reject absent actors before any state transition.
+do $$
+begin
+  begin
+    perform public.avatar_hide(
+      '22000000-0000-0000-0000-000000000002',
+      '44000000-0000-0000-0000-000000000004',
+      'Invalid actor test'
+    );
+    raise exception 'missing moderator unexpectedly succeeded';
+  exception when insufficient_privilege then
+    if sqlerrm not like '%Administrator access required%' then raise; end if;
+  end;
 end $$;
 
 -- Atomic rolling-hour rate limit records all attempts and permits ten.

@@ -94,7 +94,7 @@ begin
       using errcode = '42501';
   end if;
   select role into v_role from public.profiles where id = p_actor_id;
-  if v_role not in ('member', 'admin', 'super_admin') then
+  if v_role is null or v_role not in ('member', 'admin', 'super_admin') then
     raise exception 'Approved membership required.' using errcode = '42501';
   end if;
 end;
@@ -110,7 +110,7 @@ declare
   v_role text;
 begin
   select role into v_role from public.profiles where id = p_actor_id;
-  if v_role not in ('admin', 'super_admin') then
+  if v_role is null or v_role not in ('admin', 'super_admin') then
     raise exception 'Administrator access required.' using errcode = '42501';
   end if;
 end;
