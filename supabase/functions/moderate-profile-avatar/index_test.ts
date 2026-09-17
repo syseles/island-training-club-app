@@ -93,10 +93,9 @@ function moderationHarness(options: {
       decideReview(profileId, actorId, decision, reason) {
         if (profileId !== TARGET_ID) return Promise.reject(new Error('missing target'));
         const pending = target.pendingObjectPath;
-        const replaced = decision === 'approve'
-          ? (target.activeObjectPath ? [target.activeObjectPath] : [])
-          : (pending ? [pending] : []);
+        let replaced: string[] = [];
         if (decision === 'approve' && target.state === 'pending_review' && pending) {
+          replaced = target.activeObjectPath ? [target.activeObjectPath] : [];
           target = avatar({
             ...target,
             state: 'active',
@@ -106,6 +105,7 @@ function moderationHarness(options: {
             moderatedAt: null,
           });
         } else if (decision === 'reject' && target.state === 'pending_review' && pending) {
+          replaced = [pending];
           target = avatar({
             ...target,
             state: 'hidden',
@@ -262,7 +262,7 @@ Deno.test('moderation retries remain successful without changing final state', a
     const initial = action === 'hide'
       ? avatar()
       : avatar({ state: 'pending_review', pendingObjectPath: PENDING_PATH });
-    const { handler, target, audit } = moderationHarness({ target: initial });
+    const { handler, target, audit, removed } = moderationHarness({ target: initial });
     const body = action === 'approve'
       ? { action, profileId: TARGET_ID }
       : { action, profileId: TARGET_ID, reason: 'Moderation reason' };
@@ -271,5 +271,9 @@ Deno.test('moderation retries remain successful without changing final state', a
     assertEquals((await handler(request(body))).status, 200);
     assertEquals(target().state, stateAfterFirst);
     assertEquals(audit.length, 2);
+    assertEquals(
+      removed,
+      action === 'approve' ? [CUSTOM_PATH] : action === 'reject' ? [PENDING_PATH] : [],
+    );
   }
 });
