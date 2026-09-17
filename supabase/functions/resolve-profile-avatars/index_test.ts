@@ -107,6 +107,8 @@ function resolverHarness(options: {
       listAdminMembers() {
         return Promise.resolve([...rows.values()]);
       },
+      hideAvatar: () => Promise.reject(new Error('unused')),
+      decideReview: () => Promise.reject(new Error('unused')),
     },
     storage: {
       upload: () => Promise.reject(new Error('unused')),

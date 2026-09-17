@@ -101,6 +101,8 @@ function testHarness(options: {
     },
     listSessionAttendees: () => Promise.resolve([]),
     listAdminMembers: () => Promise.resolve([]),
+    hideAvatar: () => Promise.reject(new Error('unused')),
+    decideReview: () => Promise.reject(new Error('unused')),
   };
   const storage: AvatarStorageAdapter = {
     upload(path, bytes) {

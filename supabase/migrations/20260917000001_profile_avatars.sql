@@ -300,13 +300,14 @@ create function public.avatar_hide(
   p_actor_id uuid,
   p_reason text
 )
-returns public.profile_avatars
+returns jsonb
 language plpgsql
 security definer
 set search_path = public
 as $$
 declare
   v_avatar public.profile_avatars;
+  v_previous_pending text;
 begin
   perform public.avatar_assert_admin(p_actor_id);
   if nullif(btrim(p_reason), '') is null then
@@ -316,22 +317,32 @@ begin
     raise exception 'Profile not found.' using errcode = 'P0002';
   end if;
 
-  insert into public.profile_avatars (
-    profile_id, state, moderated_by, moderation_reason, moderated_at
-  ) values (
-    p_profile_id, 'hidden', p_actor_id, btrim(p_reason), now()
-  )
-  on conflict (profile_id) do update
-    set pending_object_path = null,
-        state = 'hidden',
-        moderated_by = excluded.moderated_by,
-        moderation_reason = excluded.moderation_reason,
-        moderated_at = excluded.moderated_at
-  returning * into v_avatar;
+  insert into public.profile_avatars (profile_id)
+  values (p_profile_id)
+  on conflict (profile_id) do nothing;
+
+  select * into v_avatar from public.profile_avatars
+   where profile_id = p_profile_id for update;
+  v_previous_pending := v_avatar.pending_object_path;
+
+  if v_avatar.state <> 'hidden'
+     or v_avatar.moderation_reason is distinct from btrim(p_reason) then
+    update public.profile_avatars
+       set pending_object_path = null,
+           state = 'hidden',
+           moderated_by = p_actor_id,
+           moderation_reason = btrim(p_reason),
+           moderated_at = now()
+     where profile_id = p_profile_id
+    returning * into v_avatar;
+  end if;
 
   insert into public.profile_avatar_audit (profile_id, actor_id, action, reason)
   values (p_profile_id, p_actor_id, 'hide', btrim(p_reason));
-  return v_avatar;
+  return jsonb_build_object(
+    'avatar', to_jsonb(v_avatar),
+    'replaced_object_paths', to_jsonb(array_remove(array[v_previous_pending], null))
+  );
 end;
 $$;
 
@@ -380,13 +391,14 @@ create function public.avatar_decide_review(
   p_decision text,
   p_reason text
 )
-returns public.profile_avatars
+returns jsonb
 language plpgsql
 security definer
 set search_path = public
 as $$
 declare
   v_avatar public.profile_avatars;
+  v_replaced_path text;
 begin
   perform public.avatar_assert_admin(p_actor_id);
   if p_decision not in ('approve', 'reject') then
@@ -396,28 +408,41 @@ begin
     raise exception 'A rejection reason is required.' using errcode = '23514';
   end if;
 
-  if p_decision = 'approve' then
-    update public.profile_avatars
-       set active_object_path = pending_object_path,
-           pending_object_path = null,
-           state = 'active',
-           moderated_by = null,
-           moderation_reason = null,
-           moderated_at = null
-     where profile_id = p_profile_id and state = 'pending_review'
-    returning * into v_avatar;
-  else
-    update public.profile_avatars
-       set pending_object_path = null,
-           state = 'hidden',
-           moderated_by = p_actor_id,
-           moderation_reason = btrim(p_reason),
-           moderated_at = now()
-     where profile_id = p_profile_id and state = 'pending_review'
-    returning * into v_avatar;
-  end if;
+  select * into v_avatar from public.profile_avatars
+   where profile_id = p_profile_id for update;
   if not found then
     raise exception 'No pending profile photo review.' using errcode = '23514';
+  end if;
+
+  if p_decision = 'approve' then
+    if v_avatar.state = 'pending_review' and v_avatar.pending_object_path is not null then
+      v_replaced_path := v_avatar.active_object_path;
+      update public.profile_avatars
+         set active_object_path = pending_object_path,
+             pending_object_path = null,
+             state = 'active',
+             moderated_by = null,
+             moderation_reason = null,
+             moderated_at = null
+       where profile_id = p_profile_id
+      returning * into v_avatar;
+    elsif v_avatar.state <> 'active' or v_avatar.pending_object_path is not null then
+      raise exception 'No pending profile photo review.' using errcode = '23514';
+    end if;
+  else
+    if v_avatar.state = 'pending_review' and v_avatar.pending_object_path is not null then
+      v_replaced_path := v_avatar.pending_object_path;
+      update public.profile_avatars
+         set pending_object_path = null,
+             state = 'hidden',
+             moderated_by = p_actor_id,
+             moderation_reason = btrim(p_reason),
+             moderated_at = now()
+       where profile_id = p_profile_id
+      returning * into v_avatar;
+    elsif v_avatar.state <> 'hidden' or v_avatar.pending_object_path is not null then
+      raise exception 'No pending profile photo review.' using errcode = '23514';
+    end if;
   end if;
 
   insert into public.profile_avatar_audit (profile_id, actor_id, action, reason)
@@ -427,7 +452,10 @@ begin
     case when p_decision = 'approve' then 'approve' else 'reject' end,
     nullif(btrim(p_reason), '')
   );
-  return v_avatar;
+  return jsonb_build_object(
+    'avatar', to_jsonb(v_avatar),
+    'replaced_object_paths', to_jsonb(array_remove(array[v_replaced_path], null))
+  );
 end;
 $$;
 

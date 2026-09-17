@@ -66,6 +66,13 @@ export interface AvatarDatabaseAdapter {
   removeCustom(profileId: string): Promise<AvatarTransition>;
   listSessionAttendees(sessionId: string): Promise<AvatarMemberRow[]>;
   listAdminMembers(): Promise<AvatarMemberRow[]>;
+  hideAvatar(profileId: string, actorId: string, reason: string): Promise<AvatarTransition>;
+  decideReview(
+    profileId: string,
+    actorId: string,
+    decision: 'approve' | 'reject',
+    reason: string | null,
+  ): Promise<AvatarTransition>;
 }
 
 export interface AvatarStorageAdapter {
@@ -445,6 +452,25 @@ export function createDefaultAvatarDependencies(): ProcessAvatarDependencies {
         .order('created_at', { ascending: true });
       if (error) throw new Error('Admin member lookup failed');
       return await hydrateMemberRows((data ?? []).map((profile) => profile.id));
+    },
+    async hideAvatar(profileId, actorId, reason) {
+      const { data, error } = await service.rpc('avatar_hide', {
+        p_profile_id: profileId,
+        p_actor_id: actorId,
+        p_reason: reason,
+      });
+      if (error) throw new Error('Avatar hide transition failed');
+      return rpcTransition(data, profileId);
+    },
+    async decideReview(profileId, actorId, decision, reason) {
+      const { data, error } = await service.rpc('avatar_decide_review', {
+        p_profile_id: profileId,
+        p_actor_id: actorId,
+        p_decision: decision,
+        p_reason: reason,
+      });
+      if (error) throw new Error('Avatar review decision failed');
+      return rpcTransition(data, profileId);
     },
   };
 

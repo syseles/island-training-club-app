@@ -46,10 +46,14 @@ export function nextAvatarState(current: AvatarState, action: AvatarAction): Ava
   throw new Error('Invalid avatar state transition');
 }
 
-export function avatarObjectPath(profileId: string, kind: AvatarObjectKind): string {
+export function assertProfileId(profileId: string): void {
   if (!UUID_PATTERN.test(profileId)) {
     throw new Error('Invalid profile ID');
   }
+}
+
+export function avatarObjectPath(profileId: string, kind: AvatarObjectKind): string {
+  assertProfileId(profileId);
   if (!['google', 'custom', 'pending'].includes(kind)) {
     throw new Error('Invalid avatar object kind');
   }
