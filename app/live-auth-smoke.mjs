@@ -1026,6 +1026,20 @@ const storeSourceForAvatar = readFileSync(resolve(__dirnameSmoke, "js/store.js")
 assert.doesNotMatch(storeSourceForAvatar, /supabase[.]storage|[.]storage[.]from/,
   "browser avatar adapters must never mutate Storage directly");
 
+const approvedRole = store.currentUser().role;
+store.currentUser().role = "unexpected_role";
+store.clearAvatarCache();
+const malformedRoleResolveCount = avatarResolveCalls.length;
+assert.equal((await store.getOwnAvatar()).source, "initials");
+assert.equal(avatarResolveCalls.length, malformedRoleResolveCount,
+  "unknown roles must never call the avatar resolver");
+await assert.rejects(
+  store.uploadMyAvatar(new Blob(["jpeg"], { type: "image/jpeg" })),
+  /Approved membership is required/,
+);
+store.currentUser().role = approvedRole;
+store.clearAvatarCache();
+
 const originalProfileForApply = structuredClone(profile);
 const originalApplicationForApply = structuredClone(applicationRows.get(authUser.id));
 Object.assign(profile, { role: "pending" });

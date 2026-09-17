@@ -45,9 +45,12 @@ export function commitOwnAvatarPresentation(presentation) {
   return true;
 }
 
+const canManageOwnAvatar = (user) => user?.status === "approved"
+  && ["member", "admin", "superadmin", "super_admin"].includes(user.role);
+
 export async function openOwnAvatarManager(openManager = openAvatarManager) {
   const user = store.currentUser();
-  if (!user || user.status !== "approved") {
+  if (!canManageOwnAvatar(user)) {
     throw new Error("Approved membership is required to manage a profile photo.");
   }
   const presentation = await store.getOwnAvatar();
@@ -71,7 +74,7 @@ export async function openOwnAvatarManager(openManager = openAvatarManager) {
 }
 
 async function syncApprovedGoogleAvatar({ ifMissing = false } = {}) {
-  if (store.currentUser()?.status !== "approved") return null;
+  if (!canManageOwnAvatar(store.currentUser())) return null;
   try {
     if (ifMissing) {
       const current = await store.getOwnAvatar();
@@ -528,7 +531,7 @@ async function render(generation = renderGeneration) {
   // Keep the local filter cache paired with this generation's HTML commit.
   if (notificationsActive) notificationRouteRows = nextNotificationRouteRows;
   const user = store.currentUser();
-  const ownAvatar = user?.status === "approved"
+  const ownAvatar = canManageOwnAvatar(user)
     ? await store.getOwnAvatar().catch(() => null)
     : null;
   if (generation !== renderGeneration) return;

@@ -992,6 +992,13 @@ const approvedAccount = await check("account (new member)", () => views.viewAcco
 if (!/button[^>]+data-action="manage-profile-photo"[^>]+aria-label="Manage profile photo/.test(approvedAccount)) {
   throw new Error("approved Profile must expose a labelled manage-photo button");
 }
+const approvedAvatarRole = store.currentUser().role;
+store.currentUser().role = "unexpected_role";
+const malformedRoleAccount = await views.viewAccount();
+if (malformedRoleAccount.includes('data-action="manage-profile-photo"')) {
+  throw new Error("unknown roles must not expose profile-photo management");
+}
+store.currentUser().role = approvedAvatarRole;
 const topAvatarWithPhoto = views.avatarHTML(signIn.user, {
   url: "https://project.supabase.co/storage/v1/object/sign/profile-avatars/member/custom.jpg?token=test",
   source: "custom",

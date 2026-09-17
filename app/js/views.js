@@ -194,15 +194,16 @@ export function avatarHTML(user, presentation = null) {
     : ICONS.user;
 }
 
-export function profileAvatarHTML(user, presentation = null) {
-  return avatarMarkup({
+export function profileAvatarHTML(user, presentation = null, { editable = true } = {}) {
+  const avatar = avatarMarkup({
     name: user?.fullName,
     presentation,
     size: 72,
     className: "avatar--profile",
     decorative: true,
     eager: true,
-  }) + '<span class="ph-avatar-edit" aria-hidden="true">Edit</span>';
+  });
+  return editable ? avatar + '<span class="ph-avatar-edit" aria-hidden="true">Edit</span>' : avatar;
 }
 
 export function notificationBellHTML(unreadCount = 0, active = false) {
@@ -1215,7 +1216,8 @@ async function accountMember(user) {
   const normalized = normalizeRole(hydrated.role);
   if (user.role !== normalized) user.role = normalized;
   const isAdmin = isAdminRole(normalized);
-  const avatarPresentation = await store.getOwnAvatar().catch(() => null);
+  const canManageAvatar = ["member", "admin", "superadmin"].includes(normalized);
+  const avatarPresentation = canManageAvatar ? await store.getOwnAvatar().catch(() => null) : null;
 
   const roleLabel = {
     member: "Active member",
@@ -1231,9 +1233,11 @@ async function accountMember(user) {
 
     <div class="profile-hero">
       <div class="ph-top">
-        <button class="ph-avatar" type="button" data-action="manage-profile-photo" aria-label="Manage profile photo for ${esc(user.fullName)}">
-          ${profileAvatarHTML(user, avatarPresentation)}
-        </button>
+        ${canManageAvatar
+          ? `<button class="ph-avatar" type="button" data-action="manage-profile-photo" aria-label="Manage profile photo for ${esc(user.fullName)}">
+              ${profileAvatarHTML(user, avatarPresentation)}
+            </button>`
+          : `<div class="ph-avatar">${profileAvatarHTML(user, null, { editable: false })}</div>`}
         <div class="ph-id">
           <div class="ph-role">${roleLabel}</div>
           <h1>${esc(user.fullName)}</h1>

@@ -44,6 +44,7 @@ let liveGivingCampaign = null;
 let livePaymentDirectory = new Map();
 const LIVE_PROFILE_TTL_MS = 30_000;
 const AVATAR_CACHE_EXPIRY_SKEW_MS = 30_000;
+const AVATAR_APPROVED_ROLES = new Set(["member", "admin", "superadmin", "super_admin"]);
 let ownAvatarCache = null;
 let ownAvatarRequest = null;
 let avatarRequestGeneration = 0;
@@ -2029,7 +2030,7 @@ const initialsAvatar = (profileId = null, state = "active") => ({
 
 const approvedAvatarUser = () => {
   const user = currentUser();
-  return user?.status === "approved" ? user : null;
+  return user?.status === "approved" && AVATAR_APPROVED_ROLES.has(user.role) ? user : null;
 };
 
 const avatarCacheIsFresh = (entry, profileId) => {
