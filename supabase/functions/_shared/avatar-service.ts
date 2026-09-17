@@ -38,6 +38,11 @@ export type AvatarProfile = {
   avatar: AvatarRecord;
 };
 
+export type AvatarTransition = {
+  avatar: AvatarRecord;
+  replacedObjectPaths: string[];
+};
+
 export interface AvatarAuthAdapter {
   getUser(token: string): Promise<AuthUser | null>;
 }
@@ -49,10 +54,10 @@ export interface AvatarIdentityAdapter {
 export interface AvatarDatabaseAdapter {
   getProfile(profileId: string): Promise<AvatarProfile | null>;
   recordUploadAttempt(profileId: string): Promise<boolean>;
-  activateCustom(profileId: string, path: string): Promise<AvatarRecord>;
-  submitReview(profileId: string, path: string): Promise<AvatarRecord>;
-  setGoogle(profileId: string, path: string): Promise<AvatarRecord>;
-  removeCustom(profileId: string): Promise<AvatarRecord>;
+  activateCustom(profileId: string, path: string): Promise<AvatarTransition>;
+  submitReview(profileId: string, path: string): Promise<AvatarTransition>;
+  setGoogle(profileId: string, path: string): Promise<AvatarTransition>;
+  removeCustom(profileId: string): Promise<AvatarTransition>;
 }
 
 export interface AvatarStorageAdapter {
@@ -113,12 +118,23 @@ function avatarRecord(value: Record<string, unknown> | null, profileId: string):
   };
 }
 
-function rpcRecord(data: unknown, profileId: string): AvatarRecord {
+function rpcTransition(data: unknown, profileId: string): AvatarTransition {
   const value = Array.isArray(data) ? data[0] : data;
   if (!value || typeof value !== 'object') {
+    throw new Error('Avatar transition returned no result');
+  }
+  const result = value as Record<string, unknown>;
+  if (!result.avatar || typeof result.avatar !== 'object') {
     throw new Error('Avatar transition returned no row');
   }
-  return avatarRecord(value as Record<string, unknown>, profileId);
+  const rawPaths = result.replaced_object_paths;
+  if (!Array.isArray(rawPaths) || rawPaths.some((path) => typeof path !== 'string')) {
+    throw new Error('Avatar transition returned invalid cleanup paths');
+  }
+  return {
+    avatar: avatarRecord(result.avatar as Record<string, unknown>, profileId),
+    replacedObjectPaths: rawPaths as string[],
+  };
 }
 
 export function parseAllowedOrigins(value: string | undefined): ReadonlySet<string> {
@@ -168,7 +184,10 @@ export function jsonResponse(
 ): Response {
   return Response.json(body, {
     status,
-    headers: corsHeaders(request, allowedOrigins),
+    headers: {
+      ...corsHeaders(request, allowedOrigins),
+      'Cache-Control': 'private, no-store',
+    },
   });
 }
 
@@ -347,7 +366,7 @@ export function createDefaultAvatarDependencies(): ProcessAvatarDependencies {
         p_object_path: path,
       });
       if (error) throw new Error('Custom avatar transition failed');
-      return rpcRecord(data, profileId);
+      return rpcTransition(data, profileId);
     },
     async submitReview(profileId, path) {
       const { data, error } = await service.rpc('avatar_submit_review', {
@@ -356,7 +375,7 @@ export function createDefaultAvatarDependencies(): ProcessAvatarDependencies {
         p_object_path: path,
       });
       if (error) throw new Error('Avatar review transition failed');
-      return rpcRecord(data, profileId);
+      return rpcTransition(data, profileId);
     },
     async setGoogle(profileId, path) {
       const { data, error } = await service.rpc('avatar_set_google', {
@@ -365,7 +384,7 @@ export function createDefaultAvatarDependencies(): ProcessAvatarDependencies {
         p_object_path: path,
       });
       if (error) throw new Error('Google avatar transition failed');
-      return rpcRecord(data, profileId);
+      return rpcTransition(data, profileId);
     },
     async removeCustom(profileId) {
       const { data, error } = await service.rpc('avatar_remove_custom', {
@@ -373,7 +392,7 @@ export function createDefaultAvatarDependencies(): ProcessAvatarDependencies {
         p_actor_id: profileId,
       });
       if (error) throw new Error('Avatar removal failed');
-      return data ? rpcRecord(data, profileId) : defaultAvatar(profileId);
+      return rpcTransition(data, profileId);
     },
   };
 

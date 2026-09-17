@@ -174,26 +174,36 @@ create function public.avatar_set_google(
   p_actor_id uuid,
   p_object_path text
 )
-returns public.profile_avatars
+returns jsonb
 language plpgsql
 security definer
 set search_path = public
 as $$
 declare
   v_avatar public.profile_avatars;
+  v_previous_path text;
 begin
   perform public.avatar_assert_approved_self(p_profile_id, p_actor_id);
   perform public.avatar_assert_object_path(p_profile_id, 'google', p_object_path);
 
-  insert into public.profile_avatars (profile_id, google_object_path)
-  values (p_profile_id, p_object_path)
-  on conflict (profile_id) do update
-    set google_object_path = excluded.google_object_path
+  insert into public.profile_avatars (profile_id)
+  values (p_profile_id)
+  on conflict (profile_id) do nothing;
+
+  select google_object_path into v_previous_path
+    from public.profile_avatars where profile_id = p_profile_id for update;
+
+  update public.profile_avatars
+     set google_object_path = p_object_path
+   where profile_id = p_profile_id
   returning * into v_avatar;
 
   insert into public.profile_avatar_audit (profile_id, actor_id, action)
   values (p_profile_id, p_actor_id, 'google_import');
-  return v_avatar;
+  return jsonb_build_object(
+    'avatar', to_jsonb(v_avatar),
+    'replaced_object_paths', to_jsonb(array_remove(array[v_previous_path], null))
+  );
 end;
 $$;
 
@@ -202,43 +212,47 @@ create function public.avatar_activate_custom(
   p_actor_id uuid,
   p_object_path text
 )
-returns public.profile_avatars
+returns jsonb
 language plpgsql
 security definer
 set search_path = public
 as $$
 declare
   v_existing_state text;
+  v_previous_path text;
   v_avatar public.profile_avatars;
 begin
   perform public.avatar_assert_approved_self(p_profile_id, p_actor_id);
   perform public.avatar_assert_object_path(p_profile_id, 'custom', p_object_path);
 
-  select state into v_existing_state from public.profile_avatars
+  insert into public.profile_avatars (profile_id)
+  values (p_profile_id)
+  on conflict (profile_id) do nothing;
+
+  select state, active_object_path into v_existing_state, v_previous_path
+    from public.profile_avatars
    where profile_id = p_profile_id for update;
   if v_existing_state in ('hidden', 'pending_review') then
     raise exception 'Moderated profiles must submit replacements for review.'
       using errcode = '23514';
   end if;
 
-  insert into public.profile_avatars (
-    profile_id, active_object_path, state,
-    moderated_by, moderation_reason, moderated_at
-  ) values (
-    p_profile_id, p_object_path, 'active', null, null, null
-  )
-  on conflict (profile_id) do update
-    set active_object_path = excluded.active_object_path,
-        pending_object_path = null,
-        state = 'active',
-        moderated_by = null,
-        moderation_reason = null,
-        moderated_at = null
+  update public.profile_avatars
+     set active_object_path = p_object_path,
+         pending_object_path = null,
+         state = 'active',
+         moderated_by = null,
+         moderation_reason = null,
+         moderated_at = null
+   where profile_id = p_profile_id
   returning * into v_avatar;
 
   insert into public.profile_avatar_audit (profile_id, actor_id, action)
   values (p_profile_id, p_actor_id, 'upload');
-  return v_avatar;
+  return jsonb_build_object(
+    'avatar', to_jsonb(v_avatar),
+    'replaced_object_paths', to_jsonb(array_remove(array[v_previous_path], null))
+  );
 end;
 $$;
 
@@ -246,15 +260,24 @@ create function public.avatar_remove_custom(
   p_profile_id uuid,
   p_actor_id uuid
 )
-returns public.profile_avatars
+returns jsonb
 language plpgsql
 security definer
 set search_path = public
 as $$
 declare
   v_avatar public.profile_avatars;
+  v_previous_paths text[];
 begin
   perform public.avatar_assert_approved_self(p_profile_id, p_actor_id);
+
+  insert into public.profile_avatars (profile_id)
+  values (p_profile_id)
+  on conflict (profile_id) do nothing;
+
+  select array_remove(array[active_object_path, pending_object_path], null)
+    into v_previous_paths
+    from public.profile_avatars where profile_id = p_profile_id for update;
 
   update public.profile_avatars
      set active_object_path = null,
@@ -265,7 +288,10 @@ begin
 
   insert into public.profile_avatar_audit (profile_id, actor_id, action)
   values (p_profile_id, p_actor_id, 'remove');
-  return v_avatar;
+  return jsonb_build_object(
+    'avatar', to_jsonb(v_avatar),
+    'replaced_object_paths', to_jsonb(coalesce(v_previous_paths, array[]::text[]))
+  );
 end;
 $$;
 
@@ -314,16 +340,20 @@ create function public.avatar_submit_review(
   p_actor_id uuid,
   p_object_path text
 )
-returns public.profile_avatars
+returns jsonb
 language plpgsql
 security definer
 set search_path = public
 as $$
 declare
   v_avatar public.profile_avatars;
+  v_previous_path text;
 begin
   perform public.avatar_assert_approved_self(p_profile_id, p_actor_id);
   perform public.avatar_assert_object_path(p_profile_id, 'pending', p_object_path);
+
+  select pending_object_path into v_previous_path
+    from public.profile_avatars where profile_id = p_profile_id for update;
 
   update public.profile_avatars
      set pending_object_path = p_object_path,
@@ -337,7 +367,10 @@ begin
 
   insert into public.profile_avatar_audit (profile_id, actor_id, action)
   values (p_profile_id, p_actor_id, 'submit_review');
-  return v_avatar;
+  return jsonb_build_object(
+    'avatar', to_jsonb(v_avatar),
+    'replaced_object_paths', to_jsonb(array_remove(array[v_previous_path], null))
+  );
 end;
 $$;
 

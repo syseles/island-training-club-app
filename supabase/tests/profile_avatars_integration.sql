@@ -216,6 +216,7 @@ declare
   active_path text;
   pending_path text;
   audit_before bigint;
+  transition_result jsonb;
 begin
   perform public.avatar_set_google(
     '22000000-0000-0000-0000-000000000002',
@@ -235,9 +236,15 @@ begin
     'no-row to active-custom transition failed'
   );
 
-  perform public.avatar_remove_custom(
+  select public.avatar_remove_custom(
     '22000000-0000-0000-0000-000000000002',
     '22000000-0000-0000-0000-000000000002'
+  ) into transition_result;
+  perform pg_temp.avatar_assert(
+    transition_result->'replaced_object_paths' = jsonb_build_array(
+      '22000000-0000-0000-0000-000000000002/custom-bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb.jpg'
+    ),
+    'remove transition did not return its locked replaced path'
   );
   select active_object_path into active_path from public.profile_avatars
    where profile_id = '22000000-0000-0000-0000-000000000002';

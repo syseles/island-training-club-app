@@ -1,7 +1,8 @@
-import { sanitizeAvatar } from '../_shared/avatar-image.ts';
+import { readBodyLimited, sanitizeAvatar } from '../_shared/avatar-image.ts';
 import { assertApprovedRole, avatarObjectPath } from '../_shared/avatar-policy.ts';
 import {
   assertOriginAllowed,
+  type AvatarProfile,
   AvatarRequestError,
   bearerToken,
   bestEffortRemove,
@@ -19,10 +20,27 @@ function invalidRequest(message = 'Invalid profile photo request'): never {
   throw new AvatarRequestError(message, 400);
 }
 
-function assertUploadContentLength(request: Request): void {
-  const contentLength = Number(request.headers.get('content-length'));
-  if (Number.isFinite(contentLength) && contentLength > MAX_MULTIPART_BYTES) {
-    throw new AvatarRequestError('Profile photo exceeds 2 MB', 400);
+async function parseBoundedMultipart(request: Request): Promise<FormData> {
+  const headers = new Headers();
+  for (const name of ['content-type', 'content-length']) {
+    const value = request.headers.get(name);
+    if (value) headers.set(name, value);
+  }
+  try {
+    const bytes = await readBodyLimited(
+      new Response(request.body, { headers }),
+      MAX_MULTIPART_BYTES,
+    );
+    return await new Request(request.url, {
+      method: 'POST',
+      headers,
+      body: bytes.buffer.slice(
+        bytes.byteOffset,
+        bytes.byteOffset + bytes.byteLength,
+      ) as ArrayBuffer,
+    }).formData();
+  } catch {
+    throw new AvatarRequestError('Profile photo exceeds 2 MB or is malformed', 400);
   }
 }
 
@@ -54,16 +72,10 @@ async function requireAttempt(
 async function handleUpload(
   request: Request,
   profileId: string,
-  current: Awaited<ReturnType<ProcessAvatarDependencies['database']['getProfile']>> & object,
+  current: AvatarProfile,
   dependencies: ProcessAvatarDependencies,
 ): Promise<Response> {
-  assertUploadContentLength(request);
-  let form: FormData;
-  try {
-    form = await request.formData();
-  } catch {
-    return invalidRequest();
-  }
+  const form = await parseBoundedMultipart(request);
   const keys = [...form.keys()];
   if (keys.some((key) => key !== 'action' && key !== 'file')) invalidRequest();
   if (form.get('action') !== 'upload') invalidRequest();
@@ -83,9 +95,9 @@ async function handleUpload(
   const candidatePath = avatarObjectPath(profileId, kind);
   await dependencies.storage.upload(candidatePath, sanitized);
 
-  let next;
+  let transition;
   try {
-    next = moderated
+    transition = moderated
       ? await dependencies.database.submitReview(profileId, candidatePath)
       : await dependencies.database.activateCustom(profileId, candidatePath);
   } catch (error) {
@@ -93,10 +105,12 @@ async function handleUpload(
     throw error;
   }
 
-  await bestEffortRemove(dependencies.storage, [
-    moderated ? current.avatar.pendingObjectPath : current.avatar.activeObjectPath,
-  ]);
-  const presentation = await resolveOwnPresentation(next, dependencies.storage, dependencies.clock);
+  await bestEffortRemove(dependencies.storage, transition.replacedObjectPaths);
+  const presentation = await resolveOwnPresentation(
+    transition.avatar,
+    dependencies.storage,
+    dependencies.clock,
+  );
   return jsonResponse(request, dependencies.allowedOrigins, { presentation });
 }
 
@@ -115,7 +129,7 @@ async function handleGoogleSync(
   request: Request,
   profileId: string,
   user: Parameters<ProcessAvatarDependencies['identity']['googleAvatarUrl']>[0],
-  current: Awaited<ReturnType<ProcessAvatarDependencies['database']['getProfile']>> & object,
+  current: AvatarProfile,
   dependencies: ProcessAvatarDependencies,
 ): Promise<Response> {
   const body = await parseJsonObject(request);
@@ -142,30 +156,35 @@ async function handleGoogleSync(
 
   const candidatePath = avatarObjectPath(profileId, 'google');
   await dependencies.storage.upload(candidatePath, sanitized);
-  let next;
+  let transition;
   try {
-    next = await dependencies.database.setGoogle(profileId, candidatePath);
+    transition = await dependencies.database.setGoogle(profileId, candidatePath);
   } catch (error) {
     await bestEffortRemove(dependencies.storage, [candidatePath]);
     throw error;
   }
-  await bestEffortRemove(dependencies.storage, [current.avatar.googleObjectPath]);
-  const presentation = await resolveOwnPresentation(next, dependencies.storage, dependencies.clock);
+  await bestEffortRemove(dependencies.storage, transition.replacedObjectPaths);
+  const presentation = await resolveOwnPresentation(
+    transition.avatar,
+    dependencies.storage,
+    dependencies.clock,
+  );
   return jsonResponse(request, dependencies.allowedOrigins, { presentation });
 }
 
 async function handleDelete(
   request: Request,
   profileId: string,
-  current: Awaited<ReturnType<ProcessAvatarDependencies['database']['getProfile']>> & object,
+  _current: AvatarProfile,
   dependencies: ProcessAvatarDependencies,
 ): Promise<Response> {
-  const next = await dependencies.database.removeCustom(profileId);
-  await bestEffortRemove(dependencies.storage, [
-    current.avatar.activeObjectPath,
-    current.avatar.pendingObjectPath,
-  ]);
-  const presentation = await resolveOwnPresentation(next, dependencies.storage, dependencies.clock);
+  const transition = await dependencies.database.removeCustom(profileId);
+  await bestEffortRemove(dependencies.storage, transition.replacedObjectPaths);
+  const presentation = await resolveOwnPresentation(
+    transition.avatar,
+    dependencies.storage,
+    dependencies.clock,
+  );
   return jsonResponse(request, dependencies.allowedOrigins, { presentation });
 }
 

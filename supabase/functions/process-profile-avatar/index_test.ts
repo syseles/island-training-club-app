@@ -6,6 +6,7 @@ import type {
   AvatarStorageAdapter,
   ProcessAvatarDependencies,
 } from '../_shared/avatar-service.ts';
+import { MAX_UPLOAD_BYTES } from '../_shared/avatar-policy.ts';
 import { createProcessProfileAvatarHandler } from './index.ts';
 
 const MEMBER_ID = '22000000-0000-4000-8000-000000000002';
@@ -42,6 +43,7 @@ function testHarness(options: {
   avatar?: AvatarRecord;
   attemptAllowed?: boolean;
   failTransition?: boolean;
+  racePathBeforeTransition?: string;
   fetcher?: typeof fetch;
 } = {}) {
   let current = options.avatar ?? avatar();
@@ -54,30 +56,40 @@ function testHarness(options: {
       return Promise.resolve({ profileId, role: options.role ?? 'member', avatar: current });
     },
     recordUploadAttempt() {
+      if (options.racePathBeforeTransition) {
+        current = avatar({ ...current, activeObjectPath: options.racePathBeforeTransition });
+      }
       return Promise.resolve(options.attemptAllowed ?? true);
     },
     activateCustom(profileId, path) {
       if (options.failTransition) {
         return Promise.reject(new Error('SECRET database transition detail'));
       }
+      const replacedObjectPaths = current.activeObjectPath ? [current.activeObjectPath] : [];
       current = avatar({ ...current, profileId, state: 'active', activeObjectPath: path });
-      return Promise.resolve(current);
+      return Promise.resolve({ avatar: current, replacedObjectPaths });
     },
     submitReview(profileId, path) {
       if (options.failTransition) {
         return Promise.reject(new Error('SECRET database transition detail'));
       }
+      const replacedObjectPaths = current.pendingObjectPath ? [current.pendingObjectPath] : [];
       current = avatar({ ...current, profileId, state: 'pending_review', pendingObjectPath: path });
-      return Promise.resolve(current);
+      return Promise.resolve({ avatar: current, replacedObjectPaths });
     },
     setGoogle(profileId, path) {
       if (options.failTransition) {
         return Promise.reject(new Error('SECRET database transition detail'));
       }
+      const replacedObjectPaths = current.googleObjectPath ? [current.googleObjectPath] : [];
       current = avatar({ ...current, profileId, googleObjectPath: path });
-      return Promise.resolve(current);
+      return Promise.resolve({ avatar: current, replacedObjectPaths });
     },
     removeCustom(profileId) {
+      const replacedObjectPaths = [
+        current.activeObjectPath,
+        current.pendingObjectPath,
+      ].filter((path): path is string => Boolean(path));
       current = avatar({
         ...current,
         profileId,
@@ -85,7 +97,7 @@ function testHarness(options: {
         pendingObjectPath: null,
         state: current.state === 'active' ? 'active' : 'hidden',
       });
-      return Promise.resolve(current);
+      return Promise.resolve({ avatar: current, replacedObjectPaths });
     },
   };
   const storage: AvatarStorageAdapter = {
@@ -197,6 +209,7 @@ Deno.test('normal upload activates a sanitized custom photo', async () => {
   const { handler, current, objects } = testHarness();
   const response = await handler(uploadRequest());
   assertEquals(response.status, 200);
+  assertEquals(response.headers.get('cache-control'), 'private, no-store');
   const body = await response.json();
   assertEquals(body.presentation.state, 'active');
   assertEquals(body.presentation.source, 'custom');
@@ -205,6 +218,50 @@ Deno.test('normal upload activates a sanitized custom photo', async () => {
   assertEquals(objects.size, 1);
   const stored = [...objects.values()][0];
   assertEquals([...stored.slice(0, 3)], [0xff, 0xd8, 0xff]);
+});
+
+Deno.test('successful upload cleans the path replaced inside the transition', async () => {
+  const stalePath = `${MEMBER_ID}/custom-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa.jpg`;
+  const concurrentPath = `${MEMBER_ID}/custom-bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb.jpg`;
+  const { handler, removed } = testHarness({
+    avatar: avatar({ activeObjectPath: stalePath }),
+    racePathBeforeTransition: concurrentPath,
+  });
+  const response = await handler(uploadRequest());
+  assertEquals(response.status, 200);
+  assertEquals(removed, [concurrentPath]);
+});
+
+Deno.test('streamed multipart body is cancelled at the bounded envelope limit', async () => {
+  const oversizedRequest = uploadRequest(new Uint8Array(MAX_UPLOAD_BYTES + 512 * 1024));
+  const contentType = oversizedRequest.headers.get('content-type') ?? '';
+  const encoded = new Uint8Array(await oversizedRequest.arrayBuffer());
+  let offset = 0;
+  let cancelled = false;
+  const stream = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      if (offset >= encoded.length) {
+        controller.close();
+        return;
+      }
+      const end = Math.min(offset + 64 * 1024, encoded.length);
+      controller.enqueue(encoded.slice(offset, end));
+      offset = end;
+    },
+    cancel() {
+      cancelled = true;
+    },
+  });
+  const streamedRequest = new Request('http://edge.invalid/process-profile-avatar', {
+    method: 'POST',
+    headers: { ...requestHeaders(), 'content-type': contentType },
+    body: stream,
+  });
+  const { handler } = testHarness();
+  const response = await handler(streamedRequest);
+  assertEquals(response.status, 400);
+  assertEquals(cancelled, true);
+  assert(offset < encoded.length);
 });
 
 Deno.test('hidden profile upload writes pending path and stays invisible', async () => {
