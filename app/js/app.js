@@ -241,6 +241,7 @@ let renderGeneration = 0;
 let notificationRouteRows = null;
 let pendingNotificationRouteRequest = null;
 const controlBusy = new WeakSet();
+const avatarModerationBusy = new Set();
 const venuePickerControllers = new WeakMap();
 const APPLY_DRAFT_DEBOUNCE_MS = 500;
 let applyDraftTimer = null;
@@ -473,9 +474,19 @@ async function render(generation = renderGeneration) {
     case "schedule":
       out = views.viewSchedule();
       break;
-    case "activity":
-      out = views.viewActivity(arg);
+    case "activity": {
+      const session = store.getSession(arg);
+      let avatarRows = null;
+      if (session?.kind === "paid" && canManageOwnAvatar(store.currentUser())) {
+        try {
+          avatarRows = await store.getSessionAvatars(arg);
+        } catch {
+          avatarRows = null;
+        }
+      }
+      out = views.viewActivity(arg, { avatarRows });
       break;
+    }
     case "community":
       out = views.viewCommunity(arg);
       break;
@@ -651,6 +662,49 @@ function downloadICS(session) {
 
 // --- Click delegation -----------------------------------------------------------------
 
+export async function runAvatarModeration(control) {
+  const action = {
+    "avatar-hide": "hide",
+    "avatar-approve": "approve",
+    "avatar-reject": "reject",
+  }[control?.dataset?.action];
+  const profileId = String(control?.dataset?.profileId || "");
+  if (!action || !profileId || avatarModerationBusy.has(profileId)) return false;
+  const card = control.closest?.("[data-avatar-moderation-card]");
+  const reasonInput = card?.querySelector?.("[data-avatar-moderation-reason]");
+  const reason = String(reasonInput?.value || "").trim();
+  if (["hide", "reject"].includes(action) && !reason) {
+    toast("Enter a moderation reason", true);
+    reasonInput?.focus?.();
+    return false;
+  }
+
+  avatarModerationBusy.add(profileId);
+  const controls = [...(card?.querySelectorAll?.("button") || [control])];
+  controls.forEach((item) => { item.disabled = true; });
+  let mutationSucceeded = false;
+  let refreshed = false;
+  try {
+    await store.moderateAvatar(profileId, action, reason);
+    mutationSucceeded = true;
+    const name = control.dataset.memberName || "Member";
+    const message = action === "approve"
+      ? `${name}’s profile photo approved.`
+      : action === "reject"
+      ? `${name}’s replacement rejected.`
+      : `${name}’s profile photo hidden.`;
+    const result = await refreshAfterAdminMutation(message);
+    refreshed = result.refreshed;
+    return true;
+  } catch (error) {
+    toast(error.message || "Profile photo moderation failed", true);
+    return false;
+  } finally {
+    avatarModerationBusy.delete(profileId);
+    if (!mutationSucceeded || refreshed) controls.forEach((item) => { item.disabled = false; });
+  }
+}
+
 document.addEventListener("click", async (e) => {
   const el = e.target.closest("[data-action]");
   // Repeated forms route through the submit delegate via data-action. If a
@@ -661,6 +715,11 @@ document.addEventListener("click", async (e) => {
   e.preventDefault?.();
 
   switch (action) {
+    case "avatar-hide":
+    case "avatar-approve":
+    case "avatar-reject":
+      await runAvatarModeration(el);
+      break;
     case "notification-filter": {
       const kind = el.dataset.notificationFilter;
       const allowedKinds = ["all", "application", "decision", "role", "club", "personal"];

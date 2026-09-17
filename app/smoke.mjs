@@ -1465,7 +1465,27 @@ if (!views.viewHome().includes(bookedActivityLink)) {
 }
 await check("booking confirmation", () => views.viewBooking(booking.id));
 await check("receipt", () => views.viewReceipt(receipt.id));
-await check("activity (member, booked)", () => views.viewActivity(paid.id));
+const memberActivityWithAvatars = await check("activity (member, booked)", () => views.viewActivity(paid.id, {
+  avatarRows: [{
+    profileId: "member-visible-only-to-resolver",
+    displayName: "Alex T.",
+    url: "https://project.supabase.co/storage/v1/object/sign/profile-avatars/member/avatar.jpg?token=attendee",
+    source: "custom",
+    state: "active",
+    expiresAt: "2099-01-01T00:00:00.000Z",
+  }],
+}));
+if (!memberActivityWithAvatars.includes("Alex T.") || !memberActivityWithAvatars.includes("attendee-avatar")) {
+  throw new Error("approved Activity Details must render resolved attendee avatar/name rows");
+}
+if (memberActivityWithAvatars.includes("member-visible-only-to-resolver") ||
+    memberActivityWithAvatars.includes('data-action="avatar-hide"')) {
+  throw new Error("member attendee rows must not expose profile IDs or moderation controls");
+}
+const memberActivityFallback = views.viewActivity(paid.id, { avatarRows: null });
+if (!memberActivityFallback.includes("Who’s coming") || /object_path|pending_object|google_object/.test(memberActivityFallback)) {
+  throw new Error("attendee resolver failure must retain safe attendee copy without internal paths");
+}
 
 // the booked class is badged on Home "My week" and on the Schedule row;
 // "My week" shows booked sessions only, so unbooked ones stay out

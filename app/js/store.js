@@ -48,6 +48,8 @@ const AVATAR_APPROVED_ROLES = new Set(["member", "admin", "superadmin", "super_a
 let ownAvatarCache = null;
 let ownAvatarRequest = null;
 let avatarRequestGeneration = 0;
+const sessionAvatarCache = new Map();
+let adminAvatarCache = null;
 
 let state = null;
 
@@ -2074,6 +2076,9 @@ const avatarFailure = (operation, error) => {
     upload: "Profile photo could not be saved. Please try again.",
     remove: "Profile photo could not be removed. Please try again.",
     google: "Google profile photo could not be refreshed. Please try again.",
+    attendees: "Attendee photos could not be loaded. Please try again.",
+    admin: "Member photo status could not be loaded. Please try again.",
+    moderate: "Profile photo moderation could not be completed. Please try again.",
   };
   return new Error(messages[operation] || messages.load);
 };
@@ -2085,12 +2090,12 @@ async function avatarAccessToken() {
   return token;
 }
 
-async function resolveOwnAvatarFromFunction() {
+async function resolveAvatarsFromFunction(params, operation = "load") {
   const token = await avatarAccessToken();
   let response;
   try {
     const url = new URL("/functions/v1/resolve-profile-avatars", config.url);
-    url.searchParams.set("scope", "self");
+    for (const [key, value] of Object.entries(params)) url.searchParams.set(key, value);
     response = await fetch(url, {
       method: "GET",
       headers: {
@@ -2100,16 +2105,19 @@ async function resolveOwnAvatarFromFunction() {
       cache: "no-store",
     });
   } catch (error) {
-    throw avatarFailure("load", error);
+    throw avatarFailure(operation, error);
   }
-  if (response.status === 401) throw avatarFailure("load", { status: 401 });
-  if (!response.ok) throw avatarFailure("load", { status: response.status });
-  let payload;
+  if (response.status === 401) throw avatarFailure(operation, { status: 401 });
+  if (!response.ok) throw avatarFailure(operation, { status: response.status });
   try {
-    payload = await response.json();
+    return await response.json();
   } catch {
-    throw avatarFailure("load");
+    throw avatarFailure(operation);
   }
+}
+
+async function resolveOwnAvatarFromFunction() {
+  const payload = await resolveAvatarsFromFunction({ scope: "self" });
   if (!Array.isArray(payload?.avatars) || payload.avatars.length !== 1) {
     throw avatarFailure("load");
   }
@@ -2127,6 +2135,8 @@ export function clearAvatarCache() {
   avatarRequestGeneration += 1;
   ownAvatarCache = null;
   ownAvatarRequest = null;
+  sessionAvatarCache.clear();
+  adminAvatarCache = null;
 }
 
 export async function getOwnAvatar({ force = false } = {}) {
@@ -2204,6 +2214,149 @@ export async function syncGoogleAvatar() {
   } catch (error) {
     if (/sign in again|^Google profile photo /i.test(error?.message || "")) throw error;
     throw avatarFailure("google", error);
+  }
+}
+
+const avatarRowsExpiry = (rows) => {
+  const defaultExpiry = Date.now() + 9 * 60_000;
+  return rows.reduce((earliest, row) => {
+    if (!row.url) return earliest;
+    const expiry = Date.parse(row.expiresAt || "");
+    return Math.min(earliest, Number.isFinite(expiry) ? expiry : Date.now());
+  }, defaultExpiry);
+};
+
+const avatarRowsCacheIsFresh = (entry, profileId) =>
+  entry?.profileId === profileId
+  && entry.expiresAt > Date.now() + AVATAR_CACHE_EXPIRY_SKEW_MS;
+
+const serviceAvatarRow = (input, { admin = false } = {}) => {
+  if (!input || typeof input !== "object" || typeof input.profileId !== "string") return null;
+  const presentation = serviceAvatarPresentation(input, input.profileId);
+  const row = {
+    ...presentation,
+    displayName: typeof input.displayName === "string" && input.displayName.trim()
+      ? input.displayName.trim()
+      : "Member",
+  };
+  if (!admin) return row;
+  return {
+    ...row,
+    pendingPreviewUrl: typeof input.pendingPreviewUrl === "string" ? input.pendingPreviewUrl : null,
+    moderationReason: typeof input.moderationReason === "string" ? input.moderationReason : null,
+    moderatedAt: typeof input.moderatedAt === "string" ? input.moderatedAt : null,
+  };
+};
+
+export async function getSessionAvatars(sessionId, { force = false } = {}) {
+  const id = String(sessionId || "").trim();
+  if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(id) || id.length > 100) {
+    throw new Error("Invalid session for attendee photos.");
+  }
+  const user = approvedAvatarUser();
+  if (!isLive() || !supabase) {
+    const session = getSession(id);
+    return session
+      ? attendeesFor(session).map((displayName) => ({
+        ...initialsAvatar(),
+        displayName,
+      }))
+      : [];
+  }
+  if (!user) return [];
+  const cached = sessionAvatarCache.get(id);
+  if (!force && avatarRowsCacheIsFresh(cached, user.id)) return cached.rows;
+  let payload;
+  try {
+    payload = await resolveAvatarsFromFunction({ scope: "session", sessionId: id }, "attendees");
+  } catch (error) {
+    if (/sign in again|^Attendee photos /i.test(error?.message || "")) throw error;
+    throw avatarFailure("attendees", error);
+  }
+  if (!Array.isArray(payload?.avatars)) throw avatarFailure("attendees");
+  let rows;
+  try {
+    rows = payload.avatars.map((row) => serviceAvatarRow(row)).filter(Boolean);
+  } catch (error) {
+    throw avatarFailure("attendees", error);
+  }
+  sessionAvatarCache.set(id, {
+    profileId: user.id,
+    rows,
+    expiresAt: avatarRowsExpiry(rows),
+  });
+  return rows;
+}
+
+export async function getAdminAvatarRows({ force = false } = {}) {
+  const user = currentUser();
+  const isAdmin = user?.status === "approved" && ["admin", "superadmin", "super_admin"].includes(user.role);
+  if (!isLive() || !supabase) {
+    if (!isAdmin) return [];
+    return allUsers().map((member) => ({
+      ...initialsAvatar(member.id),
+      displayName: member.fullName || member.email || "Member",
+      pendingPreviewUrl: null,
+      moderationReason: null,
+      moderatedAt: null,
+    }));
+  }
+  if (!isAdmin) return [];
+  if (!force && avatarRowsCacheIsFresh(adminAvatarCache, user.id)) return adminAvatarCache.rows;
+  let payload;
+  try {
+    payload = await resolveAvatarsFromFunction({ scope: "admin_members" }, "admin");
+  } catch (error) {
+    if (/sign in again|^Member photo status /i.test(error?.message || "")) throw error;
+    throw avatarFailure("admin", error);
+  }
+  if (!Array.isArray(payload?.rows)) throw avatarFailure("admin");
+  let rows;
+  try {
+    rows = payload.rows.map((row) => serviceAvatarRow(row, { admin: true })).filter(Boolean);
+  } catch (error) {
+    throw avatarFailure("admin", error);
+  }
+  adminAvatarCache = {
+    profileId: user.id,
+    rows,
+    expiresAt: avatarRowsExpiry(rows),
+  };
+  return rows;
+}
+
+export async function moderateAvatar(profileId, action, reason = "") {
+  const user = currentUser();
+  const isAdmin = user?.status === "approved" && ["admin", "superadmin", "super_admin"].includes(user.role);
+  if (!isAdmin) throw new Error("Administrator access is required to moderate profile photos.");
+  const targetId = String(profileId || "").trim();
+  if (!targetId || targetId.length > 100) throw new Error("Choose a valid member photo.");
+  if (!["hide", "approve", "reject"].includes(action)) throw new Error("Choose a valid moderation action.");
+  const trimmedReason = String(reason || "").trim();
+  if (["hide", "reject"].includes(action) && !trimmedReason) {
+    throw new Error("A moderation reason is required.");
+  }
+  if (trimmedReason.length > 300) throw new Error("Moderation reason must be 300 characters or fewer.");
+  if (!isLive() || !supabase) return initialsAvatar(targetId, action === "approve" ? "active" : "hidden");
+  const body = action === "approve"
+    ? { profileId: targetId, action }
+    : { profileId: targetId, action, reason: trimmedReason };
+  let result;
+  try {
+    result = await supabase.functions.invoke("moderate-profile-avatar", {
+      method: "POST",
+      body,
+    });
+  } catch (error) {
+    throw avatarFailure("moderate", error);
+  }
+  if (result.error || !result.data?.presentation) throw avatarFailure("moderate", result.error);
+  try {
+    const presentation = serviceAvatarPresentation(result.data.presentation, targetId);
+    clearAvatarCache();
+    return presentation;
+  } catch (error) {
+    throw avatarFailure("moderate", error);
   }
 }
 
