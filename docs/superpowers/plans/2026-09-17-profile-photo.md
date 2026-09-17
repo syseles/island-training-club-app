@@ -873,7 +873,7 @@ Clarify that local mode keeps initials and never stores image data.
 node app/avatar-smoke.mjs
 node app/smoke.mjs
 node app/live-auth-smoke.mjs
-deno test --allow-net supabase/functions/_shared/*_test.ts \
+deno test --config supabase/functions/deno.json --allow-net supabase/functions/_shared/*_test.ts \
   supabase/functions/process-profile-avatar/index_test.ts \
   supabase/functions/resolve-profile-avatars/index_test.ts \
   supabase/functions/moderate-profile-avatar/index_test.ts
