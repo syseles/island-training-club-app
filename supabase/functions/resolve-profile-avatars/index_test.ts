@@ -139,6 +139,20 @@ function get(path: string, authenticated = true): Request {
   });
 }
 
+Deno.test('resolver preflight advertises GET to an allowed browser origin', async () => {
+  const { handler } = resolverHarness();
+  const response = await handler(
+    new Request('http://edge.invalid/resolve-profile-avatars', {
+      method: 'OPTIONS',
+      headers: { origin: ORIGIN },
+    }),
+  );
+
+  assertEquals(response.status, 204);
+  assertEquals(response.headers.get('access-control-allow-origin'), ORIGIN);
+  assertStringIncludes(response.headers.get('access-control-allow-methods') ?? '', 'GET');
+});
+
 Deno.test('public, pending, and declined viewers cannot resolve a session', async () => {
   const publicHarness = resolverHarness({ viewer: null });
   assertEquals(

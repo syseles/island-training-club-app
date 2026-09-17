@@ -177,11 +177,17 @@ test("presentation accepts only private HTTPS signed avatar URLs", () => {
   }
 });
 
-test("hidden presentation always normalizes to initials", () => {
+test("hidden and malformed presentation states always normalize to initials", () => {
   assert.deepEqual(
     normalizeAvatarPresentation({ url: SIGNED_URL, source: "custom", state: "hidden" }),
     { url: null, source: "initials", state: "hidden", expiresAt: null },
   );
+  for (const state of [undefined, null, "visible", 1]) {
+    assert.deepEqual(
+      normalizeAvatarPresentation({ url: SIGNED_URL, source: "custom", state }),
+      { url: null, source: "initials", state: "hidden", expiresAt: null },
+    );
+  }
 });
 
 test("avatar markup escapes content and keeps an independent initials sibling", () => {

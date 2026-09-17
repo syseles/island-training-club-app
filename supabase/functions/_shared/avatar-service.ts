@@ -165,7 +165,7 @@ export function corsHeaders(
   const origin = request.headers.get('origin');
   const headers: Record<string, string> = {
     'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
-    'Access-Control-Allow-Methods': 'POST, DELETE, OPTIONS',
+    'Access-Control-Allow-Methods': 'GET, POST, DELETE, OPTIONS',
     'Vary': 'Origin',
   };
   if (origin && allowedOrigins.has(origin)) {

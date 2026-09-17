@@ -61,7 +61,10 @@ export function avatarInitials(name) {
 
 export function normalizeAvatarPresentation(value) {
   const input = value && typeof value === "object" ? value : {};
-  const state = AVATAR_STATES.has(input.state) ? input.state : "active";
+  if (!AVATAR_STATES.has(input.state)) {
+    return { url: null, source: "initials", state: "hidden", expiresAt: null };
+  }
+  const state = input.state;
   const url = safeSignedAvatarURL(input.url);
   const source = AVATAR_SOURCES.has(input.source) ? input.source : "initials";
   if (!url || source === "initials" || state === "hidden") {

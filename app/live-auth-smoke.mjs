@@ -1046,6 +1046,15 @@ assert.equal(avatarResolveCalls.length, 1, "fresh own-avatar cache should suppre
 await store.getOwnAvatar({ force: true });
 assert.equal(avatarResolveCalls.length, 2, "forced own-avatar resolution should replace cache");
 
+avatarPresentation.state = "unexpected";
+store.clearAvatarCache();
+assert.deepEqual(
+  await store.getOwnAvatar(),
+  { profileId: "live-user-1", url: null, source: "initials", state: "hidden", expiresAt: null },
+  "malformed resolver state must fail closed without returning its signed URL",
+);
+avatarPresentation.state = "active";
+
 avatarPresentation.expiresAt = null;
 store.clearAvatarCache();
 const unsignedExpiryResolveCount = avatarResolveCalls.length;

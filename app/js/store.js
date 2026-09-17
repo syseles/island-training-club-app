@@ -23,6 +23,7 @@ import {
 } from "./data.js";
 import { config, supabase, isLive } from "./config.js";
 import { INDEMNITY_VERSION } from "./documents.js";
+import { normalizeAvatarPresentation } from "./avatar.js";
 import { normalizeMeetingPoint, normalizeVenueLocation } from "./venue.js";
 import * as liveOps from "./operations.js";
 
@@ -2044,17 +2045,7 @@ const avatarCacheIsFresh = (entry, profileId) => {
 
 const serviceAvatarPresentation = (input, profileId) => {
   if (!input || typeof input !== "object") throw new Error("Invalid profile photo response");
-  const source = ["custom", "google", "initials"].includes(input.source) ? input.source : "initials";
-  const avatarState = ["active", "hidden", "pending_review"].includes(input.state)
-    ? input.state
-    : "active";
-  return {
-    profileId,
-    url: typeof input.url === "string" ? input.url : null,
-    source,
-    state: avatarState,
-    expiresAt: typeof input.expiresAt === "string" ? input.expiresAt : null,
-  };
+  return { profileId, ...normalizeAvatarPresentation(input) };
 };
 
 const cacheOwnAvatar = (presentation, profileId) => {
