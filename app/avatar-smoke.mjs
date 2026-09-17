@@ -93,6 +93,8 @@ test("initials fallback omits image markup", () => {
     presentation: { url: "https://evil.invalid/photo", source: "custom", state: "active" },
   });
   assert.doesNotMatch(html, /<img/);
+  assert.match(html, /role="img"/);
+  assert.match(html, /aria-label="Ada Lovelace&#39;s profile photo"/);
   assert.match(html, />AL</);
 });
 

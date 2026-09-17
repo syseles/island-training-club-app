@@ -87,13 +87,18 @@ export function avatarMarkup({
     .filter((token) => /^[a-zA-Z][a-zA-Z0-9_-]*$/.test(token));
   const wrapperClass = ["avatar", ...classes].join(" ");
   const initials = escapeHTML(avatarInitials(name));
-  const ariaHidden = decorative ? ' aria-hidden="true"' : "";
+  const accessibleName = `${String(name ?? "").trim() || "Member"}'s profile photo`;
+  const wrapperAccessibility = decorative
+    ? ' aria-hidden="true"'
+    : normalized.url
+    ? ""
+    : ` role="img" aria-label="${escapeHTML(accessibleName)}"`;
   const image = normalized.url
     ? `<img class="avatar__image" src="${escapeHTML(normalized.url)}" alt="${
-      decorative ? "" : escapeHTML(`${String(name ?? "").trim() || "Member"}'s profile photo`)
+      decorative ? "" : escapeHTML(accessibleName)
     }" width="${pixelSize}" height="${pixelSize}"${eager ? "" : ' loading="lazy"'}>`
     : "";
-  return `<span class="${escapeHTML(wrapperClass)}" style="--avatar-size:${pixelSize}px"${ariaHidden}>` +
+  return `<span class="${escapeHTML(wrapperClass)}" style="--avatar-size:${pixelSize}px"${wrapperAccessibility}>` +
     `<span class="avatar__initials" aria-hidden="true">${initials}</span>${image}</span>`;
 }
 
