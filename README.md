@@ -15,6 +15,7 @@ The prototype implements the selected "Night Circuit" direction and the confirme
 - Weekly HYROX is paid per session at a fixed price, booked and paid in-app, with confirmation, receipt, and member-area management.
 - Account lifecycle: public visitor → application → leader approval → member. Pending applicants keep public access only.
 - Member area: upcoming bookings, receipts, payment history, profile.
+- Approved-member profile photos: private 512×512 sanitized images, manual crop/zoom, verified Google fallback, member-only attendee avatars, and Admin moderation. Local mode remains initials-only.
 - Admin area: applicant approval queue, activity editor (including the unresolved HYROX price/capacity as editable placeholders), member role list.
 - Super Admin can additionally change member roles.
 
@@ -44,6 +45,7 @@ The design review remains available at `http://127.0.0.1:4173/references/itc-mob
 - Without Supabase configuration, local state starts empty. Apply through the membership flow to create a local pending profile, which can then sign in again by email (no password).
 - `app/js/store.js` remains the backend seam across both ownership domains until a production backend is selected.
 - Static Vercel deployment has no env-injection/build step. Live Supabase browser configuration is set explicitly in `app/index.html`; deployment steps and credential boundaries are documented in `docs/runbooks/live-auth.md`.
+- Profile photos use the private Supabase `profile-avatars` bucket through authenticated Edge Functions only. Signed URLs live in memory, never in `localStorage`; follow the [profile-photo deployment, acceptance, and rollback procedure](docs/runbooks/live-auth.md#profile-photos-deployment-acceptance-and-rollback).
 - Giving's `PGRST205` fallback keeps the member route reachable but does not enable donations. Functional Giving requires the ordered schema migrations and a real campaign published through **Admin Tools → Giving**; follow the [Giving schema and campaign recovery steps](docs/runbooks/live-auth.md#giving-schema-and-campaign). No fake campaign data is restored.
 - Administrative testing requires Supabase live mode or the historical `archive/demo` branch. The archive is demonstration-only and must not be used as a production source branch.
 - `app/smoke.mjs` is a headless regression check for the product rules (`node smoke.mjs` from `app/`).

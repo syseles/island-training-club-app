@@ -1,6 +1,6 @@
 # Profile Photo Design
 
-Date: 2026-09-17  
+Date: 2026-09-17
 Status: Approved 2026-09-17
 Branch: `feature/profile-photo`, based on `main`
 

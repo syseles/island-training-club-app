@@ -121,6 +121,27 @@ for (const marker of [
 }
 console.log("ok  Giving deployment recovery is documented without fake campaign data");
 
+for (const marker of [
+  "20260917000001_profile_avatars.sql",
+  "profile-avatars",
+  "process-profile-avatar",
+  "resolve-profile-avatars",
+  "moderate-profile-avatar",
+  "SUPABASE_SERVICE_ROLE_KEY",
+  "ITC_APP_ORIGINS",
+  "600 seconds",
+  "rollback",
+]) {
+  if (!liveAuthRunbookSource.includes(marker)) {
+    throw new Error(`profile-photo deployment runbook missing ${marker}`);
+  }
+}
+if (/eyJ[a-zA-Z0-9_-]{20,}[.][a-zA-Z0-9_-]{20,}[.][a-zA-Z0-9_-]{20,}/.test(liveAuthRunbookSource)
+    || /sb_secret_[a-zA-Z0-9_-]{12,}/.test(liveAuthRunbookSource)) {
+  throw new Error("profile-photo runbook must never contain a JWT or service-role secret literal");
+}
+console.log("ok  profile-photo deployment and rollback are documented without secrets");
+
 if (!/values\s*\([\s\S]*?'pending'\s*\)/i.test(profilesMigrationSource)
     || /existing_count|count\s*\(\s*\*\s*\)[\s\S]*super_admin/i.test(profilesMigrationSource)) {
   throw new Error("fresh OAuth profiles must always bootstrap as pending");
