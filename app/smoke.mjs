@@ -61,6 +61,7 @@ for (const relativePath of [
   "../supabase/migrations/20260804000000_profiles.sql",
   "../supabase/migrations/20260805000007_admin_application_decisions.sql",
   "../supabase/migrations/20260827000001_hyrox_indemnity_fields.sql",
+  "../supabase/config.toml",
 ]) {
   const absolutePath = resolve(__dirnameSmoke, relativePath);
   if (!existsSync(absolutePath)) {
@@ -68,6 +69,22 @@ for (const relativePath of [
   }
 }
 console.log("ok  Payment Auth baseline foundation files exist");
+
+const localAvatarStateBefore = JSON.stringify([...mem.entries()]);
+const localAvatar = await store.getOwnAvatar();
+const localUpload = await store.uploadMyAvatar(new Blob(["local-photo-bytes"], { type: "image/jpeg" }));
+const localRemove = await store.removeMyAvatar();
+if ([localAvatar, localUpload, localRemove].some((item) => item.source !== "initials" || item.url !== null)) {
+  throw new Error("local avatar adapters must return initials only");
+}
+if (JSON.stringify([...mem.entries()]) !== localAvatarStateBefore) {
+  throw new Error("local avatar adapters must never serialize image data");
+}
+const signedOutPaidSession = store.upcomingSessions(60).find((session) => session.kind === "paid");
+if (!signedOutPaidSession || (await store.getSessionAvatars(signedOutPaidSession.id)).length !== 0) {
+  throw new Error("local attendee adapter must stay closed without an approved viewer");
+}
+console.log("ok  local avatar adapters stay initials-only and memory-safe");
 
 const profilesMigrationSource = readFileSync(
   resolve(__dirnameSmoke, "../supabase/migrations/20260804000000_profiles.sql"),
@@ -91,6 +108,20 @@ const liveAuthRunbookSource = readFileSync(
   resolve(__dirnameSmoke, "../docs/runbooks/live-auth.md"),
   "utf8"
 );
+const supabaseConfigSource = readFileSync(
+  resolve(__dirnameSmoke, "../supabase/config.toml"),
+  "utf8"
+);
+for (const marker of [
+  "functions/deno.json",
+  "functions.process-profile-avatar",
+  "functions.resolve-profile-avatars",
+  "functions.moderate-profile-avatar",
+]) {
+  if (!supabaseConfigSource.includes(marker)) {
+    throw new Error(`Supabase CLI config missing ${marker}`);
+  }
+}
 const readmeSource = readFileSync(resolve(__dirnameSmoke, "../README.md"), "utf8");
 const deploymentDocs = `${readmeSource}\n${liveAuthRunbookSource}`;
 for (const marker of [
@@ -104,6 +135,27 @@ for (const marker of [
   }
 }
 console.log("ok  Giving deployment recovery is documented without fake campaign data");
+
+for (const marker of [
+  "20260917000001_profile_avatars.sql",
+  "profile-avatars",
+  "process-profile-avatar",
+  "resolve-profile-avatars",
+  "moderate-profile-avatar",
+  "SUPABASE_SERVICE_ROLE_KEY",
+  "ITC_APP_ORIGINS",
+  "600 seconds",
+  "rollback",
+]) {
+  if (!liveAuthRunbookSource.includes(marker)) {
+    throw new Error(`profile-photo deployment runbook missing ${marker}`);
+  }
+}
+if (/eyJ[a-zA-Z0-9_-]{20,}[.][a-zA-Z0-9_-]{20,}[.][a-zA-Z0-9_-]{20,}/.test(liveAuthRunbookSource)
+    || /sb_secret_[a-zA-Z0-9_-]{12,}/.test(liveAuthRunbookSource)) {
+  throw new Error("profile-photo runbook must never contain a JWT or service-role secret literal");
+}
+console.log("ok  profile-photo deployment and rollback are documented without secrets");
 
 if (!/values\s*\([\s\S]*?'pending'\s*\)/i.test(profilesMigrationSource)
     || /existing_count|count\s*\(\s*\*\s*\)[\s\S]*super_admin/i.test(profilesMigrationSource)) {
@@ -804,7 +856,10 @@ for (const [input, expect] of [
   }
 }
 console.log("ok  donor ID format validation");
-await check("account (pending)", () => views.viewAccount());
+const pendingAccount = await check("account (pending)", () => views.viewAccount());
+if (pendingAccount.includes('data-action="manage-profile-photo"')) {
+  throw new Error("pending Profile must not expose photo management");
+}
 const pendingHome = views.viewHome();
 {
   // Pending applicants see "My Week" filtered to free sessions in the
@@ -973,7 +1028,26 @@ console.log("ok  admin approved new applicant");
 // --- Member booking + payment flow ---
 const signIn = store.signIn("test@example.com");
 if (!signIn.ok || signIn.user.status !== "approved") throw new Error("approval did not take effect");
-await check("account (new member)", () => views.viewAccount());
+const approvedAccount = await check("account (new member)", () => views.viewAccount());
+if (!/button[^>]+data-action="manage-profile-photo"[^>]+aria-label="Manage profile photo/.test(approvedAccount)) {
+  throw new Error("approved Profile must expose a labelled manage-photo button");
+}
+const approvedAvatarRole = store.currentUser().role;
+store.currentUser().role = "unexpected_role";
+const malformedRoleAccount = await views.viewAccount();
+if (malformedRoleAccount.includes('data-action="manage-profile-photo"')) {
+  throw new Error("unknown roles must not expose profile-photo management");
+}
+store.currentUser().role = approvedAvatarRole;
+const topAvatarWithPhoto = views.avatarHTML(signIn.user, {
+  url: "https://project.supabase.co/storage/v1/object/sign/profile-avatars/member/custom.jpg?token=test",
+  source: "custom",
+  state: "active",
+  expiresAt: "2099-01-01T00:00:00.000Z",
+});
+if (!topAvatarWithPhoto.includes('class="avatar__image"') || topAvatarWithPhoto.includes('loading="lazy"')) {
+  throw new Error("top navigation must use eager resolved avatar presentation markup");
+}
 const approvedCommunity = views.viewCommunity();
 if (!approvedCommunity.includes("Connect and grow with us.")) {
   failures++;
@@ -1431,7 +1505,32 @@ if (!views.viewHome().includes(bookedActivityLink)) {
 }
 await check("booking confirmation", () => views.viewBooking(booking.id));
 await check("receipt", () => views.viewReceipt(receipt.id));
-await check("activity (member, booked)", () => views.viewActivity(paid.id));
+const memberActivityWithAvatars = await check("activity (member, booked)", () => views.viewActivity(paid.id, {
+  avatarRows: [{
+    profileId: "member-visible-only-to-resolver",
+    displayName: "Alex T.",
+    url: "https://project.supabase.co/storage/v1/object/sign/profile-avatars/member/avatar.jpg?token=attendee",
+    source: "custom",
+    state: "active",
+    expiresAt: "2099-01-01T00:00:00.000Z",
+  }],
+}));
+if (!memberActivityWithAvatars.includes("Alex T.") || !memberActivityWithAvatars.includes("attendee-avatar")) {
+  throw new Error("approved Activity Details must render resolved attendee avatar/name rows");
+}
+if (memberActivityWithAvatars.includes("member-visible-only-to-resolver") ||
+    memberActivityWithAvatars.includes('data-action="avatar-hide"')) {
+  throw new Error("member attendee rows must not expose profile IDs or moderation controls");
+}
+const memberActivityFallback = views.viewActivity(paid.id, { avatarRows: null });
+if (!memberActivityFallback.includes("Who’s coming") || /object_path|pending_object|google_object/.test(memberActivityFallback)) {
+  throw new Error("attendee resolver failure must retain safe attendee copy without internal paths");
+}
+store.signOut();
+if ((await store.getSessionAvatars(paid.id)).length !== 0) {
+  throw new Error("signed-out local attendee adapter must not return booked-member rows");
+}
+if (!store.signIn("test@example.com").ok) throw new Error("member fixture must sign back in after attendee authorization test");
 
 // the booked class is badged on Home "My week" and on the Schedule row;
 // "My week" shows booked sessions only, so unbooked ones stay out

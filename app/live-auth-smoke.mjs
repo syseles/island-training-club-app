@@ -199,6 +199,53 @@ let oauthOptions = null;
 let releaseOAuth = null;
 let signOutCalls = 0;
 let releaseSignOut = null;
+const avatarFunctionCalls = [];
+const avatarResolveCalls = [];
+let avatarInvokeError = null;
+let avatarModerationError = null;
+let avatarModerationGate = null;
+let avatarResolveStatus = 200;
+let avatarPresentation = {
+  profileId: authUser.id,
+  url: "https://example.supabase.co/storage/v1/object/sign/profile-avatars/live-user-1/google.jpg?token=test-token",
+  source: "google",
+  state: "active",
+  expiresAt: "2026-08-05T02:10:00.000Z",
+};
+const avatarSessionRows = [
+  {
+    profileId: "attendee-live-1",
+    displayName: "Alex T.",
+    url: "https://example.supabase.co/storage/v1/object/sign/profile-avatars/attendee-live-1/custom.jpg?token=attendee-token",
+    source: "custom",
+    state: "active",
+    expiresAt: "2026-08-05T02:10:00.000Z",
+  },
+];
+const avatarAdminRows = [
+  {
+    profileId: "approved-admin",
+    displayName: "Tina Admin",
+    url: "https://example.supabase.co/storage/v1/object/sign/profile-avatars/approved-admin/custom.jpg?token=admin-active-token",
+    source: "custom",
+    state: "active",
+    expiresAt: "2026-08-05T02:10:00.000Z",
+    pendingPreviewUrl: null,
+    moderationReason: null,
+    moderatedAt: null,
+  },
+  {
+    profileId: "approved-member",
+    displayName: "Micah Member",
+    url: null,
+    source: "initials",
+    state: "pending_review",
+    expiresAt: null,
+    pendingPreviewUrl: "https://example.supabase.co/storage/v1/object/sign/profile-avatars/approved-member/pending.jpg?token=admin-pending-token",
+    moderationReason: "Previous photo hidden",
+    moderatedAt: "2026-08-05T01:00:00.000Z",
+  },
+];
 const deferredAuthTasks = [];
 const LIVE_TABLES_COUNT = 7;
 const fixedIso = "2026-08-05T02:00:00.000Z";
@@ -251,6 +298,61 @@ const fakeSupabase = {
       signOutCalls++;
       return new Promise((resolve) => { releaseSignOut = resolve; });
     },
+  },
+  functions: {
+    async invoke(name, options = {}) {
+      avatarFunctionCalls.push({ name, options });
+      if (name === "moderate-profile-avatar") {
+        if (avatarModerationGate) await avatarModerationGate;
+        if (avatarModerationError) return { data: null, error: avatarModerationError };
+        const command = options.body;
+        const row = avatarAdminRows.find((item) => item.profileId === command.profileId);
+        if (row) {
+          if (command.action === "approve") {
+            row.state = "active";
+            row.source = "custom";
+            row.url = row.pendingPreviewUrl;
+            row.pendingPreviewUrl = null;
+            row.moderationReason = null;
+          } else {
+            row.state = "hidden";
+            row.source = "initials";
+            row.url = null;
+            row.pendingPreviewUrl = null;
+            row.moderationReason = command.reason;
+          }
+        }
+        return {
+          data: {
+            presentation: row
+              ? {
+                profileId: row.profileId,
+                url: row.url,
+                source: row.source,
+                state: row.state,
+                expiresAt: row.expiresAt,
+              }
+              : structuredClone(avatarPresentation),
+          },
+          error: null,
+        };
+      }
+      if (name !== "process-profile-avatar") throw new Error(`Unexpected function: ${name}`);
+      if (avatarInvokeError) return { data: null, error: avatarInvokeError };
+      const action = options.body instanceof FormData ? options.body.get("action") : options.body?.action;
+      const source = options.method === "DELETE" ? "google" : action === "upload" ? "custom" : "google";
+      avatarPresentation = {
+        ...avatarPresentation,
+        source,
+        url: source === "custom"
+          ? "https://example.supabase.co/storage/v1/object/sign/profile-avatars/live-user-1/custom.jpg?token=custom-token"
+          : "https://example.supabase.co/storage/v1/object/sign/profile-avatars/live-user-1/google.jpg?token=google-token",
+      };
+      return { data: { presentation: structuredClone(avatarPresentation) }, error: null };
+    },
+  },
+  get storage() {
+    throw new Error("Browser avatar code must not use the Supabase Storage client");
   },
   from(table) {
     if (table === "profiles") {
@@ -508,6 +610,26 @@ globalThis.window = {
   SUPABASE_URL: "https://example.supabase.co",
   SUPABASE_ANON_KEY: "test-anon-key",
   supabase: { createClient: () => fakeSupabase },
+};
+
+globalThis.fetch = async (url, options = {}) => {
+  const parsed = new URL(url);
+  if (parsed.pathname !== "/functions/v1/resolve-profile-avatars") {
+    throw new Error(`Unexpected fetch URL: ${url}`);
+  }
+  avatarResolveCalls.push({ url: parsed.toString(), options });
+  const scope = parsed.searchParams.get("scope");
+  const payload = avatarResolveStatus !== 200
+    ? { error: "sensitive resolver detail" }
+    : scope === "session"
+    ? { avatars: structuredClone(avatarSessionRows) }
+    : scope === "admin_members"
+    ? { rows: structuredClone(avatarAdminRows) }
+    : { avatars: [structuredClone(avatarPresentation)] };
+  return new Response(JSON.stringify(payload), {
+    status: avatarResolveStatus,
+    headers: { "content-type": "application/json" },
+  });
 };
 
 // Seed operational fake tables with at least one upcoming paid session so
@@ -909,11 +1031,181 @@ assert.match(signedOutAccount, /data-action="sign-in-google"/);
 store.clearApplyDraft();
 
 await store.getCurrentUser();
+
+// Avatar adapters use only authenticated Edge Functions and keep signed URLs
+// in memory. Cache hits avoid resolver traffic; mutations replace that cache.
+const firstAvatar = await store.getOwnAvatar();
+assert.equal(firstAvatar.source, "google");
+assert.equal(avatarResolveCalls.length, 1);
+assert.equal(new URL(avatarResolveCalls[0].url).searchParams.get("scope"), "self");
+assert.equal(avatarResolveCalls[0].options.method, "GET");
+assert.equal(avatarResolveCalls[0].options.headers.Authorization, "Bearer test-access-token");
+assert.equal(avatarResolveCalls[0].options.headers.apikey, "test-anon-key");
+await store.getOwnAvatar();
+assert.equal(avatarResolveCalls.length, 1, "fresh own-avatar cache should suppress duplicate resolution");
+await store.getOwnAvatar({ force: true });
+assert.equal(avatarResolveCalls.length, 2, "forced own-avatar resolution should replace cache");
+
+avatarPresentation.state = "unexpected";
+store.clearAvatarCache();
+assert.deepEqual(
+  await store.getOwnAvatar(),
+  { profileId: "live-user-1", url: null, source: "initials", state: "hidden", expiresAt: null },
+  "malformed resolver state must fail closed without returning its signed URL",
+);
+avatarPresentation.state = "active";
+
+avatarPresentation.expiresAt = null;
+store.clearAvatarCache();
+const unsignedExpiryResolveCount = avatarResolveCalls.length;
+await store.getOwnAvatar();
+await store.getOwnAvatar();
+assert.equal(avatarResolveCalls.length, unsignedExpiryResolveCount + 2,
+  "a signed URL without expiry metadata must never be cached indefinitely");
+avatarPresentation.expiresAt = "2026-08-05T02:10:00.000Z";
+store.clearAvatarCache();
+
+const uploadedAvatar = await store.uploadMyAvatar(new Blob(["jpeg"], { type: "image/jpeg" }));
+assert.equal(uploadedAvatar.source, "custom");
+const uploadCall = avatarFunctionCalls.at(-1);
+assert.equal(uploadCall.name, "process-profile-avatar");
+assert.equal(uploadCall.options.method, "POST");
+assert.ok(uploadCall.options.body instanceof FormData);
+assert.equal(uploadCall.options.body.get("action"), "upload");
+assert.ok(uploadCall.options.body.get("file") instanceof Blob);
+const resolveCountAfterUpload = avatarResolveCalls.length;
+assert.equal((await store.getOwnAvatar()).source, "custom");
+assert.equal(avatarResolveCalls.length, resolveCountAfterUpload, "upload should replace own cache");
+
+const removedAvatar = await store.removeMyAvatar();
+assert.equal(removedAvatar.source, "google");
+const removeCall = avatarFunctionCalls.at(-1);
+assert.equal(removeCall.name, "process-profile-avatar");
+assert.equal(removeCall.options.method, "DELETE");
+assert.equal((await store.getOwnAvatar()).source, "google");
+
+avatarInvokeError = { message: "sensitive service-role detail", context: { status: 500 } };
+await assert.rejects(
+  store.uploadMyAvatar(new Blob(["jpeg"], { type: "image/jpeg" })),
+  (error) => /could not be saved/i.test(error.message) && !/service-role/i.test(error.message),
+);
+avatarInvokeError = null;
+assert.equal((await store.uploadMyAvatar(new Blob(["jpeg"], { type: "image/jpeg" }))).source, "custom",
+  "avatar mutation must recover after an error");
+
+store.clearAvatarCache();
+avatarResolveStatus = 401;
+await assert.rejects(
+  store.getOwnAvatar(),
+  (error) => /sign in again/i.test(error.message) && !/sensitive/i.test(error.message),
+);
+avatarResolveStatus = 200;
+assert.equal((await store.getOwnAvatar()).source, "custom", "401 must not leave a rejected request cached");
+const syncBefore = avatarFunctionCalls.length;
+await store.syncGoogleAvatar();
+assert.equal(avatarFunctionCalls.length, syncBefore + 1);
+assert.deepEqual(avatarFunctionCalls.at(-1), {
+  name: "process-profile-avatar",
+  options: { method: "POST", body: { action: "sync_google" } },
+});
+
+const sessionResolveBefore = avatarResolveCalls.length;
+const sessionAvatars = await store.getSessionAvatars("hyrox-2026-08-15");
+assert.equal(sessionAvatars[0].displayName, "Alex T.");
+assert.equal(avatarResolveCalls.length, sessionResolveBefore + 1);
+const sessionResolveUrl = new URL(avatarResolveCalls.at(-1).url);
+assert.equal(sessionResolveUrl.searchParams.get("scope"), "session");
+assert.equal(sessionResolveUrl.searchParams.get("sessionId"), "hyrox-2026-08-15");
+await store.getSessionAvatars("hyrox-2026-08-15");
+assert.equal(avatarResolveCalls.length, sessionResolveBefore + 1,
+  "session avatar rows should use their fresh in-memory cache");
+
+const adminRows = await store.getAdminAvatarRows();
+assert.equal(adminRows.length, 2);
+assert.equal(adminRows.find((row) => row.state === "pending_review").pendingPreviewUrl.includes("pending.jpg"), true);
+const adminResolveUrl = new URL(avatarResolveCalls.at(-1).url);
+assert.equal(adminResolveUrl.searchParams.get("scope"), "admin_members");
+const adminAvatarHtml = await views.viewAdmin("members");
+assert.match(adminAvatarHtml, /Profile photo review/);
+assert.match(adminAvatarHtml, /data-action="avatar-hide"/);
+assert.match(adminAvatarHtml, /data-action="avatar-approve"/);
+assert.match(adminAvatarHtml, /data-action="avatar-reject"/);
+assert.match(adminAvatarHtml, /data-avatar-moderation-reason/);
+store.clearAvatarCache();
+avatarResolveStatus = 500;
+const unavailableAdminAvatarHtml = await views.viewAdmin("members");
+avatarResolveStatus = 200;
+assert.match(unavailableAdminAvatarHtml, /Photo review status unavailable/);
+assert.doesNotMatch(unavailableAdminAvatarHtml, /No profile photos awaiting review/);
+assert.doesNotMatch(await views.viewAccount(), /data-action="avatar-(?:hide|approve|reject)"/,
+  "member Profile must never contain moderation controls");
+
+const moderationCallsBeforeValidation = avatarFunctionCalls.length;
+await assert.rejects(store.moderateAvatar("approved-admin", "hide", "   "), /reason is required/i);
+await assert.rejects(store.moderateAvatar("approved-member", "reject", ""), /reason is required/i);
+assert.equal(avatarFunctionCalls.length, moderationCallsBeforeValidation,
+  "invalid moderation must fail before an Edge Function call");
+const activeRowBackup = structuredClone(avatarAdminRows[0]);
+const hiddenPresentation = await store.moderateAvatar("approved-admin", "hide", "  Inappropriate image  ");
+assert.equal(hiddenPresentation.state, "hidden");
+assert.deepEqual(avatarFunctionCalls.at(-1), {
+  name: "moderate-profile-avatar",
+  options: {
+    method: "POST",
+    body: { profileId: "approved-admin", action: "hide", reason: "Inappropriate image" },
+  },
+});
+Object.assign(avatarAdminRows[0], activeRowBackup);
+store.clearAvatarCache();
+const pendingRowBackup = structuredClone(avatarAdminRows[1]);
+const approvedPresentation = await store.moderateAvatar("approved-member", "approve");
+assert.equal(approvedPresentation.state, "active");
+assert.deepEqual(avatarFunctionCalls.at(-1), {
+  name: "moderate-profile-avatar",
+  options: {
+    method: "POST",
+    body: { profileId: "approved-member", action: "approve" },
+  },
+});
+Object.assign(avatarAdminRows[1], pendingRowBackup);
+store.clearAvatarCache();
+avatarModerationError = { message: "sensitive audit detail", context: { status: 500 } };
+await assert.rejects(
+  store.moderateAvatar("approved-member", "reject", "Not suitable"),
+  (error) => /could not be completed/i.test(error.message) && !/audit/i.test(error.message),
+);
+avatarModerationError = null;
+assert.equal((await store.getAdminAvatarRows({ force: true })).some((row) => row.state === "pending_review"), true,
+  "failed moderation must preserve the pending row and recover cleanly");
+
+const storeSourceForAvatar = readFileSync(resolve(__dirnameSmoke, "js/store.js"), "utf8");
+assert.doesNotMatch(storeSourceForAvatar, /supabase[.]storage|[.]storage[.]from/,
+  "browser avatar adapters must never mutate Storage directly");
+
+const approvedRole = store.currentUser().role;
+store.currentUser().role = "unexpected_role";
+store.clearAvatarCache();
+const malformedRoleResolveCount = avatarResolveCalls.length;
+assert.equal((await store.getOwnAvatar()).source, "initials");
+assert.equal(avatarResolveCalls.length, malformedRoleResolveCount,
+  "unknown roles must never call the avatar resolver");
+await assert.rejects(
+  store.uploadMyAvatar(new Blob(["jpeg"], { type: "image/jpeg" })),
+  /Approved membership is required/,
+);
+store.currentUser().role = approvedRole;
+store.clearAvatarCache();
+
 const originalProfileForApply = structuredClone(profile);
 const originalApplicationForApply = structuredClone(applicationRows.get(authUser.id));
 Object.assign(profile, { role: "pending" });
 applicationRows.delete(authUser.id);
 await store.getCurrentUser();
+const pendingAvatarResolveCount = avatarResolveCalls.length;
+assert.deepEqual(await store.getSessionAvatars("hyrox-2026-08-15"), []);
+assert.deepEqual(await store.getAdminAvatarRows(), []);
+assert.equal(avatarResolveCalls.length, pendingAvatarResolveCount,
+  "pending viewers must not call attendee or Admin avatar scopes");
 const liveApplyHtml = await views.viewApply();
 assert.match(liveApplyHtml, /data-form="apply"/);
 assert.match(liveApplyHtml, /name="mobile"/);
@@ -1320,6 +1612,12 @@ const uuidBooking = await store.reserveSession(authUser.id, gatedPaidSession, Da
 if (uuidBooking.userId !== authUser.id) {
   throw new Error("Payment records must use the authenticated Supabase profile UUID");
 }
+assert.equal(
+  uuidBooking.snapshot.time,
+  "11:15",
+  "live booking snapshots must normalize database start_time for sessionStarted and views",
+);
+assert.doesNotThrow(() => data.sessionStarted(uuidBooking.snapshot));
 for (const status of ["pending", "declined"]) {
   store.currentUser().role = status;
   store.currentUser().status = status;
@@ -1825,8 +2123,12 @@ globalThis.document = {
 globalThis.HTMLInputElement = class {};
 globalThis.HTMLFormElement = class {};
 globalThis.FormData = class {
-  constructor(form) { this.form = form; }
-  get(name) { return this.form.fields?.[name] ?? null; }
+  constructor(form) {
+    this.form = form;
+    this.values = new Map();
+  }
+  append(name, value) { this.values.set(name, value); }
+  get(name) { return this.values.has(name) ? this.values.get(name) : this.form?.fields?.[name] ?? null; }
 };
 globalThis.location = {
   hash: "#/account",
@@ -2762,6 +3064,145 @@ process.off("unhandledRejection", captureRejection);
 applicationReadError = null;
 profile.role = "super_admin";
 await store.getCurrentUser();
+const approvedSyncBefore = avatarFunctionCalls.filter((call) => call.options.body?.action === "sync_google").length;
+location.hash = "#/account";
+toastStack.children.length = 0;
+await dispatchAuthStateChange("SIGNED_IN");
+const approvedSyncAfter = avatarFunctionCalls.filter((call) => call.options.body?.action === "sync_google").length;
+assert.equal(approvedSyncAfter, approvedSyncBefore + 1,
+  "approved sign-in must request verified Google avatar synchronization");
+assert.equal(store.currentUser().status, "approved");
+const signedInAvatar = await store.getOwnAvatar();
+assert.equal(signedInAvatar.source, "google");
+assert.match(signedInAvatar.url, /google[.]jpg/);
+assert.match(views.avatarHTML(store.currentUser(), signedInAvatar), /avatar__image/);
+app.commitOwnAvatarPresentation(signedInAvatar);
+assert.match(elements.get("top-avatar").innerHTML, /avatar__image/,
+  "top navigation must render the resolved signed presentation");
+
+let managedOptions = null;
+const profileAvatarButton = makeElement();
+const previousViewQuery = viewEl.querySelector;
+viewEl.querySelector = (selector) => selector === '[data-action="manage-profile-photo"]'
+  ? profileAvatarButton
+  : null;
+await app.openOwnAvatarManager((options) => {
+  managedOptions = options;
+  return { close() {} };
+});
+assert.equal(managedOptions.memberName, "Riley Runner");
+assert.equal(typeof managedOptions.onUpload, "function");
+const managedUpload = await managedOptions.onUpload(new Blob(["jpeg"], { type: "image/jpeg" }));
+assert.equal(managedUpload.source, "custom");
+assert.match(elements.get("top-avatar").innerHTML, /custom[.]jpg/);
+assert.match(profileAvatarButton.innerHTML, /custom[.]jpg/,
+  "upload must update Profile avatar without a page reload");
+const managedRemove = await managedOptions.onRemove();
+assert.equal(managedRemove.source, "google");
+assert.match(elements.get("top-avatar").innerHTML, /google[.]jpg/);
+assert.match(profileAvatarButton.innerHTML, /google[.]jpg/,
+  "remove must update Profile avatar without a page reload");
+viewEl.querySelector = previousViewQuery;
+
+const avatarErrorWrapper = makeElement();
+const avatarErrorImage = makeElement();
+avatarErrorImage.className = "avatar__image";
+avatarErrorImage.classList.toggle("avatar__image", true);
+avatarErrorImage.closest = () => avatarErrorWrapper;
+assert.equal(app.revealAvatarInitials(avatarErrorImage), true);
+assert.equal(avatarErrorImage.hidden, true);
+assert.equal(avatarErrorWrapper.classList.contains("is-error"), true,
+  "image failure must reveal the independent initials fallback");
+assert.doesNotMatch(readFileSync(resolve(__dirnameSmoke, "js/app.js"), "utf8"), /location[.]reload/,
+  "avatar updates must not reload the page");
+
+store.clearAvatarCache();
+const activityAvatarResolveBefore = avatarResolveCalls.length;
+location.hash = "#/activity/hyrox-2026-08-15";
+await windowListeners.get("hashchange")();
+const activityAvatarCalls = avatarResolveCalls.slice(activityAvatarResolveBefore)
+  .filter((call) => new URL(call.url).searchParams.get("scope") === "session");
+assert.equal(activityAvatarCalls.length, 1,
+  "approved Activity Details must request exactly one session-scoped avatar list");
+assert.equal(new URL(activityAvatarCalls[0].url).searchParams.get("sessionId"), "hyrox-2026-08-15");
+assert.match(viewEl.innerHTML, /Alex T[.]/);
+assert.match(viewEl.innerHTML, /attendee-avatar/);
+
+store.clearAvatarCache();
+avatarResolveStatus = 500;
+location.hash = "#/activity/hyrox-2026-08-15";
+await windowListeners.get("hashchange")();
+avatarResolveStatus = 200;
+assert.match(viewEl.innerHTML, /Who’s coming/);
+assert.doesNotMatch(viewEl.innerHTML, /sensitive resolver detail|object_path|pending_object/,
+  "resolver failure must retain safe attendee UI without server details");
+
+const makeAvatarModerationControl = (action, profileId, reason) => {
+  const reasonInput = makeElement();
+  reasonInput.value = reason;
+  const primary = makeElement();
+  primary.dataset = { action, profileId, memberName: "Micah Member" };
+  const secondary = makeElement();
+  const card = makeElement();
+  card.querySelector = (selector) => selector === "[data-avatar-moderation-reason]" ? reasonInput : null;
+  card.querySelectorAll = () => [primary, secondary, reasonInput];
+  primary.closest = () => card;
+  return { primary, secondary, reasonInput, card };
+};
+
+views.adminMemberFilters.query = "";
+views.adminMemberFilters.status = "all";
+views.adminMemberFilters.role = "all";
+Object.assign(avatarAdminRows[1], pendingRowBackup);
+store.clearAvatarCache();
+location.hash = "#/admin/members";
+viewEl.innerHTML = "moderation-before";
+const moderationGate = deferred();
+avatarModerationGate = moderationGate.promise;
+const approveControl = makeAvatarModerationControl("avatar-approve", "approved-member", "");
+const moderateCallsBefore = avatarFunctionCalls.filter((call) => call.name === "moderate-profile-avatar").length;
+const firstModeration = app.runAvatarModeration(approveControl.primary);
+const duplicateModeration = await app.runAvatarModeration(approveControl.primary);
+assert.equal(duplicateModeration, false);
+assert.equal(
+  avatarFunctionCalls.filter((call) => call.name === "moderate-profile-avatar").length,
+  moderateCallsBefore + 1,
+  "pending moderation must suppress duplicate actions",
+);
+assert.equal(approveControl.primary.disabled, true);
+assert.equal(approveControl.secondary.disabled, true);
+assert.equal(approveControl.reasonInput.disabled, true);
+assert.equal(approveControl.primary.getAttribute("aria-busy"), "true");
+assert.equal(approveControl.primary.textContent, "Approving…");
+moderationGate.resolve();
+assert.equal(await firstModeration, true);
+avatarModerationGate = null;
+assert.notEqual(viewEl.innerHTML, "moderation-before", "successful moderation must rerender Admin Members");
+assert.match(viewEl.innerHTML, /No profile photos awaiting review/);
+
+Object.assign(avatarAdminRows[1], pendingRowBackup);
+store.clearAvatarCache();
+const rejectControl = makeAvatarModerationControl("avatar-reject", "approved-member", "Keep this reason");
+avatarModerationError = { message: "sensitive moderation detail", context: { status: 500 } };
+viewEl.innerHTML = "moderation-failure-preserved";
+assert.equal(await app.runAvatarModeration(rejectControl.primary), false);
+avatarModerationError = null;
+assert.equal(viewEl.innerHTML, "moderation-failure-preserved",
+  "failed moderation must preserve the current Admin UI");
+assert.equal(rejectControl.reasonInput.value, "Keep this reason");
+assert.equal(rejectControl.primary.disabled, false);
+assert.equal(rejectControl.secondary.disabled, false);
+assert.equal(rejectControl.reasonInput.disabled, false);
+assert.equal(rejectControl.primary.hasAttribute("aria-busy"), false);
+assert.equal(rejectControl.primary.textContent, "");
+const missingReasonControl = makeAvatarModerationControl("avatar-reject", "approved-member", "   ");
+const callsBeforeMissingReason = avatarFunctionCalls.length;
+assert.equal(await app.runAvatarModeration(missingReasonControl.primary), false);
+assert.equal(avatarFunctionCalls.length, callsBeforeMissingReason);
+assert.equal(missingReasonControl.reasonInput.focusOptions, undefined);
+assert.equal(activeElement, missingReasonControl.reasonInput,
+  "missing moderation reason must move focus to the reason field");
+
 activeGivingCampaignRow = null;
 activeGivingCampaignError = {
   code: "PGRST205",
@@ -2810,6 +3251,12 @@ console.log("ok  stale Giving lookups cannot mutate the owned live campaign cach
 const finalSignOut = store.signOutLive();
 releaseSignOut({ error: null });
 await finalSignOut;
+const avatarResolveCountAfterSignOut = avatarResolveCalls.length;
+const signedOutAvatar = await store.getOwnAvatar({ force: true });
+assert.equal(signedOutAvatar.source, "initials");
+assert.equal(signedOutAvatar.url, null);
+assert.equal(avatarResolveCalls.length, avatarResolveCountAfterSignOut,
+  "sign-out must clear signed URLs and never resolve another avatar anonymously");
 if (!store.getBooking(uuidBooking.id) || store.getBooking(uuidBooking.id).userId !== authUser.id) {
   throw new Error("Live sign-out must preserve device-local Payment records keyed by profile UUID");
 }

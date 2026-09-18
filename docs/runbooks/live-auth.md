@@ -97,6 +97,214 @@ To use live mode locally, edit `app/index.html`'s inline `<script>` block to set
 project's values. Refresh the page after changes. Manage live identities in
 Supabase Admin; this cleanup does not change the schema or delete live users.
 
+## Profile photos: deployment, acceptance, and rollback
+
+Profile photos are a live-Supabase feature. Local mode always renders initials:
+it does not upload, persist, or place image bytes/base64 data in `localStorage`.
+Approved members, Admins, and Super Admins may manage photos. Public, pending,
+and declined viewers cannot resolve other members' photos.
+
+### Pre-deployment checks and secrets
+
+1. Select the intended Supabase project and confirm its backup/point-in-time
+   recovery status. Do not use a production database for the destructive test
+   harness. Set and visibly verify the public project reference, then inspect
+   both local and remote migration history before any write:
+
+   ```bash
+   export SUPABASE_PROJECT_REF="<confirmed-project-ref>"
+   supabase projects list
+   supabase migration list --project-ref "$SUPABASE_PROJECT_REF"
+   supabase db push --dry-run --project-ref "$SUPABASE_PROJECT_REF"
+   ```
+
+   `supabase/config.toml` is versioned so the CLI discovers local migrations
+   and each function's shared `supabase/functions/deno.json` import map. If the
+   dry run reports no migrations while local files exist, stop: the CLI is not
+   reading the repository configuration.
+2. In Supabase Dashboard → Edge Functions → Secrets, confirm the managed
+   `SUPABASE_SERVICE_ROLE_KEY` is available to functions. Never copy its value
+   into the browser, Vercel, logs, screenshots, this runbook, or any repository
+   file.
+3. Configure `ITC_APP_ORIGINS` as a comma-separated list of exact allowed
+   origins, with no paths and no wildcard. Include each deployed preview/test
+   origin that is intentionally supported and, only when needed, the exact
+   local origin such as `http://127.0.0.1:4173`. Use the Dashboard secret editor
+   or a placeholder command locally; never commit the real list:
+
+   ```bash
+   supabase secrets set ITC_APP_ORIGINS="<exact-origin-1>,<exact-origin-2>"
+   supabase secrets list
+   ```
+
+4. Confirm the deployed frontend contains only the browser-safe Supabase URL
+   and anon/publishable key. Search the deployment output for service-role and
+   database credentials before continuing.
+
+### Deploy in order
+
+The migration `20260917000001_profile_avatars.sql` creates the private
+`profile-avatars` bucket, metadata and immutable audit tables, upload-attempt
+rate enforcement, and service-only transition functions. When local and remote
+migration histories align, deploy in this exact order:
+
+```bash
+supabase db push --project-ref "$SUPABASE_PROJECT_REF"
+supabase functions deploy process-profile-avatar --project-ref "$SUPABASE_PROJECT_REF"
+supabase functions deploy resolve-profile-avatars --project-ref "$SUPABASE_PROJECT_REF"
+supabase functions deploy moderate-profile-avatar --project-ref "$SUPABASE_PROJECT_REF"
+```
+
+The production project had a legacy migration-history gap before the avatar
+rollout on 18 September 2026: its existing schema was present while older
+migration-history rows were absent. An unqualified `db push` would therefore
+try to replay old migrations. For that verified condition only, the avatar
+migration was applied and recorded explicitly:
+
+```bash
+supabase db query --linked --project-ref "$SUPABASE_PROJECT_REF" \
+  --file supabase/migrations/20260917000001_profile_avatars.sql
+# Verify the bucket, tables, RLS, grants, and functions before recording it.
+supabase migration repair 20260917000001 --status applied --linked \
+  --project-ref "$SUPABASE_PROJECT_REF" --yes
+```
+
+Do not use `--include-all`, and do not mark older versions applied without a
+separate schema audit. Reconcile that historical drift before the next normal
+migration rollout.
+
+Do not deploy the photo-enabled frontend until all four commands succeed. Edge
+Functions accept CORS only from `ITC_APP_ORIGINS`; they must never return
+`Access-Control-Allow-Origin: *`. Browser code has no direct Storage mutation
+policy. Sanitized objects are delivered through signed URLs valid for 600 seconds
+and cached only in page memory.
+
+### Post-deployment verification
+
+Verify the bucket in Dashboard → Storage and with trusted SQL:
+
+```sql
+select id, public, file_size_limit, allowed_mime_types
+  from storage.buckets
+ where id = 'profile-avatars';
+```
+
+Expected: one row, `public = false`, `file_size_limit = 2097152`, and only
+`image/jpeg`. Confirm anon/authenticated users have no direct insert, update,
+or delete policy for this bucket. A direct browser Storage upload/delete must
+fail; only the three Edge Functions may own object paths.
+
+Before live acceptance, run all automated checks from the repository root:
+
+```bash
+node app/avatar-smoke.mjs
+node app/smoke.mjs
+node app/live-auth-smoke.mjs
+deno test --config supabase/functions/deno.json --allow-net supabase/functions/_shared/*_test.ts \
+  supabase/functions/process-profile-avatar/index_test.ts \
+  supabase/functions/resolve-profile-avatars/index_test.ts \
+  supabase/functions/moderate-profile-avatar/index_test.ts
+bash supabase/tests/verify_profile_avatars_safety.sh
+```
+
+When an explicitly disposable, empty Supabase-compatible database is available,
+run the destructive migration integration suite. The acknowledgement flag is a
+safety boundary, not boilerplate:
+
+```bash
+ITC_AVATAR_TEST_DATABASE_URL="$DISPOSABLE_DATABASE_URL" \
+ITC_ALLOW_DATABASE_RESET=1 \
+bash supabase/tests/verify_profile_avatars.sh
+```
+
+If no acknowledged disposable database is available, record this check as
+**unexecuted deployment acceptance**. Never report it as passing, and never
+point it at production, staging, a shared database, or a database containing
+users/application objects.
+
+Use separate approved Google and email magic-link accounts, plus pending,
+declined, Admin, and Super Admin accounts, for browser acceptance:
+
+1. On current Safari/iOS and Chrome/Android, tap the approved Profile avatar.
+   Confirm the standard picker offers camera and photo library where supported;
+   it must not force camera-only capture.
+2. Select JPEG, PNG, and WebP sources. Drag the square crop with pointer/touch,
+   zoom from 1–4×, move it with arrow keys, and save. Confirm progress copy,
+   duplicate-submit disabling, a 512×512 JPEG result, and Profile/top-navigation
+   updates without a page reload.
+3. Confirm a verified Google account photo appears automatically when no custom
+   image exists. Remove a custom photo and verify Google fallback, or initials
+   for a magic-link account without Google imagery.
+4. Confirm approved Activity Details shows only confirmed attendee avatar/name
+   rows. Signed-out, pending, and declined sessions must retain the member-only
+   gate and receive no cross-member image URLs.
+5. As Admin and Super Admin, hide an active photo with a required reason. Upload
+   a replacement as that moderated member, verify it remains pending, then test
+   approve and reject (with reason) independently. Ordinary members must never
+   see moderation controls or pending previews.
+6. Let a signed URL expire or deliberately break an image request. Confirm the
+   initials sibling appears without exposing an object path or server error.
+7. Test 375 px portrait and a narrow landscape viewport. Confirm attendee rows,
+   review cards, dialogs, focus order, Escape close, focus restoration, and
+   reduced-motion behavior remain usable.
+8. Download one processed object through a temporary signed URL in trusted
+   Admin context. Verify exact 512×512 JPEG dimensions and no EXIF/GPS/comment
+   metadata. Do not retain the downloaded member image after the check.
+
+### Storage and audit cleanup checks
+
+After upload replacement, custom removal, Admin rejection, and a forced failed
+transition, inspect metadata/audit rows and look for unreferenced objects:
+
+```sql
+select profile_id, state, moderated_by, moderation_reason, moderated_at
+  from public.profile_avatars
+ order by updated_at desc;
+
+select profile_id, actor_id, action, reason, created_at
+  from public.profile_avatar_audit
+ order by created_at desc
+ limit 100;
+
+select o.name, o.created_at
+  from storage.objects o
+  left join public.profile_avatars p
+    on o.name in (p.google_object_path, p.active_object_path, p.pending_object_path)
+ where o.bucket_id = 'profile-avatars'
+   and p.profile_id is null
+ order by o.created_at;
+```
+
+The audit should show attempts and transitions without image bytes. Investigate
+recent in-flight objects before removal. Delete only confirmed stale objects
+through trusted operator tooling after the retention decision; never add a
+browser cleanup policy.
+
+### Rollback
+
+Treat rollback as an access shutdown first and data cleanup second:
+
+1. Deploy a frontend revision that removes/disables photo upload, attendee
+   resolution, and Admin moderation entry points. Confirm clients no longer call
+   any avatar function.
+2. Disable or delete `process-profile-avatar`, `resolve-profile-avatars`, and
+   `moderate-profile-avatar` in the target project. Removing
+   `ITC_APP_ORIGINS` alone is not a substitute for disabling function access.
+3. Confirm no browser/function requests remain. Preserve the private bucket,
+   metadata, and immutable audit rows while leadership decides retention and
+   member-notification obligations.
+4. If deletion is approved, export the required audit evidence, delete bucket
+   objects with trusted service-side tooling, and only then remove the empty
+   `profile-avatars` bucket. Verify the object count is zero.
+5. Database migrations are append-only. Do not edit or delete the applied
+   `20260917000001_profile_avatars.sql` file. Create and review a new rollback
+   migration to revoke/drop avatar RPCs and tables only after object cleanup and
+   retention approval. Re-run the complete smoke and SQL safety suites.
+
+For a code-only rollback, stop after steps 1–3 and leave private data in place;
+this is safer and reversible. Never drop metadata first, because doing so loses
+references needed to identify and clean stored objects safely.
+
 ## Giving schema and campaign
 
 The member route treats PostgREST `PGRST205` as no active campaign so Giving

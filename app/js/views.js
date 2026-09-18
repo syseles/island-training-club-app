@@ -9,6 +9,7 @@ import * as store from "./store.js";
 import { isLive } from "./config.js";
 import * as liveOps from "./operations.js";
 import { sessionCancellationCopy } from "./operations.js";
+import { avatarMarkup } from "./avatar.js";
 import {
   normalizeMeetingPoint,
   normalizeVenueLocation,
@@ -30,7 +31,6 @@ import {
   fmtDateLong,
   fmtTime,
   fmtMoney,
-  initials,
   weeklyVerse,
   notificationRelativeTime,
   notificationHktTime,
@@ -181,8 +181,29 @@ export function navHTML(routeKey, user) {
     .join("");
 }
 
-export function avatarHTML(user) {
-  return user ? initials(user.fullName) : ICONS.user;
+export function avatarHTML(user, presentation = null) {
+  return user
+    ? avatarMarkup({
+      name: user.fullName,
+      presentation,
+      size: 36,
+      className: "avatar--top",
+      decorative: true,
+      eager: true,
+    })
+    : ICONS.user;
+}
+
+export function profileAvatarHTML(user, presentation = null, { editable = true } = {}) {
+  const avatar = avatarMarkup({
+    name: user?.fullName,
+    presentation,
+    size: 72,
+    className: "avatar--profile",
+    decorative: true,
+    eager: true,
+  });
+  return editable ? avatar + '<span class="ph-avatar-edit" aria-hidden="true">Edit</span>' : avatar;
 }
 
 export function notificationBellHTML(unreadCount = 0, active = false) {
@@ -425,12 +446,13 @@ function venuePresentationHTML(presentation) {
   return "";
 }
 
-export function viewActivity(sessionId) {
+export function viewActivity(sessionId, { avatarRows = null } = {}) {
   const s = store.getSession(sessionId);
   if (!s) return viewNotFound("That session doesn’t exist.");
 
   const user = store.currentUser();
-  const isMember = user && user.status === "approved";
+  const isMember = user && user.status === "approved"
+    && ["member", "admin", "superadmin", "super_admin"].includes(user.role);
   const past = sessionStarted(s);
   const spots = store.spotsLeft(s);
   const booking = user ? store.userBookingFor(user.id, s.id) : null;
@@ -540,12 +562,28 @@ export function viewActivity(sessionId) {
       <div><small>Places</small><strong>${spots <= 0 ? "Full" : `${spots} of ${s.capacity} left`}</strong></div>`
       : "";
 
+  const attendeeRows = Array.isArray(avatarRows)
+    ? avatarRows
+    : store.attendeesFor(s).map((displayName) => ({ displayName, url: null, source: "initials", state: "active" }));
+  const attendeeList = attendeeRows.length
+    ? attendeeRows.map((row) => `
+        <div class="attendee-row">
+          ${avatarMarkup({
+            name: row.displayName,
+            presentation: row,
+            size: 32,
+            className: "attendee-avatar",
+            decorative: true,
+          })}
+          <span class="attendee-name">${esc(row.displayName || "Member")}</span>
+        </div>`).join("")
+    : '<p class="muted small">No confirmed attendees yet.</p>';
   const attendees =
     s.kind === "paid"
       ? isMember
         ? `
       <div class="section-head"><h2>Who’s coming</h2></div>
-      <div class="attendees">${store.attendeesFor(s).map((n) => `<span>${esc(n)}</span>`).join("")}</div>`
+      <div class="attendees">${attendeeList}</div>`
         : `<div class="section-head"><h2>Who’s coming</h2></div>${memberOnlyNote("Member-only: the attendee list is visible after approval.")}`
       : "";
 
@@ -1195,6 +1233,8 @@ async function accountMember(user) {
   const normalized = normalizeRole(hydrated.role);
   if (user.role !== normalized) user.role = normalized;
   const isAdmin = isAdminRole(normalized);
+  const canManageAvatar = ["member", "admin", "superadmin"].includes(normalized);
+  const avatarPresentation = canManageAvatar ? await store.getOwnAvatar().catch(() => null) : null;
 
   const roleLabel = {
     member: "Active member",
@@ -1210,7 +1250,11 @@ async function accountMember(user) {
 
     <div class="profile-hero">
       <div class="ph-top">
-        <div class="ph-avatar">${esc(initials(user.fullName))}</div>
+        ${canManageAvatar
+          ? `<button class="ph-avatar" type="button" data-action="manage-profile-photo" aria-label="Manage profile photo for ${esc(user.fullName)}">
+              ${profileAvatarHTML(user, avatarPresentation)}
+            </button>`
+          : `<div class="ph-avatar">${profileAvatarHTML(user, null, { editable: false })}</div>`}
         <div class="ph-id">
           <div class="ph-role">${roleLabel}</div>
           <h1>${esc(user.fullName)}</h1>
@@ -1981,13 +2025,22 @@ export async function viewAdmin(tab = "approvals") {
   // Live mode reads real data (Supabase applications + profiles); local
   // mode keeps the local prototype lists.
   let memberUsers = null;
+  let adminAvatarRows = null;
+  let avatarLoadFailed = false;
   if (["members", "payments", "ops"].includes(tab)) {
     memberUsers = (await store.listPaymentUsers())
       .sort((a, b) => a.fullName.localeCompare(b.fullName));
   }
+  if (tab === "members") {
+    try {
+      adminAvatarRows = await store.getAdminAvatarRows();
+    } catch {
+      avatarLoadFailed = true;
+    }
+  }
   let body;
   if (tab === "activities") body = adminActivities();
-  else if (tab === "members") body = adminMembers(user, memberUsers);
+  else if (tab === "members") body = adminMembers(user, memberUsers, adminAvatarRows, { avatarLoadFailed });
   else if (tab === "giving") {
     try {
       body = adminGiving(await store.listGivingCampaigns());
@@ -2350,8 +2403,60 @@ function adminActivities() {
     ${adminFreeEventVenues()}`;
 }
 
-function adminMembers(viewer, users) {
+function adminMembers(viewer, users, avatarRows = null, { avatarLoadFailed = false } = {}) {
   const canEdit = isSuperRole(viewer.role);
+  const canModerate = isAdminRole(viewer.role);
+  const avatarById = new Map((avatarRows || []).map((row) => [row.profileId, row]));
+  const photoStateLabel = (row) => {
+    if (avatarLoadFailed) return '<span class="badge neutral">Photo status unavailable</span>';
+    if (!row || row.source === "initials" && row.state === "active") return '<span class="badge neutral">No photo</span>';
+    if (row.state === "pending_review") return '<span class="badge warn">Photo pending review</span>';
+    if (row.state === "hidden") return '<span class="badge danger">Photo hidden</span>';
+    return `<span class="badge free">${row.source === "google" ? "Google photo" : "Custom photo"}</span>`;
+  };
+  const pendingRows = (avatarRows || []).filter((row) => {
+    if (row.state !== "pending_review") return false;
+    const member = users.find((item) => item.id === row.profileId);
+    if (!member) return false;
+    const filterQuery = adminMemberFilters.query.trim().toLocaleLowerCase();
+    return (!filterQuery || `${member.fullName || ""} ${member.email || ""}`.toLocaleLowerCase().includes(filterQuery))
+      && (adminMemberFilters.status === "all" || member.status === adminMemberFilters.status)
+      && (adminMemberFilters.role === "all" || normalizedRole(member.role) === adminMemberFilters.role);
+  });
+  const pendingQueue = `
+    <section class="avatar-review-queue" aria-labelledby="avatar-review-title">
+      <div class="section-head"><h2 id="avatar-review-title">Profile photo review</h2></div>
+      ${avatarLoadFailed
+        ? '<div class="empty">Photo review status unavailable — try again.</div>'
+        : pendingRows.length ? pendingRows.map((row) => `
+        <div class="avatar-review-card" data-avatar-moderation-card data-profile-id="${esc(row.profileId)}">
+          ${avatarMarkup({
+            name: row.displayName,
+            presentation: {
+              url: row.pendingPreviewUrl,
+              source: row.pendingPreviewUrl ? "custom" : "initials",
+              state: "pending_review",
+              expiresAt: row.expiresAt,
+            },
+            size: 64,
+            className: "admin-pending-avatar",
+            decorative: true,
+          })}
+          <div class="avatar-review-copy">
+            <strong>${esc(row.displayName)}</strong>
+            <span class="badge warn">Awaiting review</span>
+            ${row.moderationReason ? `<p class="muted small">Previous action: ${esc(row.moderationReason)}</p>` : ""}
+          </div>
+          <div class="avatar-review-actions">
+            <label for="avatar-reject-reason-${esc(row.profileId)}">Reason if rejecting</label>
+            <input id="avatar-reject-reason-${esc(row.profileId)}" type="text" maxlength="300" data-avatar-moderation-reason placeholder="Required to reject">
+            <div class="btn-row two">
+              <button class="btn sm" type="button" data-action="avatar-approve" data-profile-id="${esc(row.profileId)}" data-member-name="${esc(row.displayName)}">Approve</button>
+              <button class="btn danger sm" type="button" data-action="avatar-reject" data-profile-id="${esc(row.profileId)}" data-member-name="${esc(row.displayName)}">Reject</button>
+            </div>
+          </div>
+        </div>`).join("") : '<div class="empty">No profile photos awaiting review.</div>'}
+    </section>`;
   const query = adminMemberFilters.query.trim().toLocaleLowerCase();
   const filtered = users.filter((u) => {
     const matchesQuery = !query || `${u.fullName || ""} ${u.email || ""}`.toLocaleLowerCase().includes(query);
@@ -2370,6 +2475,18 @@ function adminMembers(viewer, users) {
   ].filter(Boolean).join(", ");
   const rows = filtered.map((u) => {
     const role = normalizedRole(u.role);
+    const avatarRow = avatarById.get(u.id) || null;
+    const photoControls = canModerate && avatarRow?.state === "active" && avatarRow.source !== "initials"
+      ? `<div class="avatar-hide-controls" data-avatar-moderation-card data-profile-id="${esc(u.id)}">
+          <label for="avatar-hide-reason-${esc(u.id)}">Reason to hide photo</label>
+          <div class="avatar-hide-action">
+            <input id="avatar-hide-reason-${esc(u.id)}" type="text" maxlength="300" data-avatar-moderation-reason placeholder="Required">
+            <button class="btn danger sm" type="button" data-action="avatar-hide" data-profile-id="${esc(u.id)}" data-member-name="${esc(u.fullName)}">Hide photo</button>
+          </div>
+        </div>`
+      : avatarRow?.state === "hidden" && avatarRow.moderationReason
+      ? `<p class="muted small avatar-moderation-reason">Reason: ${esc(avatarRow.moderationReason)}</p>`
+      : "";
     const roleBadge =
       u.status === "pending"
         ? '<span class="badge warn">Pending</span>'
@@ -2387,13 +2504,26 @@ function adminMembers(viewer, users) {
       : roleBadge;
     return `
       <div class="member-row">
-        <div class="who"><strong>${esc(u.fullName)}</strong><span>${esc(u.email)}</span></div>
-        ${editor}
+        <div class="who member-avatar-who">
+          ${avatarMarkup({
+            name: u.fullName,
+            presentation: avatarRow,
+            size: 40,
+            className: "admin-member-avatar",
+            decorative: true,
+          })}
+          <span class="member-avatar-copy"><strong>${esc(u.fullName)}</strong><span>${esc(u.email)}</span></span>
+        </div>
+        <div class="member-admin-controls">
+          <div class="member-photo-state">${photoStateLabel(avatarRow)}${photoControls}</div>
+          ${editor}
+        </div>
       </div>`;
   }).join("");
   const hasActiveFilters = adminMemberFilters.query.length > 0 ||
     adminMemberFilters.status !== "all" || adminMemberFilters.role !== "all";
   return `
+    ${pendingQueue}
     <p class="muted small mt16">${canEdit ? "Role changes are Super Admin only." : "Only a Super Admin can change roles."}</p>
     <div class="member-filters" aria-label="Filter members">
       <div class="field"><label for="member-search">Search members</label><input id="member-search" type="search" value="${esc(adminMemberFilters.query)}" placeholder="Name or email" data-input="member-search"></div>
