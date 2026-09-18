@@ -8,6 +8,7 @@ import { buildIndemnityCsv } from "./exports.js";
 import * as views from "./views.js";
 import { isLive, supabase } from "./config.js";
 import * as components from "./components.js";
+import { openAvatarManager } from "./avatar-cropper.js";
 import {
   normalizeMeetingPoint,
   normalizeVenueLocation,
@@ -20,6 +21,73 @@ const notificationEl = document.getElementById("top-notifications");
 const avatarEl = document.getElementById("top-avatar");
 const toastStack = document.getElementById("toast-stack");
 const MAP_FALLBACK_HTML = `<p class="muted small activity-map-fallback" role="status">Couldn't find the venue on the map — tap Get directions instead.</p>`;
+
+export function revealAvatarInitials(image) {
+  const isAvatarImage = image?.classList?.contains?.("avatar__image")
+    || String(image?.className || "").split(/\s+/).includes("avatar__image");
+  if (!isAvatarImage) return false;
+  const wrapper = image.closest?.(".avatar") || image.parentElement;
+  wrapper?.classList?.toggle?.("is-error", true);
+  image.hidden = true;
+  return true;
+}
+
+document.addEventListener("error", (event) => {
+  revealAvatarInitials(event.target);
+}, true);
+
+export function commitOwnAvatarPresentation(presentation) {
+  const user = store.currentUser();
+  if (!user?.id) return false;
+  avatarEl.dataset.avatarSource = presentation?.source || "initials";
+  avatarEl.innerHTML = views.avatarHTML(user, presentation);
+  const profileButton = viewEl.querySelector?.('[data-action="manage-profile-photo"]');
+  if (profileButton) profileButton.innerHTML = views.profileAvatarHTML(user, presentation);
+  return true;
+}
+
+const canManageOwnAvatar = (user) => user?.status === "approved"
+  && ["member", "admin", "superadmin", "super_admin"].includes(user.role);
+
+export async function openOwnAvatarManager(openManager = openAvatarManager) {
+  const user = store.currentUser();
+  if (!canManageOwnAvatar(user)) {
+    throw new Error("Approved membership is required to manage a profile photo.");
+  }
+  const presentation = await store.getOwnAvatar();
+  return openManager({
+    memberName: user.fullName,
+    presentation,
+    moderated: ["hidden", "pending_review"].includes(presentation.state),
+    onUpload: async (jpegBlob) => {
+      const next = await store.uploadMyAvatar(jpegBlob);
+      commitOwnAvatarPresentation(next);
+      toast(next.state === "pending_review" ? "Photo sent for approval" : "Profile photo saved");
+      return next;
+    },
+    onRemove: async () => {
+      const next = await store.removeMyAvatar();
+      commitOwnAvatarPresentation(next);
+      toast("Profile photo removed");
+      return next;
+    },
+  });
+}
+
+async function syncApprovedGoogleAvatar({ ifMissing = false } = {}) {
+  if (!canManageOwnAvatar(store.currentUser())) return null;
+  try {
+    if (ifMissing) {
+      const current = await store.getOwnAvatar();
+      if (current.source !== "initials" || current.state !== "active") return current;
+    }
+    const presentation = await store.syncGoogleAvatar();
+    commitOwnAvatarPresentation(presentation);
+    return presentation;
+  } catch {
+    return null;
+  }
+}
 
 export function loadActivityMapModule() {
   return import("./map.js");
@@ -180,6 +248,7 @@ let renderGeneration = 0;
 let notificationRouteRows = null;
 let pendingNotificationRouteRequest = null;
 const controlBusy = new WeakSet();
+const avatarModerationBusy = new Set();
 const venuePickerControllers = new WeakMap();
 const APPLY_DRAFT_DEBOUNCE_MS = 500;
 let applyDraftTimer = null;
@@ -425,8 +494,10 @@ async function render(generation = renderGeneration) {
       out = views.viewSchedule();
       break;
     case "activity": {
-      let attendeeNames;
+      const session = store.getSession(arg);
       const viewer = store.currentUser();
+      let attendeeNames;
+      let avatarRows = null;
       if (viewer?.status === "approved") {
         try {
           attendeeNames = await store.attendeeNamesFor(arg);
@@ -434,8 +505,21 @@ async function render(generation = renderGeneration) {
           console.warn("Unable to load attendee names", err);
           attendeeNames = null;
         }
+        if (session?.kind === "paid" && canManageOwnAvatar(viewer)) {
+          try {
+            avatarRows = await store.getSessionAvatars(arg);
+            if (Array.isArray(attendeeNames)) {
+              avatarRows = avatarRows.map((row, index) => ({
+                ...row,
+                displayName: attendeeNames[index] || row.displayName,
+              }));
+            }
+          } catch {
+            avatarRows = null;
+          }
+        }
       }
-      out = views.viewActivity(arg, attendeeNames);
+      out = views.viewActivity(arg, { attendeeNames, avatarRows });
       break;
     }
     case "hyrox":
@@ -501,14 +585,20 @@ async function render(generation = renderGeneration) {
 
   // Keep the local filter cache paired with this generation's HTML commit.
   if (notificationsActive) notificationRouteRows = nextNotificationRouteRows;
-  viewEl.innerHTML = out;
   const user = store.currentUser();
+  const ownAvatar = canManageOwnAvatar(user)
+    ? await store.getOwnAvatar().catch(() => null)
+    : null;
+  if (generation !== renderGeneration) return;
+
+  viewEl.innerHTML = out;
   if (!viewEl.querySelector("[data-route-not-found]")) {
     store.rememberLastRoute(location.hash, user?.id);
   }
   navEl.innerHTML = views.navHTML(NAV_FOR[page] ?? "home", user);
   avatarEl.classList.toggle("is-empty", !user);
-  avatarEl.innerHTML = views.avatarHTML(user);
+  avatarEl.dataset.avatarSource = ownAvatar?.source || "initials";
+  avatarEl.innerHTML = views.avatarHTML(user, ownAvatar);
   if (!notificationsActive) renderNotificationChrome(user, false, generation);
   if (page === "activity") {
     const ownsGeneration = () => generation === renderGeneration;
@@ -633,6 +723,55 @@ async function downloadIndemnityList(control) {
 
 // --- Click delegation -----------------------------------------------------------------
 
+export async function runAvatarModeration(control) {
+  const action = {
+    "avatar-hide": "hide",
+    "avatar-approve": "approve",
+    "avatar-reject": "reject",
+  }[control?.dataset?.action];
+  const profileId = String(control?.dataset?.profileId || "");
+  if (!action || !profileId || avatarModerationBusy.has(profileId)) return false;
+  const card = control.closest?.("[data-avatar-moderation-card]");
+  const reasonInput = card?.querySelector?.("[data-avatar-moderation-reason]");
+  const reason = String(reasonInput?.value || "").trim();
+  if (["hide", "reject"].includes(action) && !reason) {
+    toast("Enter a moderation reason", true);
+    reasonInput?.focus?.();
+    return false;
+  }
+
+  avatarModerationBusy.add(profileId);
+  const controls = [...(card?.querySelectorAll?.("button, input") || [control])];
+  const originalLabel = control.textContent;
+  const busyLabel = action === "approve" ? "Approving…" : action === "reject" ? "Rejecting…" : "Hiding…";
+  controls.forEach((item) => { item.disabled = true; });
+  control.textContent = busyLabel;
+  control.setAttribute?.("aria-busy", "true");
+  let mutationSucceeded = false;
+  let refreshed = false;
+  try {
+    await store.moderateAvatar(profileId, action, reason);
+    mutationSucceeded = true;
+    const name = control.dataset.memberName || "Member";
+    const message = action === "approve"
+      ? `${name}’s profile photo approved.`
+      : action === "reject"
+      ? `${name}’s replacement rejected.`
+      : `${name}’s profile photo hidden.`;
+    const result = await refreshAfterAdminMutation(message);
+    refreshed = result.refreshed;
+    return true;
+  } catch (error) {
+    toast(error.message || "Profile photo moderation failed", true);
+    return false;
+  } finally {
+    avatarModerationBusy.delete(profileId);
+    control.textContent = originalLabel;
+    control.removeAttribute?.("aria-busy");
+    if (!mutationSucceeded || refreshed) controls.forEach((item) => { item.disabled = false; });
+  }
+}
+
 document.addEventListener("click", async (e) => {
   // Drill-down anchor links (e.g. Admin HYROX status counts) point at in-page
   // element IDs without changing the route. The router treats any hash as a
@@ -661,6 +800,11 @@ document.addEventListener("click", async (e) => {
   e.preventDefault?.();
 
   switch (action) {
+    case "avatar-hide":
+    case "avatar-approve":
+    case "avatar-reject":
+      await runAvatarModeration(el);
+      break;
     case "notification-filter": {
       const kind = el.dataset.notificationFilter;
       const allowedKinds = ["all", "application", "decision", "role", "club", "personal"];
@@ -726,6 +870,13 @@ document.addEventListener("click", async (e) => {
       store.clearApplyDraft();
       toast("Application draft discarded");
       await renderWithFeedback();
+      break;
+    case "manage-profile-photo":
+      try {
+        await openOwnAvatarManager();
+      } catch (err) {
+        toast(err.message || "Unable to manage profile photo", true);
+      }
       break;
     case "sign-in-google":
       try {
@@ -1869,6 +2020,7 @@ async function boot() {
     try {
       await store.getCurrentUser();
       await store.fetchApplicationForUser(store.currentUser());
+      await syncApprovedGoogleAvatar({ ifMissing: true });
       await store.hydrateLiveOperations({ ensureWindow: true });
     } catch (err) {
       bootError = err;
@@ -1949,6 +2101,7 @@ async function boot() {
       setTimeout(async () => {
         try {
           await store.getCurrentUser();
+          await syncApprovedGoogleAvatar({ ifMissing: true });
           await renderWithFeedback();
           await maybeRedirectToApply();
         } catch (err) {

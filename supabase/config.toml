@@ -1,0 +1,26 @@
+project_id = "island-training-club-app"
+
+[db]
+major_version = 17
+
+[db.migrations]
+enabled = true
+schema_paths = []
+
+[functions.process-profile-avatar]
+enabled = true
+verify_jwt = true
+import_map = "./functions/deno.json"
+entrypoint = "./functions/process-profile-avatar/index.ts"
+
+[functions.resolve-profile-avatars]
+enabled = true
+verify_jwt = true
+import_map = "./functions/deno.json"
+entrypoint = "./functions/resolve-profile-avatars/index.ts"
+
+[functions.moderate-profile-avatar]
+enabled = true
+verify_jwt = true
+import_map = "./functions/deno.json"
+entrypoint = "./functions/moderate-profile-avatar/index.ts"
