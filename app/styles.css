@@ -1766,18 +1766,22 @@ a.profile-row:hover .pr-text strong { color: var(--accent); }
 
 .avatar-crop-stage {
   --avatar-crop-size: min(280px, 76vw);
+  position: relative;
   width: var(--avatar-crop-size);
   height: var(--avatar-crop-size);
   justify-self: center;
+  display: grid;
+  place-items: center;
   overflow: hidden;
-  touch-action: none;
-  cursor: grab;
+  touch-action: pan-y;
+  cursor: default;
   border: 3px solid var(--accent);
   border-radius: 50%;
   background: var(--surface);
   box-shadow: 0 0 0 8px rgba(202, 255, 49, .08);
 }
-.avatar-crop-stage:active { cursor: grabbing; }
+.avatar-crop-stage[data-cropping="true"] { touch-action: none; cursor: grab; }
+.avatar-crop-stage[data-cropping="true"]:active { cursor: grabbing; }
 .avatar-crop-stage:focus-visible,
 .avatar-manager-close:focus-visible,
 .avatar-manager-actions .btn:focus-visible,
@@ -1785,7 +1789,23 @@ a.profile-row:hover .pr-text strong { color: var(--accent); }
   outline: 3px solid var(--accent);
   outline-offset: 3px;
 }
-.avatar-crop-canvas { width: 100%; height: 100%; object-fit: cover; }
+.avatar-crop-canvas,
+.avatar-crop-current-image {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+.avatar-crop-current-image { object-fit: cover; }
+.avatar-crop-current-initials {
+  color: var(--accent);
+  font-size: clamp(48px, 14vw, 84px);
+  font-weight: 900;
+  letter-spacing: -.04em;
+}
+.avatar-crop-canvas[hidden],
+.avatar-crop-current-image[hidden],
+.avatar-crop-current-initials[hidden] { display: none; }
 
 .avatar-zoom-label {
   display: grid;

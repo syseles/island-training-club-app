@@ -1,4 +1,10 @@
-import { clampCrop, cropSourceRect, fitCrop } from "./avatar.js";
+import {
+  avatarInitials,
+  clampCrop,
+  cropSourceRect,
+  fitCrop,
+  normalizeAvatarPresentation,
+} from "./avatar.js";
 
 export const AVATAR_FILE_ACCEPT = "image/jpeg,image/png,image/webp";
 const ACCEPTED_TYPES = new Set(AVATAR_FILE_ACCEPT.split(","));
@@ -114,6 +120,7 @@ export function openAvatarManager({
   let busy = false;
   let closed = false;
   let drag = null;
+  const currentPresentation = normalizeAvatarPresentation(presentation);
 
   const overlay = makeElement(documentRef, "div", { className: "avatar-manager-backdrop" });
   const dialog = makeElement(documentRef, "section", {
@@ -181,14 +188,41 @@ export function openAvatarManager({
     className: "avatar-crop-stage",
     attrs: {
       tabindex: "0",
-      role: "application",
-      "aria-label": "Photo crop. Drag the image or use arrow keys to reposition it.",
+      role: "img",
+      "aria-label": currentPresentation.url
+        ? "Current profile photo. Choose a new photo to crop a replacement."
+        : "Current profile photo uses initials. Choose a photo to add one.",
       "data-avatar-action": "crop",
+      "data-cropping": "false",
     },
   });
+  const currentInitials = makeElement(documentRef, "span", {
+    className: "avatar-crop-current-initials",
+    text: avatarInitials(memberName),
+    attrs: { "aria-hidden": "true" },
+  });
+  currentInitials.hidden = Boolean(currentPresentation.url);
+  let currentImage = null;
+  if (currentPresentation.url) {
+    currentImage = makeElement(documentRef, "img", {
+      className: "avatar-crop-current-image",
+      attrs: {
+        src: currentPresentation.url,
+        alt: "",
+        "aria-hidden": "true",
+      },
+    });
+    currentImage.addEventListener("error", () => {
+      currentImage.hidden = true;
+      if (!selected) currentInitials.hidden = false;
+    });
+  }
   const canvas = makeElement(documentRef, "canvas", { className: "avatar-crop-canvas" });
   canvas.width = 512;
   canvas.height = 512;
+  canvas.hidden = true;
+  preview.append(currentInitials);
+  if (currentImage) preview.append(currentImage);
   preview.append(canvas);
 
   const zoomLabel = makeElement(documentRef, "label", { className: "avatar-zoom-label" });
@@ -233,13 +267,13 @@ export function openAvatarManager({
     attrs: { type: "button", "data-avatar-action": "remove" },
   });
   saveButton.disabled = true;
-  const canRemoveCustom = presentation?.source === "custom";
+  const canRemoveCustom = currentPresentation.source === "custom";
   removeButton.disabled = !canRemoveCustom;
   actions.append(chooseButton, saveButton, removeButton);
 
   const status = makeElement(documentRef, "p", {
     className: "avatar-manager-status muted",
-    text: "No new photo selected.",
+    text: "",
     attrs: { id: "avatar-manager-status", "aria-live": "polite" },
   });
   body.append(member, help, fallback, moderation, preview, zoomLabel, picker, actions, status);
@@ -308,6 +342,12 @@ export function openAvatarManager({
       zoom.value = "1";
       zoom.disabled = false;
       saveButton.disabled = false;
+      if (currentImage) currentImage.hidden = true;
+      currentInitials.hidden = true;
+      canvas.hidden = false;
+      preview.setAttribute("role", "application");
+      preview.setAttribute("data-cropping", "true");
+      preview.setAttribute("aria-label", "Photo crop. Drag the image or use arrow keys to reposition it.");
       status.textContent = "Photo ready. Adjust the crop, then save.";
       drawPreview();
       preview.focus();
