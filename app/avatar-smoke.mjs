@@ -335,6 +335,43 @@ test("manager uses the standard picker and suppresses duplicate saves", async ()
   assert.equal(documentRef.body.children.includes(overlay), false);
 });
 
+test("manager shows the current profile photo until a new crop is selected", async () => {
+  const documentRef = new FakeDocument();
+  const manager = openAvatarManager({
+    memberName: "Ada Lovelace",
+    presentation: { url: SIGNED_URL, source: "google", state: "active" },
+    onUpload: async () => null,
+    onRemove: async () => null,
+  }, {
+    documentRef,
+    decodeImage: async () => ({ image: { width: 900, height: 1200 }, release() {} }),
+  });
+  const overlay = documentRef.body.children.at(-1);
+  const stage = overlay.querySelector('[data-avatar-action="crop"]');
+  const currentImage = stage.querySelector(".avatar-crop-current-image");
+  const initials = stage.querySelector(".avatar-crop-current-initials");
+  const canvas = stage.querySelector(".avatar-crop-canvas");
+  const status = overlay.querySelector(".avatar-manager-status");
+  assert.equal(currentImage.getAttribute("src"), SIGNED_URL);
+  assert.equal(stage.getAttribute("data-cropping"), "false");
+  assert.equal(currentImage.hidden, false);
+  assert.equal(initials.hidden, true);
+  assert.equal(canvas.hidden, true);
+  assert.equal(status.textContent, "");
+
+  const picker = overlay.querySelector('[data-avatar-action="picker"]');
+  picker.files = [{ name: "replacement.webp", type: "image/webp", size: 1000 }];
+  await picker.emit("change");
+  assert.equal(currentImage.hidden, true);
+  assert.equal(initials.hidden, true);
+  assert.equal(canvas.hidden, false);
+  assert.equal(stage.getAttribute("data-cropping"), "true");
+  await currentImage.emit("error");
+  assert.equal(initials.hidden, true, "a late current-image failure must not cover the selected crop");
+  assert.match(status.textContent, /Photo ready/);
+  manager.close();
+});
+
 test("Google-only presentation explains fallback and cannot offer custom removal", () => {
   const documentRef = new FakeDocument();
   const manager = openAvatarManager({
