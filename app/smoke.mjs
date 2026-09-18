@@ -61,6 +61,7 @@ for (const relativePath of [
   "../supabase/migrations/20260804000000_profiles.sql",
   "../supabase/migrations/20260805000007_admin_application_decisions.sql",
   "../supabase/migrations/20260827000001_hyrox_indemnity_fields.sql",
+  "../supabase/config.toml",
 ]) {
   const absolutePath = resolve(__dirnameSmoke, relativePath);
   if (!existsSync(absolutePath)) {
@@ -107,6 +108,20 @@ const liveAuthRunbookSource = readFileSync(
   resolve(__dirnameSmoke, "../docs/runbooks/live-auth.md"),
   "utf8"
 );
+const supabaseConfigSource = readFileSync(
+  resolve(__dirnameSmoke, "../supabase/config.toml"),
+  "utf8"
+);
+for (const marker of [
+  "functions/deno.json",
+  "functions.process-profile-avatar",
+  "functions.resolve-profile-avatars",
+  "functions.moderate-profile-avatar",
+]) {
+  if (!supabaseConfigSource.includes(marker)) {
+    throw new Error(`Supabase CLI config missing ${marker}`);
+  }
+}
 const readmeSource = readFileSync(resolve(__dirnameSmoke, "../README.md"), "utf8");
 const deploymentDocs = `${readmeSource}\n${liveAuthRunbookSource}`;
 for (const marker of [

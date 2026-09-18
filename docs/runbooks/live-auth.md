@@ -108,7 +108,20 @@ and declined viewers cannot resolve other members' photos.
 
 1. Select the intended Supabase project and confirm its backup/point-in-time
    recovery status. Do not use a production database for the destructive test
-   harness.
+   harness. Set and visibly verify the public project reference, then inspect
+   both local and remote migration history before any write:
+
+   ```bash
+   export SUPABASE_PROJECT_REF="<confirmed-project-ref>"
+   supabase projects list
+   supabase migration list --project-ref "$SUPABASE_PROJECT_REF"
+   supabase db push --dry-run --project-ref "$SUPABASE_PROJECT_REF"
+   ```
+
+   `supabase/config.toml` is versioned so the CLI discovers local migrations
+   and each function's shared `supabase/functions/deno.json` import map. If the
+   dry run reports no migrations while local files exist, stop: the CLI is not
+   reading the repository configuration.
 2. In Supabase Dashboard → Edge Functions → Secrets, confirm the managed
    `SUPABASE_SERVICE_ROLE_KEY` is available to functions. Never copy its value
    into the browser, Vercel, logs, screenshots, this runbook, or any repository
@@ -132,15 +145,33 @@ and declined viewers cannot resolve other members' photos.
 
 The migration `20260917000001_profile_avatars.sql` creates the private
 `profile-avatars` bucket, metadata and immutable audit tables, upload-attempt
-rate enforcement, and service-only transition functions. From a CLI linked to
-and visibly confirmed against the intended project, deploy in this exact order:
+rate enforcement, and service-only transition functions. When local and remote
+migration histories align, deploy in this exact order:
 
 ```bash
-supabase db push
-supabase functions deploy process-profile-avatar
-supabase functions deploy resolve-profile-avatars
-supabase functions deploy moderate-profile-avatar
+supabase db push --project-ref "$SUPABASE_PROJECT_REF"
+supabase functions deploy process-profile-avatar --project-ref "$SUPABASE_PROJECT_REF"
+supabase functions deploy resolve-profile-avatars --project-ref "$SUPABASE_PROJECT_REF"
+supabase functions deploy moderate-profile-avatar --project-ref "$SUPABASE_PROJECT_REF"
 ```
+
+The production project had a legacy migration-history gap before the avatar
+rollout on 18 September 2026: its existing schema was present while older
+migration-history rows were absent. An unqualified `db push` would therefore
+try to replay old migrations. For that verified condition only, the avatar
+migration was applied and recorded explicitly:
+
+```bash
+supabase db query --linked --project-ref "$SUPABASE_PROJECT_REF" \
+  --file supabase/migrations/20260917000001_profile_avatars.sql
+# Verify the bucket, tables, RLS, grants, and functions before recording it.
+supabase migration repair 20260917000001 --status applied --linked \
+  --project-ref "$SUPABASE_PROJECT_REF" --yes
+```
+
+Do not use `--include-all`, and do not mark older versions applied without a
+separate schema audit. Reconcile that historical drift before the next normal
+migration rollout.
 
 Do not deploy the photo-enabled frontend until all four commands succeed. Edge
 Functions accept CORS only from `ITC_APP_ORIGINS`; they must never return
