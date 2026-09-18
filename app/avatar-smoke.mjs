@@ -390,6 +390,17 @@ test("crop renderer rejects missing or oversized JPEG output", async () => {
   await assert.rejects(renderCropToJpeg({ image: {}, crop, documentRef: oversized }), /larger than 2 MB/);
 });
 
+test("short crop dialogs scroll without compressing the preview into actions", () => {
+  const styles = readFileSync(new URL("./styles.css", import.meta.url), "utf8");
+  const bodyRule = styles.match(/[.]avatar-manager-body\s*\{([^}]*)\}/)?.[1] ?? "";
+  const stageRule = styles.match(/[.]avatar-crop-stage\s*\{([^}]*)\}/)?.[1] ?? "";
+  assert.match(bodyRule, /grid-auto-rows:\s*max-content/);
+  assert.match(bodyRule, /align-content:\s*start/);
+  assert.match(bodyRule, /min-height:\s*0/);
+  assert.match(stageRule, /--avatar-crop-size:/);
+  assert.match(stageRule, /height:\s*var\(--avatar-crop-size\)/);
+});
+
 test("cropper source never persists image bytes or embeds base64 data", () => {
   const source = readFileSync(new URL("./js/avatar-cropper.js", import.meta.url), "utf8");
   assert.doesNotMatch(source, /localStorage/);
