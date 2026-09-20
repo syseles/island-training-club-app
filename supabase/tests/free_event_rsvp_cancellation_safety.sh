@@ -98,5 +98,11 @@ if grep -Eqi 'defer|deferred|cancel_operational_session_legacy' <<<"$rsvp_branch
   echo "FAIL: RSVP cancellation must return before paid/HYROX deferral behavior" >&2
   exit 1
 fi
+rsvp_before_session_update="${rsvp_branch%%update public.operational_sessions*}"
+if ! grep -q "at time zone 'Asia/Hong_Kong' <= now()" <<<"$rsvp_before_session_update" \
+    || ! grep -qi 'already started' <<<"$rsvp_before_session_update"; then
+  echo "FAIL: RSVP cancellation must reject at/after Hong Kong start before mutating the session" >&2
+  exit 1
+fi
 
 echo "ok  free-event RSVP migration safety"

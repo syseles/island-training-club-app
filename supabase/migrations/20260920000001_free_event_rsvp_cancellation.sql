@@ -510,6 +510,10 @@ begin
     if v_session.cancelled_at is not null then
       raise exception 'Session is already cancelled.' using errcode = '23514';
     end if;
+    if (v_session.session_date + v_session.start_time)
+         at time zone 'Asia/Hong_Kong' <= now() then
+      raise exception 'Session has already started.' using errcode = '23514';
+    end if;
 
     update public.operational_sessions
        set cancelled_at = now(),

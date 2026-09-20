@@ -609,6 +609,14 @@ assert.match(freeEventRsvpBranch, /status = 'confirmed'/,
 assert.match(freeEventRsvpBranch,
   /cancelled_at = v_session\.cancelled_at[\s\S]*?cancellation_source = 'session'/,
   "RSVP cancellation must atomically link booking metadata to the occurrence");
+assert.match(freeEventRsvpBranch,
+  /session_date\s*\+\s*v_session\.start_time[\s\S]*?at time zone 'Asia\/Hong_Kong'\s*<=\s*now\(\)[\s\S]*?already started/i,
+  "RSVP cancellation must reject at or after Hong Kong start");
+assert.ok(
+  freeEventRsvpBranch.search(/already started/i)
+    < freeEventRsvpBranch.search(/update public\.operational_sessions/i),
+  "RSVP cancellation start validation must precede every occurrence mutation"
+);
 assert.doesNotMatch(freeEventRsvpBranch, /defer|cancel_operational_session_legacy/i,
   "RSVP cancellation must return before paid deferral behavior");
 assert.ok(
@@ -655,6 +663,7 @@ for (const marker of [
   "pending withdrawal is rejected", "declined withdrawal is rejected",
   "pending attendee roster access is rejected", "declined attendee roster access is rejected",
   "recurring occurrences use declared weekdays", "cancellation dissolves active RSVP queues",
+  "started RSVP cancellation is rejected without mutation",
 ]) {
   assert.ok(freeEventRsvpIntegrationSource.includes(marker),
     `free-event RSVP integration evidence missing ${marker}`);
@@ -4786,14 +4795,152 @@ installLocalFixtures();
   assert.doesNotMatch(views.viewActivity(startedFreeId), freeRsvpAction,
     "started free occurrences must not offer RSVP actions");
   store.signIn("admin@example.test");
-  store.cancelSessionWeek(startedFreeId, "Historical cancellation", cancellationTime + 2000);
-  await assert.rejects(
-    () => store.repostRsvpEvent(startedFreeId),
+  assert.throws(
+    () => store.cancelSessionWeek(startedFreeId, "Historical cancellation", cancellationTime + 2000),
     /already started/i,
-    "post-start reopening must fail closed"
+    "post-start free-event cancellation must fail closed"
   );
+  assert.equal(store.getSession(startedFreeId).cancelled, undefined,
+    "rejected historical cancellation must not create an override");
   console.log("ok  free-event RSVP controls, roster privacy, withdrawal, cancellation and reopening preserve local parity");
 }
+
+// Direct or stale local RSVP withdrawals must use the supplied clock against
+// the occurrence's Hong Kong start instant and fail closed when its session
+// can no longer be resolved.
+for (const boundary of [
+  { label: "before", offsetMs: -1, rejected: false },
+  { label: "at", offsetMs: 0, rejected: true },
+  { label: "after", offsetMs: 1, rejected: true },
+]) {
+  store.resetLocalData();
+  installLocalFixtures();
+  store.signIn("member@example.test");
+  const session = store.upcomingSessions(21).find(
+    (item) => item.activityId === "wnt" && !data.sessionStarted(item)
+  );
+  assert.ok(session, `${boundary.label}-start withdrawal needs an upcoming free RSVP occurrence`);
+  const startsAt = data.hktEventStartMs(session.dateISO, session.time);
+  const booking = await store.rsvpSession("fixture-member", session.id, startsAt - 1000);
+  if (boundary.rejected) {
+    await assert.rejects(
+      () => store.withdrawRsvp(booking.id, startsAt + boundary.offsetMs),
+      /already started/i,
+      `withdrawal ${boundary.label} Hong Kong start must fail closed`
+    );
+    assert.equal(store.getBooking(booking.id).status, "confirmed",
+      `rejected ${boundary.label}-start withdrawal must not mutate the booking`);
+  } else {
+    const withdrawn = await store.withdrawRsvp(booking.id, startsAt + boundary.offsetMs);
+    assert.equal(withdrawn.status, "cancelled",
+      "withdrawal immediately before Hong Kong start must remain allowed");
+  }
+}
+{
+  store.resetLocalData();
+  installLocalFixtures();
+  store.signIn("member@example.test");
+  const session = store.upcomingSessions(21).find(
+    (item) => item.activityId === "wnt" && !data.sessionStarted(item)
+  );
+  assert.ok(session, "missing-session withdrawal needs an upcoming free RSVP occurrence");
+  const booking = await store.rsvpSession("fixture-member", session.id);
+  const corrupted = JSON.parse(mem.get("itc.prototype.v1"));
+  corrupted.bookings.find((item) => item.id === booking.id).sessionId = "missing-session-2099-01-01";
+  mem.set("itc.prototype.v1", JSON.stringify(corrupted));
+  store.load();
+  await assert.rejects(
+    () => store.withdrawRsvp(booking.id),
+    /session not found/i,
+    "withdrawal must fail closed when the booking session is missing"
+  );
+  assert.equal(store.getBooking(booking.id).status, "confirmed",
+    "missing-session withdrawal must not mutate the booking");
+}
+console.log("ok  local RSVP withdrawal enforces missing-session and HKT start boundaries");
+
+// Direct or stale local Admin cancellation must resolve the occurrence before
+// creating an override and enforce the same exact HKT start boundary.
+{
+  store.resetLocalData();
+  installLocalFixtures();
+  store.signIn("admin@example.test");
+  const before = JSON.parse(mem.get("itc.prototype.v1")).sessionOverrides;
+  assert.throws(
+    () => store.cancelSessionWeek("missing-session-2099-01-01", "Weather warning"),
+    /session not found/i,
+    "unknown local cancellation must fail closed"
+  );
+  assert.deepEqual(JSON.parse(mem.get("itc.prototype.v1")).sessionOverrides, before,
+    "unknown local cancellation must not create a ghost override");
+}
+for (const boundary of [
+  { label: "before", offsetMs: -1, rejected: false },
+  { label: "at", offsetMs: 0, rejected: true },
+  { label: "after", offsetMs: 1, rejected: true },
+]) {
+  store.resetLocalData();
+  installLocalFixtures();
+  store.signIn("member@example.test");
+  const session = store.upcomingSessions(21).find(
+    (item) => item.activityId === "wnt" && !data.sessionStarted(item)
+  );
+  assert.ok(session, `${boundary.label}-start cancellation needs an upcoming free RSVP occurrence`);
+  const startsAt = data.hktEventStartMs(session.dateISO, session.time);
+  const booking = await store.rsvpSession("fixture-member", session.id, startsAt - 1000);
+  store.signIn("admin@example.test");
+  if (boundary.rejected) {
+    assert.throws(
+      () => store.cancelSessionWeek(session.id, "Weather warning", startsAt + boundary.offsetMs),
+      /already started/i,
+      `cancellation ${boundary.label} Hong Kong start must fail closed`
+    );
+    assert.equal(store.getSession(session.id).cancelled, undefined,
+      `rejected ${boundary.label}-start cancellation must not create an override`);
+    assert.equal(store.getBooking(booking.id).status, "confirmed",
+      `rejected ${boundary.label}-start cancellation must not mutate active RSVPs`);
+    assert.equal(store.notificationsFor("fixture-member").filter(
+      (notification) => notification.kind === "session-cancelled"
+        && notification.link === `#/activity/${session.id}`
+    ).length, 0, `rejected ${boundary.label}-start cancellation must not notify attendees`);
+  } else {
+    store.cancelSessionWeek(session.id, "Weather warning", startsAt + boundary.offsetMs);
+    assert.equal(store.getSession(session.id).cancelled, true,
+      "cancellation immediately before Hong Kong start must remain allowed");
+    assert.equal(store.getBooking(booking.id).status, "cancelled");
+  }
+}
+console.log("ok  local RSVP cancellation rejects unknown and HKT-started occurrences without mutation");
+
+// Persisted prototype state can predate uniqueness guarantees. Cancellation
+// repairs every duplicate active row while notifying each profile only once.
+{
+  store.resetLocalData();
+  installLocalFixtures();
+  store.signIn("member@example.test");
+  const session = store.upcomingSessions(21).find(
+    (item) => item.activityId === "wnt" && !data.sessionStarted(item)
+  );
+  assert.ok(session, "duplicate-RSVP cancellation needs an upcoming free occurrence");
+  const booking = await store.rsvpSession("fixture-member", session.id);
+  const corrupted = JSON.parse(mem.get("itc.prototype.v1"));
+  const persistedBooking = corrupted.bookings.find((item) => item.id === booking.id);
+  corrupted.bookings.push({ ...persistedBooking, id: "duplicate-active-rsvp" });
+  mem.set("itc.prototype.v1", JSON.stringify(corrupted));
+  store.load();
+  store.signIn("admin@example.test");
+  store.cancelSessionWeek(session.id, "Weather warning");
+  assert.deepEqual(
+    [booking.id, "duplicate-active-rsvp"].map((id) => store.getBooking(id).status),
+    ["cancelled", "cancelled"],
+    "cancellation must update every duplicate active RSVP row"
+  );
+  assert.equal(store.notificationsFor("fixture-member").filter(
+    (notification) => notification.kind === "session-cancelled"
+      && notification.link === `#/activity/${session.id}`
+  ).length, 1, "duplicate active RSVP rows must emit one cancellation notification per profile");
+}
+console.log("ok  local RSVP cancellation deduplicates corrupted active booking recipients");
 
 // Event-change and cancellation fan-out follows the occurrence's active RSVP
 // cohort, not the member directory. A later role downgrade also closes the

@@ -7,7 +7,7 @@
 const PH = "../assets/itc/";
 
 // --- Activity templates ----------------------------------------------------
-// kind: "free"  -> open attendance, no booking, no capacity (per product brief)
+// kind: "free"  -> no booking required; optional RSVP; no capacity or checkout
 // kind: "paid"  -> members book + pay per session at a fixed price
 // HYROX capacity is a seeded placeholder; price, time and capacity are all
 // editable in the Admin area.

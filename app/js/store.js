@@ -3176,8 +3176,13 @@ export async function withdrawRsvp(bookingId, now = Date.now()) {
   const booking = getBooking(bookingId);
   if (!booking || booking.status !== "confirmed") return null;
   const session = getSession(booking.sessionId);
+  if (!session) throw new Error("Session not found.");
   if (!sessionRequiresRsvp(session) || Number(booking.snapshot?.price) > 0) return null;
   requireAuthorizedPaymentOwner(booking.userId);
+  const startsAt = hktEventStartMs(session.dateISO, session.time);
+  if (!Number.isFinite(startsAt) || startsAt <= now) {
+    throw new Error("Session has already started");
+  }
   booking.status = "cancelled";
   booking.cancelledAt = now;
   booking.cancelledSource = "member";
@@ -3289,8 +3294,15 @@ export function cancelSessionWeek(sessionId, reason, now = Date.now()) {
   const cancellationReason = String(reason || "").trim();
   if (!cancellationReason) throw new Error("Cancellation reason is required.");
   const session = getSession(sessionId);
-  const rsvpOccurrence = sessionRequiresRsvp(session) && Number(session?.price ?? 0) === 0;
-  if (rsvpOccurrence && session.cancelled) throw new Error("Session is already cancelled.");
+  if (!session) throw new Error("Session not found.");
+  const rsvpOccurrence = sessionRequiresRsvp(session) && Number(session.price) === 0;
+  if (rsvpOccurrence) {
+    if (session.cancelled) throw new Error("Session is already cancelled.");
+    const startsAt = hktEventStartMs(session.dateISO, session.time);
+    if (!Number.isFinite(startsAt) || startsAt <= now) {
+      throw new Error("Session has already started.");
+    }
+  }
   const o = (state.sessionOverrides[sessionId] ||= {});
   o.cancelled = cancellationReason;
   if (rsvpOccurrence) o.cancelledAt = now;
@@ -3306,11 +3318,6 @@ export function cancelSessionWeek(sessionId, reason, now = Date.now()) {
         b.status = "cancelled";
         b.cancelledAt = now;
         b.cancelledSource = "session";
-        if (cancellationRecipients.has(b.userId)) {
-          notify(b.userId, "session-cancelled",
-            `${cancellationCopy}. ${b.snapshot.name} · ${fmtDate(b.snapshot.dateISO)}.`,
-            cancellationLink);
-        }
         continue;
       }
       const target = deferTargetsFor(b).find((s) => s.activityId === venueActivityId);
@@ -3335,7 +3342,16 @@ export function cancelSessionWeek(sessionId, reason, now = Date.now()) {
         cancellationLink);
     }
   }
-  if (!rsvpOccurrence) {
+  if (rsvpOccurrence) {
+    for (const userId of cancellationRecipients) {
+      const snapshot = state.bookings.find((booking) =>
+        booking.sessionId === sessionId && booking.userId === userId
+      )?.snapshot || session;
+      notify(userId, "session-cancelled",
+        `${cancellationCopy}. ${snapshot.name} · ${fmtDate(snapshot.dateISO)}.`,
+        cancellationLink);
+    }
+  } else {
     const q = paymentQueueFor(sessionId);
     for (const entry of [...q.waitlist, ...q.interest]) {
       notify(entry.userId, "session-cancelled",
