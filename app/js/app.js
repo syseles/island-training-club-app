@@ -4,9 +4,11 @@
 
 import * as store from "./store.js";
 import { buildICS, findSession, todayLocal, mondayOf, addDays, isoDate, donorIdProblem } from "./data.js";
+import { buildIndemnityCsv } from "./exports.js";
 import * as views from "./views.js";
 import { isLive, supabase } from "./config.js";
 import * as components from "./components.js";
+import { openAvatarManager } from "./avatar-cropper.js";
 import {
   normalizeMeetingPoint,
   normalizeVenueLocation,
@@ -19,6 +21,73 @@ const notificationEl = document.getElementById("top-notifications");
 const avatarEl = document.getElementById("top-avatar");
 const toastStack = document.getElementById("toast-stack");
 const MAP_FALLBACK_HTML = `<p class="muted small activity-map-fallback" role="status">Couldn't find the venue on the map — tap Get directions instead.</p>`;
+
+export function revealAvatarInitials(image) {
+  const isAvatarImage = image?.classList?.contains?.("avatar__image")
+    || String(image?.className || "").split(/\s+/).includes("avatar__image");
+  if (!isAvatarImage) return false;
+  const wrapper = image.closest?.(".avatar") || image.parentElement;
+  wrapper?.classList?.toggle?.("is-error", true);
+  image.hidden = true;
+  return true;
+}
+
+document.addEventListener("error", (event) => {
+  revealAvatarInitials(event.target);
+}, true);
+
+export function commitOwnAvatarPresentation(presentation) {
+  const user = store.currentUser();
+  if (!user?.id) return false;
+  avatarEl.dataset.avatarSource = presentation?.source || "initials";
+  avatarEl.innerHTML = views.avatarHTML(user, presentation);
+  const profileButton = viewEl.querySelector?.('[data-action="manage-profile-photo"]');
+  if (profileButton) profileButton.innerHTML = views.profileAvatarHTML(user, presentation);
+  return true;
+}
+
+const canManageOwnAvatar = (user) => user?.status === "approved"
+  && ["member", "admin", "superadmin", "super_admin"].includes(user.role);
+
+export async function openOwnAvatarManager(openManager = openAvatarManager) {
+  const user = store.currentUser();
+  if (!canManageOwnAvatar(user)) {
+    throw new Error("Approved membership is required to manage a profile photo.");
+  }
+  const presentation = await store.getOwnAvatar();
+  return openManager({
+    memberName: user.fullName,
+    presentation,
+    moderated: ["hidden", "pending_review"].includes(presentation.state),
+    onUpload: async (jpegBlob) => {
+      const next = await store.uploadMyAvatar(jpegBlob);
+      commitOwnAvatarPresentation(next);
+      toast(next.state === "pending_review" ? "Photo sent for approval" : "Profile photo saved");
+      return next;
+    },
+    onRemove: async () => {
+      const next = await store.removeMyAvatar();
+      commitOwnAvatarPresentation(next);
+      toast("Profile photo removed");
+      return next;
+    },
+  });
+}
+
+async function syncApprovedGoogleAvatar({ ifMissing = false } = {}) {
+  if (!canManageOwnAvatar(store.currentUser())) return null;
+  try {
+    if (ifMissing) {
+      const current = await store.getOwnAvatar();
+      if (current.source !== "initials" || current.state !== "active") return current;
+    }
+    const presentation = await store.syncGoogleAvatar();
+    commitOwnAvatarPresentation(presentation);
+    return presentation;
+  } catch {
+    return null;
+  }
+}
 
 export function loadActivityMapModule() {
   return import("./map.js");
@@ -152,10 +221,15 @@ function parseHash() {
     .filter(Boolean);
 }
 
+function replaceRoute(route) {
+  history.replaceState(history.state, "", `${location.pathname}${location.search}${route}`);
+}
+
 const NAV_FOR = {
   home: "home",
   schedule: "schedule",
   activity: "schedule",
+  hyrox: "schedule",
   community: "community",
   giving: "giving",
   notifications: "notifications",
@@ -164,6 +238,7 @@ const NAV_FOR = {
   checkout: "account",
   pay: "account",
   booking: "account",
+  replacement: "account",
   receipt: "account",
   admin: "admin",
 };
@@ -173,6 +248,7 @@ let renderGeneration = 0;
 let notificationRouteRows = null;
 let pendingNotificationRouteRequest = null;
 const controlBusy = new WeakSet();
+const avatarModerationBusy = new Set();
 const venuePickerControllers = new WeakMap();
 const APPLY_DRAFT_DEBOUNCE_MS = 500;
 let applyDraftTimer = null;
@@ -307,6 +383,13 @@ function showInlineFormError(host, message) {
   host.appendChild(alert);
 }
 
+function showMagicLinkFeedback(form, message, isError = false) {
+  const host = form.querySelector("[data-magic-link-feedback]");
+  if (!host) return;
+  host.textContent = message;
+  host.setAttribute("role", isError ? "alert" : "status");
+}
+
 export async function maybeRedirectToApply() {
   if (!isLive()) return;
   const cu = await store.getCurrentUser();
@@ -315,6 +398,14 @@ export async function maybeRedirectToApply() {
   if (!app && window.location.hash !== "#/apply") {
     window.location.hash = "#/apply";
   }
+}
+
+function commitNotificationCount(unreadCount, active) {
+  notificationEl.innerHTML = views.notificationBellHTML(unreadCount, active);
+  notificationEl.setAttribute(
+    "aria-label",
+    unreadCount ? `Notifications, ${unreadCount} unread` : "Notifications"
+  );
 }
 
 function renderNotificationChrome(user, active, generation, rowsPromise = null) {
@@ -336,11 +427,7 @@ function renderNotificationChrome(user, active, generation, rowsPromise = null) 
   request.then((rows) => {
     if (generation !== renderGeneration) return;
     const unreadCount = rows.filter((row) => !row.read_at).length;
-    notificationEl.innerHTML = views.notificationBellHTML(unreadCount, active);
-    notificationEl.setAttribute(
-      "aria-label",
-      unreadCount ? `Notifications, ${unreadCount} unread` : "Notifications"
-    );
+    commitNotificationCount(unreadCount, active);
   }).catch(() => {});
   return request;
 }
@@ -371,9 +458,10 @@ async function render(generation = renderGeneration) {
   const parts = parseHash();
   const [page, arg, arg2] = parts.length ? parts : ["home"];
 
-  // Route rows are valid only for the Notifications render that committed
-  // them. Invalidate before any replacement can await or fail.
-  notificationRouteRows = null;
+  // Keep the last committed Notifications rows available while a same-route
+  // refresh is pending so a displayed unread row can still complete its
+  // read/remove/navigation sequence. Other routes must not reuse that cache.
+  if (page !== "notifications") notificationRouteRows = null;
 
   // Entering the Schedule tab fresh (bottom nav, Home, Profile…) resets it
   // to this week + today — a week offset left over from earlier browsing
@@ -405,8 +493,38 @@ async function render(generation = renderGeneration) {
     case "schedule":
       out = views.viewSchedule();
       break;
-    case "activity":
-      out = views.viewActivity(arg);
+    case "activity": {
+      const session = store.getSession(arg);
+      const viewer = store.currentUser();
+      let attendeeNames;
+      let avatarRows = null;
+      if (viewer?.status === "approved") {
+        try {
+          attendeeNames = await store.attendeeNamesFor(arg);
+        } catch (err) {
+          console.warn("Unable to load attendee names", err);
+          attendeeNames = null;
+        }
+        if ((session?.kind === "paid" || store.sessionRequiresRsvp(session))
+            && canManageOwnAvatar(viewer)) {
+          try {
+            avatarRows = await store.getSessionAvatars(arg);
+            if (Array.isArray(attendeeNames)) {
+              avatarRows = avatarRows.map((row, index) => ({
+                ...row,
+                displayName: attendeeNames[index] || row.displayName,
+              }));
+            }
+          } catch {
+            avatarRows = null;
+          }
+        }
+      }
+      out = views.viewActivity(arg, { attendeeNames, avatarRows });
+      break;
+    }
+    case "hyrox":
+      out = arg2 === "register" ? views.viewHyroxRegistration(arg) : views.viewHyroxCycle(arg);
       break;
     case "community":
       out = views.viewCommunity(arg);
@@ -430,10 +548,16 @@ async function render(generation = renderGeneration) {
       out = views.viewCheckout(arg);
       break;
     case "pay":
+      if (isLive() && routeUser?.status === "approved") {
+        await store.hydrateLiveOperations({ force: true });
+      }
       out = views.viewPay(arg);
       break;
     case "booking":
       out = views.viewBooking(arg);
+      break;
+    case "replacement":
+      out = await views.viewReplacementInvite(arg);
       break;
     case "receipt":
       out = views.viewReceipt(arg);
@@ -445,7 +569,7 @@ async function render(generation = renderGeneration) {
           ? await views.viewAdminCampaign(arg2)
           : arg === "users"
             ? { redirect: "#/admin/members" }
-            : await views.viewAdmin(arg || "approvals");
+            : await views.viewAdmin(arg || "members");
       break;
     default:
       out = views.viewNotFound();
@@ -462,11 +586,20 @@ async function render(generation = renderGeneration) {
 
   // Keep the local filter cache paired with this generation's HTML commit.
   if (notificationsActive) notificationRouteRows = nextNotificationRouteRows;
-  viewEl.innerHTML = out;
   const user = store.currentUser();
+  const ownAvatar = canManageOwnAvatar(user)
+    ? await store.getOwnAvatar().catch(() => null)
+    : null;
+  if (generation !== renderGeneration) return;
+
+  viewEl.innerHTML = out;
+  if (!viewEl.querySelector("[data-route-not-found]")) {
+    store.rememberLastRoute(location.hash, user?.id);
+  }
   navEl.innerHTML = views.navHTML(NAV_FOR[page] ?? "home", user);
   avatarEl.classList.toggle("is-empty", !user);
-  avatarEl.innerHTML = views.avatarHTML(user);
+  avatarEl.dataset.avatarSource = ownAvatar?.source || "initials";
+  avatarEl.innerHTML = views.avatarHTML(user, ownAvatar);
   if (!notificationsActive) renderNotificationChrome(user, false, generation);
   if (page === "activity") {
     const ownsGeneration = () => generation === renderGeneration;
@@ -575,9 +708,90 @@ function downloadICS(session) {
   toast("Calendar file downloaded");
 }
 
+async function downloadIndemnityList(control) {
+  await withBusyControl(control, "Preparing…", async () => {
+    const records = await store.listIndemnityRecords();
+    const blob = new Blob([buildIndemnityCsv(records)], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `itc-indemnity-list-${isoDate(todayLocal())}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+    toast(`${records.length} indemnity records downloaded`);
+  });
+}
+
 // --- Click delegation -----------------------------------------------------------------
 
+export async function runAvatarModeration(control) {
+  const action = {
+    "avatar-hide": "hide",
+    "avatar-approve": "approve",
+    "avatar-reject": "reject",
+  }[control?.dataset?.action];
+  const profileId = String(control?.dataset?.profileId || "");
+  if (!action || !profileId || avatarModerationBusy.has(profileId)) return false;
+  const card = control.closest?.("[data-avatar-moderation-card]");
+  const reasonInput = card?.querySelector?.("[data-avatar-moderation-reason]");
+  const reason = String(reasonInput?.value || "").trim();
+  if (["hide", "reject"].includes(action) && !reason) {
+    toast("Enter a moderation reason", true);
+    reasonInput?.focus?.();
+    return false;
+  }
+
+  avatarModerationBusy.add(profileId);
+  const controls = [...(card?.querySelectorAll?.("button, input") || [control])];
+  const originalLabel = control.textContent;
+  const busyLabel = action === "approve" ? "Approving…" : action === "reject" ? "Rejecting…" : "Hiding…";
+  controls.forEach((item) => { item.disabled = true; });
+  control.textContent = busyLabel;
+  control.setAttribute?.("aria-busy", "true");
+  let mutationSucceeded = false;
+  let refreshed = false;
+  try {
+    await store.moderateAvatar(profileId, action, reason);
+    mutationSucceeded = true;
+    const name = control.dataset.memberName || "Member";
+    const message = action === "approve"
+      ? `${name}’s profile photo approved.`
+      : action === "reject"
+      ? `${name}’s replacement rejected.`
+      : `${name}’s profile photo hidden.`;
+    const result = await refreshAfterAdminMutation(message);
+    refreshed = result.refreshed;
+    return true;
+  } catch (error) {
+    toast(error.message || "Profile photo moderation failed", true);
+    return false;
+  } finally {
+    avatarModerationBusy.delete(profileId);
+    control.textContent = originalLabel;
+    control.removeAttribute?.("aria-busy");
+    if (!mutationSucceeded || refreshed) controls.forEach((item) => { item.disabled = false; });
+  }
+}
+
 document.addEventListener("click", async (e) => {
+  // Drill-down anchor links (e.g. Admin HYROX status counts) point at in-page
+  // element IDs without changing the route. The router treats any hash as a
+  // full navigation, which would land on the not-found page; intercepting
+  // the click keeps the user on Admin/Payments and just scrolls the target
+  // into view.
+  const anchor = e.target.closest && e.target.closest("a[href^='#']:not([href='#'])");
+  if (anchor && !anchor.dataset.action && !e.defaultPrevented) {
+    const href = anchor.getAttribute("href") || "";
+    const target = document.querySelector(href);
+    if (target && href.startsWith("#") && href.length > 1) {
+      e.preventDefault();
+      target.scrollIntoView({ behavior: "smooth", block: "start" });
+      target.setAttribute("tabindex", "-1");
+      target.focus({ preventScroll: true });
+      history.replaceState(null, "", `${location.pathname}${location.search}${href}`);
+      return;
+    }
+  }
   const el = e.target.closest("[data-action]");
   // Repeated forms route through the submit delegate via data-action. If a
   // nested submit button resolves to its parent form here, preventDefault()
@@ -587,6 +801,11 @@ document.addEventListener("click", async (e) => {
   e.preventDefault?.();
 
   switch (action) {
+    case "avatar-hide":
+    case "avatar-approve":
+    case "avatar-reject":
+      await runAvatarModeration(el);
+      break;
     case "notification-filter": {
       const kind = el.dataset.notificationFilter;
       const allowedKinds = ["all", "application", "decision", "role", "club", "personal"];
@@ -596,6 +815,16 @@ document.addEventListener("click", async (e) => {
       viewEl.querySelector(
         `[data-action="notification-filter"][data-notification-filter="${kind}"]`
       )?.focus();
+      break;
+    }
+    case "download-indemnity-list": {
+      const viewer = store.currentUser();
+      if (!viewer || !["admin", "superadmin", "super_admin"].includes(viewer.role)) break;
+      try {
+        await downloadIndemnityList(el);
+      } catch (err) {
+        toast(err.message || "Unable to download indemnity list", true);
+      }
       break;
     }
     case "admin-member-filter": {
@@ -643,6 +872,13 @@ document.addEventListener("click", async (e) => {
       toast("Application draft discarded");
       await renderWithFeedback();
       break;
+    case "manage-profile-photo":
+      try {
+        await openOwnAvatarManager();
+      } catch (err) {
+        toast(err.message || "Unable to manage profile photo", true);
+      }
+      break;
     case "sign-in-google":
       try {
         await withBusyControl(el, "Connecting…", () => store.signInWithGoogle());
@@ -651,6 +887,7 @@ document.addEventListener("click", async (e) => {
       }
       break;
     case "notification-open": {
+      if (controlBusy.has(el)) break;
       const destination = el.dataset.destination || "#/account";
       if (el.dataset.notificationRead !== "true") {
         try {
@@ -664,11 +901,24 @@ document.addEventListener("click", async (e) => {
           toast("Failed to mark notification read", true);
           break;
         }
+
+        if (parseHash()[0] === "notifications" && notificationRouteRows) {
+          ++renderGeneration;
+          notificationRouteRows = notificationRouteRows.filter(
+            (row) => row.id !== el.dataset.notificationId
+          );
+          viewEl.innerHTML = await views.viewNotifications(new Date(), notificationRouteRows);
+          commitNotificationCount(
+            notificationRouteRows.filter((row) => !row.read_at).length,
+            true
+          );
+        }
       }
 
-      // Let the single hashchange route path render and report destination
-      // failures. A successful mark-read must never be relabelled as failed
-      // because the destination itself could not load.
+      // The successful read is removed from the unread-only window before the
+      // single hashchange route path renders and reports destination failures.
+      // A successful mark-read must never be relabelled as failed because the
+      // destination itself could not load.
       location.hash = destination;
       break;
     }
@@ -742,10 +992,7 @@ document.addEventListener("click", async (e) => {
     case "sched-week": {
       const st = views.scheduleState;
       st.weekOffset += Number(el.dataset.dir);
-      st.selected =
-        st.weekOffset === 0
-          ? isoDate(todayLocal())
-          : isoDate(addDays(mondayOf(todayLocal()), st.weekOffset * 7));
+      st.selected = views.scheduleSelectionForWeek(todayLocal(), st.weekOffset);
       render();
       break;
     }
@@ -764,13 +1011,15 @@ document.addEventListener("click", async (e) => {
     case "ics-booking": {
       const b = store.getBooking(el.dataset.booking);
       if (b) {
+        const session = b.sessionId ? store.getSession(b.sessionId) : null;
+        const snapshot = b.snapshot || {};
         downloadICS({
           id: b.sessionId,
-          name: b.snapshot.name,
-          dateISO: b.snapshot.dateISO,
-          time: b.snapshot.time,
-          durationMin: b.snapshot.durationMin,
-          location: b.snapshot.location,
+          name: session?.name ?? snapshot.name,
+          dateISO: session?.dateISO ?? snapshot.dateISO,
+          time: session?.time || session?.startTime || snapshot.time || snapshot.startTime || "00:00",
+          durationMin: session?.durationMin ?? snapshot.durationMin,
+          location: session?.location ?? snapshot.location,
           blurb: "",
         });
       }
@@ -800,21 +1049,106 @@ document.addEventListener("click", async (e) => {
       }
       break;
 
+    case "replacement-create":
+      if (controlBusy.has(el)) break;
+      try {
+        await withBusyControl(el, "Creating invite…", async () => {
+          await store.createReplacementRequest(el.dataset.booking, Date.now());
+          toast("Private replacement invite created — share it via WhatsApp");
+          await renderWithFeedback();
+        });
+      } catch (err) { toast(err.message || "Unable to create replacement invite", true); }
+      break;
+
+    case "replacement-accept":
+    case "replacement-decline": {
+      if (controlBusy.has(el)) break;
+      const accepting = action === "replacement-accept";
+      try {
+        await withBusyControl(el, accepting ? "Accepting…" : "Declining…", async () => {
+          if (accepting) await store.acceptReplacement(el.dataset.token, Date.now());
+          else await store.declineReplacement(el.dataset.token, Date.now());
+          toast(accepting ? "Replacement accepted — awaiting Admin confirmation" : "Replacement declined");
+          await renderWithFeedback();
+        });
+      } catch (err) { toast(err.message || "Unable to update replacement invite", true); }
+      break;
+    }
+
+    case "replacement-cancel":
+      if (controlBusy.has(el)) break;
+      try {
+        await withBusyControl(el, "Cancelling…", async () => {
+          await store.cancelReplacement(el.dataset.request, Date.now());
+          toast("Replacement invite cancelled");
+          await renderWithFeedback();
+        });
+      } catch (err) { toast(err.message || "Unable to cancel replacement invite", true); }
+      break;
+
+    case "replacement-decision":
+      if (controlBusy.has(el)) break;
+      try {
+        const confirming = el.dataset.confirmed === "1";
+        await withBusyControl(el, confirming ? "Confirming…" : "Rejecting…", async () => {
+          await store.decideReplacement(el.dataset.request, confirming, null, Date.now());
+          toast(confirming ? "Replacement confirmed — attendee roster updated" : "Replacement rejected — original booking unchanged");
+          await renderWithFeedback();
+        });
+      } catch (err) { toast(err.message || "Unable to update replacement request", true); }
+      break;
+
     case "release-reservation":
-      if (confirm("Release this reservation? Your spot may go to the waitlist.")) {
+      if (controlBusy.has(el)) break;
+      if (confirm("Cancel this unpaid booking? Your spot will be released.")) {
         try {
-          const released = store.releaseReservation(el.dataset.booking);
-          toast(released ? "Reservation released" : "Nothing to release", !released);
-          render();
-        } catch (err) { toast(err.message || "Unable to release reservation", true); }
+          await withBusyControl(el, "Cancelling…", async () => {
+            const released = await store.releaseReservation(el.dataset.booking);
+            toast(released ? "Booking cancelled" : "Booking cannot be cancelled", !released);
+            await renderWithFeedback();
+          });
+        } catch (err) { toast(err.message || "Unable to cancel booking", true); }
       }
       break;
 
+    case "select-hyrox-venue":
+      if (controlBusy.has(el)) break;
+      try {
+        await withBusyControl(el, "Updating…", async () => {
+          await store.selectHyroxCycleVenue(el.dataset.booking, el.dataset.session);
+          toast("HYROX venue updated");
+          await renderWithFeedback();
+        });
+      } catch (err) { toast(err.message || "Unable to change HYROX venue", true); }
+      break;
+
+    case "join-hyrox-switch-queue":
+      if (controlBusy.has(el)) break;
+      try {
+        await withBusyControl(el, "Joining…", async () => {
+          await store.joinHyroxVenueSwitchQueue(el.dataset.booking, el.dataset.session);
+          toast("Switch queue joined");
+          await renderWithFeedback();
+        });
+      } catch (err) { toast(err.message || "Unable to join switch queue", true); }
+      break;
+
+    case "leave-hyrox-switch-queue":
+      if (controlBusy.has(el)) break;
+      try {
+        await withBusyControl(el, "Leaving…", async () => {
+          await store.leaveHyroxVenueSwitchQueue(el.dataset.entry);
+          toast("Switch queue left");
+          await renderWithFeedback();
+        });
+      } catch (err) { toast(err.message || "Unable to leave switch queue", true); }
+      break;
+
     case "defer-to":
-      if (confirm("Move this booking to the selected session?")) {
+      if (confirm("Defer to this session? Your current spot will be released and your payment will carry over.")) {
         try {
           const moved = await store.deferBooking(el.dataset.booking, el.dataset.session);
-          toast("Booking moved — payment carried over");
+          toast("Booking moved — previous spot released and payment carried over");
           location.hash = `#/booking/${moved.id}`;
           render();
         } catch (err) { toast(err.message || "Unable to move booking", true); }
@@ -886,56 +1220,185 @@ document.addEventListener("click", async (e) => {
 
     case "join-waitlist":
       try {
-        const pos = store.joinWaitlist(store.currentUser().id, el.dataset.session);
-        toast(`You're #${pos} on the waitlist`);
-      } catch (err) { toast(err.message, true); }
-      render();
+        await withBusyControl(el, "Joining…", async () => {
+          await store.joinWaitlist(store.currentUser().id, el.dataset.session);
+          const pos = store.waitlistPosition(store.currentUser().id, el.dataset.session);
+          toast(pos ? `You're #${pos} on the waitlist` : "Joined the waitlist");
+          await renderWithFeedback();
+        });
+      } catch (err) { toast(err.message || "Unable to join the waitlist", true); }
       break;
 
     case "leave-waitlist":
-      store.leaveWaitlist(store.currentUser().id, el.dataset.session);
-      toast("Left the waitlist");
-      render();
+      try {
+        await withBusyControl(el, "Leaving…", async () => {
+          await store.leaveWaitlist(store.currentUser().id, el.dataset.session);
+          toast("Left the waitlist");
+          await renderWithFeedback();
+        });
+      } catch (err) { toast(err.message || "Unable to leave the waitlist", true); }
       break;
 
     case "join-interest":
       try {
-        const pos = store.joinInterest(store.currentUser().id, el.dataset.session);
-        toast(`You're #${pos} in line for Midtown`);
-      } catch (err) { toast(err.message, true); }
-      render();
+        await withBusyControl(el, "Joining…", async () => {
+          await store.joinInterest(store.currentUser().id, el.dataset.session);
+          const pos = store.interestPosition(store.currentUser().id, el.dataset.session);
+          toast(pos ? `You're #${pos} in line for Midtown` : "Joined the Midtown list");
+          await renderWithFeedback();
+        });
+      } catch (err) { toast(err.message || "Unable to join the Midtown list", true); }
       break;
 
     case "leave-interest":
-      store.leaveInterest(store.currentUser().id, el.dataset.session);
-      toast("Left the Midtown list");
-      render();
+      try {
+        await withBusyControl(el, "Leaving…", async () => {
+          await store.leaveInterest(store.currentUser().id, el.dataset.session);
+          toast("Left the Midtown list");
+          await renderWithFeedback();
+        });
+      } catch (err) { toast(err.message || "Unable to leave the Midtown list", true); }
       break;
 
     case "duty-claim":
-      store.setDuty(store.currentUser().id, el.dataset.week);
-      toast("You're on duty this week");
-      render();
+      try {
+        await withBusyControl(el, "Claiming…", async () => {
+          await store.setDuty(store.currentUser().id, el.dataset.week);
+          toast("You're on duty this week");
+          await renderWithFeedback();
+        });
+      } catch (err) { toast(err.message || "Unable to claim collector duty", true); }
       break;
 
     case "confirm-payment": {
-      const res = store.confirmBookingPayment(el.dataset.booking);
-      toast(res ? "Payment confirmed — member notified" : "Nothing to confirm", !res);
-      render();
+      try {
+        await withBusyControl(el, "Confirming…", async () => {
+          const res = await store.confirmBookingPayment(el.dataset.booking);
+          toast(res ? "Payment confirmed — member notified" : "Nothing to confirm", !res);
+          await renderWithFeedback();
+        });
+      } catch (err) { toast(err.message || "Unable to confirm payment", true); }
       break;
     }
 
+    case "attendance-toggle": {
+      const bookingId = String(el.dataset.booking || "");
+      if (!bookingId || !["0", "1"].includes(el.dataset.arrived)) break;
+      const arrived = el.dataset.arrived === "1";
+      try {
+        await withBusyControl(el, arrived ? "Marking…" : "Undoing…", async () => {
+          await store.setBookingAttendance(bookingId, arrived);
+          toast(arrived ? "Marked Arrived" : "Attendance reset to Expected");
+          await renderWithFeedback();
+        });
+      } catch (err) {
+        toast(err.message || "Unable to update attendance", true);
+        try {
+          await store.hydrateLiveOperations({ force: true });
+          await renderWithFeedback();
+        } catch (refreshError) {
+          console.warn("Unable to refresh attendance after mutation failure", refreshError);
+        }
+      }
+      break;
+    }
+
+    case "hyrox-plan-retry":
+      if (controlBusy.has(el)) break;
+      try {
+        await withBusyControl(el, "Retrying…", async () => {
+          await store.finalizeHyroxVenuePlan(el.dataset.cycle);
+          toast("Automatic venue plan retried — members notified");
+          await renderWithFeedback();
+        });
+      } catch (err) { toast(err.message || "Unable to retry automatic venue plan", true); }
+      break;
+
+    case "hyrox-allocation-close":
+      if (controlBusy.has(el)) break;
+      try {
+        await withBusyControl(el, "Finalizing…", async () => {
+          await store.closeHyroxVenueAllocation(el.dataset.cycle);
+          toast("Venue allocations finalized");
+          await renderWithFeedback();
+        });
+      } catch (err) { toast(err.message || "Unable to finalize venue allocations", true); }
+      break;
+
     case "midtown-toggle":
-      store.setMidtownOpen(el.dataset.session, el.dataset.open === "1");
-      toast(el.dataset.open === "1" ? "Midtown opened — interest list converting" : "Midtown closed");
-      render();
+      try {
+        await withBusyControl(el, "Updating…", async () => {
+          await store.setMidtownOpen(el.dataset.session, el.dataset.open === "1");
+          toast(el.dataset.open === "1" ? "Midtown opened — interest list converting" : "Midtown closed");
+          await renderWithFeedback();
+        });
+      } catch (err) { toast(err.message || "Unable to update Midtown", true); }
       break;
 
     case "venue-tbc-toggle":
-      store.setVenueTBC(el.dataset.session, el.dataset.on === "1");
-      toast(el.dataset.on === "1" ? "Venue marked TBC" : "Venue confirmed");
-      render();
+      try {
+        await withBusyControl(el, "Updating…", async () => {
+          await store.setVenueTBC(el.dataset.session, el.dataset.on === "1");
+          toast(el.dataset.on === "1" ? "Venue marked TBC" : "Venue confirmed");
+          await renderWithFeedback();
+        });
+      } catch (err) { toast(err.message || "Unable to update the venue status", true); }
       break;
+
+    case "delete-event": {
+      if (!confirm("Delete this event? Only possible before anyone books — afterwards cancel it instead.")) return;
+      withBusyControl(el, "Deleting…", async () => {
+        try {
+          await store.deleteOneOffEvent(el.dataset.session);
+          toast("Event deleted");
+          await renderWithFeedback();
+        } catch (err) {
+          toast(err.message || "Unable to delete event", true);
+        }
+      }, { busyKey: el });
+      break;
+    }
+
+    case "repost-rsvp": {
+      if (!confirm("Reopen this event? Existing cancelled RSVPs stay cancelled, so members must RSVP again.")) return;
+      await withBusyControl(el, "Reopening…", async () => {
+        try {
+          await store.repostRsvpEvent(el.dataset.session);
+          toast("Event reopened");
+          await renderWithFeedback();
+        } catch (err) {
+          toast(err.message || "Unable to reopen event", true);
+        }
+      }, { busyKey: el });
+      break;
+    }
+
+    case "rsvp-join": {
+      withBusyControl(el, "Counting you in…", async () => {
+        try {
+          await store.rsvpSession(store.currentUser()?.id, el.dataset.session);
+          toast("You’re coming");
+          await renderWithFeedback();
+        } catch (err) {
+          toast(err.message || "Unable to RSVP", true);
+        }
+      }, { busyKey: el });
+      break;
+    }
+
+    case "rsvp-withdraw": {
+      if (!confirm("Cancel your RSVP? The team is counting heads.")) return;
+      withBusyControl(el, "Withdrawing…", async () => {
+        try {
+          await store.withdrawRsvp(el.dataset.booking);
+          toast("RSVP cancelled");
+          await renderWithFeedback();
+        } catch (err) {
+          toast(err.message || "Unable to cancel RSVP", true);
+        }
+      }, { busyKey: el });
+      break;
+    }
 
     case "reset-week-venue": {
       const control = el;
@@ -954,18 +1417,46 @@ document.addEventListener("click", async (e) => {
     }
 
     case "copy-fps":
-      if (el.dataset.phone && navigator.clipboard?.writeText) {
-        await navigator.clipboard.writeText(el.dataset.phone);
-        toast("FPS number copied");
-      } else {
-        toast("Copy unsupported on this device");
+    case "copy-reference": {
+      const value = String(el.dataset.copyValue || "").trim();
+      const successMessage = {
+        id: "FPS ID copied",
+        number: "FPS number copied",
+        reference: "Payment reference copied",
+        "giving-reference": "Giving reference copied",
+      }[el.dataset.copyKind] || "Copied";
+      if (!value || !navigator.clipboard?.writeText) {
+        toast("Copy unavailable — select and copy the value manually", true);
+        break;
+      }
+      try {
+        await navigator.clipboard.writeText(value);
+        toast(successMessage);
+      } catch (_err) {
+        toast("Copy unavailable — select and copy the value manually", true);
       }
       break;
+    }
+
+    case "copy-payment-note": {
+      const note = String(el.dataset.note || "");
+      if (!note.trim() || !navigator.clipboard?.writeText) {
+        toast("Unable to copy payment note", true);
+        break;
+      }
+      try {
+        await navigator.clipboard.writeText(note);
+        toast("Payment note copied");
+      } catch {
+        toast("Unable to copy payment note", true);
+      }
+      break;
+    }
 
     case "copy-gym":
       if (navigator.clipboard?.writeText) {
         await navigator.clipboard.writeText(el.dataset.msg);
-        toast("Gym message copied");
+        toast(`Message to ${el.dataset.venueLabel || "Gym"} copied`);
       } else {
         toast("Copy unsupported on this device");
       }
@@ -1017,9 +1508,51 @@ document.addEventListener("submit", async (e) => {
     return;
   }
 
+  if (form.id === "form-privacy") {
+    e.preventDefault();
+    if (!form.reportValidity()) return;
+    const control = form.querySelector('[type="submit"]');
+    await withBusyControl(control, "Saving…", async () => {
+      try {
+        await store.updateMyPrivacyPreferences(Object.fromEntries(new FormData(form).entries()));
+        toast("Privacy preferences saved");
+        location.hash = "#/account/privacy";
+        await renderWithFeedback();
+      } catch (err) {
+        toast(err.message || "Unable to save privacy preferences", true);
+      }
+    });
+    return;
+  }
+
   const formAction = form.id || form.dataset.action;
 
   switch (formAction) {
+    case "form-magic-link": {
+      e.preventDefault();
+      if (!form.reportValidity()) return;
+      const email = form.querySelector('[name="email"]');
+      const control = form.querySelector('[type="submit"]');
+      const emailValue = new FormData(form).get("email");
+      showMagicLinkFeedback(form, "");
+      await withBusyControl(control, "Sending…", async () => {
+        try {
+          await store.signInWithMagicLink(emailValue);
+          showMagicLinkFeedback(
+            form,
+            "Check your inbox. We sent a private sign-in link. Open it on this device to continue."
+          );
+        } catch {
+          showMagicLinkFeedback(
+            form,
+            "We couldn’t send the link. Wait a moment and try again.",
+            true
+          );
+        }
+      }, { controls: [email, control] });
+      break;
+    }
+
     case "form-signin": {
       e.preventDefault();
       const email = new FormData(form).get("email");
@@ -1030,7 +1563,9 @@ document.addEventListener("submit", async (e) => {
         return;
       }
       toast(`Welcome back, ${res.user.preferredName || res.user.fullName}`);
-      location.hash = "#/home";
+      location.hash = /^#\/replacement\/[^/?#]+$/.test(location.hash)
+        ? location.hash
+        : "#/home";
       render();
       break;
     }
@@ -1076,14 +1611,40 @@ document.addEventListener("submit", async (e) => {
       break;
     }
 
+    case "form-hyrox-reserve": {
+      e.preventDefault();
+      const user = store.currentUser();
+      if (!user || user.status !== "approved" || !form.dataset.cycle) return;
+      const fd = new FormData(form);
+      const control = form.querySelector('[type="submit"]');
+      const controls = [...form.querySelectorAll("input, button")];
+      try {
+        await withBusyControl(control, "Reserving…", async () => {
+          const booking = await store.reserveHyroxCycle(
+            user.id, form.dataset.cycle, String(fd.get("preference") || ""),
+            fd.get("fallbackAcknowledged") === "on",
+          );
+          toast("Place reserved — continue to payment");
+          location.hash = `#/pay/${booking.id}`;
+        }, { busyKey: form, controls });
+      } catch (err) {
+        toast(err.message || "Unable to reserve this HYROX place", true);
+      }
+      break;
+    }
+
     case "form-reserve": {
       e.preventDefault();
       const user = store.currentUser();
       if (!form.dataset.session || !user || user.status !== "approved") return;
+      const control = form.querySelector('[type="submit"]');
+      const controls = [...form.querySelectorAll("input, button")];
       try {
-        const booking = store.reserveSession(user.id, form.dataset.session);
-        toast("Spot reserved — pay before the deadline");
-        location.hash = `#/pay/${booking.id}`;
+        await withBusyControl(control, "Reserving…", async () => {
+          const booking = await store.reserveSession(user.id, form.dataset.session);
+          toast("Spot reserved — pay before the deadline");
+          location.hash = `#/pay/${booking.id}`;
+        }, { busyKey: form, controls });
       } catch (err) {
         toast(err.message || "Unable to reserve this spot", true);
       }
@@ -1096,10 +1657,14 @@ document.addEventListener("submit", async (e) => {
       const user = store.currentUser();
       if (!booking || !user || booking.userId !== user.id) return;
       const fd = new FormData(form);
+      const control = form.querySelector('[type="submit"]');
+      const controls = [...form.querySelectorAll("input, button")];
       try {
-        store.markBookingPaid(booking.id, fd.get("method"), fd.get("ref"));
-        toast("Payment marked — awaiting collector confirmation");
-        location.hash = `#/booking/${booking.id}`;
+        await withBusyControl(control, "Marking paid…", async () => {
+          await store.markBookingPaid(booking.id, fd.get("method"), fd.get("ref"));
+          toast("Payment marked — awaiting collector confirmation");
+          location.hash = `#/booking/${booking.id}`;
+        }, { busyKey: form, controls });
       } catch (err) {
         toast(err.message || "Unable to mark payment", true);
       }
@@ -1119,29 +1684,6 @@ document.addEventListener("submit", async (e) => {
         ref: `GIVE-${Math.random().toString(36).slice(2, 8).toUpperCase()}`,
       });
       await renderWithFeedback();
-      break;
-    }
-
-    case "form-donor-id": {
-      e.preventDefault();
-      const user = store.currentUser();
-      if (!user) return;
-      const errEl = form.querySelector("#donor-error");
-      const raw = String(new FormData(form).get("donorId") || "").trim();
-      if (donorIdProblem(raw)) {
-        errEl.innerHTML =
-          `<div class="form-error">That Donor ID doesn’t look right — it needs a hyphen between your last name and the 4- or 5-digit number (e.g. CHUI-08879 or CHUI-8879). Please enter it again.</div>`;
-        return;
-      }
-      if (!raw) {
-        errEl.innerHTML = `<div class="form-error">Enter your Donor ID to save it.</div>`;
-        return;
-      }
-      try {
-        await store.updateMyDonorId(raw);
-        toast("Donor ID saved");
-        await renderWithFeedback();
-      } catch (err) { toast(err.message || "Unable to save Donor ID", true); }
       break;
     }
 
@@ -1187,42 +1729,137 @@ document.addEventListener("submit", async (e) => {
       break;
     }
 
+    case "form-hyrox-payment-reject": {
+      e.preventDefault();
+      if (!form.reportValidity()) return;
+      const reason = String(new FormData(form).get("reason") || "").trim();
+      const control = form.querySelector('[type="submit"]');
+      try {
+        await withBusyControl(control, "Rejecting…", async () => {
+          await store.rejectHyroxCyclePayment(form.dataset.booking, reason);
+          toast("Payment claim rejected — member notified");
+          await renderWithFeedback();
+        }, { busyKey: form, controls: [...form.querySelectorAll("input, button")] });
+      } catch (err) { toast(err.message || "Unable to reject payment claim", true); }
+      break;
+    }
+
+    case "form-cancel-hyrox-cycle": {
+      e.preventDefault();
+      if (!form.reportValidity()) return;
+      const reason = String(new FormData(form).get("reason") || "").trim();
+      if (!confirm("Cancel this HYROX cycle? Members will be notified.")) return;
+      const control = form.querySelector('[type="submit"]');
+      try {
+        await withBusyControl(control, "Cancelling…", async () => {
+          await store.cancelHyroxCycle(form.dataset.cycle, reason);
+          toast("HYROX cycle cancelled — members notified");
+          await renderWithFeedback();
+        }, { busyKey: form, controls: [...form.querySelectorAll("input, button")] });
+      } catch (err) { toast(err.message || "Unable to cancel HYROX cycle", true); }
+      break;
+    }
+
     case "form-cancel-week": {
       e.preventDefault();
       if (!form.reportValidity()) return;
       const reason = String(new FormData(form).get("reason") || "").trim();
       if (!confirm("Cancel this session? Paid bookings auto-defer; waitlists dissolve.")) return;
-      store.cancelSessionWeek(form.dataset.session, reason);
-      toast("Session cancelled — members notified");
-      render();
+      const control = form.querySelector('[type="submit"]');
+      const controls = [...form.querySelectorAll("input, button")];
+      try {
+        await withBusyControl(control, "Cancelling…", async () => {
+          await store.cancelSessionWeek(form.dataset.session, reason);
+          toast("Session cancelled — members notified");
+          await renderWithFeedback();
+        }, { busyKey: form, controls });
+      } catch (err) {
+        toast(err.message || "Unable to cancel the session", true);
+      }
+      break;
+    }
+
+    case "form-one-off-event": {
+      e.preventDefault();
+      if (!form.reportValidity()) return;
+      const control = form.querySelector('[type="submit"]');
+      const fd = new FormData(form);
+      const kind = String(fd.get("kind") || "free");
+      await withBusyControl(control, "Adding…", async () => {
+        try {
+          await store.createOneOffEvent({
+            name: fd.get("name"),
+            dateISO: fd.get("date"),
+            time: fd.get("time"),
+            durationMin: fd.get("durationMin"),
+            location: fd.get("location"),
+            mapsQuery: fd.get("mapsQuery"),
+            category: fd.get("category"),
+            price: kind === "paid" ? Number(fd.get("price")) : 0,
+            capacity: fd.get("capacity"),
+          });
+          toast("Event added");
+          await renderWithFeedback();
+        } catch (err) {
+          toast(err.message || "Unable to add event", true);
+        }
+      }, { busyKey: form });
       break;
     }
 
     case "form-session-time": {
       e.preventDefault();
-      store.setSessionTime(form.dataset.session, new FormData(form).get("time"));
-      toast("Session time updated");
-      render();
+      const time = new FormData(form).get("time");
+      const control = form.querySelector('[type="submit"]');
+      const controls = [...form.querySelectorAll("input, button")];
+      try {
+        await withBusyControl(control, "Saving…", async () => {
+          await store.setSessionTime(form.dataset.session, time);
+          toast("Session time updated");
+          await renderWithFeedback();
+        }, { busyKey: form, controls });
+      } catch (err) {
+        toast(err.message || "Unable to update the session time", true);
+      }
       break;
     }
 
     case "form-session-notice": {
       e.preventDefault();
-      store.setSessionNotice(form.dataset.session, new FormData(form).get("notice"));
-      toast("Session note posted");
-      render();
+      const notice = new FormData(form).get("notice");
+      const control = form.querySelector('[type="submit"]');
+      const controls = [...form.querySelectorAll("input, button")];
+      try {
+        await withBusyControl(control, "Posting…", async () => {
+          await store.setSessionNotice(form.dataset.session, notice);
+          toast("Session note posted");
+          await renderWithFeedback();
+        }, { busyKey: form, controls });
+      } catch (err) {
+        toast(err.message || "Unable to post the session note", true);
+      }
       break;
     }
 
     case "form-payouts": {
       e.preventDefault();
+      const control = form.querySelector('[type="submit"]');
+      const controls = [...form.querySelectorAll("input, button")];
       const fd = new FormData(form);
-      store.updateCollectorPayouts(store.currentUser().id, {
-        paymeLink: fd.get("paymeLink"),
-        fpsPhone: fd.get("fpsPhone"),
-      });
-      toast("Payout details saved");
-      render();
+      await withBusyControl(control, "Saving…", async () => {
+        try {
+          const member = store.currentUser();
+          const renderedFpsPhone = String(form.dataset.fpsPhone || member?.phone || "").trim();
+          await store.updateCollectorPayouts(member.id, {
+            paymeLink: fd.get("paymeLink"),
+            fpsPhone: renderedFpsPhone,
+          });
+          toast("Payout details saved");
+          await renderWithFeedback();
+        } catch (err) {
+          toast(err.message || "Unable to save payout details", true);
+        }
+      }, { busyKey: form, controls });
       break;
     }
 
@@ -1346,9 +1983,15 @@ document.addEventListener("change", async (e) => {
 
     case "duty-set":
       if (el.value) {
-        store.setDuty(el.value, el.dataset.week);
-        toast("Duty handed over");
-        render();
+        try {
+          await withBusyControl(el, "Updating…", async () => {
+            await store.setDuty(el.value, el.dataset.week);
+            toast("Duty handed over");
+            await renderWithFeedback();
+          });
+        } catch (err) {
+          toast(err.message || "Unable to hand over collector duty", true);
+        }
       }
       break;
 
@@ -1378,6 +2021,7 @@ async function boot() {
     try {
       await store.getCurrentUser();
       await store.fetchApplicationForUser(store.currentUser());
+      await syncApprovedGoogleAvatar({ ifMissing: true });
       await store.hydrateLiveOperations({ ensureWindow: true });
     } catch (err) {
       bootError = err;
@@ -1386,7 +2030,8 @@ async function boot() {
       toast(bootError.message || "Application read failed", true);
     }
   }
-  if (!location.hash) location.hash = "#/home";
+  const startup = store.startupRoute(location.hash, store.currentUser()?.id);
+  if (startup !== location.hash) replaceRoute(startup);
   window.addEventListener("hashchange", async () => {
     const generation = ++renderGeneration;
     // The Payment/Auth baseline hydrates identity before rendering. Commit
@@ -1431,15 +2076,33 @@ async function boot() {
     }
   });
 
-  // Live-mode auth listener: when Supabase completes sign-in, route the
-  // pending user to /apply (if they have not yet submitted an application).
+  // Mobile app switching can relaunch the installed app without its hash.
+  // Recover the last committed route in that case. An intact non-Payment
+  // route needs no work; Payment still refreshes its least-privilege collector
+  // details whenever the member returns from PayMe.
+  document.addEventListener("visibilitychange", async () => {
+    if (document.visibilityState !== "visible") return;
+    const resumedRoute = store.startupRoute(location.hash, store.currentUser()?.id);
+    const recoveredRoute = resumedRoute !== location.hash;
+    if (recoveredRoute) replaceRoute(resumedRoute);
+    if (!recoveredRoute && parseHash()[0] !== "pay") return;
+    try {
+      await renderWithFeedback();
+    } catch (err) {
+      toast(err.message || "Unable to refresh the current page", true);
+    }
+  });
+
+  // Supabase may emit SIGNED_IN again when an existing session regains focus.
+  // Refresh identity without replacing the current route; only a pending
+  // applicant still needs the follow-up redirect to /apply.
   if (isLive() && supabase) {
     supabase.auth.onAuthStateChange((event) => {
       if (event !== "SIGNED_IN") return;
       setTimeout(async () => {
         try {
           await store.getCurrentUser();
-          location.hash = "#/home";
+          await syncApprovedGoogleAvatar({ ifMissing: true });
           await renderWithFeedback();
           await maybeRedirectToApply();
         } catch (err) {

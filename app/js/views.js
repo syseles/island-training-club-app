@@ -9,6 +9,7 @@ import * as store from "./store.js";
 import { isLive } from "./config.js";
 import * as liveOps from "./operations.js";
 import { sessionCancellationCopy } from "./operations.js";
+import { avatarMarkup } from "./avatar.js";
 import {
   normalizeMeetingPoint,
   normalizeVenueLocation,
@@ -20,17 +21,19 @@ import {
   ANNOUNCEMENTS,
   findSession,
   sessionStarted,
+  hktEventStartMs,
   sessionsInRange,
   parseISO,
   mondayOf,
+  sundayOf,
   addDays,
+  todayHktISO,
   todayLocal,
   isoDate,
   fmtDate,
   fmtDateLong,
   fmtTime,
   fmtMoney,
-  initials,
   weeklyVerse,
   notificationRelativeTime,
   notificationHktTime,
@@ -64,20 +67,50 @@ const esc = (s) =>
     "'": "&#39;",
   })[c]);
 
-const todayISO = () => isoDate(todayLocal());
+const todayISO = () => todayHktISO();
+
+export function replacementShareUrl(token, baseHref = globalThis.location?.href) {
+  const route = `#/replacement/${encodeURIComponent(String(token || ""))}`;
+  if (!baseHref) return route;
+  try {
+    const url = new URL(baseHref);
+    if (!new Set(["http:", "https:"]).has(url.protocol)) return route;
+    url.search = "";
+    url.hash = route.slice(1);
+    return url.href;
+  } catch {
+    return route;
+  }
+}
 
 const fmtDay = (ts) =>
-  new Date(ts).toLocaleDateString("en-HK", { day: "numeric", month: "short", year: "numeric" });
+  new Date(ts).toLocaleDateString("en-HK", {
+    timeZone: "Asia/Hong_Kong",
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+  });
 
 const fmtMonthYear = (ts) =>
-  new Date(ts).toLocaleDateString("en-HK", { month: "short", year: "numeric" });
+  new Date(ts).toLocaleDateString("en-HK", {
+    timeZone: "Asia/Hong_Kong",
+    month: "short",
+    year: "numeric",
+  });
 
 // --- Shared fragments ---------------------------------------------------------
 
-function badgeFor(s) {
-  return s.kind === "free"
-    ? `<span class="badge free">Free · No booking</span>`
-    : `<span class="badge paid">${fmtMoney(s.price)} per session</span>`;
+function badgeFor(s, booking = null, reservation = null) {
+  if (s.kind === "free") return `<span class="badge free">Free</span>`;
+  if (s.kind === "rsvp") {
+    return booking
+      ? `<span class="badge free">Going</span>`
+      : `<span class="badge free">RSVP</span>`;
+  }
+  if (booking) return `<span class="badge free">Paid</span>`;
+  if (reservation?.paymentMarkedAt) return `<span class="badge warn">Awaiting confirmation</span>`;
+  if (reservation) return `<span class="badge warn">To be paid</span>`;
+  return `<span class="badge paid">${fmtMoney(s.price)}</span>`;
 }
 
 function spotsLabel(s) {
@@ -88,6 +121,74 @@ function spotsLabel(s) {
 
 const fmtDeadline = (ts) =>
   new Date(ts).toLocaleString("en-HK", { weekday: "short", hour: "numeric", minute: "2-digit" });
+
+function hyroxCycleVenues(cycle) {
+  return [cycle.bftSessionId, cycle.midtownSessionId].map((id) => store.getSession(id)).filter(Boolean);
+}
+
+function hyroxVenuePreferenceLabel(preference) {
+  if (preference === "bft") return "BFT Causeway Bay";
+  if (preference === "midtown") return "Midtown 28";
+  return "Either venue";
+}
+
+function hyroxAssignedVenue(cycle, booking, assignedSession) {
+  if (assignedSession?.location) return assignedSession.location;
+  const cycleSession = cycle && booking.sessionId
+    ? hyroxCycleVenues(cycle).find((session) => session.id === booking.sessionId)
+    : null;
+  if (cycleSession?.location) return cycleSession.location;
+  const snapshots = Array.isArray(booking.allocationSnapshot) ? booking.allocationSnapshot : [];
+  return snapshots.at(-1)?.venue || snapshots.at(-1)?.location || null;
+}
+
+function hyroxCycleStatus(cycle) {
+  const now = Date.now();
+  if (cycle.registrationState === "cancelled") return { label: "Cancelled", className: "danger" };
+  if (now < cycle.registrationOpensAt) return {
+    label: "Sign up opens Monday at 6 PM HKT",
+    compactLabel: "Opens Mon · 6 PM",
+    className: "neutral",
+  };
+  if (cycle.venuePlan === "bft_only") return { label: "BFT only", className: "free" };
+  if (cycle.venuePlan === "both") return { label: cycle.allocationClosedAt ? "Both gyms confirmed" : "Both gyms open", className: "free" };
+  if (cycle.registrationState === "reconciling") return { label: "Payment review", className: "warn" };
+  return { label: "Registration open", className: "paid" };
+}
+
+function hyroxCycleBookingForUser(cycle) {
+  const user = store.currentUser();
+  if (!user) return null;
+  return store.bookingsForUser(user.id).find((booking) => booking.cycleId === cycle.id
+    && ["reserved", "confirmed", "attended"].includes(booking.status)) || null;
+}
+
+function hyroxCycleRow(cycle) {
+  const status = hyroxCycleStatus(cycle);
+  const booking = hyroxCycleBookingForUser(cycle);
+  const action = booking
+    ? `<span class="badge free">${booking.status === "reserved" ? "Payment due" : booking.status === "attended" ? "Arrived" : "Booked"}</span>`
+    : `<span class="badge ${status.className}">${esc(status.compactLabel || status.label)}</span>`;
+  const venues = hyroxCycleVenues(cycle)
+    .sort((a, b) => a.time.localeCompare(b.time));
+  const venueDetails = venues
+    .map((venue) => `<span>${esc(venue.location)} · ${esc(fmtTime(venue.time))}</span>`)
+    .join("");
+  return `<a class="session-row hyrox-cycle-row" href="#/hyrox/${esc(cycle.id)}">
+    <time>${esc(fmtTime(venues[0]?.time || "00:00"))}</time>
+    <div class="hyrox-cycle-content"><h3>ITC HYROX<br><span>BFT + Midtown Pool</span></h3><p class="hyrox-cycle-venues">${venueDetails}</p></div>
+    <div class="row-end">${action}</div>
+  </a>`;
+}
+
+function hyroxVenueCards(cycle) {
+  return hyroxCycleVenues(cycle).map((venue) => `
+    <div class="card hyrox-venue-card">
+      <span class="kicker">${esc(venue.location)}</span>
+      <h3>${esc(fmtTime(venue.time))}</h3>
+      <p class="muted small">${venue.capacity} places · ${fmtMoney(venue.price)}</p>
+    </div>`).join("");
+}
 
 function sessionRow(s, { past, showDate = true, highlight } = {}) {
   // A session the signed-in member has already booked shows a "Booked"
@@ -103,9 +204,14 @@ function sessionRow(s, { past, showDate = true, highlight } = {}) {
   if (s.cancelled) {
     end = `<span class="badge danger">Cancelled</span>`;
   } else if (booked) {
-    end = `<span class="badge free booked">Booked</span>`;
+    end = store.sessionRequiresRsvp(s)
+      ? `<span class="badge free booked">Going</span><span class="spots">${store.attendeeCountFor(s)} going</span>`
+      : `<span class="badge free booked">${booked.status === "attended" ? "Arrived" : "Booked"}</span>`;
   } else if (reserved) {
     end = `<span class="badge warn">Pay by ${fmtDeadline(reserved.payDeadlineAt)}</span>`;
+  } else if (s.kind === "rsvp") {
+    const going = store.attendeeCountFor(s);
+    end = `<span class="badge free">RSVP</span><span class="spots">${going} going</span>`;
   } else if (s.kind === "free") {
     end = `<span class="badge free">Free</span><span class="spots">Just show up</span>`;
   } else if (midtownClosed) {
@@ -181,8 +287,29 @@ export function navHTML(routeKey, user) {
     .join("");
 }
 
-export function avatarHTML(user) {
-  return user ? initials(user.fullName) : ICONS.user;
+export function avatarHTML(user, presentation = null) {
+  return user
+    ? avatarMarkup({
+      name: user.fullName,
+      presentation,
+      size: 36,
+      className: "avatar--top",
+      decorative: true,
+      eager: true,
+    })
+    : ICONS.user;
+}
+
+export function profileAvatarHTML(user, presentation = null, { editable = true } = {}) {
+  const avatar = avatarMarkup({
+    name: user?.fullName,
+    presentation,
+    size: 72,
+    className: "avatar--profile",
+    decorative: true,
+    eager: true,
+  });
+  return editable ? avatar + '<span class="ph-avatar-edit" aria-hidden="true">Edit</span>' : avatar;
 }
 
 export function notificationBellHTML(unreadCount = 0, active = false) {
@@ -233,12 +360,17 @@ export function viewHome() {
     emptyMsg = "No open sessions this week — check back soon.";
     weekHeading = "My Week";
   } else {
+    const bookings = store.bookingsForUser(user.id);
+    const pooledBookings = bookings
+      .filter((booking) => booking.cycleId && booking.status === "confirmed")
+      .filter((booking) => !booking.sessionId || !sessionStarted(store.getSession(booking.sessionId)));
+    const pooledSessionIds = new Set(pooledBookings.map((booking) => booking.sessionId).filter(Boolean));
     const bookedIds = new Set(
-      store.bookingsForUser(user.id)
-        .filter((booking) => booking.status === "confirmed" && !sessionStarted(booking.snapshot))
+      bookings
+        .filter((booking) => booking.status === "confirmed" && !booking.cycleId && !sessionStarted(booking.snapshot))
         .map((booking) => booking.sessionId)
     );
-    rows = upcoming.filter((session) => bookedIds.has(session.id));
+    rows = [...upcoming.filter((session) => bookedIds.has(session.id) && !pooledSessionIds.has(session.id)), ...pooledBookings];
     emptyMsg = `Nothing booked this week yet. <a href="#/schedule" style="color:var(--accent)">Find a session →</a>`;
     weekHeading = "My Week";
   }
@@ -251,7 +383,8 @@ export function viewHome() {
       <p class="hero-meta">Free activities are open to all — just show up. Membership is free too; sign in and an ITC leader approves every application before paid booking unlocks.</p>
       ${visitorDraftActions()}
       ${isLive()
-        ? `<button class="btn mt16" type="button" data-action="sign-in-google">Continue with Google</button>`
+        ? `<button class="btn mt16" type="button" data-action="sign-in-google">Continue with Google</button>
+          <a class="btn ghost mt8" href="#/account">Use an email link instead</a>`
         : `<a class="btn mt16" href="#/account">Sign in or join</a>`}
       <p class="muted small mt8">New here? You'll be guided through a short application after sign-in.</p>
     </div></div>`
@@ -277,7 +410,8 @@ export function viewHome() {
     </div>
     <div class="session-list">
       ${rows.length
-        ? rows.map((s, i) => sessionRow(s, { highlight: i === 0 })).join("")
+        ? rows.map((item, i) => item.cycleId ? pooledBookingRow(item, { highlight: i === 0 })
+          : sessionRow(item, { highlight: i === 0 })).join("")
         : `<div class="empty">${emptyMsg}</div>`}
     </div>
     <div class="section-head"><h2>The Club</h2><a href="#/community">More →</a></div>
@@ -307,12 +441,18 @@ export function resetScheduleState() {
   scheduleState.filter = "all";
 }
 
+export function scheduleSelectionForWeek(referenceDate = todayLocal(), weekOffset = 0) {
+  const weekStart = addDays(sundayOf(referenceDate), weekOffset * 7);
+  return isoDate(weekOffset === 0 ? referenceDate : weekStart);
+}
+
 const FILTERS = [
   ["all", "All"],
   ["Run", "Run"],
   ["Water", "Water"],
   ["Strength", "Strength"],
   ["HYROX", "HYROX"],
+  ["Socials", "Socials"],
 ];
 
 function matchesFilter(s, filter) {
@@ -322,44 +462,27 @@ function matchesFilter(s, filter) {
 
 export function viewSchedule() {
   const t = todayLocal();
-  const monday = addDays(mondayOf(t), scheduleState.weekOffset * 7);
+  const weekStart = addDays(sundayOf(t), scheduleState.weekOffset * 7);
   if (!scheduleState.selected) {
-    scheduleState.selected = scheduleState.weekOffset === 0 ? isoDate(t) : isoDate(monday);
+    scheduleState.selected = scheduleSelectionForWeek(t, scheduleState.weekOffset);
   }
-  let sourceActivities;
+  let weekSessions;
   if (isLive()) {
-    const liveTemplates = liveOps.liveActivityTemplates();
-    const templateActivities = liveTemplates.map((tpl) => ({
-      id: tpl.activity_id,
-      weekday: tpl.weekday,
-      price: tpl.price_hkd,
-      capacity: tpl.capacity,
-      kind: "paid",
-      name: tpl.name,
-      venue: tpl.venue,
-      durationMin: tpl.duration_minutes,
-      start_time: tpl.start_time,
-      category: "HYROX",
-      published: true,
-    }));
-    const freeActivities = store.activities().filter((a) => a.kind === "free");
-    sourceActivities = [...templateActivities, ...freeActivities];
+    const weekStartISO = isoDate(weekStart);
+    const weekEndISO = isoDate(addDays(weekStart, 6));
+    weekSessions = liveOps.listLiveSessions()
+      .filter((session) => session.dateISO >= weekStartISO && session.dateISO <= weekEndISO)
+      .map((session) => store.getSession(session.id))
+      .filter(Boolean);
   } else {
-    sourceActivities = store.activities();
+    weekSessions = sessionsInRange(store.activities(), weekStart, 7)
+      .map((session) => store.getSession(session.id))
+      .filter(Boolean);
   }
-  const weekSessions = sessionsInRange(sourceActivities, monday, 7)
-    .map((s) => {
-      if (isLive()) {
-        if (s.kind === "free") return store.getSession(s.id);
-        return liveOps.getLiveSession(s.id);
-      }
-      return store.getSession(s.id);
-    })
-    .filter(Boolean);
-  const dayNames = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+  const dayNames = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
   const cells = Array.from({ length: 7 }, (_, i) => {
-    const d = addDays(monday, i);
+    const d = addDays(weekStart, i);
     const iso = isoDate(d);
     const has = weekSessions.some((s) => s.dateISO === iso);
     return `
@@ -369,16 +492,20 @@ export function viewSchedule() {
       </button>`;
   }).join("");
 
+  const cycle = store.hyroxCycleForDate(scheduleState.selected);
+  const cycleChildIds = cycle ? new Set([cycle.bftSessionId, cycle.midtownSessionId]) : new Set();
   const list = weekSessions
     .filter((s) => s.dateISO === scheduleState.selected)
+    .filter((s) => !cycleChildIds.has(s.id))
     .filter((s) => matchesFilter(s, scheduleState.filter));
-
-  const listHTML = list.length
-    ? list.map((s) => sessionRow(s, { past: sessionStarted(s), showDate: false })).join("")
+  const poolItem = cycle && matchesFilter({ category: "HYROX" }, scheduleState.filter)
+    ? hyroxCycleRow(cycle) : "";
+  const listHTML = list.length || poolItem
+    ? `${poolItem}${list.map((s) => sessionRow(s, { past: sessionStarted(s), showDate: false })).join("")}`
     : `<div class="empty">No ${scheduleState.filter === "all" ? "" : esc(scheduleState.filter) + " "}sessions on ${esc(fmtDate(scheduleState.selected))}.</div>`;
 
   return `
-    <div class="kicker">Week of ${esc(fmtDateLong(monday))}</div>
+    <div class="kicker">Week of ${esc(fmtDateLong(weekStart))}</div>
     <h1 class="display">Find your next session</h1>
     <div class="week-strip">${cells}</div>
     <div class="week-nav">
@@ -397,6 +524,78 @@ export function viewSchedule() {
 }
 
 // --- Activity detail ------------------------------------------------------------------
+
+export function viewHyroxCycle(cycleId) {
+  const cycle = store.getHyroxCycle(cycleId);
+  if (!cycle) return viewNotFound("That HYROX registration does not exist.");
+  const status = hyroxCycleStatus(cycle);
+  const user = store.currentUser();
+  const approved = user?.status === "approved";
+  const booking = hyroxCycleBookingForUser(cycle);
+  const open = (cycle.registrationState === "open" || Date.now() >= cycle.registrationOpensAt)
+    && Date.now() < cycle.paymentDeadlineAt && cycle.registrationState !== "cancelled";
+  const action = cycle.registrationState === "cancelled"
+    ? `<div class="banner warn"><span class="kicker">Cancelled</span><p>Session cancelled by ITC — ${esc(cycle.cancelReason || "reason unavailable")}.</p></div>`
+    : booking ? `<div class="banner"><p>Your HYROX registration is already in your account.</p><a class="btn sm" href="#/booking/${booking.id}">View booking</a></div>`
+      : approved && open ? `<a class="btn" href="#/hyrox/${esc(cycle.id)}/register">Reserve your place</a>`
+        : approved ? memberOnlyNote(status.label) : memberOnlyNote(open ? "Approved members can reserve from Monday at 6 PM HKT." : status.label);
+  return `<div class="kicker">HYROX · ${esc(fmtDate(cycle.dateISO))}</div>
+    <h1 class="display">One weekly pool. Two possible gyms.</h1>
+    <p class="lede">Register once for the shared 32-place pool. Your venue is allocated automatically from confirmed payments.</p>
+    <div class="hyrox-pool-card"><div class="section-head"><div><span class="kicker">${esc(status.label)}</span><h2>ITC HYROX</h2></div><span class="badge paid">${fmtMoney(hyroxCycleVenues(cycle)[0]?.price || 180)}</span></div>
+      <div class="hyrox-venue-options">${hyroxVenueCards(cycle)}</div>
+      <div class="hyrox-threshold-rule"><strong>Monday 6 PM HKT</strong><span>Registration opens</span><strong>Thursday 6 PM HKT</strong><span>Standard payment deadline</span><strong>Thursday 7 PM HKT</strong><span>Holder grace ends</span><strong>Friday 9 PM HKT</strong><span>Venue changes close</span></div>
+      ${action}
+    </div>`;
+}
+
+export function viewHyroxRegistration(cycleId) {
+  const cycle = store.getHyroxCycle(cycleId);
+  if (!cycle) return viewNotFound("That HYROX registration does not exist.");
+  const user = store.currentUser();
+  if (!user || user.status !== "approved") return `${memberOnlyNote("Approved members can reserve a HYROX place.")}<a class="btn ghost" href="#/account">Go to Profile</a>`;
+  const open = (cycle.registrationState === "open" || Date.now() >= cycle.registrationOpensAt)
+    && Date.now() < cycle.paymentDeadlineAt;
+  if (!open) return viewHyroxCycle(cycleId);
+  return `<div class="hyrox-registration">
+    <span class="kicker hyrox-kicker">You’re in. · Sat ${esc(fmtDate(cycle.dateISO))}</span>
+    <h1 class="display">Pick your home gym.</h1>
+    <p class="lede">Two gyms. One epic Saturday. Tell us which one feels right and we’ll do the rest.</p>
+    <aside class="hyrox-no-deferral" aria-label="Booking policy">
+      <span class="hyrox-no-deferral-icon" aria-hidden="true">${ICONS.shield}</span>
+      <p><strong>Once paid, this booking is final</strong> — no refund and no deferral. If you can’t attend, arrange a manual replacement with an approved ITC friend. No refund or payment transfer is processed in the app; an Admin must confirm the handover.</p>
+    </aside>
+    <form id="form-hyrox-reserve" class="card hyrox-reserve-card" data-cycle="${esc(cycle.id)}">
+      <fieldset class="hyrox-preference-grid"><legend>Venue preference</legend>
+        <label class="hyrox-radio"><input type="radio" name="preference" value="bft" required>
+          <span class="hyrox-radio-card">
+            <span class="hyrox-radio-dot" aria-hidden="true"></span>
+            <span class="hyrox-radio-text"><span class="hyrox-radio-name">BFT Causeway Bay</span><span class="hyrox-radio-meta">11:15AM · 20 spots</span></span>
+          </span>
+        </label>
+        <label class="hyrox-radio"><input type="radio" name="preference" value="midtown">
+          <span class="hyrox-radio-card">
+            <span class="hyrox-radio-dot" aria-hidden="true"></span>
+            <span class="hyrox-radio-text"><span class="hyrox-radio-name">Midtown 28</span><span class="hyrox-radio-meta">11:00AM · 12 spots</span></span>
+          </span>
+        </label>
+        <label class="hyrox-radio"><input type="radio" name="preference" value="either">
+          <span class="hyrox-radio-card">
+            <span class="hyrox-radio-dot" aria-hidden="true"></span>
+            <span class="hyrox-radio-text"><span class="hyrox-radio-name">Either venue</span><span class="hyrox-radio-meta">Auto-allocate to your nearest gym</span></span>
+          </span>
+        </label>
+      </fieldset>
+      <label class="check-row"><input type="checkbox" name="fallbackAcknowledged" required> I understand that my booking will be at BFT at 11:15AM if only BFT opens.</label>
+      <div class="hyrox-threshold-rule">
+        <p>20 or fewer paid → BFT only.</p>
+        <p>More than 20 paid → both gyms.</p>
+        <p>Pay by Thursday 6 PM. Venue changes close Friday 9 PM.</p>
+      </div>
+      <button class="btn hyrox-cta" type="submit">Reserve my spot →</button>
+    </form>
+  </div>`;
+}
 
 function venuePresentationHTML(presentation) {
   if (presentation.kind === "image") return `
@@ -425,12 +624,16 @@ function venuePresentationHTML(presentation) {
   return "";
 }
 
-export function viewActivity(sessionId) {
+export function viewActivity(sessionId, options) {
+  const optionsObject = options && typeof options === "object" && !Array.isArray(options);
+  const attendeeNames = optionsObject ? options.attendeeNames : options;
+  const avatarRows = optionsObject ? options.avatarRows ?? null : null;
   const s = store.getSession(sessionId);
   if (!s) return viewNotFound("That session doesn’t exist.");
 
   const user = store.currentUser();
-  const isMember = user && user.status === "approved";
+  const isMember = user && user.status === "approved"
+    && ["member", "admin", "superadmin", "super_admin"].includes(user.role);
   const past = sessionStarted(s);
   const spots = store.spotsLeft(s);
   const booking = user ? store.userBookingFor(user.id, s.id) : null;
@@ -451,24 +654,78 @@ export function viewActivity(sessionId) {
     ? venuePresentationHTML(venuePresentation)
     : "";
   if (s.cancelled) {
+    const cancellationFollowup = s.kind === "paid"
+      ? "Paid bookings were moved to the next available session — check your account."
+      : "Stay tuned for the next available social.";
     actionBlock = `
       <div class="banner warn mt16">
         <span class="kicker">Cancelled</span>
-        <p>${esc(sessionCancellationCopy(s))}. Paid bookings were moved to the next available session — check your account.</p>
+        <p>${esc(sessionCancellationCopy(s))}. ${cancellationFollowup}</p>
       </div>`;
   } else if (past) {
     actionBlock = `<div class="banner mt16"><p>This session has already happened. See you at the next one.</p></div>`;
-  } else if (s.kind === "free") {
-    // Product rule: free activities never show booking, capacity or checkout.
-    actionBlock = `
-      <div class="free-banner">
-        ${ICONS.pin}
-        <div><strong>Free · No booking needed.</strong><br><span class="muted small">Everyone is welcome — just show up${s.id.startsWith("wnt") ? " and look for the lime ITC flag" : ""}.</span></div>
-      </div>
-      <div class="btn-row ${showDirections ? "two" : ""}">
-        <button class="btn" type="button" data-action="ics" data-session="${s.id}">Add to calendar</button>
-        ${directionsLink}
-      </div>`;
+  } else if (store.sessionRequiresRsvp(s)) {
+    // RSVP capability controls participation independently of the activity's
+    // presentation kind. Free activities retain walk-in framing, while Lunch
+    // retains its organizer and pay-your-own-bill copy.
+    const goingCount = store.attendeeCountFor(s);
+    if (s.kind === "free") {
+      const freeBanner = `
+        <div class="free-banner">
+          ${ICONS.pin}
+          <div><strong>Free · No booking needed.</strong><br><span class="muted small">Everyone is welcome — just show up. RSVP helps the team plan; walk-ins are welcome.</span></div>
+        </div>`;
+      const calendarButton = `<button class="btn ghost" type="button" data-action="ics" data-session="${s.id}">Add to calendar</button>`;
+      if (booking && isMember) {
+        actionBlock = `${freeBanner}
+          <div class="banner mt16">
+            <span class="kicker">You’re going</span>
+            <p>${goingCount} going — see you there. Walk-ins are still welcome.</p>
+          </div>
+          <div class="btn-row">
+            <button class="btn ghost" type="button" data-action="rsvp-withdraw" data-booking="${booking.id}">Can’t make it</button>
+            ${calendarButton}
+            ${directionsLink}
+          </div>`;
+      } else if (isMember) {
+        actionBlock = `${freeBanner}
+          <div class="btn-row">
+            <button class="btn" type="button" data-action="rsvp-join" data-session="${s.id}">I’m coming</button>
+            ${calendarButton}
+            ${directionsLink}
+          </div>`;
+      } else {
+        actionBlock = `${freeBanner}
+          <div class="btn-row ${showDirections ? "two" : ""}">
+            ${calendarButton}
+            ${directionsLink}
+          </div>`;
+      }
+    } else if (booking && isMember) {
+      actionBlock = `
+        <div class="banner mt16">
+          <span class="kicker">You're going</span>
+          <p>${goingCount} going — see you there. Everyone pays their own bill at the venue.</p>
+        </div>
+        <div class="btn-row ${showDirections ? "two" : ""}">
+          <button class="btn ghost" type="button" data-action="rsvp-withdraw" data-booking="${booking.id}">Can't make it</button>
+          ${directionsLink}
+        </div>`;
+    } else if (isMember) {
+      actionBlock = `
+        <div class="free-banner">
+          ${ICONS.pin}
+          <div><strong>Free to join — pay your own bill.</strong><br><span class="muted small">${goingCount} going so far · the organizer books a table from this list, so only tap if you're coming.</span></div>
+        </div>
+        <div class="btn-row ${showDirections ? "two" : ""}">
+          <button class="btn" type="button" data-action="rsvp-join" data-session="${s.id}">Count me in</button>
+          ${directionsLink}
+        </div>`;
+    } else if (user && user.status === "pending") {
+      actionBlock = `<div class="banner mt16"><p>Your membership is being reviewed — you can RSVP once you're approved.</p></div>`;
+    } else {
+      actionBlock = membersOnlyGate();
+    }
   } else if (midtownClosed) {
     const pos = user ? store.interestPosition(user.id, s.id) : null;
     const actionInner = isMember
@@ -540,12 +797,33 @@ export function viewActivity(sessionId) {
       <div><small>Places</small><strong>${spots <= 0 ? "Full" : `${spots} of ${s.capacity} left`}</strong></div>`
       : "";
 
+  const fallbackNames = attendeeNames === undefined ? store.attendeesFor(s) : attendeeNames;
+  const attendeeRows = Array.isArray(avatarRows)
+    ? avatarRows
+    : Array.isArray(fallbackNames)
+      ? fallbackNames.map((displayName) => ({ displayName, url: null, source: "initials", state: "active" }))
+      : [];
+  const attendeeList = attendeeRows.length
+    ? attendeeRows.map((row) => `
+        <div class="attendee-row">
+          ${avatarMarkup({
+            name: row.displayName,
+            presentation: row,
+            size: 32,
+            className: "attendee-avatar",
+            decorative: true,
+          })}
+          <span class="attendee-name">${esc(row.displayName || "Member")}</span>
+        </div>`).join("")
+    : attendeeNames === null && !Array.isArray(avatarRows)
+      ? '<p class="muted small">Attendee names are temporarily unavailable. Try again shortly.</p>'
+      : '<p class="muted small">No confirmed bookings yet.</p>';
   const attendees =
-    s.kind === "paid"
+    (s.kind === "paid" || store.sessionRequiresRsvp(s))
       ? isMember
         ? `
       <div class="section-head"><h2>Who’s coming</h2></div>
-      <div class="attendees">${store.attendeesFor(s).map((n) => `<span>${esc(n)}</span>`).join("")}</div>`
+      <div class="attendees">${attendeeList}</div>`
         : `<div class="section-head"><h2>Who’s coming</h2></div>${memberOnlyNote("Member-only: the attendee list is visible after approval.")}`
       : "";
 
@@ -560,7 +838,7 @@ export function viewActivity(sessionId) {
   return `
     <a class="back-link" href="#/schedule">← Schedule</a>
     <img class="detail-photo" src="${esc(photo)}" alt="${esc(s.name)}" data-photo-fallback="${photoFallback}">
-    <div class="mt16">${badgeFor(s)}</div>
+    <div class="mt16">${badgeFor(s, booking, reservation)}</div>
     <h1 class="display sm">${esc(s.name)}</h1>
     <div class="meta-grid">
       <div><small>When</small><strong>${esc(fmtDate(s.date))}<br>${fmtTime(s.time)}</strong></div>
@@ -732,14 +1010,25 @@ function givingFpsStep(campaign) {
     <div class="card mt16"><div class="card-body">
       <span class="kicker">Step 2 · Complete the transfer</span>
       <h3 class="mt8">Pay ${fmtMoney(givingState.amount)} via FPS</h3>
-      <div class="fps-qr" aria-hidden="true">FPS QR<br>placeholder</div>
       <div class="receipt-lines">
         <div class="line"><span>FPS ID</span><strong class="mono">${esc(campaign.fpsId)}</strong></div>
         <div class="line"><span>Payee</span><strong>${esc(campaign.fpsPayee)}</strong></div>
         <div class="line"><span>Amount</span><strong>${fmtMoney(givingState.amount)}</strong></div>
         <div class="line total"><span>Reference</span><strong class="mono">${esc(givingState.ref)}</strong></div>
       </div>
-      <p class="muted small mt8">Open your banking app, choose FPS, and pay using the details above. Put the reference in the transfer remarks so a leader can match your gift.</p>
+      <div class="btn-row two">
+        <button class="btn ghost" type="button" data-action="copy-fps"
+          data-copy-value="${esc(campaign.fpsId)}" data-copy-kind="id" aria-label="Copy FPS ID">Copy FPS ID</button>
+        <button class="btn ghost" type="button" data-action="copy-reference"
+          data-copy-value="${esc(givingState.ref)}" data-copy-kind="giving-reference" aria-label="Copy Giving reference">Copy reference</button>
+      </div>
+      <ol class="muted small mt16">
+        <li>Open your banking app.</li>
+        <li>Choose FPS and pay using the FPS ID.</li>
+        <li>Paste the FPS ID.</li>
+        <li>Enter ${fmtMoney(givingState.amount)} and reference <span class="mono">${esc(givingState.ref)}</span>.</li>
+        <li>Return here and select <strong>I’ve made the transfer</strong>.</li>
+      </ol>
       <div class="btn-row">
         <button class="btn" type="button" data-action="giving-confirm">I’ve made the transfer</button>
         <button class="btn ghost" type="button" data-action="giving-back">Back</button>
@@ -793,7 +1082,8 @@ export function viewCommunity(section) {
     case "fellowship":
       return communityFellowship();
     case "meals":
-      return communityMeals();
+      // Meals moved to the Schedule tab (recurring RSVP lunch).
+      return { redirect: "#/schedule" };
     case "announcements":
       return communityAnnouncements();
     case "about":
@@ -813,6 +1103,11 @@ function communityHeading(user) {
 function communityHome() {
   const user = store.currentUser();
   const announcement = ANNOUNCEMENTS[0];
+  const nextSocial = store.nextSocialSession();
+  const socialHref = nextSocial ? `#/activity/${nextSocial.id}` : "#/schedule";
+  const socialDetail = nextSocial
+    ? `<p class="muted small mt8">Next up: ${esc(nextSocial.name)} · ${esc(fmtDate(nextSocial.dateISO))}</p>`
+    : "";
   return `
     <div class="community-pulse">
       <div class="kicker">Community</div>
@@ -820,12 +1115,12 @@ function communityHome() {
       <p class="subcopy mt8">Island Training Club is a Hong Kong training community with a Christian foundation — open to everyone. Training is the doorway; find your next way to connect.</p>
 
       <section class="community-feature" aria-labelledby="next-connection-title">
-        <span class="kicker">Next connection</span>
-        <h2 id="next-connection-title">Post-training dinner</h2>
-        <p>Date and venue are announced in the session WhatsApp group a few days ahead.</p>
+        <span class="kicker">Socials</span>
+        <h2 id="next-connection-title">Connect beyond training</h2>
+        <p>Meet up, share a meal, and find your people.</p>
+        ${socialDetail}
         <div class="community-feature-actions">
-          <button class="btn sm" type="button" data-action="connect-interest" data-topic="the next ad-hoc meal">Count me in</button>
-          <a class="btn ghost sm" href="#/community/meals">View details</a>
+          <a class="btn sm" href="${socialHref}">View next social</a>
         </div>
       </section>
 
@@ -857,7 +1152,7 @@ function communityHome() {
 
       <div class="community-section-head"><h2>Explore</h2></div>
       <nav class="community-explore" aria-label="Explore the ITC community">
-        <a href="#/community/meals">Meals</a>
+        <a href="#/schedule">Socials</a>
         <a href="#/community/announcements">Announcements</a>
         <a href="#/community/about">About ITC</a>
       </nav>
@@ -936,21 +1231,6 @@ function communityFellowship() {
     <p class="muted small mt16 center">Draft content — fellowship details to be confirmed with ITC leadership.</p>`;
 }
 
-function communityMeals() {
-  return `
-    <a class="back-link" href="#/community">← Community</a>
-    <div class="kicker mt16">Community · Ad-Hoc Meals</div>
-    <h1 class="display sm">Ad-Hoc Meals.</h1>
-    <p class="subcopy mt8">The best conversations happen over food. After some sessions we head straight to a nearby cha chaan teng — no programme, no agenda, just dinner. First-timers especially welcome.</p>
-    <div class="card mt16"><div class="card-body">
-      <span class="kicker">Next meal</span>
-      <h3 class="mt8">Post-training dinner — details TBC</h3>
-      <p class="hero-meta">Date and venue are announced in the session WhatsApp group a few days ahead. Pay for your own meal; the company is free.</p>
-    </div></div>
-    <button class="btn mt16" type="button" data-action="connect-interest" data-topic="the next ad-hoc meal">Count me in</button>
-    <p class="muted small mt16 center">Prototype placeholder — meal scheduling will plug in here.</p>`;
-}
-
 function communityAnnouncements() {
   const announcement = ANNOUNCEMENTS[0];
   if (!announcement) {
@@ -1002,6 +1282,7 @@ export async function viewAccount(section, sub) {
         if (!app) {
           const sectionTitle = {
             details: "Membership Details",
+            donor: "Membership Details",
             indemnity: "Indemnity",
             privacy: "Privacy &amp; Notifications",
           }[section] || "Profile";
@@ -1031,15 +1312,17 @@ export async function viewAccount(section, sub) {
     case "indemnity":
       return await accountIndemnity(user);
     case "donor":
-      return accountDonor(user, isLive() ? await store.fetchApplicationForUser(user) : null);
+      return await accountDetails(user);
     case "payments":
       return accountPayments(user);
     case "privacy":
       return await accountPrivacy(user);
     case "privacy/edit":
       return await accountPrivacyEdit(user);
+    case "bookings":
+      return accountBookings(user, sub === "attended" ? "attended" : "all");
     case "history":
-      return accountHistory(user);
+      return accountBookings(user, "all");
     default:
       return viewNotFound();
   }
@@ -1059,11 +1342,14 @@ async function hydrateLiveUser(user) {
       emergencyPhone: app.emergency_phone ?? user.emergencyPhone ?? "",
       preferredName: (Object.prototype.hasOwnProperty.call(app, "preferred_name")) ? (app.preferred_name || "") : user.preferredName,
       heard: app.heard_source ?? user.heard ?? "",
+      donorId: app.donor_id ?? user.donorId ?? null,
       isMinor: app.is_minor !== undefined ? !!app.is_minor : user.isMinor,
       guardianName: app.guardian_name ?? user.guardianName ?? "",
       guardianPhone: app.guardian_phone ?? user.guardianPhone ?? "",
       mediaConsent: app.photo_consent !== undefined ? !!app.photo_consent : user.mediaConsent,
       whatsappReminders: app.whatsapp_reminders !== undefined ? !!app.whatsapp_reminders : user.whatsappReminders,
+      hyroxPaymentReminders: app.hyrox_payment_reminders !== undefined
+        ? !!app.hyrox_payment_reminders : user.hyroxPaymentReminders !== false,
       emailReceipts: app.email_receipts !== undefined ? !!app.email_receipts : user.emailReceipts,
       communityNews: app.community_news !== undefined ? !!app.community_news : user.communityNews,
       indemnityAcceptedAt: app.waiver_accepted_at ?? user.indemnityAcceptedAt,
@@ -1088,6 +1374,15 @@ function accountVisitor() {
       ${visitorDraftActions()}
       <div class="card mt24"><div class="card-body">
         <button class="btn mt16" type="button" data-action="sign-in-google">Continue with Google</button>
+        <p class="muted small center mt16">or continue with email</p>
+        <form id="form-magic-link" class="mt16" novalidate>
+          <div class="field">
+            <label for="magic-link-email">Email</label>
+            <input id="magic-link-email" name="email" type="email" autocomplete="email" inputmode="email" placeholder="you@example.com" required>
+          </div>
+          <button class="btn ghost mt16" type="submit">Email me a sign-in link</button>
+          <div class="muted small mt16" data-magic-link-feedback aria-live="polite"></div>
+        </form>
         <p class="muted small mt16">By continuing, you agree to be added to the ITC community roster. An ITC leader will review your application before you can book sessions.</p>
       </div></div>`;
   }
@@ -1195,6 +1490,8 @@ async function accountMember(user) {
   const normalized = normalizeRole(hydrated.role);
   if (user.role !== normalized) user.role = normalized;
   const isAdmin = isAdminRole(normalized);
+  const canManageAvatar = ["member", "admin", "superadmin"].includes(normalized);
+  const avatarPresentation = canManageAvatar ? await store.getOwnAvatar().catch(() => null) : null;
 
   const roleLabel = {
     member: "Active member",
@@ -1202,7 +1499,7 @@ async function accountMember(user) {
     superadmin: "Super admin",
   }[normalized];
 
-  const bookings = store.bookingsForUser(user.id).filter((b) => b.status !== "cancelled");
+  const bookings = visibleBookingsForUser(user.id);
   const attended = bookings.filter((b) => b.status === "attended").length;
 
   return `
@@ -1210,7 +1507,11 @@ async function accountMember(user) {
 
     <div class="profile-hero">
       <div class="ph-top">
-        <div class="ph-avatar">${esc(initials(user.fullName))}</div>
+        ${canManageAvatar
+          ? `<button class="ph-avatar" type="button" data-action="manage-profile-photo" aria-label="Manage profile photo for ${esc(user.fullName)}">
+              ${profileAvatarHTML(user, avatarPresentation)}
+            </button>`
+          : `<div class="ph-avatar">${profileAvatarHTML(user, null, { editable: false })}</div>`}
         <div class="ph-id">
           <div class="ph-role">${roleLabel}</div>
           <h1>${esc(user.fullName)}</h1>
@@ -1218,14 +1519,18 @@ async function accountMember(user) {
         </div>
       </div>
       <div class="ph-stats">
-        <div><strong>${bookings.length}</strong><span>Bookings</span></div>
-        <div><strong>${attended}</strong><span>Attended</span></div>
+        <a class="ph-stat" href="#/account/bookings" aria-label="View all bookings">
+          <strong>${bookings.length}</strong><span>Bookings</span>
+        </a>
+        <a class="ph-stat" href="#/account/bookings/attended" aria-label="View attended bookings">
+          <strong>${attended}</strong><span>Attended</span>
+        </a>
       </div>
     </div>
 
     <div class="profile-rows">
       ${isAdmin ? profileRow("#/admin", ICONS.shield, "Admin Tools", "Approvals, activities and members") : ""}
-      ${profileRow("#/account/details", ICONS.user, "Membership Details", "Contact and emergency information")}
+      ${profileRow("#/account/details", ICONS.user, "Membership Details", "Contact, emergency and donor information")}
       ${profileRow(
         "#/account/indemnity",
         ICONS.check,
@@ -1233,10 +1538,8 @@ async function accountMember(user) {
         indemnity.row,
         { cls: indemnity.kind === "current" ? "ok" : "todo" }
       )}
-      ${profileRow("#/account/donor", ICONS.heart, "Donor Profile", "Donor ID and e-receipt details")}
       ${profileRow("#/account/payments", ICONS.dollar, "Payments & Receipts", "Bookings, donations and orders")}
       ${profileRow("#/account/privacy", ICONS.bell, "Privacy & Notifications", "Consent and communication choices")}
-      ${profileRow("#/account/history", ICONS.clock, "History", "Activity history")}
     </div>
 
     <div class="btn-row">
@@ -1267,6 +1570,12 @@ async function accountDetailsEdit(user) {
     <form id="form-membership-details" data-form="membership-details" class="card mt16"><div class="card-body">
       <div class="line"><span>Full name</span><strong>${esc(user.fullName)}</strong></div>
       <div class="line"><span>Email</span><strong>${esc(user.email)}</strong></div>
+      <div class="field">
+        <label for="md-donorId">Donor ID</label>
+        <input id="md-donorId" name="donorId" value="${esc(hydrated.donorId || "")}" placeholder="e.g. CHUI-08879" autocomplete="off">
+        <div class="hint">Optional. Use the Donor ID from your IECC donor record so leaders can match your giving.</div>
+      </div>
+      <div id="membership-details-error"></div>
       <div class="field">
         <label for="md-preferred_name">Preferred name</label>
         <input id="md-preferred_name" name="preferred_name" value="${esc(hydrated.preferredName || "")}">
@@ -1319,6 +1628,7 @@ async function accountDetails(user) {
         <div class="line"><span>Full name</span><strong>${esc(user.fullName)}</strong></div>
         <div class="line"><span>Preferred name</span><strong>${hydrated.preferredName ? esc(hydrated.preferredName) : "Not provided"}</strong></div>
         <div class="line"><span>Email</span><strong>${esc(user.email)}</strong></div>
+        <div class="line"><span>Donor ID</span><strong>${hydrated.donorId ? esc(hydrated.donorId) : "Not provided"}</strong></div>
         <div class="line"><span>Member since</span><strong>${fmtDay(hydrated.appliedAt)}</strong></div>
         <div class="line"><span>Mobile / WhatsApp number</span><strong>${esc(hydrated.phone)}</strong></div>
         <div class="line"><span>Age status</span><strong>${ageStatus}</strong></div>
@@ -1398,58 +1708,15 @@ async function accountIndemnity(user) {
   `;
 }
 
-function accountDonor(user, application) {
-  const donorId = application?.donor_id || user.donorId || null;
-  const gifts = store.donationsForUser(user.id);
-  const totalGiven = gifts.reduce((sum, d) => sum + d.amount, 0);
-  return `
-    <a class="back-link" href="#/account">← Profile</a>
-    <div class="kicker mt16">Profile · Donor Profile</div>
-    <h1 class="display sm">Donor Profile.</h1>
-    <div class="card mt16"><div class="card-body">
-      <div class="receipt-lines" style="margin-top:0;border-top:0">
-        <div class="line"><span>Donor ID</span><strong>${donorId ? esc(donorId) : "Not provided"}</strong></div>
-        ${
-          gifts.length
-            ? `
-          <div class="line"><span>Total given</span><strong>${fmtMoney(totalGiven)}</strong></div>
-          <div class="line"><span>Gifts</span><strong>${gifts.length}</strong></div>
-          <div class="line"><span>Latest gift</span><strong>${new Date(gifts[0].createdAt).toLocaleDateString("en-HK", { day: "numeric", month: "short" })}</strong></div>`
-            : ""
-        }
-      </div>
-      ${
-        donorId
-          ? ""
-          : `
-        <form id="form-donor-id" class="mt16" novalidate>
-          <div class="field">
-            <label for="donor-id">Add your Donor ID</label>
-            <input id="donor-id" name="donorId" placeholder="e.g. CHUI-08879" autocomplete="off">
-            <div class="hint">Format: your last name, a hyphen, then the 4- or 5-digit number from your IECC donor record (e.g. CHUI-08879 or CHUI-8879). Left this blank at sign-up? Add it here any time — leaders use it to match your giving to your donor record.</div>
-          </div>
-          <div id="donor-error"></div>
-          <button class="btn ghost sm" type="submit">Save Donor ID</button>
-        </form>`
-      }
-      ${
-        gifts.length
-          ? `
-        <p class="muted small mt16">FPS gifts stay pending until a leader reconciles them against the club account. Full history lives on the Giving tab.</p>
-        <a class="btn ghost sm mt16" href="#/giving">Open Giving &amp; Fundraising →</a>`
-          : `
-        <p class="hero-meta mt16">No gifts yet — every step can give back. Support the current campaign via FPS.</p>
-        <a class="btn ghost sm mt16" href="#/giving">Give via FPS →</a>`
-      }
-    </div></div>`;
-}
-
 function accountPayments(user) {
   const receipts = store.receiptsForUser(user.id);
+  const pooledBookings = store.bookingsForUser(user.id)
+    .filter((booking) => booking.cycleId && ["reserved", "confirmed"].includes(booking.status));
   return `
     <a class="back-link" href="#/account">← Profile</a>
     <div class="kicker mt16">Profile · Payments &amp; Receipts</div>
     <h1 class="display sm">Payments &amp; Receipts.</h1>
+    ${pooledBookings.length ? `<div class="session-list">${pooledBookings.map((booking) => pooledBookingRow(booking)).join("")}</div>` : ""}
     ${
       receipts.length
         ? `<div class="session-list">${receipts
@@ -1478,6 +1745,8 @@ async function accountPrivacyEdit(user) {
       <div class="line"><span>Privacy policy accepted</span><strong>${hydrated.privacyAcceptedAt ? fmtDay(hydrated.privacyAcceptedAt) : "To be accepted"}</strong></div>
       <label class="check"><input type="checkbox" name="photo_consent" ${hydrated.mediaConsent ? "checked" : ""}> Photos and video at sessions</label>
       <label class="check"><input type="checkbox" name="whatsapp_reminders" ${hydrated.whatsappReminders ? "checked" : ""}> WhatsApp session reminders</label>
+      <label class="check"><input type="checkbox" name="hyrox_payment_reminders" ${hydrated.hyroxPaymentReminders !== false ? "checked" : ""}> HYROX payment reminders</label>
+      <p class="muted small">Thursday payment reminders for unpaid HYROX reservations. You can still check payment status in the app.</p>
       <label class="check"><input type="checkbox" name="email_receipts" ${hydrated.emailReceipts ? "checked" : ""}> Email receipts</label>
       <label class="check"><input type="checkbox" name="community_news" ${hydrated.communityNews ? "checked" : ""}> Community news</label>
       <div class="actions">
@@ -1499,48 +1768,167 @@ async function accountPrivacy(user) {
         <div class="line"><span>Photo/video consent</span><strong>${hydrated.mediaConsent ? "Allowed" : "Not allowed"}</strong></div>
         <div class="line"><span>Privacy policy accepted</span><strong>${hydrated.privacyAcceptedAt ? fmtDay(hydrated.privacyAcceptedAt) : "To be accepted"}</strong></div>
         <div class="line"><span>WhatsApp session reminders</span><strong>${onOff(hydrated.whatsappReminders)}</strong></div>
+        <div class="line"><span>HYROX payment reminders</span><strong>${onOff(hydrated.hyroxPaymentReminders !== false)}</strong></div>
         <div class="line"><span>Email receipts</span><strong>${onOff(hydrated.emailReceipts)}</strong></div>
         <div class="line"><span>Community news</span><strong>${onOff(hydrated.communityNews)}</strong></div>
       </div>
       <a class="btn ghost sm mt16" href="#/account/privacy/edit">Edit privacy preferences</a>
-      <p class="muted small mt16">Privacy and notification settings are stubbed for setup — they’ll be configurable here before launch.</p>
+      <p class="muted small mt16">You can update these communication preferences at any time.</p>
     </div></div>`;
 }
 
+function bookingDisplaySnapshot(b) {
+  const snapshot = b.snapshot || {};
+  const session = b.sessionId ? store.getSession(b.sessionId) : null;
+  const cycle = b.cycleId ? store.getHyroxCycle(b.cycleId) : null;
+  return {
+    ...snapshot,
+    dateISO: snapshot.dateISO ?? session?.dateISO ?? cycle?.dateISO,
+    time: snapshot.time ?? snapshot.startTime ?? session?.time ?? session?.startTime,
+    name: snapshot.name ?? session?.name ?? "ITC HYROX",
+    location: snapshot.location ?? session?.location ?? (cycle ? "Venue pending" : undefined),
+    durationMin: snapshot.durationMin ?? session?.durationMin,
+    kind: snapshot.kind ?? session?.kind ?? (cycle ? "paid" : undefined),
+    requiresRsvp: snapshot.requiresRsvp ?? session?.requiresRsvp ?? snapshot.kind === "rsvp",
+    price: snapshot.price ?? session?.price ?? snapshot.priceHkd,
+  };
+}
+
+function pooledBookingRow(b, { highlight = false } = {}) {
+  const s = bookingDisplaySnapshot(b);
+  const venue = b.sessionId ? s.location : "Venue pending";
+  return `<a class="session-row hyrox-queue-state${highlight ? " next" : ""}" href="#/booking/${esc(b.id)}">
+    <time>${esc(fmtDate(s.dateISO))}</time><div><h3>ITC HYROX</h3><p>${esc(venue)} · ${b.status === "attended" ? "Arrived" : b.status === "confirmed" ? "Confirmed" : "Payment due"}</p></div>
+    <div class="row-end"><span class="badge ${b.sessionId ? "free" : "neutral"}">${b.status === "attended" ? "Arrived" : b.sessionId ? "Booked" : "Venue pending"}</span></div>
+  </a>`;
+}
+
 function bookingCard(b) {
-  const s = b.snapshot;
-  const live = b.status === "confirmed" && !sessionStarted(s);
+  const s = bookingDisplaySnapshot(b);
+  const started = sessionStarted(s);
+  const live = b.status === "confirmed" && !started;
   const status =
     b.status === "cancelled"
       ? '<span class="badge danger">Cancelled</span>'
       : b.status === "attended"
         ? '<span class="badge neutral">Attended</span>'
-        : '<span class="badge free">Booked</span>';
+        : b.status === "reserved"
+          ? '<span class="badge warn">Awaiting payment</span>'
+          : started
+            ? '<span class="badge neutral">Ended</span>'
+            : '<span class="badge free">Confirmed</span>';
+  const amount = store.sessionRequiresRsvp(s)
+    ? "RSVP"
+    : (b.paymentMarkedAt != null || ["confirmed", "attended"].includes(b.status))
+      ? `paid ${fmtMoney(s.price)}`
+      : `${fmtMoney(s.price)} to be paid`;
   return `
     <div class="card booking-card"><div class="card-body">
       <header>
         <div>
-          <div class="kicker dim" style="margin-top:0">${esc(fmtDate(s.dateISO))} · ${fmtTime(s.time)}</div>
+          <div class="kicker dim" style="margin-top:0">${esc(fmtDate(s.dateISO))}${s.time ? ` · ${fmtTime(s.time)}` : ""}</div>
           <h3 class="mt8">${esc(s.name)}</h3>
         </div>
         ${status}
       </header>
-      <p>${esc(s.location)} · ${s.durationMin} min · paid ${fmtMoney(s.price)}</p>
+      <p>${esc(s.location || "Venue pending")}${s.durationMin ? ` · ${s.durationMin} min` : ""} · ${amount}</p>
       <div class="actions">
         <a class="btn ghost sm" href="#/booking/${b.id}">${live ? "Manage" : "Details"}</a>
       </div>
     </div></div>`;
 }
 
-function accountHistory(user) {
-  const history = store
-    .bookingsForUser(user.id)
-    .filter((b) => !(b.status === "confirmed" && !sessionStarted(b.snapshot)));
+function bookingTimestamp(booking) {
+  const createdAt = Number(booking.createdAt);
+  if (booking.createdAt != null && Number.isFinite(createdAt)) return createdAt;
+  const reservedAt = Number(booking.reservedAt);
+  return booking.reservedAt != null && Number.isFinite(reservedAt) ? reservedAt : 0;
+}
+
+function bookingPriority(booking) {
+  return { attended: 5, confirmed: 4, reserved: 3, cancelled: 2, withdrawn: 1 }[booking.status] || 0;
+}
+
+function bookingIdentity(booking) {
+  const snapshot = bookingDisplaySnapshot(booking);
+  return booking.cycleId
+    || booking.sessionId
+    || [snapshot.dateISO, snapshot.time, snapshot.name].filter(Boolean).join("|")
+    || booking.id;
+}
+
+function dedupeBookings(records) {
+  const unique = new Map();
+  records.forEach((booking) => {
+    const key = bookingIdentity(booking);
+    const current = unique.get(key);
+    const rsvpHistory = store.sessionRequiresRsvp(bookingDisplaySnapshot(booking))
+      || (current && store.sessionRequiresRsvp(bookingDisplaySnapshot(current)));
+    if (!current
+        || (rsvpHistory && bookingTimestamp(booking) > bookingTimestamp(current))
+        || (!rsvpHistory && bookingPriority(booking) > bookingPriority(current))
+        || (!rsvpHistory && bookingPriority(booking) === bookingPriority(current)
+          && bookingTimestamp(booking) > bookingTimestamp(current))) {
+      unique.set(key, booking);
+    }
+  });
+  return [...unique.values()];
+}
+
+function visibleBookingsForUser(userId) {
+  return dedupeBookings(store.bookingsForUser(userId)).filter((booking) => {
+    const inactiveRsvp = ["cancelled", "withdrawn"].includes(booking.status);
+    return !(inactiveRsvp && store.sessionRequiresRsvp(bookingDisplaySnapshot(booking)));
+  });
+}
+
+function sortBookings(records, direction = "asc") {
+  return records.slice().sort((a, b) => {
+    const aSnapshot = bookingDisplaySnapshot(a);
+    const bSnapshot = bookingDisplaySnapshot(b);
+    const aKey = `${aSnapshot.dateISO || ""}T${aSnapshot.time || ""}`;
+    const bKey = `${bSnapshot.dateISO || ""}T${bSnapshot.time || ""}`;
+    const result = aKey.localeCompare(bKey);
+    if (result) return direction === "desc" ? -result : result;
+    const timestampResult = bookingTimestamp(b) - bookingTimestamp(a);
+    return timestampResult || String(a.id).localeCompare(String(b.id));
+  });
+}
+
+function bookingGroup(title, bookings) {
+  return bookings.length
+    ? `<section class="booking-group"><div class="section-head"><h2>${title}</h2></div>${bookings.map(bookingCard).join("")}</section>`
+    : "";
+}
+
+function accountBookings(user, filter = "all") {
+  const records = visibleBookingsForUser(user.id);
+  const filtered = filter === "attended"
+    ? records.filter((booking) => booking.status === "attended")
+    : records;
+  const upcoming = sortBookings(
+    filtered.filter((booking) => booking.status !== "cancelled" && !sessionStarted(bookingDisplaySnapshot(booking)))
+  );
+  const past = sortBookings(
+    filtered.filter((booking) => booking.status !== "cancelled" && sessionStarted(bookingDisplaySnapshot(booking))),
+    "desc"
+  );
+  const cancelled = sortBookings(
+    filtered.filter((booking) => booking.status === "cancelled"),
+    "desc"
+  );
+  const hasRecords = upcoming.length || past.length || cancelled.length;
   return `
     <a class="back-link" href="#/account">← Profile</a>
-    <div class="kicker mt16">Profile · History</div>
-    <h1 class="display sm">History.</h1>
-    ${history.length ? history.map(bookingCard).join("") : `<div class="empty">Past sessions will appear here.</div>`}`;
+    <div class="kicker mt16">Profile · Bookings</div>
+    <h1 class="display sm">Bookings.</h1>
+    <div class="chip-row mt16" aria-label="Booking filter">
+      <a class="chip ${filter === "all" ? "active" : ""}" href="#/account/bookings">All bookings</a>
+      <a class="chip ${filter === "attended" ? "active" : ""}" href="#/account/bookings/attended">Attended</a>
+    </div>
+    ${hasRecords
+      ? `${bookingGroup("Upcoming", upcoming)}${bookingGroup("Past", past)}${bookingGroup("Cancelled", cancelled)}`
+      : `<div class="empty mt16">${filter === "attended" ? "Attended sessions will appear here." : "Your bookings will appear here."}</div>`}`;
 }
 
 // --- Apply ---------------------------------------------------------------------------------
@@ -1606,6 +1994,7 @@ function applySelect(name, label, options, required, value = "") {
 function applyFormHtml(cu, draft) {
   const displayName = cu?.profile?.full_name || cu?.email || "";
   const fields = draft?.fields || {};
+  const fullName = fields.full_name || cu?.profile?.full_name || "";
   const savedAge = fields.age_over_18 === "no"
     ? true
     : fields.age_over_18 === "yes"
@@ -1625,6 +2014,7 @@ function applyFormHtml(cu, draft) {
         <button class="btn ghost sm" type="button" data-action="discard-draft">Discard draft</button>
       </div>` : ""}
       <form data-form="apply" class="form-grid mt16">
+        ${applyField("text", "full_name", "Full name", true, fullName, 'autocomplete="name" maxlength="120"')}
         ${applyField("text", "mobile", "Mobile / WhatsApp number", true, fields.mobile)}
         ${ageStatusField(savedAge)}
         <div data-minor-only ${savedAge === true ? "" : "hidden"}>
@@ -1774,11 +2164,19 @@ export function viewCheckout(sessionId) {
     </div>
     <form id="form-reserve" class="mt16" data-session="${s.id}">
       <button class="btn" type="submit">Reserve spot · pay later</button>
-      <p class="muted small mt8 center">Can’t make it? Defer to a future session anytime before it starts — no refunds.</p>
+      <p class="muted small mt8 center">Once paid, this booking is final — no refund and no deferral. If you can’t attend, arrange a manual replacement with an approved ITC friend. No refund or payment transfer is processed in the app; an Admin must confirm the handover.</p>
     </form>`;
 }
 
 // --- PayMe / FPS payment screen ----------------------------------------------------------------
+
+function bookingPaymentReference(booking) {
+  const suffix = String(booking?.id || "")
+    .replace(/[^a-z0-9]/gi, "")
+    .slice(-6)
+    .toUpperCase();
+  return `ITC-${suffix || "PAYMENT"}`;
+}
 
 export function viewPay(bookingId) {
   const b = store.getBooking(bookingId);
@@ -1787,40 +2185,161 @@ export function viewPay(bookingId) {
   if (b.status !== "reserved" || b.paymentMarkedAt)
     return { redirect: `#/booking/${b.id}` };
   const s = b.snapshot;
-  const collector = store.collectorFor(b.sessionId);
+  const cycle = b.cycleId ? store.getHyroxCycle(b.cycleId) : null;
+  const collector = store.collectorFor(cycle?.bftSessionId || b.sessionId);
   const cname = collector ? esc(collector.preferredName || collector.fullName) : "the on-duty collector";
-  const payme = collector?.paymeLink || "";
-  const fps = collector?.fpsPhone || "";
+  const payouts = collector ? store.collectorPayoutsFor(collector.id) : null;
+  const payme = payouts?.paymeLink || collector?.paymeLink || "";
+  const fps = payouts?.fpsPhone || collector?.fpsPhone || "";
+  const paymentReference = bookingPaymentReference(b);
+  const memberName = user.fullName || user.preferredName || "ITC Member";
+  const paymentNote = cycle
+    ? `${s.name} · ${fmtDate(s.dateISO)} · ${memberName}`
+    : `${s.name} · ${fmtDate(s.dateISO)} · ${s.location || "Venue TBC"} · ${memberName}`;
+  const paymentHeading = cycle
+    ? b.promotedFromWaitlistAt
+      ? "You’ve been promoted — pay by Thursday 8 PM"
+      : Date.now() >= cycle.paymentDeadlineAt
+        ? "Final payment grace — pay now by Thursday 7 PM"
+        : `Pay ${fmtMoney(s.price)} by Thursday 6 PM`
+    : `${fmtMoney(s.price)} to ${cname}.`;
 
   return `
-    <a class="back-link" href="#/activity/${b.sessionId}">← ${esc(s.name)}</a>
+    <a class="back-link" href="${cycle ? `#/hyrox/${esc(cycle.id)}` : `#/activity/${b.sessionId}`}">← ${esc(s.name)}</a>
     <div class="kicker mt16">Pay to secure your spot</div>
-    <h1 class="display sm">${fmtMoney(s.price)} to ${cname}.</h1>
+    <h1 class="display sm">${paymentHeading}</h1>
     <p class="subcopy mt8">Deadline: <strong>${fmtDeadline(b.payDeadlineAt)}</strong> — unpaid spots go to the waitlist.</p>
     <div class="card mt16"><div class="card-body">
       <h3>PayMe</h3>
-      <p class="muted small">Opens PayMe straight to ${cname} with the amount ready.</p>
-      <a class="btn mt8" href="${esc(payme)}" target="_blank" rel="noopener">PayMe to ${cname} · ${fmtMoney(s.price)}</a>
-      <h3 class="mt24">FPS to ${cname}</h3>
-      <p class="muted small">Scan with your banking app — the amount is embedded in the QR — or copy the number.</p>
-      <div class="fps-qr" aria-hidden="true"><span>FPS QR<br>(mock)</span></div>
-      <p class="mt8"><strong>${esc(fps)}</strong> · ${fmtMoney(s.price)}
-        <button class="btn ghost sm" type="button" data-action="copy-fps" data-phone="${esc(fps)}">Copy number</button>
+      ${payme ? `
+        <p class="muted small">PayMe opens the collector’s profile. Enter the displayed amount of <strong>${fmtMoney(s.price)}</strong> after it opens.</p>
+        <a class="btn mt8" href="${esc(payme)}" target="_blank" rel="noopener">PayMe to ${cname} · ${fmtMoney(s.price)}</a>
+      ` : `
+        <p class="muted small">PayMe is unavailable for this collector. Please use FPS below to send <strong>${fmtMoney(s.price)}</strong>.</p>
+        <button class="btn mt8" type="button" disabled>PayMe unavailable</button>
+      `}
+      <p class="muted small mt8">Suggested payment note</p>
+      <p><strong>${esc(paymentNote)}</strong>
+        <button class="btn ghost sm" type="button" data-action="copy-payment-note" data-note="${esc(paymentNote)}">Copy note</button>
       </p>
+      <h3 class="mt24">FPS to ${cname}</h3>
+      <p class="muted small">Copy these details, then switch to your banking app to make the transfer.</p>
+      <div class="receipt-lines">
+        <div class="line"><span>Assigned collector / payee</span><strong>${cname}</strong></div>
+        <div class="line"><span>FPS mobile number</span><strong class="mono">${fps ? esc(fps) : "Not available"}</strong></div>
+        <div class="line"><span>Exact amount</span><strong>${fmtMoney(s.price)}</strong></div>
+        <div class="line total"><span>Suggested reference</span><strong class="mono">${esc(paymentReference)}</strong></div>
+      </div>
+      <div class="btn-row two">
+        ${fps ? `<button class="btn ghost" type="button" data-action="copy-fps"
+          data-copy-value="${esc(fps)}" data-copy-kind="number" aria-label="Copy FPS number">Copy FPS number</button>` : ""}
+        <button class="btn ghost" type="button" data-action="copy-reference"
+          data-copy-value="${esc(paymentReference)}" data-copy-kind="reference" aria-label="Copy payment reference">Copy reference</button>
+      </div>
+      ${fps ? `
+        <ol class="muted small mt16">
+          <li>Open your banking app.</li>
+          <li>Choose FPS and pay by mobile number.</li>
+          <li>Paste the FPS number.</li>
+          <li>Enter ${fmtMoney(s.price)} and reference <span class="mono">${esc(paymentReference)}</span>.</li>
+          <li>Return here and select <strong>I’ve paid</strong>.</li>
+        </ol>
+      ` : `<p class="muted small mt16">The collector’s FPS mobile number is not available. Ask an ITC leader for payment details before marking this booking paid.</p>`}
     </div></div>
     <form id="form-mark-paid" class="mt16" data-booking="${b.id}">
       <div class="card"><div class="card-body">
         <h3>Done? Tell the collector</h3>
         <div class="field-row">
-          <label class="chip"><input type="radio" name="method" value="PayMe" checked> PayMe</label>
-          <label class="chip"><input type="radio" name="method" value="FPS"> FPS</label>
+          <label class="chip"><input type="radio" name="method" value="PayMe"${payme ? " checked" : " disabled"}> PayMe</label>
+          <label class="chip"><input type="radio" name="method" value="FPS"${payme ? "" : " checked"}> FPS</label>
         </div>
-        </div>
-        <div class="field"><label for="pay-ref">Reference (optional)</label><input id="pay-ref" name="ref" placeholder="e.g. last 4 digits"></div>
+        <div class="field"><label for="pay-ref">Reference (optional)</label><input id="pay-ref" name="ref" value="${esc(paymentReference)}"></div>
         <p class="muted small mt8">${cname} confirms in-app when the money lands — your spot is held meanwhile.</p>
       </div></div>
       <button class="btn mt16" type="submit">I’ve paid</button>
     </form>`;
+}
+
+// --- Manual HYROX replacement invite -----------------------------------------------------------
+
+export async function viewReplacementInvite(token) {
+  let inviteToken = "";
+  try {
+    inviteToken = decodeURIComponent(String(token || "")).trim();
+  } catch {
+    inviteToken = "";
+  }
+  const user = store.currentUser();
+  if (!user) {
+    return `<div class="kicker">HYROX replacement</div>
+      <h1 class="display sm mt16">Sign in to view this invite.</h1>
+      <p class="subcopy mt8">This private link can only be accepted by an approved ITC member.</p>
+      <a class="btn mt16" href="#/account">Sign in</a>`;
+  }
+  if (user.status !== "approved") {
+    return `<div class="kicker">HYROX replacement</div>
+      <h1 class="display sm mt16">Approved membership required.</h1>
+      <p class="subcopy mt8">Ask an ITC leader to approve your membership before accepting a replacement invite.</p>
+      <a class="btn mt16" href="#/account">Go to Account</a>`;
+  }
+
+  let request = null;
+  try {
+    request = isLive()
+      ? await liveOps.liveReplacementInvite(await liveOps.hashReplacementToken(inviteToken))
+      : store.replacementInviteForToken(inviteToken);
+  } catch {
+    request = null;
+  }
+  if (!request) {
+    return `<div class="kicker">HYROX replacement</div>
+      <h1 class="display sm mt16">Invite unavailable.</h1>
+      <p class="subcopy mt8">This private invite may be invalid, expired, already claimed, or no longer available.</p>
+      <a class="btn ghost mt16" href="#/schedule">Back to Schedule</a>`;
+  }
+
+  const snapshot = request.snapshot || {};
+  const session = request.sessionId ? store.getSession(request.sessionId) : null;
+  const dateISO = session?.dateISO || snapshot.dateISO || snapshot.session_date;
+  const time = session?.time || snapshot.time || snapshot.start_time;
+  const venue = session?.location || snapshot.location || snapshot.venue || "Venue pending";
+  const when = dateISO ? `${fmtDate(dateISO)}${time ? ` · ${fmtTime(String(time).slice(0, 5))}` : ""}` : "HYROX session";
+  const isOriginal = request.originalUserId && request.originalUserId === user.id;
+  let stateCopy = "";
+  let actions = "";
+  if (request.status === "pending") {
+    stateCopy = isOriginal
+      ? "Share this single-use invite with an approved ITC member."
+      : "Accepting this does not transfer payment. An Admin must confirm the handover first.";
+    actions = isOriginal
+      ? `<a class="btn mt16" href="#/booking/${esc(request.bookingId)}">View booking</a>`
+      : `<div class="btn-row mt16"><button class="btn" type="button" data-action="replacement-accept" data-token="${esc(inviteToken)}">Accept replacement</button><button class="btn ghost" type="button" data-action="replacement-decline" data-token="${esc(inviteToken)}">Decline</button></div>`;
+  } else if (request.status === "accepted") {
+    stateCopy = "An approved member accepted this invite. ITC is reviewing the handover; the original attendee remains in place until confirmation.";
+  } else if (request.status === "confirmed") {
+    stateCopy = "ITC confirmed this replacement. The approved member is now the attendee; the original member remains payer and receipt owner.";
+  } else {
+    stateCopy = `This invite is ${request.status || "unavailable"}.`;
+  }
+
+  const inviteHeading = request.status === "confirmed"
+    ? "Replacement confirmed."
+    : request.status === "accepted" ? "Pending Admin confirmation."
+      : "Take this ITC place.";
+  return `<a class="back-link" href="#/schedule">← Schedule</a>
+    <div class="kicker mt16">HYROX replacement</div>
+    <h1 class="display sm mt16">${inviteHeading}</h1>
+    <p class="subcopy mt8">${esc(stateCopy)}</p>
+    <div class="card mt16"><div class="card-body">
+      <div class="receipt-lines" style="margin-top:0;border-top:0">
+        <div class="line"><span>Session</span><strong>ITC HYROX</strong></div>
+        <div class="line"><span>When</span><strong>${esc(when)}</strong></div>
+        <div class="line"><span>Where</span><strong>${esc(venue)}</strong></div>
+        <div class="line total"><span>Payment</span><strong>Already paid by original member</strong></div>
+      </div>
+    </div></div>
+    ${actions}
+    <p class="muted small mt16">The place stays on the same HYROX session and venue. No refund, payment transfer, or new charge is created.</p>`;
 }
 
 // --- Booking confirmation / manage ------------------------------------------------------------
@@ -1834,48 +2353,125 @@ function currentBookingFor(userId, sessionId) {
 export function viewBooking(bookingId) {
   const b = store.getBooking(bookingId);
   const user = store.currentUser();
-  if (!b || !user || (b.userId !== user.id && !isAdminRole(user.role))) {
+  const isConfirmedAttendee = !!b?.replacementConfirmedAt && b.replacementUserId === user?.id;
+  if (!b || !user || (b.userId !== user.id && !isAdminRole(user.role) && !isConfirmedAttendee)) {
     return viewNotFound("Booking not found.");
   }
   const s = b.snapshot;
+  const cycle = b.cycleId ? store.getHyroxCycle(b.cycleId) : null;
+  const assignedSession = b.sessionId ? store.getSession(b.sessionId) : null;
+  const assignedVenue = hyroxAssignedVenue(cycle, b, assignedSession);
+  const venuePreferenceCard = cycle && b.venuePreference ? `
+    <div class="card mt16 hyrox-booking-preference">
+      <div class="card-body">
+        <p class="muted small">Venue preference:</p>
+        <p><strong>${esc(hyroxVenuePreferenceLabel(b.venuePreference))}</strong>${assignedVenue ? ` · assigned to <strong>${esc(assignedVenue)}</strong>` : ""}</p>
+      </div>
+    </div>` : "";
+  const started = assignedSession ? sessionStarted(assignedSession) : false;
   const receipt = store.receiptForBooking(b.id);
   const mine = b.userId === user.id;
+  const requiresRsvp = store.sessionRequiresRsvp(assignedSession || s);
 
   let head = "";
   let actions = "";
   if (b.status === "reserved" && !b.paymentMarkedAt) {
+    const paymentHeading = cycle
+      ? b.promotedFromWaitlistAt
+        ? "You’ve been promoted — pay by Thursday 8 PM"
+        : Date.now() >= cycle.paymentDeadlineAt
+          ? "Final payment grace — pay now by Thursday 7 PM"
+          : `Pay ${fmtMoney(s.price)} by Thursday 6 PM`
+      : "Spot held.";
     head = `
-      <h1 class="display sm mt16">Spot held.</h1>
+      <h1 class="display sm mt16">${paymentHeading}</h1>
       <p class="subcopy mt8">Pay ${fmtMoney(s.price)} by <strong>${fmtDeadline(b.payDeadlineAt)}</strong> or the spot goes to the waitlist.</p>`;
-    actions = `
+    actions = mine ? `
       <a class="btn" href="#/pay/${b.id}">Pay ${fmtMoney(s.price)}</a>
-      <button class="btn ghost" type="button" data-action="release-reservation" data-booking="${b.id}">Release spot</button>`;
+      <button class="btn ghost" type="button" data-action="release-reservation" data-booking="${b.id}">Cancel booking</button>` : "";
   } else if (b.status === "reserved" && b.paymentMarkedAt) {
-    const collector = store.collectorFor(b.sessionId);
+    const collector = store.collectorFor(cycle?.bftSessionId || b.sessionId);
     const cname = collector ? esc(collector.preferredName || collector.fullName) : "the collector";
     head = `
       <h1 class="display sm mt16">Payment being confirmed.</h1>
       <p class="subcopy mt8">${cname} is checking your ${esc(b.paidMethod || "payment")}${b.paymentRef ? ` (ref ${esc(b.paymentRef)})` : ""} — your spot is held meanwhile.</p>`;
-  } else if (b.status === "confirmed" && !sessionStarted(s)) {
+  } else if (b.status === "confirmed" && !started && Number(s.price) === 0) {
     head = `
       <div class="confirm-mark">${ICONS.check}</div>
-      <h1 class="display sm center mt16">You’re booked in.</h1>
-      <p class="subcopy center mt8">Booking ref <span class="mono">${esc(b.id.toUpperCase())}</span></p>`;
-    const targets = mine ? store.deferTargetsFor(b) : [];
+      <h1 class="display sm center mt16">You’re going.</h1>
+      <p class="subcopy center mt8">${s.kind === "free"
+        ? "You’re on the headcount. Walk-ins are still welcome."
+        : "No payment needed — everyone pays their own bill at the venue."}</p>`;
     actions = `
       <button class="btn ghost" type="button" data-action="ics-booking" data-booking="${b.id}">Add to calendar</button>
-      ${receipt ? `<a class="btn ghost" href="#/receipt/${receipt.id}">View receipt · ${esc(receipt.number)}</a>` : ""}`;
-    if (targets.length) {
-      actions += `
-      <div class="card mt16"><div class="card-body">
-        <h3>Can’t make it? Defer — no refunds</h3>
-        <p class="muted small">Move your paid spot to a future session with availability. Payment carries over.</p>
-        ${targets.map((t) => `
-          <div class="member-row">
-            <div class="who"><strong>${esc(fmtDate(t.dateISO))} · ${fmtTime(t.time)}</strong><span>${esc(t.location)} · ${store.spotsLeft(t)} spots left</span></div>
-            <button class="btn ghost sm" type="button" data-action="defer-to" data-booking="${b.id}" data-session="${t.id}">Move here</button>
-          </div>`).join("")}
+      ${mine ? `<button class="btn ghost" type="button" data-action="rsvp-withdraw" data-booking="${b.id}">Can’t make it</button>` : ""}`;
+  } else if (b.status === "confirmed" && !started) {
+    const movedFrom = !cycle && mine && b.deferredFrom ? store.getBooking(b.deferredFrom) : null;
+    head = `
+      <div class="confirm-mark">${ICONS.check}</div>
+      <h1 class="display sm center mt16">${cycle ? "Your weekly HYROX place is confirmed" : movedFrom ? "Booking moved." : "You’re booked in."}</h1>
+      <p class="subcopy center mt8">${cycle
+        ? cycle.venuePlan === "both" ? "Both gyms confirmed" : b.sessionId ? "Your weekly HYROX place is confirmed" : "Your venue is pending automatic allocation."
+        : movedFrom ? "Your payment has carried over."
+          : `Booking ref <span class="mono">${esc(b.id.toUpperCase())}</span>`}</p>
+      ${cycle ? `<p class="hyrox-queue-state">${b.sessionId
+        ? `${b.allocationState === "final" ? "Your venue is final" : "Your venue is provisional until Friday 9 PM"} · ${esc(assignedVenue || "Venue pending")}`
+        : "Venue pending"}</p>` : ""}`;
+    const targets = mine ? store.deferTargetsFor(b) : [];
+    actions = `
+      ${movedFrom ? `<div class="card mt16"><div class="card-body"><strong>Previous spot released</strong><p class="muted small mt8">${esc(fmtDate(movedFrom.snapshot.dateISO))} · ${fmtTime(movedFrom.snapshot.time)}</p></div></div>` : ""}
+      <button class="btn ghost" type="button" data-action="ics-booking" data-booking="${b.id}">Add to calendar</button>
+      ${receipt ? `<a class="btn ghost" href="#/receipt/${receipt.id}">View receipt · ${esc(receipt.number)}</a>` : ""}
+      `;
+    if (cycle && mine && cycle.venuePlan === "both" && b.allocationState === "provisional" && b.sessionId) {
+      const target = hyroxCycleVenues(cycle).find((venue) => venue.id !== b.sessionId);
+      const switchEntry = store.hyroxCycleQueues(cycle.id).venueSwitches
+        .find((entry) => entry.userId === b.userId && entry.status === "active");
+      const queueName = target?.location?.includes("BFT") ? "BFT switch queue" : "Midtown switch queue";
+      actions += `<div class="card mt16"><div class="card-body"><h3>Venue choice</h3>
+        <p class="muted small">Current assignment: <strong>${esc(assignedVenue || "Venue pending")}</strong>.</p>
+        ${switchEntry ? `<p class="hyrox-queue-state">${esc(queueName)} · queue position ${store.hyroxCycleQueuePosition(b.userId, cycle.id, "venue_switch", switchEntry.targetSessionId)}. Your ${esc(assignedVenue || "current venue")} place remains guaranteed while you wait.</p>
+          <button class="btn ghost sm" type="button" data-action="leave-hyrox-switch-queue" data-entry="${switchEntry.id}">Leave switch queue</button>`
+          : `<div class="actions"><button class="btn ghost sm" type="button" data-action="select-hyrox-venue" data-booking="${b.id}" data-session="${target?.id}">Change to ${esc(target?.location || "other venue")}</button>
+            <button class="btn ghost sm" type="button" data-action="join-hyrox-switch-queue" data-booking="${b.id}" data-session="${target?.id}">${esc(queueName)}</button></div>`}
       </div></div>`;
+    }
+    // No-deferral policy: confirmed paid bookings do not offer self-service
+    // deferral. Members who can't attend can arrange a manual replacement.
+    const replacement = store.replacementRequestForBooking(b.id);
+    if (mine && Number(s.price) > 0
+        && (replacement?.status === "confirmed" || store.replacementEligible(b).ok)) {
+      const inviteToken = store.replacementInviteTokenForBooking(b.id);
+      const shareUrl = inviteToken ? replacementShareUrl(inviteToken) : "";
+      const shareText = shareUrl
+        ? `I have an ITC HYROX place available for ${fmtDate(s.dateISO)} at ${assignedSession?.location || s.location || "Venue pending"}. If you’re an approved ITC member and can take it, accept it here: ${shareUrl}`
+        : "";
+      const shareHref = shareText ? `https://wa.me/?text=${encodeURIComponent(shareText)}` : "";
+      if (!replacement || ["declined", "cancelled", "rejected", "expired"].includes(replacement.status)) {
+        actions += `<div class="card mt16 replacement-panel"><div class="card-body">
+          <h3>I can’t attend — arrange a replacement</h3>
+          <p class="muted small">Your paid booking is final — no refund or deferral. If an approved ITC friend is taking your place, contact ITC so an Admin can record and confirm the manual replacement. Payment and receipt ownership stay with you.</p>
+          <button class="btn mt12" type="button" data-action="replacement-create" data-booking="${esc(b.id)}">Create private invite</button>
+        </div></div>`;
+      } else if (replacement.status === "pending") {
+        actions += `<div class="card mt16 replacement-panel"><div class="card-body">
+          <h3>I can’t attend — arrange a replacement</h3>
+          <p class="muted small">Share this single-use invite before ${esc(fmtDay(replacement.expiresAt))}. Your booking remains yours until Admin confirmation.</p>
+          ${shareHref ? `<a class="btn mt12" href="${esc(shareHref)}" target="_blank" rel="noopener">Share via WhatsApp</a>` : `<p class="muted small mt12">The private link is available immediately after creating the invite.</p>`}
+          <button class="btn ghost mt8" type="button" data-action="replacement-cancel" data-request="${esc(replacement.id || replacement.requestId)}">Cancel invite</button>
+        </div></div>`;
+      } else if (replacement.status === "accepted") {
+        actions += `<div class="card mt16 replacement-panel"><div class="card-body">
+          <h3>Pending Admin confirmation</h3>
+          <p class="muted small">${esc(replacement.replacementDisplayName || "An approved member")} accepted the invite. Your booking and attendance remain unchanged until Admin confirmation.</p>
+        </div></div>`;
+      } else if (replacement.status === "confirmed") {
+        const attendee = b.replacementUserId ? store.effectiveAttendeeForBooking(b) : null;
+        actions += `<div class="card mt16 replacement-panel"><div class="card-body">
+          <h3>Replacement confirmed</h3>
+          <p class="muted small">${esc(attendee?.preferredName || attendee?.fullName || replacement.replacementDisplayName || "The approved member")} is now the attendee. You remain the payer and receipt owner.</p>
+        </div></div>`;
+      }
     }
   } else {
     const label =
@@ -1895,12 +2491,17 @@ export function viewBooking(bookingId) {
     <div class="card mt24"><div class="card-body">
       <div class="receipt-lines" style="margin-top:0;border-top:0">
         <div class="line"><span>Session</span><strong>${esc(s.name)}</strong></div>
-        <div class="line"><span>When</span><strong>${esc(fmtDate(s.dateISO))} · ${fmtTime(s.time)}</strong></div>
-        <div class="line"><span>Where</span><strong>${esc(s.location)}</strong></div>
+        <div class="line"><span>When</span><strong>${esc(fmtDate(s.dateISO))}${s.time ? ` · ${fmtTime(s.time)}` : ""}</strong></div>
+        <div class="line"><span>Where</span><strong>${esc(assignedVenue || s.location || "Venue pending")}</strong></div>
         <div class="line"><span>Status</span><strong>${esc(b.status)}</strong></div>
-        <div class="line total"><span>Price</span><strong>${fmtMoney(s.price)}</strong></div>
+        ${requiresRsvp && s.kind === "free"
+          ? b.status === "confirmed"
+            ? '<div class="line total"><span>Attendance</span><strong>RSVP confirmed</strong></div>'
+            : ""
+          : `<div class="line total"><span>Price</span><strong>${Number(s.price) > 0 ? fmtMoney(s.price) : "Pay your own bill"}</strong></div>`}
       </div>
     </div></div>
+    ${venuePreferenceCard}
     <div class="btn-row">
       ${actions}
       <a class="btn ghost" href="#/schedule">Back to schedule</a>
@@ -1931,7 +2532,7 @@ export function viewReceipt(receiptId) {
 }
 
 export function viewNotFound(msg = "Page not found.") {
-  return `<div class="card"><div class="card-body">
+  return `<div class="card" data-route-not-found><div class="card-body">
     <span class="kicker">404</span>
     <h2 class="mt8">${esc(msg)}</h2>
     <a class="btn mt16" href="#/home">Back to home</a>
@@ -1959,20 +2560,22 @@ function adminGivingSetupRequired() {
     </div></div>`;
 }
 
-export async function viewAdmin(tab = "approvals") {
+export async function viewAdmin(tab = "members") {
   const user = store.currentUser();
   if (!user || !isAdminRole(user.role)) {
     return { redirect: "#/account" };
   }
-  const canonicalTab = tab === "ops" ? "payments" : tab;
+  const requestedTab = tab === "ops" ? "payments" : tab;
+  const canonicalTab = ["members", "activities", "giving", "payments"].includes(requestedTab)
+    ? requestedTab
+    : "members";
   const tabs = `
-    <nav class="admin-tabs">
+    <nav class="admin-tabs admin-tabs-scroll">
       ${[
-        ["approvals", "Approvals"],
         ["members", "Members"],
         ["activities", "Activities"],
         ["giving", "Giving"],
-        ["payments", "HYROX"],
+        ["payments", "Payments"],
       ]
         .map(([key, label]) => `<a href="#/admin/${key}" class="${key === canonicalTab ? "active" : ""}"${key === canonicalTab ? ' aria-current="page"' : ""}>${label}</a>`)
         .join("")}
@@ -1981,26 +2584,52 @@ export async function viewAdmin(tab = "approvals") {
   // Live mode reads real data (Supabase applications + profiles); local
   // mode keeps the local prototype lists.
   let memberUsers = null;
-  if (["members", "payments", "ops"].includes(tab)) {
+  let adminAvatarRows = null;
+  let avatarLoadFailed = false;
+  if (["members", "payments"].includes(canonicalTab)) {
     memberUsers = (await store.listPaymentUsers())
       .sort((a, b) => a.fullName.localeCompare(b.fullName));
   }
+  let pendingApplicants = [];
+  if (canonicalTab === "members") {
+    pendingApplicants = await store.listApprovalCandidates();
+    try {
+      adminAvatarRows = await store.getAdminAvatarRows();
+    } catch {
+      avatarLoadFailed = true;
+    }
+  }
   let body;
-  if (tab === "activities") body = adminActivities();
-  else if (tab === "members") body = adminMembers(user, memberUsers);
-  else if (tab === "giving") {
+  if (canonicalTab === "activities") body = adminActivities();
+  else if (canonicalTab === "members") {
+    body = adminMembers(
+      user,
+      memberUsers,
+      pendingApplicants,
+      adminAvatarRows,
+      { avatarLoadFailed },
+    );
+  } else if (canonicalTab === "giving") {
     try {
       body = adminGiving(await store.listGivingCampaigns());
     } catch (error) {
       if (!isGivingSchemaMissing(error)) throw error;
       body = adminGivingSetupRequired();
     }
-  } else if (["payments", "ops"].includes(tab)) body = adminOps(user, memberUsers);
-  else body = adminApprovals(await store.listApprovalCandidates());
+  } else {
+    let profilePhone = String(user.phone || "").trim();
+    try {
+      const application = await store.getMyApplication();
+      profilePhone = String(application?.mobile || application?.phone || profilePhone).trim();
+    } catch (error) {
+      console.warn("Unable to load Membership Details phone for payout form", error);
+    }
+    body = await adminOps(user, memberUsers, profilePhone);
+  }
 
   return `
     <div class="kicker">Admin</div>
-    <h1 class="display">Club ops.</h1>
+    <h1 class="display">Club Operations</h1>
     ${tabs}
     ${body}`;
 }
@@ -2013,10 +2642,254 @@ function pendingPayments(memberUsers) {
   });
 }
 
-function adminOps(viewer, memberUsers) {
+function adminRosterName(userId, memberUsers) {
+  const member = (memberUsers || []).find((member) => member.id === userId);
+  return member?.fullName || member?.preferredName || "Member";
+}
+
+function adminQueueDisclosure({ id, title, subtitle, entries, memberUsers, preference = false, closed = false }) {
+  // Queue selectors already provide queue order; never alphabetize requests.
+  const rows = closed ? [] : entries;
+  return `<details class="admin-payment-group admin-queue-group" name="roster-${esc(id)}" data-queue-title="${esc(title)}">
+    <summary><span><strong>${esc(title)}</strong>${subtitle ? `<span class="muted small">${esc(subtitle)}</span>` : ""}</span><span class="badge neutral">${closed ? "Closed" : rows.length}</span></summary>
+    ${closed ? `<p class="muted small">Switching closed Friday at 9 PM HKT. Unmatched members keep their assigned venue.</p>` : rows.length ? `<ol class="admin-queue-list">${rows.map((entry) => {
+      const userId = typeof entry === "string" ? entry : entry.userId;
+      return `<li><strong>${esc(adminRosterName(userId, memberUsers))}</strong>${preference ? `<span class="muted small">Preference: ${esc(hyroxVenuePreferenceLabel(entry.venuePreference))}</span>` : ""}</li>`;
+    }).join("")}</ol>` : `<p class="muted small">No active requests.</p>`}
+  </details>`;
+}
+
+function adminPaymentRoster({ id, label, dateISO, venue, bookings, memberUsers, queue = "" }) {
+  const directory = new Map((memberUsers || []).map((member) => [member.id, member]));
+  const displayName = (booking) => {
+    const member = directory.get(booking.userId);
+    return member ? (member.fullName || member.preferredName || "Member") : "Member";
+  };
+  const definitions = [
+    ["payment_due", "Payment due", "warn"],
+    ["awaiting_confirmation", "Awaiting confirmation", "warn"],
+    ["paid", "Paid", "free"],
+  ];
+  const grouped = new Map(definitions.map(([state]) => [state, []]));
+  for (const booking of bookings || []) {
+    const state = store.paymentStateForBooking(booking);
+    if (state) grouped.get(state).push(booking);
+  }
+  for (const rows of grouped.values()) {
+    rows.sort((a, b) => displayName(a).localeCompare(displayName(b)));
+  }
+  return `<div class="admin-roster-disclosures" data-payment-roster="${esc(id)}" aria-label="Payment roster · ${esc(label)} · ${esc(fmtDate(dateISO))}">
+    <p class="muted small admin-roster-context">${esc(venue)}</p>
+    ${definitions.map(([state, text, badgeClass]) => {
+      const rows = grouped.get(state);
+      return `<details class="admin-payment-group" name="roster-${esc(id)}" data-payment-state="${state}"${state === "awaiting_confirmation" && rows.length ? " open" : ""}>
+        <summary><span>${esc(text)}</span><span class="badge ${badgeClass}">${rows.length}</span></summary>
+        ${rows.length ? rows.map((booking) => `<div class="admin-roster-row"><strong>${esc(displayName(booking))}</strong>${state === "awaiting_confirmation" ? `<button class="btn sm" type="button" data-action="confirm-payment" data-booking="${esc(booking.id)}">Confirm received</button>` : `<span class="badge ${badgeClass}">${esc(text)}</span>`}</div>${state === "awaiting_confirmation" && booking.cycleId ? `<form id="form-hyrox-payment-reject" class="admin-roster-reject" data-booking="${esc(booking.id)}"><div class="field"><label>Reject reason<input name="reason" required placeholder="e.g. Reference not found"></label></div><button class="btn danger ghost sm" type="submit">Reject claim</button></form>` : ""}`).join("") : `<p class="muted small">No members in this state.</p>`}
+      </details>`;
+    }).join("")}
+    ${queue}
+  </div><!-- payment-roster-end:${esc(id)} -->`;
+}
+
+function adminAttendanceSession(session, memberUsers) {
+  const directory = new Map((memberUsers || []).map((member) => [member.id, member]));
+  const displayName = (booking) => {
+    const attendeeId = store.effectiveAttendeeId(booking);
+    const member = directory.get(attendeeId);
+    return member ? (member.fullName || member.preferredName || "Member") : "Member";
+  };
+  const bookings = store.attendanceBookingsForSession(session.id);
+  const expected = bookings.filter((booking) => booking.status === "confirmed")
+    .sort((a, b) => displayName(a).localeCompare(displayName(b)));
+  const arrived = bookings.filter((booking) => booking.status === "attended")
+    .sort((a, b) => displayName(a).localeCompare(displayName(b)));
+  const window = store.attendanceWindowForSession(session);
+  const timingCopy = window.state === "upcoming"
+    ? "Check-in opens 15 minutes before the session."
+    : window.state === "locked"
+      ? "Attendance locked."
+      : "Attendance check-in is open.";
+  const row = (booking, isArrived) => `<div class="admin-roster-row">
+    <span class="admin-attendance-name"><strong>${esc(displayName(booking))}</strong><span class="badge ${isArrived ? "free" : "neutral"}">${isArrived ? "Arrived" : "Expected"}</span></span>
+    ${window.state === "open" ? `<button class="btn ${isArrived ? "ghost " : ""}sm" type="button" data-action="attendance-toggle" data-booking="${esc(booking.id)}" data-arrived="${isArrived ? "0" : "1"}">${isArrived ? "Undo" : "Mark Arrived"}</button>` : ""}
+  </div>`;
+  return `<details class="admin-attendance-session" data-attendance-session="${esc(session.id)}" open>
+    <summary><span><strong>Expected arrivals</strong><span class="muted small">${esc(fmtTime(session.time))} · ${esc(session.location || "Venue pending")}</span></span><span>${arrived.length} arrived · ${expected.length} still expected</span></summary>
+    <p class="muted small admin-attendance-copy">${timingCopy}</p>
+    ${expected.map((booking) => row(booking, false)).join("")}
+    ${arrived.map((booking) => row(booking, true)).join("")}
+    ${bookings.length ? "" : `<p class="muted small admin-attendance-empty">No confirmed-paid arrivals.</p>`}
+  </details>`;
+}
+
+function venueDisplayName(session) {
+  const identity = `${session?.id || ""} ${session?.location || ""}`.toLowerCase();
+  if (identity.includes("bft")) return "BFT";
+  if (identity.includes("midtown")) return "Midtown 28";
+  if (identity.includes("island ecc") || identity.includes("quarry bay")) return "Island ECC";
+  return session?.location || "venue";
+}
+
+function adminCapacityLine(count, capacity) {
+  const available = capacity == null ? "Uncapped" : `${Math.max(0, Number(capacity) - count)} available`;
+  return `<p class="muted small admin-capacity-line">${count} active places · ${available}</p>`;
+}
+
+function adminVenueHandoff(session, { message, override, meta = "", extra = "", ready = true, heading = venueDisplayName(session), subheading = "", cardClass = "" }) {
+  const venueName = venueDisplayName(session);
+  const blockedCopy = "Available after venue allocation is finalized.";
+  return `<div class="card hyrox-venue-card mt16 ${cardClass}"><div class="card-body">
+    ${meta}
+    <div class="section-head"><div><h3>${esc(heading)}</h3>${subheading ? `<p class="muted small hyrox-card-subtitle">${esc(subheading)}</p>` : ""}</div>${override.gymConfirmedAt ? `<span class="badge free">Confirmed</span>` : `<span class="badge neutral">Venue handoff</span>`}</div>
+    ${extra}
+    <section class="admin-venue-finalization${override.gymConfirmedAt ? " is-finalized" : ""}" aria-labelledby="venue-finalization-${esc(session.id)}">
+      <div class="section-head">
+        <div><span class="kicker dim">Venue operations</span><h4 id="venue-finalization-${esc(session.id)}">${override.gymConfirmedAt ? "Venue finalized" : "Finalize with venue"}</h4></div>
+        ${override.gymConfirmedAt ? '<span class="badge free">Complete</span>' : ""}
+      </div>
+      ${override.gymConfirmedAt
+        ? `<p class="badge free mt8">Confirmed with ${esc(venueName)} · ${new Date(override.gymConfirmedAt).toLocaleDateString("en-HK", { day: "numeric", month: "short" })}${override.gymNote ? ` — ${esc(override.gymNote)}` : ""}</p>`
+        : ready
+          ? `<p class="muted small mt8">Send the confirmed headcount to the venue, then record their confirmation.</p>
+             <div class="btn-row mt16">
+              <a class="btn sm" href="https://wa.me/?text=${encodeURIComponent(message)}" target="_blank" rel="noopener">Send via WhatsApp</a>
+              <button class="btn ghost sm" type="button" data-action="copy-gym" data-msg="${esc(message)}">Copy message</button>
+            </div>
+            <form id="form-gym-note" data-session="${esc(session.id)}" class="mt8">
+              <div class="field"><label>Note (optional)</label><input name="note" placeholder="e.g. confirmed 16 with ${esc(venueName)}"></div>
+              <button class="btn sm" type="submit">Mark confirmed with ${esc(venueName)}</button>
+            </form>`
+          : `<p class="badge neutral mt8">${blockedCopy}</p>`}
+    </section>
+  </div></div>`;
+}
+
+function adminHyroxGymControls(cycle, memberUsers) {
+  const sessionIds = (cycle.venuePlan === "bft_only"
+    ? [cycle.bftSessionId]
+    : [cycle.bftSessionId, cycle.midtownSessionId]).filter(Boolean);
+  const ready = cycle.venuePlan !== "pending" && !!cycle.allocationClosedAt;
+  if (!sessionIds.length) return "";
+  return `<div class="hyrox-gym-controls"><h3>Venue handoff</h3>
+    ${!ready ? `<p class="muted small">BFT and Midtown 28 handoff controls appear after venue allocation is finalized.</p>` : ""}
+    ${sessionIds.map((sessionId) => {
+      const session = store.getSession(sessionId);
+      if (!session) return "";
+      const override = store.weekVenueOverride(sessionId);
+      const paidCount = store.paymentRosterBookings().filter((booking) =>
+        booking.sessionId === sessionId && ["confirmed", "attended"].includes(booking.status)
+      ).length;
+      const message = `ITC HYROX booking — ${fmtDate(cycle.dateISO)} at ${session.location}. Confirmed: ${paidCount}.`;
+      const otherId = sessionId === cycle.bftSessionId ? cycle.midtownSessionId : cycle.bftSessionId;
+      const other = store.getSession(otherId);
+      const queue = cycle.venuePlan === "both" ? adminQueueDisclosure({
+        id: sessionId,
+        title: `Switch requests into ${venueDisplayName(session)}`,
+        subtitle: `Already booked at ${venueDisplayName(other)}`,
+        entries: store.hyroxCycleQueues(cycle.id).venueSwitches.filter((entry) => entry.targetSessionId === sessionId),
+        memberUsers,
+        closed: !!cycle.allocationClosedAt || Date.now() >= cycle.venueChoiceDeadlineAt,
+      }) : "";
+      const extra = cycle.venuePlan === "pending" ? "" : `${queue}${adminAttendanceSession(session, memberUsers)}`;
+      return adminVenueHandoff(session, { message, override, ready, extra });
+    }).join("")}
+  </div>`;
+}
+
+function paymentVisibleHyroxCycles(financialBookings, now = Date.now()) {
+  return store.hyroxCycles().filter((cycle) => {
+    const active = financialBookings.some((booking) => booking.cycleId === cycle.id);
+    const childSessions = [cycle.bftSessionId, cycle.midtownSessionId]
+      .map((sessionId) => sessionId ? store.getSession(sessionId) : null)
+      .filter(Boolean);
+    const closesAt = childSessions.length
+      ? Math.max(...childSessions.map((session) => store.attendanceWindowForSession(session, now).closesAt))
+      : cycle.venueChoiceDeadlineAt + 24 * 60 * 60_000;
+    return active || (now >= cycle.registrationOpensAt && now <= closesAt);
+  });
+}
+
+function adminHyroxCycleCards(memberUsers, cycles = paymentVisibleHyroxCycles(store.paymentRosterBookings())) {
+  const financialBookings = store.paymentRosterBookings();
+  return cycles.map((cycle) => {
+    const bookings = store.hyroxCycleBookings(cycle.id);
+    const active = bookings.filter((booking) => store.paymentStateForBooking(booking));
+    const claims = bookings.filter((booking) => store.paymentStateForBooking(booking) === "awaiting_confirmation");
+    const queues = store.hyroxCycleQueues(cycle.id);
+    const locked = Date.now() < cycle.registrationOpensAt && cycle.registrationState === "draft";
+    const afterPromotion = Date.now() >= cycle.promotedPaymentDeadlineAt;
+    const cycleFinancialBookings = financialBookings.filter((booking) => booking.cycleId === cycle.id);
+    const paymentRoster = adminPaymentRoster({
+      id: cycle.id,
+      label: "ITC HYROX weekly cycle",
+      dateISO: cycle.dateISO,
+      venue: active.some((booking) => !booking.sessionId)
+        ? "Venue allocation pending"
+        : cycle.venuePlan === "both" ? "BFT + Midtown 28" : "BFT",
+      bookings: cycleFinancialBookings,
+      memberUsers,
+      queue: adminQueueDisclosure({
+        id: cycle.id, title: "Weekly waitlist",
+        subtitle: "Waiting for a place in the shared pool",
+        entries: queues.weeklyWaitlist, memberUsers, preference: true,
+      }),
+    });
+    const allocationPending = cycleFinancialBookings.some((booking) =>
+      !booking.sessionId && ["confirmed", "attended"].includes(booking.status)
+    ) || (cycle.venuePlan === "pending" && cycleFinancialBookings.some((booking) => !booking.sessionId));
+    const retry = !claims.length && cycle.venuePlan === "pending" && cycle.reconciliationStartedAt
+      ? `<button class="btn sm" type="button" data-action="hyrox-plan-retry" data-cycle="${esc(cycle.id)}">Retry automatic venue plan</button>` : "";
+    const close = cycle.venuePlan !== "pending" && !cycle.allocationClosedAt && Date.now() >= cycle.venueChoiceDeadlineAt
+      ? `<button class="btn ghost sm" type="button" data-action="hyrox-allocation-close" data-cycle="${esc(cycle.id)}">Close venue allocation</button>` : "";
+    const openingDate = new Date(cycle.registrationOpensAt).toLocaleDateString("en-HK", {
+      timeZone: "Asia/Hong_Kong", day: "numeric", month: "short",
+    });
+    return `<section class="card hyrox-admin-cycle mt16" data-hyrox-week="${esc(cycle.dateISO)}"><div class="card-body">
+      <div class="section-head"><div><span class="kicker">${esc(fmtDate(cycle.dateISO))}</span><h2>ITC HYROX<br><span>Payment reconciliation</span></h2></div><span class="badge ${locked ? "neutral" : "warn"}">${locked ? "Locked" : esc(cycle.registrationState)}</span></div>
+      <p class="muted small">${locked ? `Registration opens Mon ${esc(openingDate)} · 6 PM HKT.` : afterPromotion ? "Final reconciliation summary after Thursday 8 PM HKT." : "Payment review runs Thursday at 6 PM HKT."}</p>
+      ${paymentRoster}
+      ${adminCapacityLine(active.length, cycle.capacity)}
+      ${allocationPending ? `<p class="muted small mt16">Expected-arrivals roster available after venue allocation.</p>` : ""}
+      <div class="actions">${retry}${close}</div>${adminHyroxGymControls(cycle, memberUsers)}
+      <form id="form-cancel-hyrox-cycle" class="mt16" data-cycle="${esc(cycle.id)}"><div class="field"><label>Cancel this HYROX cycle — reason</label><input name="reason" required placeholder="e.g. Gym unavailable"></div><button class="btn danger ghost sm" type="submit">Cancel HYROX cycle</button></form>
+    </div></section>${adminIslandEccHandoff(cycle, memberUsers)}`;
+  }).join("");
+}
+
+function adminHyroxWeeklyBookingSetup(memberUsers) {
+  // Week grouping follows Hong Kong, independent of the Admin's device zone.
+  const saturday = new Date(Date.now() + 8 * 60 * 60_000);
+  saturday.setUTCDate(saturday.getUTCDate() + (6 - saturday.getUTCDay() + 7) % 7);
+  const currentDate = saturday.toISOString().slice(0, 10);
+  const futureDates = new Set(Array.from({ length: 3 }, (_, index) => {
+    const day = new Date(saturday);
+    day.setUTCDate(day.getUTCDate() + (index + 1) * 7);
+    return day.toISOString().slice(0, 10);
+  }));
+  const cycles = store.hyroxCycles();
+  const upcoming = cycles.filter((cycle) => futureDates.has(cycle.dateISO))
+    .sort((a, b) => a.dateISO.localeCompare(b.dateISO));
+  const visibleIds = new Set(paymentVisibleHyroxCycles(store.paymentRosterBookings()).map((cycle) => cycle.id));
+  const current = cycles.filter((cycle) => !futureDates.has(cycle.dateISO)
+    && (cycle.dateISO === currentDate || visibleIds.has(cycle.id)))
+    .sort((a, b) => (a.dateISO === currentDate ? -1 : b.dateISO === currentDate ? 1 : b.dateISO.localeCompare(a.dateISO)));
+  const groupedDates = new Set([...current, ...upcoming].map((cycle) => cycle.dateISO));
+  return `<details class="admin-section mt24">
+    <summary><h2>HYROX weekly booking setup</h2></summary>
+    ${adminHyroxCycleCards(memberUsers, current)}
+    <details class="admin-upcoming-weeks mt24">
+      <summary><h3>Upcoming weeks</h3><span class="badge neutral">${upcoming.length}</span></summary>
+      <p class="muted small mt8">The next three Saturdays. Previewing a week does not open member registration.</p>
+      ${adminHyroxCycleCards(memberUsers, upcoming) || `<p class="muted small mt8">No upcoming weeks provisioned yet.</p>`}
+    </details>
+    ${adminFinalizeGym(memberUsers, groupedDates)}
+  </details>`;
+}
+
+async function adminOps(viewer, memberUsers, profilePhone = "") {
   const upcoming = store.upcomingSessions(21).filter((s) => s.category === "HYROX" && !sessionStarted(s));
   const thisWeekSat = upcoming[0]?.dateISO;
-  const dutyUser = thisWeekSat ? store.collectorFor(`hyrox-${thisWeekSat}`) : null;
+  const dutyUser = thisWeekSat ? store.collectorFor(`hyrox-bft-${thisWeekSat}`) : null;
   const admins = (memberUsers || []).filter(
     (u) => isAdminRole(u.role) && u.status === "approved"
   );
@@ -2025,8 +2898,9 @@ function adminOps(viewer, memberUsers) {
   const pending = pendingPayments(memberUsers);
 
   const dutyCard = `
-    <div class="card mt16"><div class="card-body">
-      <h3>Payment duty</h3>
+    <details class="admin-section mt16">
+      <summary><h2>Payment duty</h2></summary>
+    <div class="card mt8"><div class="card-body">
       <p class="muted small">One collector per week covers both venues. Member payment screens show this collector’s PayMe/FPS details.</p>
       <p class="mt8">On duty this week: <strong>${dutyUser ? esc(dutyUser.preferredName || dutyUser.fullName) : "—"}</strong></p>
       <div class="btn-row">
@@ -2036,16 +2910,20 @@ function adminOps(viewer, memberUsers) {
           ${admins.filter((a) => a.id !== dutyUser?.id).map((a) => `<option value="${esc(a.id)}">${esc(a.preferredName || a.fullName)}</option>`).join("")}
         </select>
       </div>
-      <form id="form-payouts" class="mt16">
+      <form id="form-payouts" class="mt16" data-fps-phone="${esc(profilePhone)}">
         <h3>My payout details</h3>
         <div class="field"><label for="payme-link">PayMe link</label><input id="payme-link" name="paymeLink" value="${esc(viewerPayouts.paymeLink)}" placeholder="https://payme.hsbc.com.hk/…"></div>
-        <div class="field"><label for="fps-phone">FPS phone</label><input id="fps-phone" name="fpsPhone" value="${esc(viewerPayouts.fpsPhone)}" placeholder="+852 …"></div>
+        <p class="muted small mt8">FPS phone: <strong>${esc(profilePhone || "Not set")}</strong> — taken from your Membership Details.</p>
+        <p class="muted small">To change this number, update Membership Details first, then save your payout details here.</p>
         <button class="btn ghost sm mt8" type="submit">Save payout details</button>
       </form>
-    </div></div>`;
+    </div></div>
+    </details>`;
 
+  const replacementCard = await adminReplacementReview();
   const pendingCard = `
-    <div class="section-head mt24"><h2>Pending payments</h2></div>
+    <details class="admin-section mt24">
+      <summary><h2>Pending payments</h2></summary>
     ${pending.length ? pending.map(({ booking: b, who }) => `
       <div class="card booking-card mt16"><div class="card-body">
         <header>
@@ -2059,30 +2937,57 @@ function adminOps(viewer, memberUsers) {
           <button class="btn sm" type="button" data-action="confirm-payment" data-booking="${esc(b.id)}">Confirm received</button>
         </div>
       </div></div>`).join("")
-    : `<div class="empty">Nothing waiting. When members mark “I’ve paid”, they land here.</div>`}`;
+    : `<div class="empty mt8">Nothing waiting. When members mark “I’ve paid”, they land here.</div>`}
+    </details>`;
 
+  return `
+    ${dutyCard}
+    ${pendingCard}
+    ${replacementCard}
+    ${adminHyroxWeeklyBookingSetup(memberUsers)}`;
+}
+
+async function adminReplacementReview() {
+  const requests = await store.replacementRequestsForAdmin();
+  const active = requests.filter((request) => ["pending", "accepted"].includes(request.status));
+  const rows = active.map((request) => {
+    const waiting = request.status === "pending";
+    const session = request.snapshot || {};
+    return `<div class="replacement-admin-row">
+      <div class="who"><strong>${esc(request.originalDisplayName)}${request.replacementDisplayName ? ` → ${esc(request.replacementDisplayName)}` : ""}</strong>
+        <span>${esc(session.name || "ITC HYROX")} · ${esc(session.dateISO || "Date pending")}</span></div>
+      <div class="replacement-admin-status"><span class="badge ${waiting ? "neutral" : "warn"}">${waiting ? "Waiting for member" : "Pending Admin confirmation"}</span>
+        ${waiting ? `<span class="muted small">Private invite has not been claimed.</span>` : `<div class="btn-row two"><button class="btn sm" type="button" data-action="replacement-decision" data-request="${esc(request.requestId)}" data-confirmed="1">Confirm replacement</button><button class="btn danger ghost sm" type="button" data-action="replacement-decision" data-request="${esc(request.requestId)}" data-confirmed="0">Reject replacement</button></div>`}
+      </div>
+    </div>`;
+  }).join("");
+  return `<details class="admin-section mt24" open>
+    <summary><h2>HYROX replacements${active.length ? ` <span class="badge warn">${active.length}</span>` : ""}</h2></summary>
+    <p class="muted small mt8">Review accepted handovers. The original member remains payer and receipt owner; only confirmation changes the attendee.</p>
+    ${rows || `<div class="empty mt8">No HYROX replacement requests waiting for review.</div>`}
+  </details>`;
+}
+
+// Weekly paid-session setup controls (time, note, venue TBC) live
+// on the Activities tab alongside the recurring defaults and free/RSVP event
+// controls. Booking and payment status belongs on Payments.
+function adminPaidSessionControls() {
+  const upcoming = store.upcomingSessions(21).filter(
+    (s) => !s.oneOff && s.category === "HYROX" && s.kind === "paid" && !sessionStarted(s)
+      && ![store.hyroxCycleForDate(s.dateISO)?.bftSessionId, store.hyroxCycleForDate(s.dateISO)?.midtownSessionId].includes(s.id)
+  );
   const sessionCards = upcoming.map((s) => {
-    const confirmed = store.heldBookingsForSession(s.id).filter((b) => b.status === "confirmed");
-    const atRisk = store.heldBookingsForSession(s.id).filter((b) => b.status === "reserved");
     const override = store.getSession(s.id);
-    const names = store.attendeesFor(s);
-    const gymMsg = `ITC HYROX booking — ${fmtDate(s.dateISO)} ${fmtTime(s.time)} at ${s.location}. Confirmed: ${confirmed.length} of ${s.capacity}. Names: ${names.join(", ")}. Total: ${fmtMoney(confirmed.length * s.price)}.`;
-    const wa = `https://wa.me/?text=${encodeURIComponent(gymMsg)}`;
-    const gymDone = override.gymConfirmedAt;
-    const isMid = store.isMidtown(s);
-    const open = store.midtownOpenFor(s);
     return `
       <div class="card mt16 ${override.cancelled ? "is-cancelled" : ""}"><div class="card-body">
         <div class="kicker dim" style="margin-top:0">${esc(fmtDate(s.dateISO))} · ${fmtTime(s.time)}</div>
-        <h3 class="mt8">${esc(s.location)}${isMid ? " (Midtown)" : " (BFT)"}</h3>
+        <h3 class="mt8">${esc(s.location)}</h3>
         ${override.cancelled ? `<p class="badge danger">${esc(sessionCancellationCopy(override))}</p>` : ""}
-        ${isMid && !open && !override.cancelled ? `<p class="badge neutral">Not open</p>` : ""}
-        <p class="muted small mt8">${confirmed.length} confirmed in-app · ${atRisk.length} awaiting payment · cap ${s.capacity}</p>
+        <p class="muted small mt8">Session setup only. Booking and payment status is shown under Admin → Payments.</p>
         ${!override.cancelled ? `
         <details class="mt8">
           <summary>Session controls</summary>
           <div class="btn-row mt8">
-            ${isMid ? `<button class="btn ghost sm" type="button" data-action="midtown-toggle" data-session="${esc(s.id)}" data-open="${open ? "0" : "1"}">${open ? "Close Midtown" : "Open Midtown"}</button>` : ""}
             <button class="btn ghost sm" type="button" data-action="venue-tbc-toggle" data-session="${esc(s.id)}" data-on="${override.venueTBC ? "0" : "1"}">${override.venueTBC ? "Venue confirmed" : "Mark venue TBC"}</button>
           </div>
           <form id="form-session-time" data-session="${esc(s.id)}" class="mt8">
@@ -2097,39 +3002,134 @@ function adminOps(viewer, memberUsers) {
             <div class="field"><label>Cancel this week — reason (required)</label><input name="reason" placeholder="e.g. HYROX race weekend — no session" required></div>
             <button class="btn danger sm" type="submit">Cancel session</button>
           </form>
-        </details>
-        <div class="section-head mt16"><h2>Finalize with gym</h2></div>
-        ${gymDone
-          ? `<p class="badge free">Confirmed with gym ${new Date(gymDone).toLocaleDateString("en-HK", { day: "numeric", month: "short" })}${override.gymNote ? ` — ${esc(override.gymNote)}` : ""}</p>`
-          : `
-          <p class="muted small">Send Friday after the 2 PM checkpoint. The app number is what’s sent.</p>
-          <div class="btn-row">
-            <a class="btn sm" href="${wa}" target="_blank" rel="noopener">Send via WhatsApp</a>
-            <button class="btn ghost sm" type="button" data-action="copy-gym" data-msg="${esc(gymMsg)}">Copy message</button>
-          </div>
-          <form id="form-gym-note" data-session="${esc(s.id)}" class="mt8">
-            <div class="field"><label>Note (optional)</label><input name="note" placeholder="e.g. confirmed 16 with BFT"></div>
-            <button class="btn sm" type="submit">Mark confirmed with gym</button>
-          </form>`}
-        ` : ""}
+        </details>` : ""}
       </div></div>`;
   }).join("");
-
   return `
-    ${dutyCard}
-    ${pendingCard}
-    <div class="section-head mt24"><h2>HYROX sessions</h2></div>
-    ${sessionCards}`;
+    <h3 id="paid-sessions-title">Paid Sessions</h3>
+    <p class="muted small mt8">Change the time, venue status or note for one dated HYROX session — or cancel that week.</p>
+    ${sessionCards || `<div class="empty mt8">No upcoming paid sessions.</div>`}`;
 }
 
-function adminFreeEventVenues() {
-  const upcoming = store.upcomingSessions(21)
-    .filter((s) => s.kind === "free" && !sessionStarted(s));
-  if (!upcoming.length) return "";
+// Money-side per-session work stays on the Payments tab: confirming paid
+// headcount with the venue reads bookings/receipts, not session setup.
+function adminFinalizeGymCard(s, cardClass = "", memberUsers = []) {
+  const override = store.getSession(s.id);
+  if (override.cancelled) return "";
+  const held = store.paymentRosterBookings().filter((booking) => booking.sessionId === s.id);
+  const confirmed = held.filter((booking) => ["confirmed", "attended"].includes(booking.status));
+  const names = store.attendeesFor(s);
+  const venueName = venueDisplayName(s);
+  const venueCardClass = cardClass || (venueName === "Island ECC" ? "hyrox-island-ecc-card" : "");
+  const message = `ITC HYROX booking — ${fmtDate(s.dateISO)} ${fmtTime(s.time)} at ${s.location}. Confirmed: ${confirmed.length} of ${s.capacity}. Names: ${names.join(", ")}. Total: ${fmtMoney(confirmed.length * s.price)}.`;
+  const isMid = store.isMidtown(s);
+  const open = store.midtownOpenFor(s);
+  const paymentRoster = adminPaymentRoster({
+    id: s.id,
+    label: s.name || "ITC HYROX",
+    dateISO: s.dateISO,
+    venue: s.location || "Venue pending",
+    bookings: held,
+    memberUsers,
+    queue: adminQueueDisclosure({
+      id: s.id, title: "Session waitlist", subtitle: "Waiting for a place in this session",
+      entries: store.queueFor(s.id).waitlist, memberUsers,
+    }),
+  });
+  return adminVenueHandoff(s, {
+    message,
+    override,
+    meta: `<div class="kicker" style="margin-top:0">${esc(fmtDate(s.dateISO))}</div>`,
+    heading: `ITC HYROX - ${venueName}`,
+    subheading: "Payment reconciliation",
+    cardClass: venueCardClass,
+    extra: `${paymentRoster}${adminCapacityLine(held.length, s.capacity)}${adminAttendanceSession(s, memberUsers)}${isMid
+      ? `<p class="muted small mt8">Registration: <strong>${open ? "Open" : "Closed"}</strong></p>
+         <button class="btn ghost sm" type="button" data-action="midtown-toggle" data-session="${esc(s.id)}" data-open="${open ? "0" : "1"}">${open ? "Close Midtown" : "Open Midtown"}</button>`
+      : ""}`,
+  });
+}
+
+function adminIslandEccHandoff(cycle, memberUsers) {
+  const childIds = [cycle.bftSessionId, cycle.midtownSessionId].filter(Boolean);
+  const financialSessionIds = store.paymentRosterBookings()
+    .filter((booking) => booking.sessionId && booking.snapshot?.dateISO === cycle.dateISO)
+    .map((booking) => booking.sessionId);
+  const candidates = [
+    ...store.upcomingSessions(35),
+    ...financialSessionIds.map((sessionId) => store.getSession(sessionId)).filter(Boolean),
+  ];
+  const session = candidates.find((candidate) => {
+    if (candidate.category !== "HYROX" || candidate.dateISO !== cycle.dateISO
+        || childIds.includes(candidate.id)) return false;
+    return !store.getSession(candidate.id).cancelled;
+  });
+  return session ? adminFinalizeGymCard(session, "hyrox-island-ecc-card", memberUsers) : "";
+}
+
+function adminFinalizeGym(memberUsers, groupedDates = null) {
+  const financialBookings = store.paymentRosterBookings();
+  const cycleDates = groupedDates || new Set(paymentVisibleHyroxCycles(financialBookings).map((cycle) => cycle.dateISO));
+  const candidates = new Map(store.upcomingSessions(21)
+    .filter((session) => session.category === "HYROX")
+    .map((session) => [session.id, session]));
+  for (const booking of financialBookings) {
+    if (!booking.sessionId || booking.cycleId) continue;
+    const session = store.getSession(booking.sessionId);
+    if (session?.category === "HYROX") candidates.set(session.id, session);
+  }
+  const upcoming = [...candidates.values()].filter((session) => {
+    const cycleChildren = [
+      store.hyroxCycleForDate(session.dateISO)?.bftSessionId,
+      store.hyroxCycleForDate(session.dateISO)?.midtownSessionId,
+    ];
+    const hasActiveBooking = financialBookings.some((booking) => booking.sessionId === session.id);
+    const start = hktEventStartMs(session.dateISO, session.time);
+    const withinDisplayWindow = Date.now() >= start - 21 * 24 * 60 * 60_000
+      && store.attendanceWindowForSession(session).state !== "locked";
+    return !cycleDates.has(session.dateISO) && !cycleChildren.includes(session.id)
+      && (hasActiveBooking || withinDisplayWindow);
+  }).sort((a, b) => hktEventStartMs(a.dateISO, a.time) - hktEventStartMs(b.dateISO, b.time));
+  const cards = upcoming.map((session) => adminFinalizeGymCard(session, "", memberUsers)).join("");
   return `
-    <div class="section-head mt24"><h2>Weekly Venue Overrides</h2></div>
-    <p class="muted small">Set a venue for one dated free event. Later weeks keep the recurring default.</p>
-    ${upcoming.map((s) => {
+    <section class="admin-control-group mt24" aria-labelledby="hyrox-venue-handoff-title">
+      <div class="section-head"><h3 id="hyrox-venue-handoff-title">Venue handoff</h3></div>
+      <p class="muted small mt8">Review each venue’s booking status, send the confirmed headcount, then record venue confirmation.</p>
+      ${cards || `<div class="empty mt8">No upcoming venue handoffs.</div>`}
+    </section>`;
+}
+
+function adminRsvpOccurrenceControls(session, {
+  cancelLabel = "Cancel this week's event",
+  cancelFieldLabel = "Cancel this week — reason (required)",
+  cancelPlaceholder = "e.g. Organizer away",
+  allowDelete = false,
+} = {}) {
+  if (!store.sessionRequiresRsvp(session) || Number(session.price ?? 0) !== 0) return "";
+  const safeId = esc(session.id);
+  const count = `<p class="muted small mt8">${store.attendeeCountFor(session)} going${session.capacity != null ? ` · cap ${session.capacity}` : ""}</p>`;
+  if (session.cancelled) {
+    return `${count}
+      <p class="badge danger">${esc(sessionCancellationCopy(session))}</p>
+      <button class="btn ghost sm mt8" type="button" data-action="repost-rsvp" data-session="${safeId}">Reopen event</button>`;
+  }
+  return `${count}
+    <form id="form-cancel-week" data-session="${safeId}" class="mt8">
+      <div class="field"><label>${cancelFieldLabel}</label><input name="reason" placeholder="${cancelPlaceholder}" required></div>
+      <div class="btn-row">
+        <button class="btn danger sm" type="submit">${cancelLabel}</button>
+        ${allowDelete ? `<button class="btn ghost sm" type="button" data-action="delete-event" data-session="${safeId}">Delete</button>` : ""}
+      </div>
+    </form>`;
+}
+
+function adminFreeEventControls() {
+  const upcoming = store.upcomingSessions(21)
+    .filter((s) => !s.oneOff && s.kind !== "paid" && !sessionStarted(s));
+  return `
+    <h3 id="free-rsvp-events-title">Free &amp; RSVP Events</h3>
+    <p class="muted small mt8">Set a venue for one dated free or RSVP event. Later weeks keep the recurring default.</p>
+    ${upcoming.length ? upcoming.map((s) => {
       const override = store.weekVenueOverride(s.id);
       const recurring = store.getActivity(s.activityId);
       const safeId = esc(s.id);
@@ -2170,8 +3170,23 @@ function adminFreeEventVenues() {
               <button class="btn ghost sm" type="button" data-action="reset-week-venue" data-session="${safeId}">Reset to Recurring Default</button>
             </div>
           </form>
+          ${adminRsvpOccurrenceControls(s)}
         </div></div>`;
-    }).join("")}`;
+    }).join("") : `<div class="empty mt8">No upcoming free or RSVP events.</div>`}`;
+}
+
+function adminWeeklyEventControls() {
+  return `
+    <details class="admin-section mt24">
+      <summary><h2>Weekly Event Controls</h2></summary>
+      <p class="muted small mt8">Manage one dated event without changing its recurring defaults.</p>
+      <section class="admin-control-group" aria-labelledby="free-rsvp-events-title">
+        ${adminFreeEventControls()}
+      </section>
+      <section class="admin-control-group mt24" aria-labelledby="paid-sessions-title">
+        ${adminPaidSessionControls()}
+      </section>
+    </details>`;
 }
 
 function adminApprovals(pending) {
@@ -2322,6 +3337,82 @@ export async function viewAdminCampaign(id) {
     </form>`;
 }
 
+// One-off events: single-date admin-created events (race days, socials,
+// pop-ups). Paid events flow through the normal reserve/pay pipeline; free
+// events are show-up. Deletion is only possible before anyone books.
+function adminOneOffEvents() {
+  const upcoming = store.upcomingSessions(60).filter((s) => s.oneOff && !sessionStarted(s));
+  const cards = upcoming.map((s) => {
+    const override = store.getSession(s.id);
+    const cancelled = override?.cancelled;
+    const rsvpOccurrence = store.sessionRequiresRsvp(override) && Number(override?.price ?? 0) === 0;
+    return `
+      <div class="card mt16 ${cancelled ? "is-cancelled" : ""}"><div class="card-body">
+        <div class="kicker dim" style="margin-top:0">${esc(fmtDate(s.dateISO))} · ${fmtTime(s.time)}</div>
+        <h3 class="mt8">${esc(s.name)}</h3>
+        <p class="muted small mt8">${esc(s.location)} · ${s.kind === "paid" ? `${fmtMoney(s.price)} · cap ${s.capacity}` : "Free · RSVP optional"}</p>
+        ${rsvpOccurrence
+          ? adminRsvpOccurrenceControls(override, {
+            cancelLabel: "Cancel event",
+            cancelFieldLabel: "Cancel this event — reason (required)",
+            cancelPlaceholder: "e.g. Venue unavailable",
+            allowDelete: true,
+          })
+          : cancelled
+            ? `<p class="badge danger">${esc(sessionCancellationCopy(override))}</p>`
+            : `
+            <form id="form-cancel-week" data-session="${esc(s.id)}" class="mt8">
+              <div class="field"><label>Cancel this event — reason (required)</label><input name="reason" placeholder="e.g. Venue unavailable" required></div>
+              <div class="btn-row">
+                <button class="btn danger sm" type="submit">Cancel event</button>
+                <button class="btn ghost sm" type="button" data-action="delete-event" data-session="${esc(s.id)}">Delete</button>
+              </div>
+            </form>`}
+      </div></div>`;
+  }).join("");
+  return `
+    <details class="admin-section mt24">
+      <summary><h2>One-off Events</h2></summary>
+      <p class="muted small mt8">Single-date events — race days, socials, pop-ups. Free events need no booking; paid events use the normal reserve-and-pay flow. Delete works only before anyone books; afterwards cancel instead.</p>
+      ${cards || `<div class="empty mt8">No upcoming one-off events.</div>`}
+      <form id="form-one-off-event" class="card mt16"><div class="card-body">
+        <h3>Add one-off event</h3>
+        <div class="field"><label for="oe-name">Name *</label><input id="oe-name" name="name" required placeholder="e.g. Dragon boat taster"></div>
+        <div class="field-row">
+          <div class="field"><label for="oe-date">Date *</label><input id="oe-date" name="date" type="date" required></div>
+          <div class="field"><label for="oe-time">Start time *</label><input id="oe-time" name="time" type="time" required></div>
+          <div class="field"><label for="oe-dur">Duration (min)</label><input id="oe-dur" name="durationMin" type="number" min="15" step="15" value="60"></div>
+        </div>
+        <div class="field-row">
+          <div class="field"><label for="oe-loc">Venue *</label><input id="oe-loc" name="location" required placeholder="e.g. Central Harbourfront"></div>
+          <div class="field"><label for="oe-maps">Google Maps search</label><input id="oe-maps" name="mapsQuery" placeholder="Defaults to venue"></div>
+        </div>
+        <div class="field-row">
+          <div class="field">
+            <label for="oe-cat">Category</label>
+            <select id="oe-cat" name="category">
+              ${["Other", "Strength", "Run", "HYROX", "Water", "Socials"].map((c) => `<option>${c}</option>`).join("")}
+            </select>
+          </div>
+          <div class="field">
+            <label for="oe-kind">Type</label>
+            <select id="oe-kind" name="kind" data-change="kind-toggle">
+              <option value="free" selected>Free — open attendance</option>
+              <option value="paid">Paid — book & pay in app</option>
+            </select>
+          </div>
+        </div>
+        <div class="paid-only hidden">
+          <div class="field-row">
+            <div class="field"><label for="oe-price">Price (HKD)</label><input id="oe-price" name="price" type="number" min="0" value="180"></div>
+            <div class="field"><label for="oe-cap">Capacity</label><input id="oe-cap" name="capacity" type="number" min="1" value="20"></div>
+          </div>
+        </div>
+        <button class="btn sm mt8" type="submit">Add event</button>
+      </div></form>
+    </details>`;
+}
+
 function adminActivities() {
   const acts = store.activities();
   const activityRows = acts
@@ -2334,24 +3425,85 @@ function adminActivities() {
             <p>${esc(a.location)}${a.kind === "paid" ? ` · ${fmtMoney(a.price)} · cap ${a.capacity}` : " · open attendance"}</p>
           </div>
           <div class="row-end">
-            ${a.kind === "free" ? '<span class="badge free">Free</span>' : '<span class="badge paid">Paid</span>'}
+            ${a.kind === "free" ? '<span class="badge free">Free</span>' : a.kind === "rsvp" ? '<span class="badge free">RSVP</span>' : '<span class="badge paid">Paid</span>'}
             ${a.published ? "" : '<span class="badge neutral">Hidden</span>'}
           </div>
         </a>`
     )
     .join("");
   return `
-    <div class="section-head"><h2>Recurring Activity Defaults</h2></div>
-    <p class="muted small">${isLive()
-      ? "Live deployment — recurring defaults are bundled with the app build and read-only. Set a venue for one week with the dated overrides below."
+    <details class="admin-section">
+      <summary><h2>Recurring Activity Defaults</h2></summary>
+    <p class="muted small mt8">${isLive()
+      ? "Live deployment — recurring defaults are bundled with the app build and read-only. Set a venue for one week with Weekly Event Controls &gt; Free &amp; RSVP Events below."
       : "Changes here affect all future weeks unless a dated override is set below."}</p>
     <div class="session-list">${activityRows}</div>
     ${isLive() ? "" : `<a class="btn ghost mt16" href="#/admin/activity/new">+ New activity</a>`}
-    ${adminFreeEventVenues()}`;
+    </details>
+    ${adminWeeklyEventControls()}
+    ${adminOneOffEvents()}`;
 }
 
-function adminMembers(viewer, users) {
+function adminMembers(
+  viewer,
+  users = [],
+  pendingApplicants = [],
+  avatarRows = null,
+  { avatarLoadFailed = false } = {},
+) {
   const canEdit = isSuperRole(viewer.role);
+  const canModerate = isAdminRole(viewer.role);
+  const avatarById = new Map((avatarRows || []).map((row) => [row.profileId, row]));
+  const photoStateLabel = (row) => {
+    if (avatarLoadFailed) return '<span class="badge neutral">Photo status unavailable</span>';
+    if (!row || row.source === "initials" && row.state === "active") return '<span class="badge neutral">No photo</span>';
+    if (row.state === "pending_review") return '<span class="badge warn">Photo pending review</span>';
+    if (row.state === "hidden") return '<span class="badge danger">Photo hidden</span>';
+    return `<span class="badge free">${row.source === "google" ? "Google photo" : "Custom photo"}</span>`;
+  };
+  const pendingRows = (avatarRows || []).filter((row) => {
+    if (row.state !== "pending_review") return false;
+    const member = users.find((item) => item.id === row.profileId);
+    if (!member) return false;
+    const filterQuery = adminMemberFilters.query.trim().toLocaleLowerCase();
+    return (!filterQuery || `${member.fullName || ""} ${member.email || ""}`.toLocaleLowerCase().includes(filterQuery))
+      && (adminMemberFilters.status === "all" || member.status === adminMemberFilters.status)
+      && (adminMemberFilters.role === "all" || normalizedRole(member.role) === adminMemberFilters.role);
+  });
+  const pendingQueue = `
+    <section class="avatar-review-queue" aria-labelledby="avatar-review-title">
+      <div class="section-head"><h2 id="avatar-review-title">Profile photo review</h2></div>
+      ${avatarLoadFailed
+        ? '<div class="empty">Photo review status unavailable — try again.</div>'
+        : pendingRows.length ? pendingRows.map((row) => `
+        <div class="avatar-review-card" data-avatar-moderation-card data-profile-id="${esc(row.profileId)}">
+          ${avatarMarkup({
+            name: row.displayName,
+            presentation: {
+              url: row.pendingPreviewUrl,
+              source: row.pendingPreviewUrl ? "custom" : "initials",
+              state: "pending_review",
+              expiresAt: row.expiresAt,
+            },
+            size: 64,
+            className: "admin-pending-avatar",
+            decorative: true,
+          })}
+          <div class="avatar-review-copy">
+            <strong>${esc(row.displayName)}</strong>
+            <span class="badge warn">Awaiting review</span>
+            ${row.moderationReason ? `<p class="muted small">Previous action: ${esc(row.moderationReason)}</p>` : ""}
+          </div>
+          <div class="avatar-review-actions">
+            <label for="avatar-reject-reason-${esc(row.profileId)}">Reason if rejecting</label>
+            <input id="avatar-reject-reason-${esc(row.profileId)}" type="text" maxlength="300" data-avatar-moderation-reason placeholder="Required to reject">
+            <div class="btn-row two">
+              <button class="btn sm" type="button" data-action="avatar-approve" data-profile-id="${esc(row.profileId)}" data-member-name="${esc(row.displayName)}">Approve</button>
+              <button class="btn danger sm" type="button" data-action="avatar-reject" data-profile-id="${esc(row.profileId)}" data-member-name="${esc(row.displayName)}">Reject</button>
+            </div>
+          </div>
+        </div>`).join("") : '<div class="empty">No profile photos awaiting review.</div>'}
+    </section>`;
   const query = adminMemberFilters.query.trim().toLocaleLowerCase();
   const filtered = users.filter((u) => {
     const matchesQuery = !query || `${u.fullName || ""} ${u.email || ""}`.toLocaleLowerCase().includes(query);
@@ -2359,6 +3511,9 @@ function adminMembers(viewer, users) {
     const matchesRole = adminMemberFilters.role === "all" || normalizedRole(u.role) === adminMemberFilters.role;
     return matchesQuery && matchesStatus && matchesRole;
   });
+  const approvalsSection = pendingApplicants.length
+    ? adminApprovals(pendingApplicants)
+    : "";
   const option = (value, label, selected) =>
     `<option value="${value}" ${selected === value ? "selected" : ""}>${label}</option>`;
   const filterChip = (key, value, label) =>
@@ -2370,6 +3525,18 @@ function adminMembers(viewer, users) {
   ].filter(Boolean).join(", ");
   const rows = filtered.map((u) => {
     const role = normalizedRole(u.role);
+    const avatarRow = avatarById.get(u.id) || null;
+    const photoControls = canModerate && avatarRow?.state === "active" && avatarRow.source !== "initials"
+      ? `<div class="avatar-hide-controls" data-avatar-moderation-card data-profile-id="${esc(u.id)}">
+          <label for="avatar-hide-reason-${esc(u.id)}">Reason to hide photo</label>
+          <div class="avatar-hide-action">
+            <input id="avatar-hide-reason-${esc(u.id)}" type="text" maxlength="300" data-avatar-moderation-reason placeholder="Required">
+            <button class="btn danger sm" type="button" data-action="avatar-hide" data-profile-id="${esc(u.id)}" data-member-name="${esc(u.fullName)}">Hide photo</button>
+          </div>
+        </div>`
+      : avatarRow?.state === "hidden" && avatarRow.moderationReason
+      ? `<p class="muted small avatar-moderation-reason">Reason: ${esc(avatarRow.moderationReason)}</p>`
+      : "";
     const roleBadge =
       u.status === "pending"
         ? '<span class="badge warn">Pending</span>'
@@ -2387,13 +3554,31 @@ function adminMembers(viewer, users) {
       : roleBadge;
     return `
       <div class="member-row">
-        <div class="who"><strong>${esc(u.fullName)}</strong><span>${esc(u.email)}</span></div>
-        ${editor}
+        <div class="who member-avatar-who">
+          ${avatarMarkup({
+            name: u.fullName,
+            presentation: avatarRow,
+            size: 40,
+            className: "admin-member-avatar",
+            decorative: true,
+          })}
+          <span class="member-avatar-copy"><strong>${esc(u.fullName)}</strong><span>${esc(u.email)}</span></span>
+        </div>
+        <div class="member-admin-controls">
+          <div class="member-photo-state">${photoStateLabel(avatarRow)}${photoControls}</div>
+          ${editor}
+        </div>
       </div>`;
   }).join("");
   const hasActiveFilters = adminMemberFilters.query.length > 0 ||
     adminMemberFilters.status !== "all" || adminMemberFilters.role !== "all";
   return `
+    ${pendingQueue}
+    <div class="card mt16"><div class="card-body">
+      <h2>Indemnity records</h2>
+      <p class="muted small mt8">Download every profile, including members who have not accepted the current indemnity.</p>
+      <button class="btn ghost sm mt16" type="button" data-action="download-indemnity-list">Download indemnity list</button>
+    </div></div>
     <p class="muted small mt16">${canEdit ? "Role changes are Super Admin only." : "Only a Super Admin can change roles."}</p>
     <div class="member-filters" aria-label="Filter members">
       <div class="field"><label for="member-search">Search members</label><input id="member-search" type="search" value="${esc(adminMemberFilters.query)}" placeholder="Name or email" data-input="member-search"></div>
@@ -2411,7 +3596,8 @@ function adminMembers(viewer, users) {
       </fieldset>
       ${hasActiveFilters ? '<button class="admin-filters-clear" type="button" data-action="admin-member-filters-clear">Clear filters</button>' : ""}
     </div>
-    <div class="member-results">${rows || `<div class="empty">No members match${activeFilters ? ` ${activeFilters}` : " these filters"}.</div>`}</div>`;
+    <div class="member-results">${rows || `<div class="empty">No members match${activeFilters ? ` ${activeFilters}` : " these filters"}.</div>`}</div>
+    ${approvalsSection ? `<div class="member-approvals">${approvalsSection}</div>` : ""}`;
 }
 
 export function viewAdminActivity(id) {
@@ -2454,7 +3640,7 @@ export function viewAdminActivity(id) {
     <h1 class="display sm">${isNew ? "New activity." : "Edit activity."}</h1>
     ${liveReadOnly ? `
       <p class="badge neutral mt16">Live deployment — recurring defaults are bundled with the app build.</p>
-      <p class="muted small mt8">To change the venue for one week, use Weekly Venue Overrides on the Activities tab. Paid venues are administered in Supabase. This form is read-only here.</p>` : ""}
+      <p class="muted small mt8">To change the venue for one week, use Weekly Event Controls &gt; Free &amp; RSVP Events on the Activities tab. Paid venues are administered in Supabase. This form is read-only here.</p>` : ""}
     <form id="form-activity" class="mt16" data-activity="${esc(a.id)}" novalidate>
       ${liveReadOnly ? `<fieldset class="form-fieldset" disabled>` : ""}
       <div class="field"><label for="ac-name">Name *</label><input id="ac-name" name="name" value="${esc(a.name)}" required></div>
@@ -2469,7 +3655,7 @@ export function viewAdminActivity(id) {
         <div class="field">
           <label for="ac-cat">Category</label>
           <select id="ac-cat" name="category">
-            ${["Strength", "Run", "HYROX", "Water", "Other"].map((c) => `<option ${a.category === c ? "selected" : ""}>${c}</option>`).join("")}
+            ${["Strength", "Run", "HYROX", "Water", "Socials", "Other"].map((c) => `<option ${a.category === c ? "selected" : ""}>${c}</option>`).join("")}
           </select>
         </div>
       </div>
@@ -2538,7 +3724,7 @@ export async function viewNotifications(now = new Date(), prefetchedRows = null)
   // malformed categories fall back safely without exposing operational rows.
   const visibleRows = rows.filter((notification) => {
     const kind = typeof notification?.kind === "string" ? notification.kind.trim() : "";
-    return admin || !kind.startsWith("admin_");
+    return !notification?.read_at && (admin || !kind.startsWith("admin_"));
   }).sort((a, b) => {
     const aTime = Date.parse(a?.created_at);
     const bTime = Date.parse(b?.created_at);
