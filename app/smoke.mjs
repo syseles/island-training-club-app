@@ -235,7 +235,7 @@ localStorage.setItem("itc.prototype.v1", JSON.stringify({
   duty: {},
 }));
 const renamedState = store.load();
-assert.equal(renamedState.version, 22, "legacy state must advance through the HYROX identifier, venue, reminder and attendance migrations");
+assert.equal(renamedState.version, 23, "legacy state must advance through the HYROX, attendance, and prayer migrations");
 assert.equal(renamedState.users.find((user) => user.id === "legacy-member").hyroxPaymentReminders, true);
 assert.equal(renamedState.hyroxCycles["legacy-cycle"]?.collectorPaymentReminderSentAt ?? null, null);
 assert.ok(renamedState.activities.some((activity) => activity.id === "hyrox-bft"));
@@ -281,7 +281,7 @@ for (const booking of v19ReplacementFixture.bookings) {
 delete v19ReplacementFixture.replacementRequests;
 localStorage.setItem("itc.prototype.v1", JSON.stringify(v19ReplacementFixture));
 const migratedReplacement = store.load();
-assert.equal(migratedReplacement.version, 22, "replacement migration must preserve the current v22 state version");
+assert.equal(migratedReplacement.version, 23, "replacement migration must preserve data through the current v23 state version");
 assert.ok(Array.isArray(migratedReplacement.replacementRequests));
 assert.ok(Array.isArray(migratedReplacement.replacementAudit));
 assert.ok(migratedReplacement.bookings.every((booking) =>
@@ -3377,11 +3377,163 @@ if (!memberHome.includes(bookedMarker) || memberHome.includes(otherMarker)) {
   failures++;
   console.error(`FAIL "My week" should show only the member's booked HYROX (${bookedMarker})`);
 } else console.log(`ok  "My week" shows only the member's booked session (${bookedMarker})`);
-// community: prayer request records locally (no public reader by design)
-const member = store.currentUser();
-const prayer = store.recordPrayer({ userId: member.id, name: member.fullName, request: "Smoke test request" });
-if (!prayer.id || prayer.request !== "Smoke test request") throw new Error("prayer not recorded");
-console.log("ok  prayer request records locally");
+// Community prayer requests: v23 migration and local role/ownership parity.
+const v22PrayerSnapshot = JSON.parse(mem.get("itc.prototype.v1"));
+v22PrayerSnapshot.version = 22;
+v22PrayerSnapshot.sessionUserId = null;
+v22PrayerSnapshot.prayers = [
+  { id: "legacy-prayer-a", request: "Historical prayer A" },
+  { id: "legacy-prayer-b", request: "Historical prayer B", createdAt: 1234 },
+];
+mem.set("itc.prototype.v1", JSON.stringify(v22PrayerSnapshot));
+const migratedPrayerState = store.load();
+assert.equal(migratedPrayerState.version, 23);
+assert.deepEqual(migratedPrayerState.prayers.map((row) => row.id), [
+  "legacy-prayer-a",
+  "legacy-prayer-b",
+]);
+assert.deepEqual(migratedPrayerState.prayers.map((row) => row.request), [
+  "Historical prayer A",
+  "Historical prayer B",
+]);
+for (const row of migratedPrayerState.prayers) {
+  assert.equal(row.status, "new");
+  assert.equal(row.anonymousToLeaders, false);
+  assert.equal(Number.isFinite(row.createdAt), true);
+  assert.equal(Number.isFinite(row.updatedAt), true);
+  assert.equal(row.closedAt, null);
+  assert.equal(row.withdrawnAt, null);
+}
+
+installLocalFixtures();
+store.signOut();
+await assert.rejects(
+  () => store.submitPrayerRequest({ request: "Please pray" }),
+  /approved member/i,
+);
+await assert.rejects(() => store.listMyPrayerRequests(), /approved member/i);
+
+{
+  const raw = JSON.parse(mem.get("itc.prototype.v1"));
+  raw.users.push(
+    { id: "prayer-other", role: "member", status: "approved", fullName: "Other Member", email: "prayer-other@example.test" },
+    { id: "prayer-pending", role: "pending", status: "pending", fullName: "Pending Member", email: "prayer-pending@example.test" },
+    { id: "prayer-declined", role: "declined", status: "declined", fullName: "Declined Member", email: "prayer-declined@example.test" },
+    { id: "prayer-super-alias", role: "superadmin", status: "approved", fullName: "Alias Super Admin", email: "prayer-super-alias@example.test" },
+    { id: "prayer-super", role: "super_admin", status: "approved", fullName: "Super Admin", email: "prayer-super@example.test" },
+  );
+  mem.set("itc.prototype.v1", JSON.stringify(raw));
+  store.load();
+}
+for (const email of ["prayer-pending@example.test", "prayer-declined@example.test"]) {
+  store.signIn(email);
+  await assert.rejects(
+    () => store.submitPrayerRequest({ request: "Blocked prayer" }),
+    /approved member/i,
+  );
+  await assert.rejects(() => store.listMyPrayerRequests(), /approved member/i);
+}
+
+store.signIn("member@example.test");
+await assert.rejects(
+  () => store.submitPrayerRequest({ request: "   " }),
+  /between 1 and 2,000 characters/i,
+);
+await assert.rejects(
+  () => store.submitPrayerRequest({ request: "x".repeat(2001) }),
+  /between 1 and 2,000 characters/i,
+);
+const identifiedPrayer = await store.submitPrayerRequest({
+  request: "  Please pray for recovery.  ",
+  anonymousToLeaders: false,
+});
+assert.equal(identifiedPrayer.request, "Please pray for recovery.");
+assert.equal(identifiedPrayer.status, "new");
+assert.equal("ownerId" in identifiedPrayer, false);
+assert.equal("userId" in identifiedPrayer, false);
+const anonymousPrayer = await store.submitPrayerRequest({
+  request: "A private concern",
+  anonymousToLeaders: true,
+});
+const memberPrayerRows = await store.listMyPrayerRequests();
+assert.equal(memberPrayerRows.length, 2);
+assert.deepEqual(memberPrayerRows.map((row) => row.id), [anonymousPrayer.id, identifiedPrayer.id]);
+assert.equal(memberPrayerRows.some((row) => row.id === "legacy-prayer-a"), false,
+  "ownerless legacy rows must not attach to member history");
+
+store.signIn("prayer-other@example.test");
+assert.deepEqual(await store.listMyPrayerRequests(), []);
+await assert.rejects(
+  () => store.setMyPrayerRequestState(identifiedPrayer.id, "close"),
+  /not found|own prayer request/i,
+);
+
+store.signIn("admin@example.test");
+let adminPrayerRows = await store.listAdminPrayerRequests();
+assert.equal(
+  adminPrayerRows.find((row) => row.id === anonymousPrayer.id).displayName,
+  "Anonymous member",
+);
+assert.equal(
+  adminPrayerRows.find((row) => row.id === identifiedPrayer.id).displayName,
+  "Test Member",
+);
+for (const row of adminPrayerRows) {
+  assert.equal("ownerId" in row, false);
+  assert.equal("userId" in row, false);
+}
+for (const legacyId of ["legacy-prayer-a", "legacy-prayer-b"]) {
+  assert.equal(adminPrayerRows.find((row) => row.id === legacyId)?.displayName, "Anonymous member");
+}
+assert.equal(
+  (await store.setAdminPrayerRequestStatus(identifiedPrayer.id, "prayed_for")).status,
+  "prayed_for",
+);
+assert.equal(
+  (await store.setAdminPrayerRequestStatus(identifiedPrayer.id, "closed")).status,
+  "closed",
+);
+await assert.rejects(
+  () => store.setAdminPrayerRequestStatus(identifiedPrayer.id, "closed"),
+  /current state/i,
+);
+await assert.rejects(
+  () => store.setAdminPrayerRequestStatus(anonymousPrayer.id, "withdrawn"),
+  /prayed_for or closed/i,
+);
+
+const adminOwnedPrayer = await store.submitPrayerRequest({ request: "Admin-owned prayer" });
+assert.equal((await store.listMyPrayerRequests()).some((row) => row.id === adminOwnedPrayer.id), true);
+await store.setMyPrayerRequestState(adminOwnedPrayer.id, "withdraw");
+for (const email of ["prayer-super-alias@example.test", "prayer-super@example.test"]) {
+  store.signIn(email);
+  const superOwned = await store.submitPrayerRequest({ request: `Prayer from ${email}` });
+  assert.equal((await store.listMyPrayerRequests()).some((row) => row.id === superOwned.id), true);
+  await store.setMyPrayerRequestState(superOwned.id, "withdraw");
+}
+
+store.signIn("member@example.test");
+const memberClosed = await store.setMyPrayerRequestState(anonymousPrayer.id, "close");
+assert.equal(memberClosed.status, "closed");
+assert.equal(Number.isFinite(memberClosed.closedAt), true);
+const withdrawnClosed = await store.setMyPrayerRequestState(anonymousPrayer.id, "withdraw");
+assert.equal(withdrawnClosed.status, "withdrawn");
+assert.equal(withdrawnClosed.request, null);
+assert.equal(withdrawnClosed.closedAt, null);
+assert.equal(Number.isFinite(withdrawnClosed.withdrawnAt), true);
+const withdrawnAdminClosed = await store.setMyPrayerRequestState(identifiedPrayer.id, "withdraw");
+assert.equal(withdrawnAdminClosed.request, null);
+await assert.rejects(
+  () => store.setMyPrayerRequestState(identifiedPrayer.id, "withdraw"),
+  /already withdrawn/i,
+);
+
+store.signIn("admin@example.test");
+adminPrayerRows = await store.listAdminPrayerRequests();
+assert.equal(adminPrayerRows.some((row) => row.id === anonymousPrayer.id), false);
+assert.equal(adminPrayerRows.some((row) => row.id === identifiedPrayer.id), false);
+assert.equal(adminPrayerRows.some((row) => row.id === adminOwnedPrayer.id), false);
+console.log("ok  prayer requests migrate and enforce local role, ownership, redaction, and transition parity");
 
 // --- ICS generation ---
 const ics = data.buildICS(free);
@@ -3555,8 +3707,8 @@ store.resetLocalData();
   localStorage.setItem("itc.prototype.v1", JSON.stringify(locationV13));
   store.load();
   const migratedV13 = JSON.parse(localStorage.getItem("itc.prototype.v1"));
-  if (migratedV13.version !== 22) {
-    throw new Error("v22 migration must persist version 22");
+  if (migratedV13.version !== 23) {
+    throw new Error("legacy migration chain must persist version 23");
   }
   const repairedWater = store.activities().find((activity) => activity.id === "water");
   if (repairedWater.location !== "TBC" || repairedWater.mapsQuery !== ""
@@ -5542,10 +5694,10 @@ console.log("ok  reset");
     failures++;
     console.error("FAIL v10 migration must clear session tied to a removed demo user");
   } else console.log("ok  v10 migration clears removed session");
-  if (migrated.version !== 22) {
+  if (migrated.version !== 23) {
     failures++;
-    console.error(`FAIL integrated migration must advance version to 22, got ${migrated.version}`);
-  } else console.log("ok  integrated migration advances genuine v9 state to v22");
+    console.error(`FAIL integrated migration must advance version to 23, got ${migrated.version}`);
+  } else console.log("ok  integrated migration advances genuine v9 state to v23");
 }
 
 {
@@ -5564,7 +5716,7 @@ console.log("ok  reset");
   store.load();
   const v14 = JSON.parse(mem.get("itc.prototype.v1"));
   const migratedUser = v14.users.find((user) => user.id === "real-v13-member");
-  if (v14.version !== 22 || !migratedUser) throw new Error("v22 migration lost the genuine member");
+  if (v14.version !== 23 || !migratedUser) throw new Error("v23 migration lost the genuine member");
   for (const field of ["indemnitySignature", "indemnitySignedAt", "indemnityFormVersion", "emergencyRelationship"]) {
     if (!(field in migratedUser) || migratedUser[field] !== null) {
       throw new Error(`v14 migration should initialize ${field} to null`);
@@ -5594,15 +5746,15 @@ console.log("ok  reset");
   localStorage.setItem("itc.prototype.v1", JSON.stringify(v21));
   const migrated = store.load();
   const migratedBooking = migrated.bookings[0];
-  assert.equal(migrated.version, 22);
+  assert.equal(migrated.version, 23);
   assert.equal(migratedBooking.attendedAt, null);
   assert.equal(migratedBooking.attendedBy, null);
   assert.deepEqual(
     Object.fromEntries(Object.keys(preservedBooking).map((key) => [key, migratedBooking[key]])),
     preservedBooking,
-    "v22 must preserve every pre-attendance booking field",
+    "v22 attendance migration must preserve every pre-attendance booking field through v23",
   );
-  console.log("ok  v22 migration preserves booking data and initializes attendance fields");
+  console.log("ok  v22 attendance migration preserves booking data through v23");
 }
 
 // --- Admin payment/attendance state seam -----------------------------------
@@ -6830,11 +6982,11 @@ for (const fixture of sourceSnapshots) {
     && !Array.isArray(migrated.paymentPayouts);
   const suppliedPayoutsPreserved = fixture.version !== 12
     || migrated.paymentPayouts["real-admin"]?.fpsPhone === "+852 6000 0000";
-  if (migrated.version !== 22 || suppliedIds.some((id) => !serialized.includes(id))
+  if (migrated.version !== 23 || suppliedIds.some((id) => !serialized.includes(id))
       || !payoutMapValid || !suppliedPayoutsPreserved) {
     failures++;
-    console.error(`FAIL genuine v${fixture.version} fixture must reach v22 intact`);
-  } else console.log(`ok  genuine v${fixture.version} fixture reaches v22 intact`);
+    console.error(`FAIL genuine v${fixture.version} fixture must reach v23 intact`);
+  } else console.log(`ok  genuine v${fixture.version} fixture reaches v23 intact`);
 }
 
 for (const invalidCounter of [null, -1, 1.5, "broken"]) {

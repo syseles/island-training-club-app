@@ -176,6 +176,60 @@ let operationalRsvpCountError = null;
 let operationalRsvpCountRowsOverride = null;
 let operationalAttendanceError = null;
 const operationalRpcCalls = [];
+const prayerRpcCalls = [];
+const prayerRpcErrors = new Map();
+const PRAYER_ID = "11111111-1111-4111-8111-111111111111";
+const SECOND_PRAYER_ID = "22222222-2222-4222-8222-222222222222";
+const prayerMemberRow = {
+  id: PRAYER_ID,
+  request_text: "Prayer",
+  anonymous_to_leaders: true,
+  status: "new",
+  created_at: "2026-08-05T02:00:00.000Z",
+  updated_at: "2026-08-05T02:00:00.000Z",
+  closed_at: null,
+  withdrawn_at: null,
+};
+const prayerAdminRow = {
+  id: SECOND_PRAYER_ID,
+  display_name: "Anonymous member",
+  request_text: "A private live concern",
+  anonymous_to_leaders: true,
+  status: "prayed_for",
+  created_at: "2026-08-05T01:00:00.000Z",
+  updated_at: "2026-08-05T02:00:00.000Z",
+  closed_at: null,
+};
+const prayerRpcNames = new Set([
+  "submit_prayer_request",
+  "list_my_prayer_requests",
+  "set_my_prayer_request_state",
+  "list_admin_prayer_requests",
+  "set_admin_prayer_request_status",
+]);
+const prayerRpcResult = (name) => {
+  if (name === "submit_prayer_request") return [structuredClone(prayerMemberRow)];
+  if (name === "list_my_prayer_requests") return [structuredClone(prayerMemberRow)];
+  if (name === "set_my_prayer_request_state") {
+    return [{
+      ...structuredClone(prayerMemberRow),
+      request_text: null,
+      status: "withdrawn",
+      updated_at: "2026-08-05T02:05:00.000Z",
+      withdrawn_at: "2026-08-05T02:05:00.000Z",
+    }];
+  }
+  if (name === "list_admin_prayer_requests") return [structuredClone(prayerAdminRow)];
+  if (name === "set_admin_prayer_request_status") {
+    return [{
+      ...structuredClone(prayerAdminRow),
+      status: "closed",
+      updated_at: "2026-08-05T02:10:00.000Z",
+      closed_at: "2026-08-05T02:10:00.000Z",
+    }];
+  }
+  return null;
+};
 const operationalPayoutDirectReads = [];
 const operationalSessionQueries = [];
 const operationalSubscriptions = [];
@@ -732,6 +786,13 @@ const fakeSupabase = {
     throw new Error(`Unexpected table: ${table}`);
   },
   rpc(name, args) {
+    if (prayerRpcNames.has(name)) {
+      prayerRpcCalls.push({ name, args: args === undefined ? undefined : structuredClone(args) });
+      return Promise.resolve({
+        data: prayerRpcErrors.has(name) ? null : prayerRpcResult(name),
+        error: prayerRpcErrors.get(name) || null,
+      });
+    }
     if (operationalRpcHandler) return operationalRpcHandler(name, args);
     return Promise.resolve({ data: null, error: null });
   },
@@ -1345,6 +1406,112 @@ assert.equal(
   "live event wall time must resolve as an HKT instant in every host timezone",
 );
 store.load();
+
+// Prayer store actions must use only the five authoritative RPCs in live mode,
+// normalize snake_case rows, reject unsafe inputs before RPC, and never fall
+// back to device-local prayer data when Supabase fails.
+const submittedPrayer = await store.submitPrayerRequest({
+  request: "  Prayer  ",
+  anonymousToLeaders: true,
+});
+assert.deepEqual(submittedPrayer, {
+  id: PRAYER_ID,
+  request: "Prayer",
+  anonymousToLeaders: true,
+  status: "new",
+  createdAt: "2026-08-05T02:00:00.000Z",
+  updatedAt: "2026-08-05T02:00:00.000Z",
+  closedAt: null,
+  withdrawnAt: null,
+});
+const liveMemberPrayers = await store.listMyPrayerRequests();
+assert.deepEqual(liveMemberPrayers, [submittedPrayer]);
+const withdrawnPrayer = await store.setMyPrayerRequestState(PRAYER_ID, "withdraw");
+assert.equal(withdrawnPrayer.status, "withdrawn");
+assert.equal(withdrawnPrayer.request, null);
+const liveAdminPrayers = await store.listAdminPrayerRequests();
+assert.deepEqual(liveAdminPrayers, [{
+  id: SECOND_PRAYER_ID,
+  request: "A private live concern",
+  anonymousToLeaders: true,
+  status: "prayed_for",
+  createdAt: "2026-08-05T01:00:00.000Z",
+  updatedAt: "2026-08-05T02:00:00.000Z",
+  closedAt: null,
+  withdrawnAt: null,
+  displayName: "Anonymous member",
+}]);
+assert.equal("ownerId" in liveAdminPrayers[0], false);
+assert.equal("owner_id" in liveAdminPrayers[0], false);
+assert.equal("email" in liveAdminPrayers[0], false);
+const adminClosedPrayer = await store.setAdminPrayerRequestStatus(SECOND_PRAYER_ID, "closed");
+assert.equal(adminClosedPrayer.status, "closed");
+assert.equal(adminClosedPrayer.displayName, "Anonymous member");
+assert.deepEqual(prayerRpcCalls.slice(0, 5), [
+  {
+    name: "submit_prayer_request",
+    args: { p_request_text: "Prayer", p_anonymous_to_leaders: true },
+  },
+  { name: "list_my_prayer_requests", args: undefined },
+  {
+    name: "set_my_prayer_request_state",
+    args: { p_request_id: PRAYER_ID, p_action: "withdraw" },
+  },
+  { name: "list_admin_prayer_requests", args: undefined },
+  {
+    name: "set_admin_prayer_request_status",
+    args: { p_request_id: SECOND_PRAYER_ID, p_status: "closed" },
+  },
+]);
+
+const prayerCallCountBeforeValidation = prayerRpcCalls.length;
+await assert.rejects(
+  () => store.submitPrayerRequest({ request: " " }),
+  /between 1 and 2,000 characters/i,
+);
+await assert.rejects(
+  () => store.submitPrayerRequest({ request: "x".repeat(2001) }),
+  /between 1 and 2,000 characters/i,
+);
+await assert.rejects(
+  () => store.setMyPrayerRequestState("not-a-uuid", "withdraw"),
+  /valid prayer request/i,
+);
+await assert.rejects(
+  () => store.setMyPrayerRequestState(PRAYER_ID, "reopen"),
+  /close or withdraw/i,
+);
+await assert.rejects(
+  () => store.setAdminPrayerRequestStatus(PRAYER_ID, "new"),
+  /prayed_for or closed/i,
+);
+assert.equal(prayerRpcCalls.length, prayerCallCountBeforeValidation,
+  "invalid live prayer inputs must not reach Supabase");
+
+const localPrayerState = JSON.parse(mem.get("itc.prototype.v1"));
+localPrayerState.prayers = [{
+  id: "device-only-prayer",
+  request: "Never expose this as a live fallback",
+  status: "new",
+}];
+mem.set("itc.prototype.v1", JSON.stringify(localPrayerState));
+store.load();
+const persistedLocalPrayers = JSON.parse(mem.get("itc.prototype.v1")).prayers;
+for (const [name, invoke, message] of [
+  ["submit_prayer_request", () => store.submitPrayerRequest({ request: "Failure check" }), /could not be sent/i],
+  ["list_my_prayer_requests", () => store.listMyPrayerRequests(), /could not be loaded/i],
+  ["set_my_prayer_request_state", () => store.setMyPrayerRequestState(PRAYER_ID, "close"), /could not be updated/i],
+  ["list_admin_prayer_requests", () => store.listAdminPrayerRequests(), /could not be loaded for Admin/i],
+  ["set_admin_prayer_request_status", () => store.setAdminPrayerRequestStatus(PRAYER_ID, "closed"), /status could not be updated/i],
+]) {
+  prayerRpcErrors.set(name, { message: `sensitive ${name} failure` });
+  await assert.rejects(invoke, message);
+  prayerRpcErrors.delete(name);
+}
+assert.deepEqual(JSON.parse(mem.get("itc.prototype.v1")).prayers, persistedLocalPrayers,
+  "failed live prayer RPCs must neither save nor replace device-local prayer rows");
+console.log("ok  live prayer actions use authoritative RPCs, safe normalization, and no local fallback");
+
 await operations.ensureLiveSessionWindow();
 assert.deepEqual(
   operationalRpcCalls.find((call) => call.name === "ensure_hyrox_cycles")?.args,

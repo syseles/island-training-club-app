@@ -46,7 +46,7 @@ const APPLY_DRAFT_KEY = "itc.apply.draft.v1";
 const APPLY_DRAFT_VERSION = 1;
 const LAST_ROUTE_KEY = "itc.last-route.v1";
 const LAST_ROUTE_VERSION = 1;
-const STATE_VERSION = 22;
+const STATE_VERSION = 23;
 
 const ROUTE_ID = "[A-Za-z0-9._~-]+";
 const RESTORABLE_ROUTE_PATTERNS = [
@@ -333,6 +333,23 @@ function migrate() {
       if (!Object.prototype.hasOwnProperty.call(booking, "attendedAt")) booking.attendedAt = null;
       if (!Object.prototype.hasOwnProperty.call(booking, "attendedBy")) booking.attendedBy = null;
     }
+  }
+  if (v < 23) {
+    // v23: historical device-only prayers stay on this device while gaining
+    // the fields required by the private member/Admin workflow.
+    state.prayers = state.prayers.map((row) => ({
+      ...row,
+      status: ["new", "prayed_for", "closed", "withdrawn"].includes(row.status)
+        ? row.status : "new",
+      anonymousToLeaders: row.anonymousToLeaders === true,
+      createdAt: Number.isFinite(Number(row.createdAt)) ? Number(row.createdAt) : Date.now(),
+      updatedAt: Number.isFinite(Number(row.updatedAt))
+        ? Number(row.updatedAt)
+        : Number.isFinite(Number(row.createdAt)) ? Number(row.createdAt) : Date.now(),
+      closedAt: row.status === "closed" ? row.closedAt ?? row.updatedAt ?? row.createdAt ?? Date.now() : null,
+      withdrawnAt: row.status === "withdrawn" ? row.withdrawnAt ?? row.updatedAt ?? Date.now() : null,
+      request: row.status === "withdrawn" ? null : String(row.request ?? "").trim(),
+    }));
   }
   if (v < 21) {
     // v21: Friday venue-choice and venue-finalization reminders are additive
@@ -2821,21 +2838,235 @@ export function nextSocialSession() {
   }) ?? null;
 }
 
-// --- Community: prayer requests ------------------------------------------------
-// Requests go privately to ITC leaders (no public list in the app), so the
-// store only records them — there is intentionally no reader exposed here.
+// --- Community: private prayer requests ----------------------------------------
 
-export function recordPrayer({ userId, name, request }) {
+const PRAYER_APPROVED_ROLES = new Set(["member", "admin", "super_admin"]);
+const PRAYER_ADMIN_ROLES = new Set(["admin", "super_admin"]);
+const PRAYER_STATUSES = new Set(["new", "prayed_for", "closed", "withdrawn"]);
+const PRAYER_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const PRAYER_MESSAGES = {
+  submit: "Prayer request could not be sent. Please try again.",
+  load: "Prayer requests could not be loaded. Please try again.",
+  memberUpdate: "Prayer request could not be updated. Please try again.",
+  adminLoad: "Prayer requests could not be loaded for Admin. Please try again.",
+  adminUpdate: "Prayer request status could not be updated. Please try again.",
+};
+
+const normalizedPrayerRole = (role) => role === "superadmin" ? "super_admin" : role;
+const prayerOwnerId = (row) => row?.ownerId ?? row?.userId ?? null;
+const prayerField = (row, camel, snake) => row?.[snake] !== undefined ? row[snake] : row?.[camel];
+
+const memberPrayerRow = (row) => ({
+  id: row?.id ?? null,
+  request: prayerField(row, "request", "request_text") ?? null,
+  anonymousToLeaders: prayerField(row, "anonymousToLeaders", "anonymous_to_leaders") === true,
+  status: PRAYER_STATUSES.has(row?.status) ? row.status : "new",
+  createdAt: prayerField(row, "createdAt", "created_at") ?? null,
+  updatedAt: prayerField(row, "updatedAt", "updated_at") ?? null,
+  closedAt: prayerField(row, "closedAt", "closed_at") ?? null,
+  withdrawnAt: prayerField(row, "withdrawnAt", "withdrawn_at") ?? null,
+});
+
+const adminPrayerRow = (row) => ({
+  ...memberPrayerRow(row),
+  displayName: String(prayerField(row, "displayName", "display_name") || "Anonymous member").trim()
+    || "Anonymous member",
+});
+
+function requireApprovedPrayerActor() {
+  const actor = currentUser();
+  const role = normalizedPrayerRole(actor?.role);
+  if (!actor || actor.status !== "approved" || !PRAYER_APPROVED_ROLES.has(role)) {
+    throw new Error("Approved member access required");
+  }
+  return actor;
+}
+
+function requirePrayerAdminActor() {
+  const actor = requireApprovedPrayerActor();
+  if (!PRAYER_ADMIN_ROLES.has(normalizedPrayerRole(actor.role))) {
+    throw new Error("Approved Admin access required");
+  }
+  return actor;
+}
+
+function validatedPrayerText(request) {
+  const trimmed = String(request ?? "").trim();
+  const length = Array.from(trimmed).length;
+  if (length < 1 || length > 2000) {
+    throw new Error("Prayer request must be between 1 and 2,000 characters.");
+  }
+  return trimmed;
+}
+
+function validatedLivePrayerId(requestId) {
+  const id = String(requestId ?? "").trim();
+  if (!PRAYER_UUID.test(id)) throw new Error("Choose a valid prayer request.");
+  return id;
+}
+
+async function prayerRpc(name, args, message) {
+  try {
+    const { data, error } = args === undefined
+      ? await supabase.rpc(name)
+      : await supabase.rpc(name, args);
+    if (error) throw error;
+    return data;
+  } catch {
+    throw new Error(message);
+  }
+}
+
+function prayerRpcRow(data, normalize, message) {
+  const row = Array.isArray(data) ? data[0] : data;
+  if (!row || typeof row !== "object") throw new Error(message);
+  return normalize(row);
+}
+
+function localAdminPrayerRow(row) {
+  const ownerId = prayerOwnerId(row);
+  const owner = ownerId ? state.users.find((user) => user.id === ownerId) : null;
+  return adminPrayerRow({
+    ...row,
+    displayName: row.anonymousToLeaders === true || !owner
+      ? "Anonymous member"
+      : owner.fullName || owner.preferredName || "ITC Member",
+  });
+}
+
+export async function submitPrayerRequest({ request, anonymousToLeaders = false } = {}) {
+  const trimmed = validatedPrayerText(request);
+  if (isLive()) {
+    const data = await prayerRpc("submit_prayer_request", {
+      p_request_text: trimmed,
+      p_anonymous_to_leaders: anonymousToLeaders === true,
+    }, PRAYER_MESSAGES.submit);
+    return prayerRpcRow(data, memberPrayerRow, PRAYER_MESSAGES.submit);
+  }
+
+  const actor = requireApprovedPrayerActor();
+  const now = Date.now();
   const prayer = {
     id: uid("p"),
-    userId: userId ?? null,
-    name: String(name ?? "").trim(),
-    request: String(request ?? "").trim(),
-    createdAt: Date.now(),
+    ownerId: actor.id,
+    request: trimmed,
+    anonymousToLeaders: anonymousToLeaders === true,
+    status: "new",
+    createdAt: now,
+    updatedAt: now,
+    closedAt: null,
+    withdrawnAt: null,
   };
   state.prayers.push(prayer);
   save();
-  return prayer;
+  return memberPrayerRow(prayer);
+}
+
+export async function listMyPrayerRequests() {
+  if (isLive()) {
+    const data = await prayerRpc("list_my_prayer_requests", undefined, PRAYER_MESSAGES.load);
+    return (Array.isArray(data) ? data : []).map(memberPrayerRow);
+  }
+
+  const actor = requireApprovedPrayerActor();
+  return state.prayers
+    .map((row, index) => ({ row, index }))
+    .filter(({ row }) => prayerOwnerId(row) === actor.id)
+    .sort((a, b) => Number(b.row.createdAt) - Number(a.row.createdAt) || b.index - a.index)
+    .map(({ row }) => memberPrayerRow(row));
+}
+
+export async function setMyPrayerRequestState(requestId, action) {
+  if (!["close", "withdraw"].includes(action)) {
+    throw new Error("Prayer request action must be close or withdraw.");
+  }
+  if (isLive()) {
+    const id = validatedLivePrayerId(requestId);
+    const data = await prayerRpc("set_my_prayer_request_state", {
+      p_request_id: id,
+      p_action: action,
+    }, PRAYER_MESSAGES.memberUpdate);
+    return prayerRpcRow(data, memberPrayerRow, PRAYER_MESSAGES.memberUpdate);
+  }
+
+  const actor = requireApprovedPrayerActor();
+  const prayer = state.prayers.find((row) =>
+    row.id === requestId && prayerOwnerId(row) === actor.id
+  );
+  if (!prayer) throw new Error("Own prayer request not found.");
+  const now = Date.now();
+  if (action === "close") {
+    if (!["new", "prayed_for"].includes(prayer.status)) {
+      throw new Error("Prayer request cannot be closed from its current state.");
+    }
+    prayer.status = "closed";
+    prayer.closedAt = now;
+    prayer.withdrawnAt = null;
+  } else {
+    if (prayer.status === "withdrawn") throw new Error("Prayer request is already withdrawn.");
+    prayer.status = "withdrawn";
+    prayer.request = null;
+    prayer.closedAt = null;
+    prayer.withdrawnAt = now;
+  }
+  prayer.updatedAt = now;
+  save();
+  return memberPrayerRow(prayer);
+}
+
+export async function listAdminPrayerRequests() {
+  if (isLive()) {
+    const data = await prayerRpc("list_admin_prayer_requests", undefined, PRAYER_MESSAGES.adminLoad);
+    return (Array.isArray(data) ? data : []).map(adminPrayerRow);
+  }
+
+  requirePrayerAdminActor();
+  const order = { new: 1, prayed_for: 2, closed: 3 };
+  return state.prayers
+    .filter((row) => row.status !== "withdrawn")
+    .sort((a, b) => {
+      const statusOrder = (order[a.status] || 4) - (order[b.status] || 4);
+      if (statusOrder) return statusOrder;
+      const createdOrder = a.status === "closed"
+        ? Number(b.createdAt) - Number(a.createdAt)
+        : Number(a.createdAt) - Number(b.createdAt);
+      return createdOrder || String(a.id).localeCompare(String(b.id));
+    })
+    .map(localAdminPrayerRow);
+}
+
+export async function setAdminPrayerRequestStatus(requestId, status) {
+  if (!["prayed_for", "closed"].includes(status)) {
+    throw new Error("Prayer request status must be prayed_for or closed.");
+  }
+  if (isLive()) {
+    const id = validatedLivePrayerId(requestId);
+    const data = await prayerRpc("set_admin_prayer_request_status", {
+      p_request_id: id,
+      p_status: status,
+    }, PRAYER_MESSAGES.adminUpdate);
+    return prayerRpcRow(data, adminPrayerRow, PRAYER_MESSAGES.adminUpdate);
+  }
+
+  requirePrayerAdminActor();
+  const prayer = state.prayers.find((row) => row.id === requestId);
+  if (!prayer) throw new Error("Prayer request not found.");
+  const valid = prayer.status === "new"
+    ? ["prayed_for", "closed"].includes(status)
+    : prayer.status === "prayed_for" && status === "closed";
+  if (!valid) throw new Error("Prayer request cannot be changed from its current state.");
+  const now = Date.now();
+  prayer.status = status;
+  prayer.updatedAt = now;
+  prayer.closedAt = status === "closed" ? now : null;
+  save();
+  return localAdminPrayerRow(prayer);
+}
+
+// Temporary compatibility for the existing form handler; Task 3 moves that
+// caller to the authoritative async action directly.
+export async function recordPrayer({ request, anonymousToLeaders = false } = {}) {
+  return submitPrayerRequest({ request, anonymousToLeaders });
 }
 
 // --- Duty roster --------------------------------------------------------------
