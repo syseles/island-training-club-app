@@ -1385,6 +1385,48 @@ const appIndexSource = readFileSync(resolve(__dirnameSmoke, "index.html"), "utf8
 if (!appIndexSource.includes("window.SUPABASE_URL") || !appIndexSource.includes("window.SUPABASE_ANON_KEY")) {
   throw new Error("static Supabase configuration seam must remain explicit in app/index.html");
 }
+const canonicalProductionOrigin = "https://island-training-club.vercel.app";
+const vercelConfig = JSON.parse(readFileSync(resolve(__dirnameSmoke, "../vercel.json"), "utf8"));
+assert.doesNotMatch(appIndexSource, /<base\b/i,
+  "hash-only app routes must remain on the canonical root without a document base URL");
+for (const assetReference of [
+  'href="/app/manifest.webmanifest"',
+  'href="/app/styles.css"',
+  'src="/app/js/config.js"',
+  'src="/app/js/app.js"',
+  'href="/assets/itc/favicon-48.png"',
+  'href="/assets/fonts/archivo-latin-variable.woff2"',
+  'src="/assets/itc/logo-header.png"',
+]) {
+  assert.ok(appIndexSource.includes(assetReference),
+    `canonical-root document must use explicit static asset URL ${assetReference}`);
+}
+assert.deepEqual(vercelConfig.rewrites, [{ source: "/", destination: "/app/index.html" }],
+  "the canonical production root must serve the app without exposing /app/");
+assert.deepEqual(vercelConfig.redirects, [
+  {
+    source: "/:path*",
+    has: [{ type: "host", value: "island-training-club-app-island-training-club.vercel.app" }],
+    destination: `${canonicalProductionOrigin}/:path*`,
+    permanent: true,
+  },
+  {
+    source: "/:path*",
+    has: [{ type: "host", value: "island-training-club-app.vercel.app" }],
+    destination: `${canonicalProductionOrigin}/:path*`,
+    permanent: true,
+  },
+  {
+    source: "/:path*",
+    has: [{ type: "host", value: "island-training-club-island-training-club.vercel.app" }],
+    destination: `${canonicalProductionOrigin}/:path*`,
+    permanent: true,
+  },
+  { source: "/app", destination: "/", permanent: true },
+  { source: "/app/", destination: "/", permanent: true },
+], "legacy-host redirects must precede the exact app-document redirects with no conflicting rules");
+assert.ok(liveAuthRunbookSource.includes(`${canonicalProductionOrigin}/`),
+  "the live-auth runbook must name the canonical production root");
 if (/## Vercel env vars|Vercel project settings[^\n]*Environment Variables/i.test(liveAuthRunbookSource)) {
   throw new Error("runbook must not claim Vercel env vars inject into static HTML");
 }
@@ -1410,8 +1452,9 @@ const integratedViewSource = readFileSync(resolve(__dirnameSmoke, "js/views.js")
 const integratedAppSource = readFileSync(resolve(__dirnameSmoke, "js/app.js"), "utf8");
 const integratedStyleSource = readFileSync(resolve(__dirnameSmoke, "styles.css"), "utf8");
 const manifest = JSON.parse(readFileSync(resolve(__dirnameSmoke, "manifest.webmanifest"), "utf8"));
-assert.equal(manifest.start_url, "./index.html",
-  "installed app launches must leave the hash empty so the last committed route can restore");
+assert.equal(manifest.start_url, "/",
+  "installed app launches must use the canonical root with an empty hash so the last route can restore");
+assert.equal(manifest.scope, "/", "the installed app must stay within the canonical root scope");
 assert.match(integratedAppSource,
   /store\.startupRoute\(location\.hash, store\.currentUser\(\)\?\.id\)/,
   "boot must resolve an empty launch against the current user's last route");

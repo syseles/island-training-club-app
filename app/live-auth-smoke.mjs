@@ -3994,7 +3994,7 @@ assert.deepEqual(magicLinkOptions, {
   email: "runner@example.com",
   options: {
     shouldCreateUser: true,
-    emailRedirectTo: `${location.origin}${location.pathname}`,
+    emailRedirectTo: `${location.origin}/app/`,
   },
 });
 releaseMagicLink({ data: {}, error: null });
@@ -6101,8 +6101,8 @@ const duplicateGoogleClick = click({ target: googleControl });
 assert.equal(oauthCalls, 1, "pending control must prevent a duplicate store action");
 assert.equal(
   oauthOptions?.options?.redirectTo,
-  `${location.origin}${location.pathname}`,
-  "Google OAuth must return to the exact deployed Payment /app/ pathname"
+  `${location.origin}/app/`,
+  "Google OAuth must use the allowlisted /app/ callback before canonical-root routing"
 );
 releaseOAuth({ error: new Error("OAuth unavailable") });
 await Promise.all([firstGoogleClick, duplicateGoogleClick]);

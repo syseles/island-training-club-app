@@ -4202,13 +4202,15 @@ export async function getCurrentUser() {
   return liveUser;
 }
 
+const authCallbackUrl = () => new URL("/app/", window.location.origin).toString();
+
 export async function signInWithGoogle() {
   if (!isLive() || !supabase) {
     throw new Error("signInWithGoogle requires SUPABASE_URL and SUPABASE_ANON_KEY");
   }
   const { error } = await supabase.auth.signInWithOAuth({
     provider: "google",
-    options: { redirectTo: `${window.location.origin}${window.location.pathname}` },
+    options: { redirectTo: authCallbackUrl() },
   });
   if (error) throw error;
 }
@@ -4223,7 +4225,7 @@ export async function signInWithMagicLink(email) {
     email: normalizedEmail,
     options: {
       shouldCreateUser: true,
-      emailRedirectTo: `${window.location.origin}${window.location.pathname}`,
+      emailRedirectTo: authCallbackUrl(),
     },
   });
   if (error) throw error;

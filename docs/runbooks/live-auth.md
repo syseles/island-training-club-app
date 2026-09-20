@@ -70,20 +70,40 @@ Use this safe deployment process:
 For localStorage-only operation, set both assignments to empty strings in a
 local, uncommitted copy.
 
-## Authentication redirect URLs
+## Canonical production URL
 
-Google OAuth and email magic links request the callback with the exact deployed
-origin and pathname:
+The canonical member-facing URL is:
 
-```js
-`${location.origin}${location.pathname}`
+```text
+https://island-training-club.vercel.app/
 ```
 
-In Supabase Dashboard → Authentication → URL Configuration → Redirect URLs,
-add the exact deployed Testing candidate URL ending in `/app/`. Preview and
-production domains are different origins, so add every deployed URL that will
-be tested. A missing or mismatched trailing `/app/` path causes an OAuth or
-magic-link callback to return to an unapproved URL.
+Attach that alias to the production Vercel project before promoting this
+routing configuration. Vercel internally rewrites `/` to `app/index.html`,
+while the document uses explicit `/app/` and `/assets/` URLs for static files.
+It deliberately has no `<base>` element, so hash-only navigation remains on the
+canonical root without reloading. The previous Vercel hostnames and exact
+`/app/` document path redirect to the canonical root. Query strings must be
+retained so authentication callbacks are not discarded; hash routes remain
+browser-side.
+
+## Authentication redirect URLs
+
+Google OAuth and email magic links deliberately request the allowlisted
+`/app/` callback trampoline on the current origin:
+
+```js
+new URL("/app/", window.location.origin).toString()
+```
+
+In Supabase Dashboard → Authentication → URL Configuration, set the Site URL
+to `https://island-training-club.vercel.app/` and add the exact production
+callback `https://island-training-club.vercel.app/app/` to Redirect URLs.
+Vercel then redirects that callback to the canonical root while preserving its
+query string. Preview and production domains are different origins, so add
+every deployed preview URL that will be tested. A missing or mismatched
+trailing `/app/` path causes an OAuth or magic-link callback to return to an
+unapproved URL.
 
 For local authentication testing, also add `http://127.0.0.1:4173/app/` (and
 the exact `localhost` form separately if you use it).
@@ -116,8 +136,9 @@ Interim launch configuration:
 5. Keep the App Password only in Supabase project settings. Never add it to
    `app/index.html`, Git, browser storage, client JavaScript, screenshots, or
    this runbook. Preserve Google recovery methods and backup codes separately.
-6. Add the exact local, preview, and production `/app/` URLs to Supabase's
-   redirect allowlist. Magic links use the same exact callback path as Google.
+6. Add the exact local, preview, and canonical production `/app/` callback
+   URLs to Supabase's redirect allowlist. Magic links use the same exact
+   callback path as Google.
 7. Set the Email OTP expiry to exactly `900` seconds so the configured lifetime
    matches the 15-minute security statement in the branded templates. Configure
    Supabase request throttling as well. The browser already suppresses duplicate
@@ -675,10 +696,12 @@ and declined viewers cannot resolve other members' photos.
    into the browser, Vercel, logs, screenshots, this runbook, or any repository
    file.
 3. Configure `ITC_APP_ORIGINS` as a comma-separated list of exact allowed
-   origins, with no paths and no wildcard. Include each deployed preview/test
-   origin that is intentionally supported and, only when needed, the exact
-   local origin such as `http://127.0.0.1:4173`. Use the Dashboard secret editor
-   or a placeholder command locally; never commit the real list:
+   origins, with no paths and no wildcard. It must include the canonical
+   production origin `https://island-training-club.vercel.app` plus each
+   deployed preview/test origin that is intentionally supported and, only when
+   needed, the exact local origin such as `http://127.0.0.1:4173`. Use the
+   Dashboard secret editor or a placeholder command locally; never commit the
+   deployed list:
 
    ```bash
    supabase secrets set ITC_APP_ORIGINS="<exact-origin-1>,<exact-origin-2>"
