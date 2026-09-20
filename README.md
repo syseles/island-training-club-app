@@ -8,6 +8,8 @@ No production application has been built yet. The `app/` directory contains a cl
 
 ## Working Prototype
 
+Canonical deployment: <https://island-training-club.vercel.app/>
+
 The prototype implements the selected "Night Circuit" direction and the confirmed product rules from the phase-one brief:
 
 - Free vs paid activity classification everywhere (home, schedule, detail).
