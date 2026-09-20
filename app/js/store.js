@@ -239,6 +239,20 @@ function migrate() {
     booking.replacementUserId ??= null;
     booking.replacementConfirmedAt ??= null;
     booking.replacementConfirmedBy ??= null;
+    booking.cancelledAt ??= null;
+    booking.cancelledSource ??= null;
+  }
+  for (const activity of state.activities) {
+    if (!["wnt", "run", "water"].includes(activity.id)) continue;
+    activity.requiresRsvp = true;
+    activity.price = 0;
+    activity.capacity = null;
+  }
+  for (const event of state.oneOffEvents) {
+    if (event.kind !== "free") continue;
+    event.requiresRsvp = true;
+    event.price = 0;
+    event.capacity = null;
   }
 
   const v = state.version || 0;
@@ -1108,8 +1122,12 @@ export function spotsLeft(session) {
   return Math.max(0, session.capacity - heldBookingsForSession(session.id).length);
 }
 
+export function sessionRequiresRsvp(session) {
+  return Boolean(session?.requiresRsvp || session?.kind === "rsvp");
+}
+
 export function attendeeCountFor(session) {
-  if (!session?.id) return 0;
+  if (!session?.id || (session.kind !== "paid" && !sessionRequiresRsvp(session))) return 0;
   if (isLive()) {
     const exactCount = liveOps.liveRsvpCountFor(session.id);
     if (exactCount !== null) return exactCount;
@@ -1118,6 +1136,7 @@ export function attendeeCountFor(session) {
 }
 
 export function attendeesFor(session) {
+  if (!session?.id || (session.kind !== "paid" && !sessionRequiresRsvp(session))) return [];
   const names = [];
   for (const b of activeBookingsForSession(session.id)) {
     const u = isLive()
@@ -3130,7 +3149,9 @@ export async function rsvpSession(userId, sessionOrId, now = Date.now()) {
   requireAuthorizedPaymentOwner(userId);
   const session = getSession(sessionId);
   if (!session) throw new Error("Unknown session");
-  if (session.kind !== "rsvp") throw new Error("Session is not an RSVP event");
+  if (!sessionRequiresRsvp(session) || Number(session.price ?? 0) > 0) {
+    throw new Error("Session is not an RSVP event");
+  }
   if (session.cancelled) throw new Error("Session is cancelled");
   if (sessionStarted(session)) throw new Error("Session has already started");
   const spots = spotsLeft(session);
@@ -3154,6 +3175,8 @@ export async function rsvpSession(userId, sessionOrId, now = Date.now()) {
     reminderSentAt: null,
     attendedAt: null,
     attendedBy: null,
+    cancelledAt: null,
+    cancelledSource: null,
     snapshot: snapshotFor(session),
   };
   state.bookings.push(booking);
@@ -3163,15 +3186,18 @@ export async function rsvpSession(userId, sessionOrId, now = Date.now()) {
 
 // Withdrawing an RSVP is member self-service: no money ever moved, so no
 // admin involvement is needed (unlike paid confirmed bookings).
-export async function withdrawRsvp(bookingId) {
+export async function withdrawRsvp(bookingId, now = Date.now()) {
   if (isLive()) {
     return liveOps.liveWithdrawRsvp(bookingId);
   }
   const booking = getBooking(bookingId);
   if (!booking || booking.status !== "confirmed") return null;
-  if (Number(booking.snapshot?.price) > 0) return null;
+  const session = getSession(booking.sessionId);
+  if (!sessionRequiresRsvp(session) || Number(booking.snapshot?.price) > 0) return null;
   requireAuthorizedPaymentOwner(booking.userId);
   booking.status = "cancelled";
+  booking.cancelledAt = now;
+  booking.cancelledSource = "member";
   save();
   return booking;
 }
@@ -3202,6 +3228,7 @@ export async function createOneOffEvent(fields) {
     dateISO,
     name,
     kind: price > 0 ? "paid" : "free",
+    requiresRsvp: price === 0,
     category,
     weekday: parseISO(dateISO).getDay(),
     time,
@@ -3210,7 +3237,7 @@ export async function createOneOffEvent(fields) {
     mapsQuery: mapsQuery || location,
     photo: "../assets/itc/main.webp",
     price,
-    capacity,
+    capacity: price > 0 ? capacity : null,
     blurb: "",
     memberNote: "",
     published: true,
@@ -3223,7 +3250,7 @@ export async function createOneOffEvent(fields) {
 export async function repostRsvpEvent(sessionId) {
   requirePaymentAdminActor();
   const source = getSession(sessionId);
-  if (!source || source.kind !== "rsvp" || !source.cancelled) {
+  if (!source || !sessionRequiresRsvp(source) || Number(source.price ?? 0) > 0 || !source.cancelled) {
     throw new Error("Only a cancelled RSVP event can be reposted.");
   }
   if (sessionStarted(source)) throw new Error("The RSVP event has already started.");
@@ -3231,7 +3258,20 @@ export async function repostRsvpEvent(sessionId) {
     return liveOps.liveReopenRsvp(sessionId);
   }
   const override = state.sessionOverrides[sessionId];
+  const cancelledAt = override.cancelledAt;
+  const recipients = new Set(state.bookings
+    .filter((booking) => booking.sessionId === sessionId
+      && booking.status === "cancelled"
+      && booking.cancelledSource === "session"
+      && booking.cancelledAt === cancelledAt)
+    .map((booking) => booking.userId));
+  for (const userId of recipients) {
+    notify(userId, "session-reopened",
+      `${source.name} · ${fmtDate(source.date)} has reopened. RSVP again if you're coming.`,
+      `#/activity/${sessionId}`);
+  }
   delete override.cancelled;
+  delete override.cancelledAt;
   if (!Object.keys(override).length) delete state.sessionOverrides[sessionId];
   save();
   return getSession(sessionId);
@@ -3259,14 +3299,26 @@ export function cancelSessionWeek(sessionId, reason, now = Date.now()) {
     return liveOps.liveCancelSession(sessionId, reason);
   }
   requirePaymentAdminActor();
+  const session = getSession(sessionId);
+  const rsvpOccurrence = sessionRequiresRsvp(session) && Number(session?.price ?? 0) === 0;
+  if (rsvpOccurrence && session.cancelled) throw new Error("Session is already cancelled.");
   const o = (state.sessionOverrides[sessionId] ||= {});
   o.cancelled = String(reason || "").trim() || "No session this week";
-  const session = getSession(sessionId);
+  if (rsvpOccurrence) o.cancelledAt = now;
   const cancellationCopy = `Session cancelled by ITC — ${o.cancelled}`;
   const cancellationLink = `#/activity/${sessionId}`;
   const venueActivityId = sessionId.replace(/-\d{4}-\d{2}-\d{2}$/, "");
   for (const b of state.bookings.filter((x) => x.sessionId === sessionId)) {
     if (b.status === "confirmed") {
+      if (rsvpOccurrence) {
+        b.status = "cancelled";
+        b.cancelledAt = now;
+        b.cancelledSource = "session";
+        notify(b.userId, "session-cancelled",
+          `${cancellationCopy}. ${b.snapshot.name} · ${fmtDate(b.snapshot.dateISO)}.`,
+          cancellationLink);
+        continue;
+      }
       const target = deferTargetsFor(b).find((s) => s.activityId === venueActivityId);
       if (target) {
         deferBooking(b.id, target.id, now);
@@ -3289,14 +3341,16 @@ export function cancelSessionWeek(sessionId, reason, now = Date.now()) {
         cancellationLink);
     }
   }
-  const q = paymentQueueFor(sessionId);
-  for (const entry of [...q.waitlist, ...q.interest]) {
-    notify(entry.userId, "session-cancelled",
-      `${cancellationCopy}. ITC HYROX · ${fmtDate(sessionDateOf(sessionId))} — the waitlist was dissolved.`,
-      cancellationLink);
+  if (!rsvpOccurrence) {
+    const q = paymentQueueFor(sessionId);
+    for (const entry of [...q.waitlist, ...q.interest]) {
+      notify(entry.userId, "session-cancelled",
+        `${cancellationCopy}. ITC HYROX · ${fmtDate(sessionDateOf(sessionId))} — the waitlist was dissolved.`,
+        cancellationLink);
+    }
+    q.waitlist = [];
+    q.interest = [];
   }
-  q.waitlist = [];
-  q.interest = [];
   save();
 }
 

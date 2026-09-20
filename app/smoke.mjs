@@ -170,6 +170,18 @@ function assertPrimaryNav(user, expected, label) {
 store.load();
 const bftSeed = data.SEED_ACTIVITIES.find((activity) => activity.id === "hyrox-bft");
 const quarryBaySeed = data.SEED_ACTIVITIES.find((activity) => activity.id === "hyrox-quarry-bay");
+for (const activityId of ["wnt", "run", "water"]) {
+  const freeSeed = data.SEED_ACTIVITIES.find((activity) => activity.id === activityId);
+  assert.deepEqual(freeSeed && {
+    kind: freeSeed.kind,
+    requiresRsvp: freeSeed.requiresRsvp,
+    capacity: freeSeed.capacity,
+  }, {
+    kind: "free",
+    requiresRsvp: true,
+    capacity: null,
+  }, `${activityId} must remain free while enabling uncapped RSVP headcounts`);
+}
 assert.ok(bftSeed, "BFT HYROX must use the canonical hyrox-bft activity id");
 assert.equal(data.SEED_ACTIVITIES.some((activity) => activity.id === "hyrox"), false,
   "the ambiguous legacy hyrox activity id must not remain canonical");
@@ -4466,6 +4478,69 @@ store.signIn("admin@example.test");
   if (store.getSession(paidEvent.id)?.cancelled !== true)
     throw new Error("cancelled one-off should read as cancelled");
   console.log("ok  one-off events: create, list, book, delete guard, cancel");
+}
+
+// --- Free-event RSVP contract and local cancellation parity ---
+store.resetLocalData();
+installLocalFixtures();
+{
+  const member = store.allUsers().find((user) => user.id === "fixture-member");
+  const freeSession = store.upcomingSessions(14).find(
+    (session) => session.kind === "free" && !data.sessionStarted(session)
+  );
+  assert.ok(freeSession, "free RSVP contract needs an upcoming free session");
+  assert.equal(store.sessionRequiresRsvp(freeSession), true);
+  store.signIn("member@example.test");
+  const withdrawn = await store.rsvpSession(member.id, freeSession);
+  assert.equal(withdrawn.status, "confirmed");
+  assert.equal(withdrawn.snapshot.price, 0);
+  assert.equal(store.attendeeCountFor(freeSession), 1);
+  await store.withdrawRsvp(withdrawn.id);
+  assert.equal(store.getBooking(withdrawn.id).cancelledSource, "member");
+  assert.equal(typeof store.getBooking(withdrawn.id).cancelledAt, "number");
+
+  const active = await store.rsvpSession(member.id, freeSession, withdrawn.createdAt + 1000);
+  const nextOccurrence = store.upcomingSessions(28).find(
+    (session) => session.activityId === freeSession.activityId && session.id !== freeSession.id
+  );
+  assert.ok(nextOccurrence, "free cancellation contract needs a later occurrence");
+  const bookingCountBeforeCancellation = store.bookingsForUser(member.id).length;
+  const cancellationTime = active.createdAt + 1000;
+  store.signIn("admin@example.test");
+  store.cancelSessionWeek(freeSession.id, "Weather warning", cancellationTime);
+  const cancelled = store.getBooking(active.id);
+  assert.equal(cancelled.status, "cancelled");
+  assert.equal(cancelled.cancelledAt, cancellationTime);
+  assert.equal(cancelled.cancelledSource, "session");
+  assert.equal(store.bookingsForUser(member.id).length, bookingCountBeforeCancellation,
+    "free cancellation must not create a deferred future booking");
+  assert.equal(store.getSession(freeSession.id).cancelled, true);
+  assert.equal(store.getSession(nextOccurrence.id).cancelled, undefined,
+    "free cancellation must affect only the selected occurrence");
+  assert.throws(
+    () => store.cancelSessionWeek(freeSession.id, "Duplicate warning", cancellationTime + 1),
+    /already cancelled/i,
+    "duplicate free-event cancellation must preserve the original cancellation cohort"
+  );
+  assert.equal(store.notificationsFor(member.id).filter(
+    (notification) => notification.kind === "session-cancelled"
+      && notification.link === `#/activity/${freeSession.id}`
+  ).length, 1, "only the active attendee should receive one cancellation notification");
+
+  await store.repostRsvpEvent(freeSession.id);
+  assert.equal(store.getSession(freeSession.id).cancelled, undefined);
+  assert.equal(store.getBooking(active.id).status, "cancelled",
+    "reopening must leave the old RSVP inactive");
+  assert.equal(store.notificationsFor(member.id).filter(
+    (notification) => notification.kind === "session-reopened"
+      && notification.link === `#/activity/${freeSession.id}`
+  ).length, 1, "only session-cancelled attendees should receive one reopening notification");
+  store.signIn("member@example.test");
+  const freshRsvp = await store.rsvpSession(member.id, freeSession, cancellationTime + 1000);
+  assert.equal(freshRsvp.status, "confirmed");
+  assert.notEqual(freshRsvp.id, active.id);
+  assert.equal(store.attendeeCountFor(freeSession), 1);
+  console.log("ok  free-event RSVP withdrawal, cancellation and reopening preserve local parity");
 }
 
 // --- RSVP events (local): the recurring post-training lunch ---

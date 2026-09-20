@@ -17,6 +17,7 @@ export const SEED_ACTIVITIES = [
     id: "wnt",
     name: "Wednesday Night Training",
     kind: "free",
+    requiresRsvp: true,
     category: "Strength",
     weekday: 3, // Wednesday
     time: "19:30",
@@ -27,12 +28,15 @@ export const SEED_ACTIVITIES = [
     blurb:
       "Our flagship all-level session. Structured strength and conditioning led by the community — come ready to move and we scale every workout to you.",
     memberNote: "Meeting point to be confirmed — check back before Wednesday. Bring water.",
+    price: 0,
+    capacity: null,
     published: true,
   },
   {
     id: "run",
     name: "ITC Run Club",
     kind: "free",
+    requiresRsvp: true,
     category: "Run",
     weekday: 1, // Monday
     time: "19:30",
@@ -43,12 +47,15 @@ export const SEED_ACTIVITIES = [
     blurb:
       "Easy-pace social run along the harbour. All paces welcome — nobody gets left behind.",
     memberNote: "Bag drop with a leader at the start point.",
+    price: 0,
+    capacity: null,
     published: true,
   },
   {
     id: "water",
     name: "ITC Swimming",
     kind: "free",
+    requiresRsvp: true,
     category: "Water",
     weekday: 2, // Tuesday
     time: "19:30",
@@ -59,6 +66,8 @@ export const SEED_ACTIVITIES = [
     blurb:
       "Community water session — skills, games and a good workout. Kit is provided, just bring a towel.",
     memberNote: "Changing facilities on site. Arrive 15 minutes early.",
+    price: 0,
+    capacity: null,
     published: true,
   },
   {

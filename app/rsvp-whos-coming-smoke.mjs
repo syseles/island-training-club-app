@@ -23,6 +23,11 @@ memory.set("itc.prototype.v1", JSON.stringify({
   replacementRequests: [], replacementAudit: [], notifications: [], duty: {},
 }));
 store.load();
+const freeEvent = store.upcomingSessions(21).find((session) => session.kind === "free");
+assert.ok(freeEvent, "focused RSVP smoke needs an upcoming free event");
+assert.equal(freeEvent.requiresRsvp, true);
+assert.equal(freeEvent.capacity, null);
+assert.equal(store.sessionRequiresRsvp(freeEvent), true);
 const event = store.upcomingSessions(21).find((session) => session.kind === "rsvp");
 assert.ok(event, "focused RSVP smoke needs an upcoming RSVP event");
 store.signIn("taylor@test");
