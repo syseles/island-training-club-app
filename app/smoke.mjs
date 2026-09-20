@@ -290,10 +290,20 @@ assert.ok(migratedReplacement.bookings.every((booking) =>
   && booking.replacementConfirmedBy === null
 ));
 store.resetLocalData();
-const { existsSync, readFileSync } = await import("node:fs");
+const { existsSync, readFileSync, readdirSync } = await import("node:fs");
 const { resolve, dirname } = await import("node:path");
 const { fileURLToPath } = await import("node:url");
 const __dirnameSmoke = dirname(fileURLToPath(import.meta.url));
+const migrationNames = readdirSync(resolve(__dirnameSmoke, "../supabase/migrations"))
+  .filter((name) => /^\d+_.+\.sql$/.test(name));
+const migrationVersions = new Map();
+for (const name of migrationNames) {
+  const version = name.split("_", 1)[0];
+  const duplicate = migrationVersions.get(version);
+  assert.equal(duplicate, undefined,
+    `Supabase migration version ${version} is duplicated by ${duplicate} and ${name}`);
+  migrationVersions.set(version, name);
+}
 const storeSource = readFileSync(resolve(__dirnameSmoke, "js/store.js"), "utf8");
 const weekVenueSource = storeSource.match(
   /export function setWeekVenue[\s\S]*?\/\/ --- Giving/
@@ -696,7 +706,7 @@ for (const marker of [
 }
 console.log("ok  authoritative free-event RSVP migration preserves transactional routing and privacy");
 const attendeeNamesMigrationPath = resolve(
-  __dirnameSmoke, "../supabase/migrations/20260905000001_operational_attendee_names.sql"
+  __dirnameSmoke, "../supabase/migrations/20260905000000_operational_attendee_names.sql"
 );
 if (!existsSync(attendeeNamesMigrationPath)) {
   throw new Error("approved attendee names migration must exist");

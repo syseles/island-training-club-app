@@ -82,12 +82,12 @@ Supabase SQL Editor (or via `supabase db push` from a trusted workstation):
    automatic allocation and receipts;
    `20260903000004_hyrox_cycle_allocation.sql` — venue switches, closure
    and cancellation carry-forward;
-   `20260904000001_hyrox_quarry_bay_capacity.sql` — Quarry Bay’s 30-place
-   capacity; and
    `20260904000001_hyrox_cycle_auto_provision.sql` — automatic recurring
-   parent-cycle provisioning.
+   parent-cycle provisioning; and
+   `20260904000002_hyrox_quarry_bay_capacity.sql` — Quarry Bay’s 30-place
+   capacity.
 4. Apply the later Admin operations migrations in filename order, ending with:
-   `20260905000001_operational_attendee_names.sql` — approved-member,
+   `20260905000000_operational_attendee_names.sql` — approved-member,
    names-only operational roster access;
    `20260908000001_collector_payment_reminders.sql` — Thursday payment reminders;
    `20260908000002_hyrox_venue_reminders.sql` — Friday allocation reminders; and
