@@ -675,7 +675,6 @@ declare
   v_before_maps text;
   v_after_location text;
   v_after_maps text;
-  v_before_confirmed boolean := false;
   v_after_confirmed boolean := false;
   v_destination text;
   v_session_label text;
@@ -765,21 +764,14 @@ begin
   v_before_maps := coalesce(v_existing.maps_query, v_template_maps, v_session.venue);
   v_after_location := coalesce(v_location, v_session.venue);
   v_after_maps := coalesce(v_maps_query, v_template_maps, v_session.venue);
-  v_before_confirmed := v_before_location is not null
-    and upper(v_before_location) <> 'TBC'
-    and v_before_maps is not null
-    and upper(v_before_maps) <> 'TBC';
   v_after_confirmed := v_after_location is not null
     and upper(v_after_location) <> 'TBC'
     and v_after_maps is not null
     and upper(v_after_maps) <> 'TBC';
-  v_effective_changed := v_before_confirmed is distinct from v_after_confirmed
-    or (v_after_confirmed and (
-      v_before_location is distinct from v_after_location
-      or v_before_maps is distinct from v_after_maps
-      or v_existing.meeting_lat is distinct from v_meeting_lat
-      or v_existing.meeting_lng is distinct from v_meeting_lng
-    ));
+  v_effective_changed := v_before_location is distinct from v_after_location
+    or v_before_maps is distinct from v_after_maps
+    or v_existing.meeting_lat is distinct from v_meeting_lat
+    or v_existing.meeting_lng is distinct from v_meeting_lng;
 
   insert into public.operational_session_venue_overrides
     (session_id, activity_id, location, maps_query, meeting_lat, meeting_lng,
@@ -819,7 +811,7 @@ begin
       join public.profiles p on p.id = b.profile_id
      where b.session_id = v_session_id
        and b.status = 'confirmed'
-       and p.role in ('member', 'admin', 'super_admin');
+       and (p.role = 'member' or p.id = v_actor);
   end if;
 
   -- Existing Admin audit fan-out remains independent of the RSVP cohort.

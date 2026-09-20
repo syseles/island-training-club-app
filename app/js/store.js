@@ -3458,14 +3458,10 @@ export function setWeekVenue(sessionId, {
   const effectiveLocation = cleanLocation || recurring?.location || "";
   const effectiveMapsQuery = cleanMapsQuery || recurring?.mapsQuery || "";
   const confirmed = hasConfirmedVenue(effectiveLocation, effectiveMapsQuery);
-  const previouslyConfirmed = hasConfirmedVenue(before.location, before.mapsQuery);
-  const effectiveVenueChanged = previouslyConfirmed !== confirmed
-    || (confirmed && (
-      before.location !== effectiveLocation
-      || before.mapsQuery !== effectiveMapsQuery
-      || (before.meetingLat ?? null) !== (meetingPoint?.lat ?? null)
-      || (before.meetingLng ?? null) !== (meetingPoint?.lng ?? null)
-    ));
+  const effectiveVenueChanged = before.location !== effectiveLocation
+    || before.mapsQuery !== effectiveMapsQuery
+    || (before.meetingLat ?? null) !== (meetingPoint?.lat ?? null)
+    || (before.meetingLng ?? null) !== (meetingPoint?.lng ?? null);
   const nextVenueTBC = cleared || confirmed ? false : Boolean(override.venueTBC);
   const pointChanged = (previousPoint?.lat ?? null) !== (meetingPoint?.lat ?? null)
     || (previousPoint?.lng ?? null) !== (meetingPoint?.lng ?? null);
@@ -3497,6 +3493,8 @@ export function setWeekVenue(sessionId, {
       ? `${sessionLabel} is at ${effectiveLocation}. Check the activity page for details.`
       : `${sessionLabel} has a venue update. Check the activity page for details.`;
     for (const userId of activeRsvpNotificationRecipients(sessionId)) {
+      const recipient = state.users.find((user) => user.id === userId);
+      if (PAYMENT_ADMIN_ROLES.has(recipient?.role) && userId !== actor?.id) continue;
       state.notifications.push({
         id: uid("n"),
         userId,

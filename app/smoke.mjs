@@ -6565,28 +6565,58 @@ const wntSession = store.upcomingSessions(21).find(
 if (!wntSession) throw new Error("expected an upcoming wnt session for venue tests");
 store.signIn("admin@example.test");
 
-// A partial TBC override remains incomplete: it may retain the independent
-// maps query, but it must not consume member dedupe or claim confirmation.
+// A visible partial override must notify the active RSVP cohort even while
+// the map remains unresolved. A non-actor RSVP Admin gets the audit row instead
+// of a second attendee row; an ordinary member gets the attendee row.
 const partialSwimmingSession = store.upcomingSessions(21).find(
   (s) => s.activityId === "water" && !data.sessionStarted(s)
 );
 if (!partialSwimmingSession) throw new Error("expected an upcoming Swimming session for partial venue tests");
+store.signIn("member@example.test");
+const partialMemberBooking = await store.rsvpSession("fixture-member", partialSwimmingSession.id);
+store.signIn("other-admin@example.test");
+const partialAdminBooking = await store.rsvpSession("fixture-other-admin", partialSwimmingSession.id);
+store.signIn("admin@example.test");
 store.setWeekVenue(partialSwimmingSession.id, {
-  location: "",
-  mapsQuery: "Victoria Park Swimming Pool, Hong Kong",
+  location: "Victoria Park Swimming Pool",
+  mapsQuery: "",
 });
 const partialSwimming = store.getSession(partialSwimmingSession.id);
 const partialSwimmingOverride = store.weekVenueOverride(partialSwimmingSession.id);
-const partialMemberNotes = store.notificationsFor("fixture-member").filter(
+const partialVenueNotesFor = (userId) => store.notificationsFor(userId).filter(
   (n) => n.kind === "operational_session_venue_updated"
-    && n.destination === `#/activity/${partialSwimmingSession.id}`
+    && n.link === `#/activity/${partialSwimmingSession.id}`
 );
-if (partialSwimming.location !== "TBC" || partialSwimming.venueTBC === false) {
-  throw new Error("a maps-query-only Swimming override must remain TBC");
+const partialMemberNotes = partialVenueNotesFor("fixture-member");
+const partialAdminNotes = partialVenueNotesFor("fixture-other-admin");
+if (partialSwimming.location !== "Victoria Park Swimming Pool" || partialSwimming.mapsQuery) {
+  throw new Error("a location-only Swimming override must render its visible location without a map");
 }
-if (partialSwimmingOverride.venueMemberNotifiedAt || partialMemberNotes.length !== 0) {
-  throw new Error("an incomplete Swimming override must not consume member notification dedupe");
+if (!partialSwimmingOverride.venueMemberNotifiedAt || partialMemberNotes.length !== 1) {
+  throw new Error("a visible partial venue change must notify an ordinary active RSVP exactly once");
 }
+if (partialMemberNotes[0]?.title !== "Venue updated"
+    || partialMemberNotes[0]?.body !== `ITC Swimming on ${partialSwimmingSession.dateISO} has a venue update. Check the activity page for details.`) {
+  throw new Error("an ordinary RSVP member must receive attendee venue-update semantics");
+}
+if (partialAdminNotes.length !== 1
+    || partialAdminNotes[0]?.title !== "Session venue updated"
+    || partialAdminNotes[0]?.body !== `Test Admin set the venue for ${partialSwimmingSession.id} to Victoria Park Swimming Pool.`) {
+  throw new Error("a non-actor RSVP Admin must receive exactly one audit venue notification");
+}
+store.setWeekVenue(partialSwimmingSession.id, {
+  location: "Victoria Park Swimming Pool",
+  mapsQuery: "",
+});
+if (partialVenueNotesFor("fixture-member").length !== 1
+    || partialVenueNotesFor("fixture-other-admin").length !== 1) {
+  throw new Error("an exact partial venue repeat must not notify any recipient again");
+}
+store.signIn("other-admin@example.test");
+await store.withdrawRsvp(partialAdminBooking.id);
+store.signIn("member@example.test");
+await store.withdrawRsvp(partialMemberBooking.id);
+store.signIn("admin@example.test");
 
 // Legacy free-event venueTBC flags must be superseded by both direct reset
 // and save-then-reset so the recurring default becomes visible again.
@@ -6871,6 +6901,7 @@ const swimmingSession = store.upcomingSessions(21).find(
   (s) => s.activityId === "water" && !data.sessionStarted(s)
 );
 if (!swimmingSession) throw new Error("expected an upcoming swimming session for admin IA checks");
+const swimmingNotesBeforeCompletion = venueNotesFor("fixture-member", swimmingSession.id).length;
 store.signIn("member@example.test");
 await store.rsvpSession("fixture-member", swimmingSession.id);
 store.signIn("admin@example.test");
@@ -6880,11 +6911,16 @@ store.setWeekVenue(swimmingSession.id, {
 });
 const completedSwimmingOverride = store.weekVenueOverride(swimmingSession.id);
 const completedSwimmingNotes = venueNotesFor("fixture-member", swimmingSession.id);
-if (!completedSwimmingOverride.venueMemberNotifiedAt || completedSwimmingNotes.length !== 1) {
+const completedSwimmingNote = completedSwimmingNotes.find(
+  (note) => note.title === "Venue confirmed"
+    && note.body === `ITC Swimming on ${swimmingSession.dateISO} is at Victoria Park Swimming Pool. Check the activity page for details.`
+);
+if (!completedSwimmingOverride.venueMemberNotifiedAt
+    || completedSwimmingNotes.length !== swimmingNotesBeforeCompletion + 1) {
   throw new Error("completing a partial Swimming override must notify its active RSVP exactly once");
 }
-if (completedSwimmingNotes[0].body !== `ITC Swimming on ${swimmingSession.dateISO} is at Victoria Park Swimming Pool. Check the activity page for details.`) {
-  throw new Error(`Swimming member copy must use its display name; got: ${completedSwimmingNotes[0].body}`);
+if (!completedSwimmingNote) {
+  throw new Error("Swimming member copy must use its display name and confirmed-venue semantics");
 }
 store.signIn("admin@example.test");
 store.setWeekVenue(wntSession.id, {

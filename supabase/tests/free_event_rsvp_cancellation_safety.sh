@@ -38,6 +38,17 @@ if [[ -z "$venue_rpc" ]] || ! grep -q "p_meeting_lat double precision" <<<"$venu
   echo "FAIL: latest six-argument venue RPC must retain meeting-point validation and target active RSVP bookings" >&2
   exit 1
 fi
+if grep -Eq "v_effective_changed := v_before_confirmed" <<<"$venue_rpc" \
+    || ! grep -q "v_before_location is distinct from v_after_location" <<<"$venue_rpc" \
+    || ! grep -q "v_before_maps is distinct from v_after_maps" <<<"$venue_rpc"; then
+  echo "FAIL: venue RPC must detect changes in independently rendered effective venue fields" >&2
+  exit 1
+fi
+if ! grep -q "p.id = v_actor" <<<"$venue_rpc" \
+    || ! grep -q "p.id <> v_actor" <<<"$venue_rpc"; then
+  echo "FAIL: venue RPC must separate actor-attendee and non-actor Admin audit recipients" >&2
+  exit 1
+fi
 
 time_rpc="$(awk '
   /create or replace function public.set_operational_session_time\(/ { capture = 1 }

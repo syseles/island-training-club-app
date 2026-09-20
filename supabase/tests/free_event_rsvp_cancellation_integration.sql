@@ -86,7 +86,8 @@ insert into auth.users (id, email, raw_user_meta_data) values
   ('f2000000-0000-0000-0000-000000000004', 'free-rsvp-c@itc.invalid', '{}'::jsonb),
   ('f2000000-0000-0000-0000-000000000005', 'free-rsvp-pending@itc.invalid', '{}'::jsonb),
   ('f2000000-0000-0000-0000-000000000006', 'free-rsvp-declined@itc.invalid', '{}'::jsonb),
-  ('f2000000-0000-0000-0000-000000000007', 'free-rsvp-unrelated@itc.invalid', '{}'::jsonb);
+  ('f2000000-0000-0000-0000-000000000007', 'free-rsvp-unrelated@itc.invalid', '{}'::jsonb),
+  ('f2000000-0000-0000-0000-000000000008', 'free-rsvp-other-admin@itc.invalid', '{}'::jsonb);
 
 update public.profiles set role = 'admin', full_name = 'Free RSVP Admin'
  where id = 'f2000000-0000-0000-0000-000000000001';
@@ -102,6 +103,8 @@ update public.profiles set role = 'declined', full_name = 'Free RSVP Declined'
  where id = 'f2000000-0000-0000-0000-000000000006';
 update public.profiles set role = 'member', full_name = 'Free RSVP Unrelated'
  where id = 'f2000000-0000-0000-0000-000000000007';
+update public.profiles set role = 'super_admin', full_name = 'Free RSVP Other Admin'
+ where id = 'f2000000-0000-0000-0000-000000000008';
 
 do $$
 declare
@@ -112,6 +115,7 @@ declare
   v_pending constant uuid := 'f2000000-0000-0000-0000-000000000005';
   v_declined constant uuid := 'f2000000-0000-0000-0000-000000000006';
   v_unrelated constant uuid := 'f2000000-0000-0000-0000-000000000007';
+  v_rsvp_admin constant uuid := 'f2000000-0000-0000-0000-000000000008';
   v_session_id text;
   v_future_session_id text;
   v_free_one_off_id text;
@@ -124,6 +128,7 @@ declare
   v_booking_c_withdrawn uuid;
   v_booking_pending uuid;
   v_booking_declined uuid;
+  v_booking_rsvp_admin uuid;
   v_booking_a_fresh uuid;
   v_cancelled_at timestamptz;
   v_rejected boolean;
@@ -379,6 +384,12 @@ begin
     from public.reserve_operational_session(v_session_id);
   reset role;
   update public.profiles set role = 'declined' where id = v_declined;
+
+  perform set_config('request.jwt.claim.sub', v_rsvp_admin::text, true);
+  set local role authenticated;
+  select id into v_booking_rsvp_admin
+    from public.reserve_operational_session(v_session_id);
+  reset role;
   perform set_config('request.jwt.claim.sub', '', true);
 
   delete from public.operational_session_venue_overrides where session_id = v_session_id;
@@ -386,17 +397,17 @@ begin
    where destination = '#/activity/' || v_session_id
      and kind in ('operational_session_venue_updated', 'operational_session_time_updated');
 
-  -- Effective venue/time changes target active, currently approved RSVP
-  -- profiles exactly once. No-op submissions create no member rows.
+  -- A location-only unconfirmed change is publicly visible and targets active,
+  -- currently approved RSVPs exactly once. Exact repeats create no new rows.
+  -- Non-actor RSVP Admins retain audit semantics instead of receiving a second
+  -- attendee notification for the same effective change.
   perform set_config('request.jwt.claim.sub', v_admin::text, true);
   set local role authenticated;
   perform public.set_session_venue(
-    v_session_id, 'Central Harbourfront', 'Central Harbourfront, Hong Kong',
-    true, null, null
+    v_session_id, 'Central Harbourfront', null, true, null, null
   );
   perform public.set_session_venue(
-    v_session_id, 'Central Harbourfront', 'Central Harbourfront, Hong Kong',
-    false, null, null
+    v_session_id, 'Central Harbourfront', null, false, null, null
   );
   perform public.set_operational_session_time(v_session_id, '19:31');
   perform public.set_operational_session_time(v_session_id, '19:31');
@@ -415,7 +426,20 @@ begin
          and destination = '#/activity/' || v_session_id
          and profile_id in (v_member_c, v_pending, v_declined, v_unrelated)
     ),
-    'venue changes notify active approved RSVPs exactly once'
+    'partial venue changes notify ordinary active approved RSVPs exactly once'
+  );
+  perform pg_temp.rsvp_assert(
+    (select count(*) = 1
+       from public.notifications
+      where kind = 'operational_session_venue_updated'
+        and destination = '#/activity/' || v_session_id
+        and profile_id = v_rsvp_admin
+        and title = 'Session venue updated'
+        and body = format(
+          'Free RSVP Admin set the venue for %s to Central Harbourfront.',
+          v_session_id
+        )),
+    'non-actor RSVP Admin receives exactly one venue row with audit semantics'
   );
   perform pg_temp.rsvp_assert(
     (select count(*) = 2
@@ -431,6 +455,12 @@ begin
     ),
     'time changes notify active approved RSVPs exactly once'
   );
+
+  perform set_config('request.jwt.claim.sub', v_rsvp_admin::text, true);
+  set local role authenticated;
+  perform public.withdraw_operational_rsvp(v_booking_rsvp_admin);
+  reset role;
+  perform set_config('request.jwt.claim.sub', '', true);
 
   perform set_config('request.jwt.claim.sub', v_admin::text, true);
   set local role authenticated;
