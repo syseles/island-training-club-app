@@ -3299,11 +3299,13 @@ export function cancelSessionWeek(sessionId, reason, now = Date.now()) {
     return liveOps.liveCancelSession(sessionId, reason);
   }
   requirePaymentAdminActor();
+  const cancellationReason = String(reason || "").trim();
+  if (!cancellationReason) throw new Error("Cancellation reason is required.");
   const session = getSession(sessionId);
   const rsvpOccurrence = sessionRequiresRsvp(session) && Number(session?.price ?? 0) === 0;
   if (rsvpOccurrence && session.cancelled) throw new Error("Session is already cancelled.");
   const o = (state.sessionOverrides[sessionId] ||= {});
-  o.cancelled = String(reason || "").trim() || "No session this week";
+  o.cancelled = cancellationReason;
   if (rsvpOccurrence) o.cancelledAt = now;
   const cancellationCopy = `Session cancelled by ITC — ${o.cancelled}`;
   const cancellationLink = `#/activity/${sessionId}`;

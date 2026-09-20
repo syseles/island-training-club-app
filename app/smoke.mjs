@@ -4507,6 +4507,15 @@ installLocalFixtures();
   const bookingCountBeforeCancellation = store.bookingsForUser(member.id).length;
   const cancellationTime = active.createdAt + 1000;
   store.signIn("admin@example.test");
+  assert.throws(
+    () => store.cancelSessionWeek(freeSession.id, "   \t  ", cancellationTime),
+    /reason.*required/i,
+    "free-event cancellation must reject a whitespace-only reason"
+  );
+  assert.equal(store.getSession(freeSession.id).cancelled, undefined,
+    "invalid cancellation must not mutate the session override");
+  assert.equal(store.getBooking(active.id).status, "confirmed",
+    "invalid cancellation must not cancel active RSVPs");
   store.cancelSessionWeek(freeSession.id, "Weather warning", cancellationTime);
   const cancelled = store.getBooking(active.id);
   assert.equal(cancelled.status, "cancelled");
