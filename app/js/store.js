@@ -3295,7 +3295,14 @@ export function cancelSessionWeek(sessionId, reason, now = Date.now()) {
   if (!cancellationReason) throw new Error("Cancellation reason is required.");
   const session = getSession(sessionId);
   if (!session) throw new Error("Session not found.");
-  const rsvpOccurrence = sessionRequiresRsvp(session) && Number(session.price) === 0;
+  const requiresRsvp = sessionRequiresRsvp(session);
+  const hasExplicitZeroPrice = typeof session.price === "number"
+    && Number.isFinite(session.price)
+    && session.price === 0;
+  if (requiresRsvp && !hasExplicitZeroPrice) {
+    throw new Error("RSVP session price must be an explicit numeric zero.");
+  }
+  const rsvpOccurrence = requiresRsvp && hasExplicitZeroPrice;
   if (rsvpOccurrence) {
     if (session.cancelled) throw new Error("Session is already cancelled.");
     const startsAt = hktEventStartMs(session.dateISO, session.time);
@@ -3303,14 +3310,20 @@ export function cancelSessionWeek(sessionId, reason, now = Date.now()) {
       throw new Error("Session has already started.");
     }
   }
+  const cancellationSnapshots = new Map();
+  if (rsvpOccurrence) {
+    for (const booking of state.bookings) {
+      if (booking.sessionId !== sessionId || booking.status !== "confirmed"
+          || !canReceiveRsvpNotification(booking.userId)
+          || cancellationSnapshots.has(booking.userId)) continue;
+      cancellationSnapshots.set(booking.userId, booking.snapshot || session);
+    }
+  }
   const o = (state.sessionOverrides[sessionId] ||= {});
   o.cancelled = cancellationReason;
   if (rsvpOccurrence) o.cancelledAt = now;
   const cancellationCopy = `Session cancelled by ITC — ${o.cancelled}`;
   const cancellationLink = `#/activity/${sessionId}`;
-  const cancellationRecipients = rsvpOccurrence
-    ? new Set(activeRsvpNotificationRecipients(sessionId))
-    : null;
   const venueActivityId = sessionId.replace(/-\d{4}-\d{2}-\d{2}$/, "");
   for (const b of state.bookings.filter((x) => x.sessionId === sessionId)) {
     if (b.status === "confirmed") {
@@ -3343,10 +3356,7 @@ export function cancelSessionWeek(sessionId, reason, now = Date.now()) {
     }
   }
   if (rsvpOccurrence) {
-    for (const userId of cancellationRecipients) {
-      const snapshot = state.bookings.find((booking) =>
-        booking.sessionId === sessionId && booking.userId === userId
-      )?.snapshot || session;
+    for (const [userId, snapshot] of cancellationSnapshots) {
       notify(userId, "session-cancelled",
         `${cancellationCopy}. ${snapshot.name} · ${fmtDate(snapshot.dateISO)}.`,
         cancellationLink);

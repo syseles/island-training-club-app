@@ -607,11 +607,29 @@ const freeEventRsvpBranch = freeEventCancellationDispatcher.match(
 assert.match(freeEventRsvpBranch, /status = 'confirmed'/,
   "RSVP cancellation must target active confirmed rows");
 assert.match(freeEventRsvpBranch,
-  /cancelled_at = v_session\.cancelled_at[\s\S]*?cancellation_source = 'session'/,
+  /cancelled_at = v_cancelled_at[\s\S]*?cancellation_source = 'session'/,
   "RSVP cancellation must atomically link booking metadata to the occurrence");
 assert.match(freeEventRsvpBranch,
-  /session_date\s*\+\s*v_session\.start_time[\s\S]*?at time zone 'Asia\/Hong_Kong'\s*<=\s*now\(\)[\s\S]*?already started/i,
-  "RSVP cancellation must reject at or after Hong Kong start");
+  /v_cancelled_at\s*:=\s*clock_timestamp\(\)[\s\S]*?session_date\s*\+\s*v_session\.start_time[\s\S]*?at time zone 'Asia\/Hong_Kong'\s*<=\s*v_cancelled_at[\s\S]*?already started/i,
+  "RSVP cancellation must decide the inclusive Hong Kong cutoff with a captured wall clock");
+const freeEventSessionLockIndex = freeEventCancellationDispatcher.search(
+  /from public\.operational_sessions[\s\S]*?for update/i
+);
+const freeEventWallClockIndex = freeEventCancellationDispatcher.search(
+  /v_cancelled_at\s*:=\s*clock_timestamp\(\)/i
+);
+const freeEventFirstMutationIndex = freeEventCancellationDispatcher.search(
+  /update public\.operational_sessions/i
+);
+assert.ok(
+  freeEventSessionLockIndex !== -1
+    && freeEventSessionLockIndex < freeEventWallClockIndex
+    && freeEventWallClockIndex < freeEventFirstMutationIndex,
+  "RSVP cancellation must capture wall-clock decision time after the session lock and before mutation"
+);
+assert.match(freeEventRsvpBranch,
+  /set cancelled_at = v_cancelled_at[\s\S]*?resolved_at = v_cancelled_at[\s\S]*?cancelled_at = v_cancelled_at[\s\S]*?v_cancelled_at[\s\S]*?from cancelled_rsvps/i,
+  "RSVP cancellation must use one captured wall-clock timestamp for session, queue, bookings, and notifications");
 assert.ok(
   freeEventRsvpBranch.search(/already started/i)
     < freeEventRsvpBranch.search(/update public\.operational_sessions/i),
@@ -664,6 +682,7 @@ for (const marker of [
   "pending attendee roster access is rejected", "declined attendee roster access is rejected",
   "recurring occurrences use declared weekdays", "cancellation dissolves active RSVP queues",
   "started RSVP cancellation is rejected without mutation",
+  "cancellation uses one captured wall-clock timestamp",
 ]) {
   assert.ok(freeEventRsvpIntegrationSource.includes(marker),
     `free-event RSVP integration evidence missing ${marker}`);
@@ -4910,7 +4929,47 @@ for (const boundary of [
     assert.equal(store.getBooking(booking.id).status, "cancelled");
   }
 }
-console.log("ok  local RSVP cancellation rejects unknown and HKT-started occurrences without mutation");
+
+// RSVP capability only permits an explicit finite numeric zero. Persisted
+// null/empty prices must not be coerced into the free cancellation path.
+for (const malformedPrice of [null, ""]) {
+  store.resetLocalData();
+  installLocalFixtures();
+  store.signIn("admin@example.test");
+  const session = await store.createOneOffEvent({
+    name: "Malformed price RSVP",
+    dateISO: data.isoDate(data.addDays(data.parseISO(data.todayHktISO()), 10)),
+    time: "18:00",
+    durationMin: 60,
+    location: "TBC",
+    category: "Other",
+    price: 180,
+    capacity: 20,
+  });
+  store.signIn("member@example.test");
+  store.reserveSession("fixture-member", session.id);
+  const corrupted = JSON.parse(mem.get("itc.prototype.v1"));
+  const corruptedEvent = corrupted.oneOffEvents.find((event) => event.id === session.activityId);
+  corruptedEvent.requiresRsvp = true;
+  corruptedEvent.price = malformedPrice;
+  mem.set("itc.prototype.v1", JSON.stringify(corrupted));
+  store.load();
+  store.signIn("admin@example.test");
+  const before = JSON.parse(mem.get("itc.prototype.v1"));
+  assert.throws(
+    () => store.cancelSessionWeek(session.id, "Weather warning"),
+    /RSVP.*price|price.*RSVP/i,
+    `RSVP cancellation must reject malformed ${malformedPrice === null ? "null" : "empty"} price`
+  );
+  const after = JSON.parse(mem.get("itc.prototype.v1"));
+  assert.deepEqual(after.sessionOverrides, before.sessionOverrides,
+    "malformed RSVP price must not create an override");
+  assert.deepEqual(after.bookings, before.bookings,
+    "malformed RSVP price must not mutate bookings");
+  assert.deepEqual(after.notifications, before.notifications,
+    "malformed RSVP price must not create notifications");
+}
+console.log("ok  local RSVP cancellation rejects unknown, malformed-price, and started occurrences without mutation");
 
 // Persisted prototype state can predate uniqueness guarantees. Cancellation
 // repairs every duplicate active row while notifying each profile only once.
@@ -4941,6 +5000,44 @@ console.log("ok  local RSVP cancellation rejects unknown and HKT-started occurre
   ).length, 1, "duplicate active RSVP rows must emit one cancellation notification per profile");
 }
 console.log("ok  local RSVP cancellation deduplicates corrupted active booking recipients");
+
+// After reopening and a fresh RSVP, notification copy must come from the
+// current active row rather than an older cancelled row for the same member.
+{
+  store.resetLocalData();
+  installLocalFixtures();
+  store.signIn("member@example.test");
+  const session = store.upcomingSessions(21).find(
+    (item) => item.activityId === "wnt" && !data.sessionStarted(item)
+  );
+  assert.ok(session, "active-snapshot cancellation needs an upcoming free RSVP occurrence");
+  const startsAt = data.hktEventStartMs(session.dateISO, session.time);
+  const older = await store.rsvpSession("fixture-member", session.id, startsAt - 5000);
+  store.signIn("admin@example.test");
+  store.cancelSessionWeek(session.id, "First warning", startsAt - 4000);
+  await store.repostRsvpEvent(session.id);
+  store.signIn("member@example.test");
+  const current = await store.rsvpSession("fixture-member", session.id, startsAt - 3000);
+  const persisted = JSON.parse(mem.get("itc.prototype.v1"));
+  persisted.bookings.find((booking) => booking.id === older.id).snapshot.name = "Older cancelled copy";
+  persisted.bookings.find((booking) => booking.id === current.id).snapshot.name = "Current active copy";
+  persisted.notifications = [];
+  mem.set("itc.prototype.v1", JSON.stringify(persisted));
+  store.load();
+  store.signIn("admin@example.test");
+  store.cancelSessionWeek(session.id, "Second warning", startsAt - 2000);
+  const notifications = store.notificationsFor("fixture-member").filter(
+    (notification) => notification.kind === "session-cancelled"
+      && notification.link === `#/activity/${session.id}`
+  );
+  assert.equal(notifications.length, 1,
+    "re-RSVP cancellation must notify the eligible member exactly once");
+  assert.match(notifications[0].body, /Current active copy/,
+    "cancellation copy must use the current active RSVP snapshot");
+  assert.doesNotMatch(notifications[0].body, /Older cancelled copy/,
+    "cancellation copy must not use an older cancelled RSVP snapshot");
+}
+console.log("ok  local RSVP cancellation snapshots active rows before deduplicated fan-out");
 
 // Event-change and cancellation fan-out follows the occurrence's active RSVP
 // cohort, not the member directory. A later role downgrade also closes the

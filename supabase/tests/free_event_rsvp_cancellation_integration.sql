@@ -135,6 +135,8 @@ declare
   v_started_booking_id uuid;
   v_started_queue_id uuid;
   v_cancelled_at timestamptz;
+  v_cancel_started_at timestamptz;
+  v_cancel_finished_at timestamptz;
   v_started_session_before jsonb;
   v_started_booking_before jsonb;
   v_started_queue_before jsonb;
@@ -543,7 +545,9 @@ begin
 
   perform set_config('request.jwt.claim.sub', v_admin::text, true);
   set local role authenticated;
+  v_cancel_started_at := clock_timestamp();
   perform public.cancel_operational_session(v_session_id, 'Weather warning.');
+  v_cancel_finished_at := clock_timestamp();
   reset role;
   perform set_config('request.jwt.claim.sub', '', true);
 
@@ -551,6 +555,10 @@ begin
     from public.operational_sessions
    where id = v_session_id;
   perform pg_temp.rsvp_assert(v_cancelled_at is not null, 'session cancellation is recorded');
+  perform pg_temp.rsvp_assert(
+    v_cancelled_at between v_cancel_started_at and v_cancel_finished_at,
+    'cancellation uses one captured wall-clock timestamp'
+  );
   perform pg_temp.rsvp_assert(
     (select status = 'dissolved' and resolved_at = v_cancelled_at
        from public.operational_queue_entries where id = v_legacy_queue_id),
@@ -584,6 +592,7 @@ begin
        from public.notifications
       where kind = 'operational_session_cancelled'
         and destination = '#/activity/' || v_session_id
+        and created_at = v_cancelled_at
         and profile_id in (v_member_a, v_member_b))
     and not exists (
       select 1 from public.notifications

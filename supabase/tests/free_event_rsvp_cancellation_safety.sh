@@ -85,11 +85,16 @@ if [[ "$(rg -UNic "$table_mutation_grant_pattern" "$mixed_grant_probe")" -ne 2 ]
   exit 1
 fi
 
+cancellation_rpc="$(awk '
+  /create or replace function public.cancel_operational_session\(/ { capture = 1 }
+  capture { print }
+  capture && /^\$\$;$/ { exit }
+' "$migration")"
 rsvp_branch="$(awk '
   /if v_is_rsvp then/ { in_branch = 1 }
   in_branch { print }
   in_branch && /return v_session;/ { exit }
-' "$migration")"
+' <<<"$cancellation_rpc")"
 if [[ -z "$rsvp_branch" ]] || ! grep -q 'return v_session;' <<<"$rsvp_branch"; then
   echo "FAIL: cancellation dispatcher must have an early-returning RSVP branch" >&2
   exit 1
@@ -99,9 +104,31 @@ if grep -Eqi 'defer|deferred|cancel_operational_session_legacy' <<<"$rsvp_branch
   exit 1
 fi
 rsvp_before_session_update="${rsvp_branch%%update public.operational_sessions*}"
-if ! grep -q "at time zone 'Asia/Hong_Kong' <= now()" <<<"$rsvp_before_session_update" \
+if ! grep -q 'v_cancelled_at := clock_timestamp()' <<<"$rsvp_before_session_update" \
+    || ! grep -q "at time zone 'Asia/Hong_Kong' <= v_cancelled_at" <<<"$rsvp_before_session_update" \
     || ! grep -qi 'already started' <<<"$rsvp_before_session_update"; then
-  echo "FAIL: RSVP cancellation must reject at/after Hong Kong start before mutating the session" >&2
+  echo "FAIL: RSVP cancellation must use a captured wall clock for the start cutoff before mutation" >&2
+  exit 1
+fi
+lock_line="$(grep -n -m1 'for update;' <<<"$cancellation_rpc" | cut -d: -f1)"
+clock_line="$(grep -n -m1 'v_cancelled_at := clock_timestamp()' <<<"$cancellation_rpc" | cut -d: -f1)"
+mutation_line="$(grep -n -m1 'update public.operational_sessions' <<<"$cancellation_rpc" | cut -d: -f1)"
+if [[ -z "$lock_line" || -z "$clock_line" || -z "$mutation_line" \
+    || "$lock_line" -ge "$clock_line" || "$clock_line" -ge "$mutation_line" ]]; then
+  echo "FAIL: wall-clock capture must follow the session lock and precede the first mutation" >&2
+  exit 1
+fi
+for timestamp_target in \
+  'set cancelled_at = v_cancelled_at' \
+  'resolved_at = v_cancelled_at' \
+  'v_cancelled_at'; do
+  if ! grep -q "$timestamp_target" <<<"$rsvp_branch"; then
+    echo "FAIL: RSVP cancellation must reuse one wall-clock timestamp for every mutation" >&2
+    exit 1
+  fi
+done
+if grep -q 'set cancelled_at = now()' <<<"$rsvp_branch"; then
+  echo "FAIL: RSVP cancellation must not use the transaction-stable now() timestamp" >&2
   exit 1
 fi
 

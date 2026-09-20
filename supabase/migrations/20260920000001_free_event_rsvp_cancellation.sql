@@ -486,6 +486,7 @@ declare
   v_is_rsvp boolean;
   v_trim_reason text;
   v_cycle_id text;
+  v_cancelled_at timestamptz;
 begin
   perform public.operational_assert_admin('cancel_session');
 
@@ -510,13 +511,14 @@ begin
     if v_session.cancelled_at is not null then
       raise exception 'Session is already cancelled.' using errcode = '23514';
     end if;
+    v_cancelled_at := clock_timestamp();
     if (v_session.session_date + v_session.start_time)
-         at time zone 'Asia/Hong_Kong' <= now() then
+         at time zone 'Asia/Hong_Kong' <= v_cancelled_at then
       raise exception 'Session has already started.' using errcode = '23514';
     end if;
 
     update public.operational_sessions
-       set cancelled_at = now(),
+       set cancelled_at = v_cancelled_at,
            cancelled_by = v_uid,
            cancelled_source = 'admin',
            cancel_reason = v_trim_reason
@@ -525,14 +527,14 @@ begin
 
     update public.operational_queue_entries
        set status = 'dissolved',
-           resolved_at = v_session.cancelled_at
+           resolved_at = v_cancelled_at
      where session_id = p_session_id
        and status = 'active';
 
     with cancelled_rsvps as (
       update public.operational_bookings
          set status = 'cancelled',
-             cancelled_at = v_session.cancelled_at,
+             cancelled_at = v_cancelled_at,
              cancellation_source = 'session'
        where session_id = p_session_id
          and status = 'confirmed'
@@ -545,7 +547,7 @@ begin
            'Session cancelled',
            'Session cancelled by ITC — ' || v_trim_reason,
            '#/activity/' || p_session_id,
-           v_session.cancelled_at
+           v_cancelled_at
       from cancelled_rsvps r
       join public.profiles p on p.id = r.profile_id
      where p.role in ('member', 'admin', 'super_admin');
