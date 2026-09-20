@@ -488,12 +488,15 @@ landscape viewport.
 
 ### Read-only notification acceptance evidence
 
-After the controlled acceptance, replace the six UUIDs, session ID, and
-acceptance start timestamp below with the recorded fixture values. Run both
-queries through trusted read-only production SQL before promotion. The UUID
-placeholders are valid but deliberately cannot pass the positive checks; do not
-edit expected counts. Every `ok` value and every boolean in the state query must
-be `true`.
+Immediately before the Admin cancellation, record the acceptance start
+timestamp; immediately after the final time-change notification commits, record
+the acceptance finish timestamp. After the controlled acceptance, replace the
+six UUIDs, exact session ID, and both timestamps below with those recorded
+fixture values. Run all three queries through trusted read-only production SQL
+before promotion. The UUID placeholders are valid but deliberately cannot pass
+the positive checks; do not edit expected counts. Every `ok` value and every
+boolean in the state query must be `true`, and the final anti-join must return
+zero rows.
 
 The first query proves exact recipient and non-recipient notification behavior,
 including no duplicate notification for the acting Admin who also RSVP'd:
@@ -501,7 +504,8 @@ including no duplicate notification for the acting Admin who also RSVP'd:
 ```sql
 with params as (
   select 'REPLACE_WITH_SESSION_ID'::text as session_id,
-         '2099-01-01 00:00:00+00'::timestamptz as acceptance_started_at
+         '2099-01-01 00:00:00+00'::timestamptz as acceptance_started_at,
+         '2099-01-01 01:00:00+00'::timestamptz as acceptance_finished_at
 ), cohorts(profile_id, cohort, expected_count) as (
   values
     ('00000000-0000-0000-0000-000000000001'::uuid, 'active member', 1),
@@ -525,6 +529,7 @@ with params as (
     cross join params p
    where n.destination = '#/activity/' || p.session_id
      and n.created_at >= p.acceptance_started_at
+     and n.created_at < p.acceptance_finished_at
      and n.kind in (select kind from kinds)
    group by n.profile_id, n.kind
 )
@@ -570,7 +575,55 @@ select count(*) filter (
  group by p.active_member_id, p.acting_admin_id;
 ```
 
-Attach the query output and authenticated screenshots to the release record.
+The third query is the observed-led safety check that the cohort-led first query
+cannot provide. Its expected set includes the two fresh RSVP confirmations that
+occur inside the bounded window. Before running it, add one explicit
+`operational_session_venue_updated` pair for every non-acting Admin or Super
+Admin who is expected to receive the existing venue-audit fan-out. Do not add
+any other profile merely to make the output empty.
+
+**Unexpected notification recipients/kinds:** this query must return zero rows
+before production promotion. Any row is an unexpected `(profile_id, kind)` or a
+missing expected-set entry that must be investigated. Because it uses the exact
+dated-session destination and the recorded half-open acceptance window, older
+notifications for this session and notifications for other sessions cannot
+create false positives.
+
+```sql
+with params as (
+  select 'REPLACE_WITH_SESSION_ID'::text as session_id,
+         '2099-01-01 00:00:00+00'::timestamptz as acceptance_started_at,
+         '2099-01-01 01:00:00+00'::timestamptz as acceptance_finished_at
+), expected_recipient_kinds(profile_id, kind) as (
+  values
+    ('00000000-0000-0000-0000-000000000001'::uuid, 'operational_session_cancelled'),
+    ('00000000-0000-0000-0000-000000000002'::uuid, 'operational_session_cancelled'),
+    ('00000000-0000-0000-0000-000000000001'::uuid, 'operational_rsvp_reopened'),
+    ('00000000-0000-0000-0000-000000000002'::uuid, 'operational_rsvp_reopened'),
+    ('00000000-0000-0000-0000-000000000001'::uuid, 'operational_rsvp_confirmed'),
+    ('00000000-0000-0000-0000-000000000002'::uuid, 'operational_rsvp_confirmed'),
+    ('00000000-0000-0000-0000-000000000001'::uuid, 'operational_session_venue_updated'),
+    ('00000000-0000-0000-0000-000000000002'::uuid, 'operational_session_venue_updated'),
+    -- Add each expected non-acting Admin venue-audit pair here.
+    ('00000000-0000-0000-0000-000000000001'::uuid, 'operational_session_time_updated'),
+    ('00000000-0000-0000-0000-000000000002'::uuid, 'operational_session_time_updated')
+), observed as (
+  select n.profile_id, n.kind, count(*)::integer as actual_count
+    from public.notifications n
+    cross join params p
+   where n.destination = '#/activity/' || p.session_id
+     and n.created_at >= p.acceptance_started_at
+     and n.created_at < p.acceptance_finished_at
+   group by n.profile_id, n.kind
+)
+select o.profile_id, o.kind, o.actual_count
+  from observed o
+  left join expected_recipient_kinds e using (profile_id, kind)
+ where e.profile_id is null
+ order by o.profile_id, o.kind;
+```
+
+Attach all query output and authenticated screenshots to the release record.
 Only then is notification acceptance complete and production frontend promotion
 permitted.
 

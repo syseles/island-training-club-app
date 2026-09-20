@@ -1294,6 +1294,20 @@ if (/^\s*supabase db query/m.test(freeEventRunbookSection)
     || /^\s*supabase[^\n]*(?:--linked[^\n]*--project-ref|--project-ref[^\n]*--linked)/m.test(freeEventRunbookSection)) {
   throw new Error("free-event RSVP runbook must not mix linked/project-ref flags or use db query");
 }
+for (const marker of [
+  "acceptance_finished_at",
+  "expected_recipient_kinds",
+  "Unexpected notification recipients/kinds",
+  "must return zero rows",
+]) {
+  if (!freeEventRunbookSection.includes(marker)) {
+    throw new Error(`free-event RSVP notification anti-join documentation missing ${marker}`);
+  }
+}
+if (!/n\.destination\s*=\s*'#\/activity\/'\s*\|\|\s*p\.session_id[\s\S]*?n\.created_at\s*>=\s*p\.acceptance_started_at[\s\S]*?n\.created_at\s*<\s*p\.acceptance_finished_at/i.test(freeEventRunbookSection)
+    || !/from\s+observed\s+o[\s\S]*?left\s+join\s+expected_recipient_kinds\s+e\s+using\s*\(\s*profile_id\s*,\s*kind\s*\)[\s\S]*?where\s+e\.profile_id\s+is\s+null/i.test(freeEventRunbookSection)) {
+  throw new Error("free-event RSVP notification verification must anti-join bounded observed rows against exact expected recipients");
+}
 const freeEventRolloutMarkers = [
   "Apply the backend migration",
   "Run read-only production verification",
