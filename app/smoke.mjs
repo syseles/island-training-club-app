@@ -571,6 +571,69 @@ const rsvpIntegrityMigrationSource = readFileSync(
   resolve(__dirnameSmoke, "../supabase/migrations/20260829000008_rsvp_integrity.sql"),
   "utf8"
 );
+const freeEventRsvpMigrationPath = resolve(
+  __dirnameSmoke, "../supabase/migrations/20260920000001_free_event_rsvp_cancellation.sql"
+);
+assert.ok(existsSync(freeEventRsvpMigrationPath),
+  "authoritative free-event RSVP cancellation migration must exist");
+const freeEventRsvpMigrationSource = readFileSync(freeEventRsvpMigrationPath, "utf8");
+const freeEventRsvpIntegrationSource = readFileSync(
+  resolve(__dirnameSmoke, "../supabase/tests/free_event_rsvp_cancellation_integration.sql"),
+  "utf8"
+);
+for (const activityId of ["wnt", "run", "water"]) {
+  assert.match(freeEventRsvpMigrationSource,
+    new RegExp(`\\('${activityId}',[\\s\\S]*?null, 0,[\\s\\S]*?true\\)`),
+    `${activityId} live template must remain uncapped, zero-price, and RSVP-enabled`);
+}
+for (const marker of [
+  "cancelled_at timestamptz",
+  "cancellation_source text",
+  "cancellation_source in ('member', 'session')",
+  "ensure_operational_sessions(current_date, 16)",
+  "at time zone 'Asia/Hong_Kong'",
+  "operational_session_cancelled",
+  "operational_rsvp_reopened",
+]) {
+  assert.ok(freeEventRsvpMigrationSource.includes(marker),
+    `free-event RSVP migration missing ${marker}`);
+}
+const freeEventCancellationDispatcher = freeEventRsvpMigrationSource.match(
+  /create or replace function public\.cancel_operational_session\([\s\S]*?\n\$\$;/i
+)?.[0] || "";
+const freeEventRsvpBranch = freeEventCancellationDispatcher.match(
+  /if v_is_rsvp then[\s\S]*?return v_session;[\s\S]*?end if;/i
+)?.[0] || "";
+assert.match(freeEventRsvpBranch, /status = 'confirmed'/,
+  "RSVP cancellation must target active confirmed rows");
+assert.match(freeEventRsvpBranch,
+  /cancelled_at = v_session\.cancelled_at[\s\S]*?cancellation_source = 'session'/,
+  "RSVP cancellation must atomically link booking metadata to the occurrence");
+assert.doesNotMatch(freeEventRsvpBranch, /defer|cancel_operational_session_legacy/i,
+  "RSVP cancellation must return before paid deferral behavior");
+assert.ok(
+  freeEventCancellationDispatcher.indexOf("return v_session;")
+    < freeEventCancellationDispatcher.indexOf("cancel_operational_session_legacy"),
+  "RSVP cancellation must return before the paid legacy dispatcher"
+);
+assert.match(freeEventRsvpMigrationSource,
+  /cancellation_source = 'session'[\s\S]*?cancelled_at = v_session\.cancelled_at[\s\S]*?operational_rsvp_reopened|cancelled_at = v_session\.cancelled_at[\s\S]*?cancellation_source = 'session'[\s\S]*?operational_rsvp_reopened/,
+  "reopening must select only recipients linked to that session cancellation");
+assert.doesNotMatch(freeEventRsvpMigrationSource,
+  /grant\s+(?:all|insert|update|delete)[^\n]*on\s+(?:table\s+)?public\./i,
+  "free-event RSVP migration must keep browser writes behind RPCs");
+for (const marker of [
+  "begin;", "rollback;", "unauthorized", "duplicate active RSVP",
+  "booking RLS hides another attendee identity", "RSVP cancellation never enters paid deferral",
+  "cancellation notifications target active attendees only",
+  "reopening targets only attendees cancelled by that occurrence",
+  "member can create a fresh RSVP after reopening",
+  "future occurrence unchanged",
+]) {
+  assert.ok(freeEventRsvpIntegrationSource.includes(marker),
+    `free-event RSVP integration evidence missing ${marker}`);
+}
+console.log("ok  authoritative free-event RSVP migration preserves transactional routing and privacy");
 const attendeeNamesMigrationPath = resolve(
   __dirnameSmoke, "../supabase/migrations/20260905000001_operational_attendee_names.sql"
 );
