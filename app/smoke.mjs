@@ -619,6 +619,27 @@ assert.ok(
 assert.match(freeEventRsvpMigrationSource,
   /cancellation_source = 'session'[\s\S]*?cancelled_at = v_session\.cancelled_at[\s\S]*?operational_rsvp_reopened|cancelled_at = v_session\.cancelled_at[\s\S]*?cancellation_source = 'session'[\s\S]*?operational_rsvp_reopened/,
   "reopening must select only recipients linked to that session cancellation");
+assert.match(freeEventRsvpMigrationSource,
+  /operational_activity_templates_free_one_off_rsvp_check[\s\S]*?activity_id not like 'event-%'[\s\S]*?requires_rsvp[\s\S]*?capacity is null/i,
+  "zero-price one-off templates must be guaranteed explicit RSVP and uncapped");
+assert.match(freeEventRsvpMigrationSource,
+  /create or replace function public\.create_operational_event[\s\S]*?p_price_hkd = 0[\s\S]*?requires_rsvp[\s\S]*?capacity/i,
+  "future free one-offs must normalize to RSVP and null capacity");
+assert.match(freeEventRsvpMigrationSource,
+  /create or replace function public\.join_operational_queue[\s\S]*?v_is_rsvp[\s\S]*?raise exception[^;]*queue/i,
+  "joining any queue for an explicit free RSVP session must be rejected");
+assert.match(freeEventRsvpMigrationSource,
+  /create or replace function public\.leave_operational_queue[\s\S]*?v_is_rsvp[\s\S]*?raise exception[^;]*queue/i,
+  "leaving a legacy queue row for an explicit free RSVP session must be rejected");
+assert.match(freeEventRsvpBranch,
+  /operational_queue_entries[\s\S]*?status = 'dissolved'/i,
+  "RSVP cancellation must dissolve active legacy queue rows");
+const withdrawRsvpFunction = freeEventRsvpMigrationSource.match(
+  /create or replace function public\.withdraw_operational_rsvp[\s\S]*?\n\$\$;/i
+)?.[0] || "";
+assert.match(withdrawRsvpFunction,
+  /current_user_role\(\)[\s\S]*?'member'[\s\S]*?'admin'[\s\S]*?'super_admin'/i,
+  "RSVP withdrawal must require a currently approved role");
 assert.doesNotMatch(freeEventRsvpMigrationSource,
   /grant\s+(?:all|insert|update|delete)[^\n]*on\s+(?:table\s+)?public\./i,
   "free-event RSVP migration must keep browser writes behind RPCs");
@@ -628,7 +649,12 @@ for (const marker of [
   "cancellation notifications target active attendees only",
   "reopening targets only attendees cancelled by that occurrence",
   "member can create a fresh RSVP after reopening",
-  "future occurrence unchanged",
+  "future occurrence unchanged", "existing free one-off is normalized",
+  "future free one-off defaults to uncapped RSVP", "paid one-off remains capacity-limited",
+  "RSVP queue joins are rejected", "RSVP queue leave is rejected",
+  "pending withdrawal is rejected", "declined withdrawal is rejected",
+  "pending attendee roster access is rejected", "declined attendee roster access is rejected",
+  "recurring occurrences use declared weekdays", "cancellation dissolves active RSVP queues",
 ]) {
   assert.ok(freeEventRsvpIntegrationSource.includes(marker),
     `free-event RSVP integration evidence missing ${marker}`);

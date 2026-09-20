@@ -53,13 +53,140 @@ set name = excluded.name,
     requires_rsvp = excluded.requires_rsvp,
     updated_at = now();
 
--- Existing free one-off events become explicit RSVPs. Zero price outside this
--- known event family remains insufficient to enter an RSVP path.
+-- Existing free one-off events become explicit, uncapped RSVPs. Zero price
+-- outside this known event family remains insufficient to enter an RSVP path.
 update public.operational_activity_templates
    set requires_rsvp = true,
+       capacity = null,
        updated_at = now()
  where activity_id like 'event-%'
    and price_hkd = 0;
+
+-- Existing occurrences inherit the uncapped invariant from every explicit
+-- zero-price RSVP template, including recurring rows materialized previously.
+update public.operational_sessions s
+   set capacity = null
+  from public.operational_activity_templates t
+ where t.activity_id = s.activity_id
+   and t.requires_rsvp
+   and t.price_hkd = 0
+   and s.price_hkd = 0;
+
+-- Legacy queue rows cannot remain active after an occurrence becomes an
+-- explicit RSVP. Future member queue operations are rejected by the RPCs below.
+update public.operational_queue_entries q
+   set status = 'dissolved',
+       resolved_at = now()
+  from public.operational_sessions s
+  join public.operational_activity_templates t on t.activity_id = s.activity_id
+ where q.session_id = s.id
+   and q.status = 'active'
+   and s.price_hkd = 0
+   and t.requires_rsvp;
+
+-- These checks make the free one-off rule authoritative even for trusted SQL
+-- writers: free event templates are explicit RSVPs and both rows are uncapped.
+alter table public.operational_activity_templates
+  drop constraint if exists operational_activity_templates_free_one_off_rsvp_check;
+alter table public.operational_activity_templates
+  add constraint operational_activity_templates_free_one_off_rsvp_check
+  check (activity_id not like 'event-%' or price_hkd <> 0
+    or (requires_rsvp and capacity is null));
+
+alter table public.operational_sessions
+  drop constraint if exists operational_sessions_free_one_off_uncapped_check;
+alter table public.operational_sessions
+  add constraint operational_sessions_free_one_off_uncapped_check
+  check (activity_id not like 'event-%' or price_hkd <> 0 or capacity is null);
+
+-- Preserve the RSVP-aware ten-argument signature (and its defaulted final
+-- argument used by the current nine-argument browser call). Free one-offs
+-- normalize to explicit RSVP/null capacity; paid one-offs retain capacity.
+create or replace function public.create_operational_event(
+  p_name             text,
+  p_session_date     date,
+  p_start_time       time,
+  p_duration_minutes integer,
+  p_venue            text,
+  p_maps_query       text default null,
+  p_category         text default 'Other',
+  p_price_hkd        integer default 0,
+  p_capacity         integer default 20,
+  p_requires_rsvp    boolean default false
+)
+returns public.operational_sessions
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_activity_id text;
+  v_session public.operational_sessions;
+  v_is_free boolean;
+begin
+  perform public.operational_assert_admin('create_event');
+
+  if nullif(btrim(coalesce(p_name, '')), '') is null then
+    raise exception 'Event name is required.' using errcode = '22023';
+  end if;
+  if p_session_date is null or p_session_date < current_date then
+    raise exception 'Event date must be today or in the future.' using errcode = '22023';
+  end if;
+  if p_start_time is null then
+    raise exception 'Start time is required.' using errcode = '22023';
+  end if;
+  if p_duration_minutes is null or p_duration_minutes <= 0 then
+    raise exception 'Duration must be positive.' using errcode = '22023';
+  end if;
+  if nullif(btrim(coalesce(p_venue, '')), '') is null then
+    raise exception 'Venue is required.' using errcode = '22023';
+  end if;
+  if p_price_hkd is null or p_price_hkd < 0 then
+    raise exception 'Price must be zero (free) or positive.' using errcode = '22023';
+  end if;
+
+  v_is_free := p_price_hkd = 0;
+  if not v_is_free and coalesce(p_requires_rsvp, false) then
+    raise exception 'RSVP events must be free.' using errcode = '22023';
+  end if;
+  if not v_is_free and (p_capacity is null or p_capacity <= 0) then
+    raise exception 'Capacity must be positive.' using errcode = '22023';
+  end if;
+
+  v_activity_id := 'event-' || floor(extract(epoch from now()))::bigint::text;
+
+  insert into public.operational_activity_templates
+    (activity_id, name, venue, weekday, start_time, duration_minutes,
+     capacity, price_hkd, default_open, active, category, maps_query, requires_rsvp)
+  values
+    (v_activity_id, btrim(p_name), btrim(p_venue),
+     extract(dow from p_session_date)::smallint, p_start_time, p_duration_minutes,
+     case when v_is_free then null else p_capacity end,
+     p_price_hkd, true, false,
+     coalesce(nullif(btrim(p_category), ''), 'Other'),
+     nullif(btrim(coalesce(p_maps_query, '')), ''),
+     v_is_free);
+
+  insert into public.operational_sessions
+    (id, activity_id, session_date, start_time, duration_minutes,
+     venue, capacity, price_hkd, is_open)
+  values
+    (v_activity_id || '-' || p_session_date::text, v_activity_id, p_session_date,
+     p_start_time, p_duration_minutes, btrim(p_venue),
+     case when v_is_free then null else p_capacity end,
+     p_price_hkd, true)
+  returning * into v_session;
+
+  return v_session;
+end;
+$$;
+
+revoke all on function public.create_operational_event(
+  text, date, time, integer, text, text, text, integer, integer, boolean
+) from public, anon, authenticated;
+grant execute on function public.create_operational_event(
+  text, date, time, integer, text, text, text, integer, integer, boolean
+) to authenticated;
 
 -- Generate each active template on its declared weekday. This preserves the
 -- function signature while correcting the historical Saturday-only generator.
@@ -163,6 +290,102 @@ update public.operational_bookings b
  where b.id = proven.id;
 
 -- =====================================================================
+-- Queue rejection for explicit free RSVPs
+-- =====================================================================
+
+-- Preserve the current leave implementation behind an ungranted compatibility
+-- name, matching the existing join wrapper pattern.
+do $$
+begin
+  if to_regprocedure('public.leave_operational_queue_legacy(uuid)') is null then
+    alter function public.leave_operational_queue(uuid)
+      rename to leave_operational_queue_legacy;
+  end if;
+end $$;
+
+revoke all on function public.leave_operational_queue_legacy(uuid)
+  from public, anon, authenticated;
+
+create or replace function public.join_operational_queue(
+  p_session_id text,
+  p_kind text
+)
+returns public.operational_queue_entries
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_uid uuid := auth.uid();
+  v_role text := public.current_user_role();
+  v_is_rsvp boolean;
+begin
+  if v_uid is null then
+    raise exception 'Authentication required.' using errcode = '28000';
+  end if;
+  if v_role not in ('member', 'admin', 'super_admin') then
+    raise exception 'Approved membership required.' using errcode = '42501';
+  end if;
+
+  select s.price_hkd = 0 and coalesce(t.requires_rsvp, false)
+    into v_is_rsvp
+    from public.operational_sessions s
+    join public.operational_activity_templates t on t.activity_id = s.activity_id
+   where s.id = p_session_id;
+  if coalesce(v_is_rsvp, false) then
+    raise exception 'RSVP sessions do not use queues.' using errcode = '23514';
+  end if;
+
+  return public.join_operational_queue_legacy(p_session_id, p_kind);
+end;
+$$;
+
+create or replace function public.leave_operational_queue(
+  p_entry_id uuid
+)
+returns public.operational_queue_entries
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_uid uuid := auth.uid();
+  v_role text := public.current_user_role();
+  v_entry public.operational_queue_entries;
+  v_is_rsvp boolean;
+begin
+  if v_uid is null then
+    raise exception 'Authentication required.' using errcode = '28000';
+  end if;
+  if v_role not in ('member', 'admin', 'super_admin') then
+    raise exception 'Approved membership required.' using errcode = '42501';
+  end if;
+
+  select * into v_entry
+    from public.operational_queue_entries
+   where id = p_entry_id
+   for update;
+  if not found then
+    raise exception 'Queue entry not found.' using errcode = 'P0002';
+  end if;
+  if v_entry.profile_id <> v_uid and v_role not in ('admin', 'super_admin') then
+    raise exception 'Not authorized for this queue entry.' using errcode = '42501';
+  end if;
+
+  select s.price_hkd = 0 and coalesce(t.requires_rsvp, false)
+    into v_is_rsvp
+    from public.operational_sessions s
+    join public.operational_activity_templates t on t.activity_id = s.activity_id
+   where s.id = v_entry.session_id;
+  if coalesce(v_is_rsvp, false) then
+    raise exception 'RSVP sessions do not use queues.' using errcode = '23514';
+  end if;
+
+  return public.leave_operational_queue_legacy(p_entry_id);
+end;
+$$;
+
+-- =====================================================================
 -- Member withdrawal
 -- =====================================================================
 
@@ -176,12 +399,16 @@ set search_path = public
 as $$
 declare
   v_uid uuid := auth.uid();
+  v_role text := public.current_user_role();
   v_booking public.operational_bookings;
   v_session public.operational_sessions;
   v_requires_rsvp boolean;
 begin
   if v_uid is null then
     raise exception 'Authentication required.' using errcode = '28000';
+  end if;
+  if v_role not in ('member', 'admin', 'super_admin') then
+    raise exception 'Approved membership required.' using errcode = '42501';
   end if;
 
   -- Read the owner and session id first, then use the same session-before-
@@ -292,6 +519,12 @@ begin
      where id = p_session_id
     returning * into v_session;
 
+    update public.operational_queue_entries
+       set status = 'dissolved',
+           resolved_at = v_session.cancelled_at
+     where session_id = p_session_id
+       and status = 'active';
+
     with cancelled_rsvps as (
       update public.operational_bookings
          set status = 'cancelled',
@@ -396,12 +629,18 @@ begin
 end;
 $$;
 
+revoke all on function public.join_operational_queue(text, text)
+  from public, anon, authenticated;
+revoke all on function public.leave_operational_queue(uuid)
+  from public, anon, authenticated;
 revoke all on function public.withdraw_operational_rsvp(uuid)
   from public, anon, authenticated;
 revoke all on function public.cancel_operational_session(text, text)
   from public, anon, authenticated;
 revoke all on function public.reopen_operational_rsvp(text)
   from public, anon, authenticated;
+grant execute on function public.join_operational_queue(text, text) to authenticated;
+grant execute on function public.leave_operational_queue(uuid) to authenticated;
 grant execute on function public.withdraw_operational_rsvp(uuid) to authenticated;
 grant execute on function public.cancel_operational_session(text, text) to authenticated;
 grant execute on function public.reopen_operational_rsvp(text) to authenticated;
