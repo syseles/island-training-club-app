@@ -1354,8 +1354,8 @@ assert.match(integratedAppSource, /form\.id === "form-privacy"[\s\S]*?updateMyPr
   "Privacy & Notifications must persist reminder preferences through the form delegate");
 assert.equal(typeof store.attendeeCountFor, "function",
   "store must export attendeeCountFor for identity-independent RSVP counts");
-assert.equal((integratedViewSource.match(/store\.attendeeCountFor\(s\)/g) || []).length, 5,
-  "Schedule Going/RSVP states, free and RSVP Activity Details, and Admin controls must use attendeeCountFor");
+assert.equal((integratedViewSource.match(/store\.attendeeCountFor\(s\)/g) || []).length, 4,
+  "Schedule Going/RSVP states, capability-driven Activity Details, and Admin controls must use attendeeCountFor");
 assert.doesNotMatch(integratedViewSource, /store\.attendeesFor\(s\)\.length/,
   "RSVP count surfaces must not derive counts from attendee identities");
 const combinedRuntimeSource = `${integratedViewSource}\n${integratedAppSource}`;

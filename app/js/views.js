@@ -664,47 +664,44 @@ export function viewActivity(sessionId, options) {
       </div>`;
   } else if (past) {
     actionBlock = `<div class="banner mt16"><p>This session has already happened. See you at the next one.</p></div>`;
-  } else if (s.kind === "free") {
-    // Free activities stay open to walk-ins. Approved members can optionally
-    // RSVP so leaders get a useful headcount without introducing checkout,
-    // capacity, or waitlist language.
+  } else if (store.sessionRequiresRsvp(s)) {
+    // RSVP capability controls participation independently of the activity's
+    // presentation kind. Free activities retain walk-in framing, while Lunch
+    // retains its organizer and pay-your-own-bill copy.
     const goingCount = store.attendeeCountFor(s);
-    const freeBanner = `
-      <div class="free-banner">
-        ${ICONS.pin}
-        <div><strong>Free · No booking needed.</strong><br><span class="muted small">Everyone is welcome — just show up. RSVP helps the team plan; walk-ins are welcome.</span></div>
-      </div>`;
-    const calendarButton = `<button class="btn ghost" type="button" data-action="ics" data-session="${s.id}">Add to calendar</button>`;
-    if (booking && isMember) {
-      actionBlock = `${freeBanner}
-        <div class="banner mt16">
-          <span class="kicker">You’re going</span>
-          <p>${goingCount} going — see you there. Walk-ins are still welcome.</p>
-        </div>
-        <div class="btn-row">
-          <button class="btn ghost" type="button" data-action="rsvp-withdraw" data-booking="${booking.id}">Can’t make it</button>
-          ${calendarButton}
-          ${directionsLink}
+    if (s.kind === "free") {
+      const freeBanner = `
+        <div class="free-banner">
+          ${ICONS.pin}
+          <div><strong>Free · No booking needed.</strong><br><span class="muted small">Everyone is welcome — just show up. RSVP helps the team plan; walk-ins are welcome.</span></div>
         </div>`;
-    } else if (isMember) {
-      actionBlock = `${freeBanner}
-        <div class="btn-row">
-          <button class="btn" type="button" data-action="rsvp-join" data-session="${s.id}">I’m coming</button>
-          ${calendarButton}
-          ${directionsLink}
-        </div>`;
-    } else {
-      actionBlock = `${freeBanner}
-        <div class="btn-row ${showDirections ? "two" : ""}">
-          ${calendarButton}
-          ${directionsLink}
-        </div>`;
-    }
-  } else if (s.kind === "rsvp") {
-    // RSVP sessions (e.g. the post-training lunch): no payment moves in-app,
-    // but the organizer needs a headcount — joining confirms instantly.
-    const goingCount = store.attendeeCountFor(s);
-    if (booking) {
+      const calendarButton = `<button class="btn ghost" type="button" data-action="ics" data-session="${s.id}">Add to calendar</button>`;
+      if (booking && isMember) {
+        actionBlock = `${freeBanner}
+          <div class="banner mt16">
+            <span class="kicker">You’re going</span>
+            <p>${goingCount} going — see you there. Walk-ins are still welcome.</p>
+          </div>
+          <div class="btn-row">
+            <button class="btn ghost" type="button" data-action="rsvp-withdraw" data-booking="${booking.id}">Can’t make it</button>
+            ${calendarButton}
+            ${directionsLink}
+          </div>`;
+      } else if (isMember) {
+        actionBlock = `${freeBanner}
+          <div class="btn-row">
+            <button class="btn" type="button" data-action="rsvp-join" data-session="${s.id}">I’m coming</button>
+            ${calendarButton}
+            ${directionsLink}
+          </div>`;
+      } else {
+        actionBlock = `${freeBanner}
+          <div class="btn-row ${showDirections ? "two" : ""}">
+            ${calendarButton}
+            ${directionsLink}
+          </div>`;
+      }
+    } else if (booking && isMember) {
       actionBlock = `
         <div class="banner mt16">
           <span class="kicker">You're going</span>
@@ -2498,7 +2495,9 @@ export function viewBooking(bookingId) {
         <div class="line"><span>Where</span><strong>${esc(assignedVenue || s.location || "Venue pending")}</strong></div>
         <div class="line"><span>Status</span><strong>${esc(b.status)}</strong></div>
         ${requiresRsvp && s.kind === "free"
-          ? '<div class="line total"><span>Attendance</span><strong>RSVP confirmed</strong></div>'
+          ? b.status === "confirmed"
+            ? '<div class="line total"><span>Attendance</span><strong>RSVP confirmed</strong></div>'
+            : ""
           : `<div class="line total"><span>Price</span><strong>${Number(s.price) > 0 ? fmtMoney(s.price) : "Pay your own bill"}</strong></div>`}
       </div>
     </div></div>
