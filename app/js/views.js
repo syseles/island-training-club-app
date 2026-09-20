@@ -466,36 +466,19 @@ export function viewSchedule() {
   if (!scheduleState.selected) {
     scheduleState.selected = scheduleSelectionForWeek(t, scheduleState.weekOffset);
   }
-  let sourceActivities;
+  let weekSessions;
   if (isLive()) {
-    const liveTemplates = liveOps.liveActivityTemplates();
-    const templateActivities = liveTemplates.map((tpl) => ({
-      id: tpl.activity_id,
-      weekday: tpl.weekday,
-      price: tpl.price_hkd,
-      capacity: tpl.capacity,
-      kind: "paid",
-      name: tpl.name,
-      venue: tpl.venue,
-      durationMin: tpl.duration_minutes,
-      start_time: tpl.start_time,
-      category: "HYROX",
-      published: true,
-    }));
-    const freeActivities = store.activities().filter((a) => a.kind === "free");
-    sourceActivities = [...templateActivities, ...freeActivities];
+    const weekStartISO = isoDate(weekStart);
+    const weekEndISO = isoDate(addDays(weekStart, 6));
+    weekSessions = liveOps.listLiveSessions()
+      .filter((session) => session.dateISO >= weekStartISO && session.dateISO <= weekEndISO)
+      .map((session) => store.getSession(session.id))
+      .filter(Boolean);
   } else {
-    sourceActivities = store.activities();
+    weekSessions = sessionsInRange(store.activities(), weekStart, 7)
+      .map((session) => store.getSession(session.id))
+      .filter(Boolean);
   }
-  const weekSessions = sessionsInRange(sourceActivities, weekStart, 7)
-    .map((s) => {
-      if (isLive()) {
-        if (s.kind === "free") return store.getSession(s.id);
-        return liveOps.getLiveSession(s.id);
-      }
-      return store.getSession(s.id);
-    })
-    .filter(Boolean);
   const dayNames = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
   const cells = Array.from({ length: 7 }, (_, i) => {

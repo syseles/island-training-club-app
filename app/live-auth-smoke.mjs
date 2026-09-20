@@ -1366,6 +1366,20 @@ assert.ok(hydratedFreeSessions.every((session) =>
 ), "live recurring free sessions must retain free presentation and RSVP capability");
 assert.equal(new Set(hydratedFreeSessions.map((session) => session.id)).size, 3,
   "live recurring free occurrences must not be duplicated by local recurrence generation");
+const priorAuthoritativeWeekOffset = views.scheduleState.weekOffset;
+const priorAuthoritativeSelected = views.scheduleState.selected;
+views.scheduleState.weekOffset = 1;
+const authoritativeWeekScheduleHtml = authoritativeFreeSessionIds.map((sessionId) => {
+  views.scheduleState.selected = sessionId.slice(-10);
+  return views.viewSchedule();
+}).join("");
+views.scheduleState.weekOffset = priorAuthoritativeWeekOffset;
+views.scheduleState.selected = priorAuthoritativeSelected;
+for (const sessionId of authoritativeFreeSessionIds) {
+  const renderedHref = `href="#/activity/${sessionId}"`;
+  assert.equal(authoritativeWeekScheduleHtml.split(renderedHref).length - 1, 1,
+    `live Schedule must render authoritative session ${sessionId} exactly once in its week`);
+}
 const hydratedRun = hydratedFreeSessions.find((session) => session.activityId === "run");
 assert.equal(hydratedRun.photo, "../assets/itc/running.webp");
 assert.match(hydratedRun.blurb, /nobody gets left behind/i);
