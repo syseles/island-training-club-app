@@ -224,6 +224,9 @@ const operationalTableRows = {
     { activity_id: "hyrox-bft", name: "ITC HYROX", venue: "BFT Causeway Bay", weekday: 6, start_time: "11:15:00", duration_minutes: 60, capacity: 20, price_hkd: 180, default_open: true, active: true, category: "HYROX", maps_query: null, requires_rsvp: false },
     { activity_id: "hyrox-midtown", name: "ITC HYROX", venue: "Midtown 28", weekday: 6, start_time: "11:00:00", duration_minutes: 60, capacity: 12, price_hkd: 180, default_open: false, active: true, category: "HYROX", maps_query: null, requires_rsvp: false },
     { activity_id: "hyrox-quarry-bay", name: "ITC HYROX", venue: "10/F, Island ECC, Quarry Bay", weekday: 6, start_time: "11:00:00", duration_minutes: 60, capacity: 30, price_hkd: 180, default_open: true, active: true, category: "HYROX", maps_query: "Island ECC, Quarry Bay, Hong Kong", requires_rsvp: false },
+    { activity_id: "wnt", name: "Wednesday Night Training", venue: "TBC", weekday: 3, start_time: "19:30:00", duration_minutes: 60, capacity: null, price_hkd: 0, default_open: true, active: true, category: "Strength", maps_query: null, requires_rsvp: true },
+    { activity_id: "run", name: "ITC Run Club", venue: "TBC", weekday: 1, start_time: "19:30:00", duration_minutes: 45, capacity: null, price_hkd: 0, default_open: true, active: true, category: "Run", maps_query: null, requires_rsvp: true },
+    { activity_id: "water", name: "ITC Swimming", venue: "TBC", weekday: 2, start_time: "19:30:00", duration_minutes: 90, capacity: null, price_hkd: 0, default_open: true, active: true, category: "Water", maps_query: null, requires_rsvp: true },
     { activity_id: "lunch", name: "Post-Training Lunch", venue: "TBC", weekday: 6, start_time: "12:45:00", duration_minutes: 75, capacity: null, price_hkd: 0, default_open: true, active: true, category: "Socials", maps_query: null, requires_rsvp: true },
   ],
   operational_bookings: [{
@@ -777,10 +780,46 @@ globalThis.fetch = async (url, options = {}) => {
   });
 };
 
-// Seed operational fake tables with at least one upcoming paid session so
-// scheduled live-mode views can render.
+// Seed operational fake tables with authoritative recurring free occurrences
+// plus at least one upcoming paid session so scheduled live-mode views can render.
 const today = new Date();
 const fixedHktTodayIso = "2026-08-05";
+const authoritativeFreeSessionIds = [
+  "run-2026-08-10",
+  "water-2026-08-11",
+  "wnt-2026-08-12",
+];
+for (const id of [
+  ...authoritativeFreeSessionIds,
+  "wnt-2026-08-26",
+  "water-2026-08-27",
+]) {
+  const activityId = id.split("-")[0];
+  const template = operationalTableRows.operational_activity_templates
+    .find((row) => row.activity_id === activityId);
+  operationalTableRows.operational_sessions.push({
+    id,
+    activity_id: activityId,
+    session_date: id.slice(-10),
+    start_time: template.start_time,
+    duration_minutes: template.duration_minutes,
+    venue: template.venue,
+    capacity: null,
+    price_hkd: 0,
+    is_open: true,
+    venue_tbc: true,
+    notice: null,
+    cancelled_at: null,
+    cancelled_by: null,
+    cancelled_source: null,
+    cancel_reason: null,
+    gym_confirmed_at: null,
+    gym_confirmed_by: null,
+    gym_note: null,
+    created_at: today.toISOString(),
+    updated_at: today.toISOString(),
+  });
+}
 const aug15Iso = "2026-08-15";
 const seededCancelled = new Set(["hyrox-bft-2026-08-15", "hyrox-midtown-2026-08-15"]);
 const normalWeeklyFixtureDates = [];
@@ -1313,6 +1352,26 @@ assert.deepEqual(
   "live boot must automatically provision the bounded HYROX cycle window",
 );
 await store.hydrateLiveOperations();
+const hydratedFreeSessions = store.upcomingSessions(21)
+  .filter((session) => ["wnt", "run", "water"].includes(session.activityId));
+assert.equal(hydratedFreeSessions.length, 3,
+  "live Schedule must expose only the three authoritative free fixtures in this horizon");
+assert.deepEqual(
+  hydratedFreeSessions.map((session) => session.id).sort(),
+  authoritativeFreeSessionIds.slice().sort(),
+  "live recurring free occurrences must come from operational session IDs",
+);
+assert.ok(hydratedFreeSessions.every((session) =>
+  session.kind === "free" && session.requiresRsvp === true
+), "live recurring free sessions must retain free presentation and RSVP capability");
+assert.equal(new Set(hydratedFreeSessions.map((session) => session.id)).size, 3,
+  "live recurring free occurrences must not be duplicated by local recurrence generation");
+const hydratedRun = hydratedFreeSessions.find((session) => session.activityId === "run");
+assert.equal(hydratedRun.photo, "../assets/itc/running.webp");
+assert.match(hydratedRun.blurb, /nobody gets left behind/i);
+assert.equal(hydratedRun.memberNote, "Bag drop with a leader at the start point.");
+assert.equal(store.getSession("wnt-2026-08-19"), null,
+  "an unmaterialized local recurrence must not exist in live mode");
 assert.equal(store.getHyroxCycle("hyrox-pool-2099-01-03")?.venuePlan, "pending");
 assert.equal(
   store.hyroxCycleQueues("hyrox-pool-2099-01-03").weeklyWaitlist[0].userId,
@@ -1995,7 +2054,7 @@ assert.equal(
 );
 console.log("ok  successful venue RPC updates live cache before a failed refresh");
 
-const partialLiveSessionId = "water-2026-08-18";
+const partialLiveSessionId = "water-2026-08-27";
 await store.setWeekVenue(partialLiveSessionId, {
   location: "",
   mapsQuery: "Sun Yat Sen Pool, Hong Kong",
@@ -3070,9 +3129,26 @@ const freeEventRow = await store.createOneOffEvent({
 const freeEventSession = store.getSession(freeEventRow.id);
 if (!freeEventSession || !freeEventSession.oneOff
     || freeEventSession.name !== "Charity Gala Workout"
-    || freeEventSession.kind !== "free" || freeEventSession.weekday !== 6) {
-  throw new Error("live one-off free event must hydrate with template name and free kind");
+    || freeEventSession.kind !== "free" || freeEventSession.weekday !== 6
+    || freeEventSession.requiresRsvp !== true || freeEventSession.capacity !== null) {
+  throw new Error("live one-off free event must hydrate as an uncapped free RSVP session");
 }
+assert.deepEqual(
+  operationalRpcCalls.filter((call) => call.name === "create_operational_event").at(-1)?.args,
+  {
+    p_name: "Charity Gala Workout",
+    p_session_date: "2026-09-12",
+    p_start_time: "09:00",
+    p_duration_minutes: 45,
+    p_venue: "Sun Yat Sen Memorial Park",
+    p_maps_query: null,
+    p_category: "Other",
+    p_price_hkd: 0,
+    p_capacity: null,
+    p_requires_rsvp: true,
+  },
+  "free one-off creation must select the compatible RSVP RPC signature and leave capacity to server authority",
+);
 if (!store.upcomingSessions(45).some((s) => s.id === freeEventRow.id)) {
   throw new Error("live one-off event must appear in upcoming sessions");
 }

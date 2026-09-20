@@ -1560,6 +1560,10 @@ if (
 // --- Visitor state ---
 store.signOut();
 const allUpcoming = store.upcomingSessions(14);
+for (const activityId of ["wnt", "run", "water"]) {
+  assert.ok(allUpcoming.some((session) => session.activityId === activityId),
+    `local mode must continue generating recurring ${activityId} sessions`);
+}
 // booking tests need a session that hasn't started yet — today's sessions
 // are unbookable once their start time passes
 const paid = allUpcoming.find((s) => s.kind === "paid" && !data.sessionStarted(s));
@@ -4518,7 +4522,15 @@ store.signIn("admin@example.test");
     name: "Community Picnic", dateISO: oneOffDate(2), time: "15:00",
     durationMin: 120, location: "Tamar Park", category: "Other",
   });
-  if (freeEvent.kind !== "free") throw new Error("zero-price one-off should be free");
+  assert.deepEqual({
+    kind: freeEvent.kind,
+    requiresRsvp: freeEvent.requiresRsvp,
+    capacity: freeEvent.capacity,
+  }, {
+    kind: "free",
+    requiresRsvp: true,
+    capacity: null,
+  }, "local zero-price one-offs must remain uncapped free RSVP sessions");
   const freeEventHtml = views.viewActivity(freeEvent.id);
   if (!freeEventHtml.includes("Free · No booking needed"))
     throw new Error("free one-off should render the free banner");

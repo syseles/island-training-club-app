@@ -2675,11 +2675,7 @@ export function interestPosition(userId, sessionId) {
 export function getSession(sessionId) {
   if (isLive()) {
     const live = liveOps.getLiveSession(sessionId);
-    if (live) return applyWntLeaderNote({ ...live });
-    // Free events live only in local state; the live cache has no row.
-    const local = findSession(state.activities, sessionId);
-    if (local) return decorateFreeSession(local);
-    return null;
+    return live ? applyWntLeaderNote({ ...live }) : null;
   }
   const s = findSession(state.activities, sessionId);
   if (!s) {
@@ -2736,18 +2732,6 @@ function decorateSession(s) {
   return applyWntLeaderNote(out);
 }
 
-function decorateFreeSession(s) {
-  const o = liveOps.getLiveVenueOverride(s.id);
-  const out = { ...s };
-  if (!o) return applyWntLeaderNote(out);
-  if (o.location) out.location = o.location;
-  if (o.mapsQuery) out.mapsQuery = o.mapsQuery;
-  const point = normalizeMeetingPoint(o.meetingLat, o.meetingLng);
-  if (point) Object.assign(out, { meetingLat: point.lat, meetingLng: point.lng });
-  if (hasConfirmedVenue(out.location, out.mapsQuery)) out.venueTBC = false;
-  return applyWntLeaderNote(out);
-}
-
 export function weekVenueOverride(sessionId) {
   const value = isLive()
     ? liveOps.getLiveVenueOverride(sessionId)
@@ -2775,33 +2759,19 @@ export function upcomingSessions(days = 14) {
     const end = new Date(today);
     end.setDate(end.getDate() + days - 1);
     const endISO = isoDate(end);
-    const livePaid = liveOps.listLiveSessions()
+    return liveOps.listLiveSessions()
       .filter((s) => s.dateISO >= todayISO && s.dateISO <= endISO)
+      .map((s) => {
+        const decorated = applyWntLeaderNote(s);
+        return {
+          ...decorated,
+          spots: spotsLeft(decorated),
+          past: false,
+        };
+      })
       .sort((a, b) =>
         a.dateISO.localeCompare(b.dateISO) || String(a.time).localeCompare(String(b.time))
-      )
-      .map((s) => ({
-        ...s,
-        spots: spotsLeft(s),
-        past: false,
-      }));
-    const freeSessions = sessionsInRange(
-      state.activities.filter((a) => a.kind === "free"),
-      today,
-      days
-    ).map((s) => {
-      const decorated = decorateFreeSession(s);
-      return {
-        ...decorated,
-        spots: spotsLeft(decorated),
-        past: false,
-      };
-    });
-    // Free (local) and paid/RSVP (live) sessions interleave by start time so
-    // each day reads chronologically.
-    return [...freeSessions, ...livePaid].sort((a, b) =>
-      a.dateISO.localeCompare(b.dateISO) || String(a.time).localeCompare(String(b.time))
-    );
+      );
   }
   const todayStart = today.getTime();
   const horizon = todayStart + days * 24 * 60 * 60 * 1000;
@@ -3211,13 +3181,16 @@ export async function createOneOffEvent(fields) {
   const mapsQuery = String(fields.mapsQuery ?? "").trim();
   const category = String(fields.category ?? "").trim() || "Other";
   const price = Math.max(0, Number(fields.price) || 0);
-  const capacity = Math.max(1, Number(fields.capacity) || 20);
+  const capacity = price > 0 ? Math.max(1, Number(fields.capacity) || 20) : null;
   if (!name) throw new Error("Enter the event name.");
   if (!/^\d{4}-\d{2}-\d{2}$/.test(dateISO)) throw new Error("Pick the event date.");
   if (!time) throw new Error("Pick the start time.");
   if (!Number.isFinite(durationMin) || durationMin <= 0) throw new Error("Enter a positive duration.");
   if (!location) throw new Error("Enter the venue.");
-  const payload = { name, dateISO, time, durationMin, location, mapsQuery, category, price, capacity };
+  const payload = {
+    name, dateISO, time, durationMin, location, mapsQuery, category, price, capacity,
+    requiresRsvp: price === 0,
+  };
   if (isLive()) {
     return liveOps.liveCreateEvent(payload);
   }
