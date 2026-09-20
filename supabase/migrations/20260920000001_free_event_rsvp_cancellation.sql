@@ -153,7 +153,7 @@ begin
     raise exception 'Capacity must be positive.' using errcode = '22023';
   end if;
 
-  v_activity_id := 'event-' || floor(extract(epoch from now()))::bigint::text;
+  v_activity_id := 'event-' || gen_random_uuid()::text;
 
   insert into public.operational_activity_templates
     (activity_id, name, venue, weekday, start_time, duration_minutes,

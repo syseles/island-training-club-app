@@ -648,9 +648,16 @@ assert.match(freeEventRsvpMigrationSource,
 assert.match(freeEventRsvpMigrationSource,
   /operational_activity_templates_free_one_off_rsvp_check[\s\S]*?activity_id not like 'event-%'[\s\S]*?requires_rsvp[\s\S]*?capacity is null/i,
   "zero-price one-off templates must be guaranteed explicit RSVP and uncapped");
-assert.match(freeEventRsvpMigrationSource,
-  /create or replace function public\.create_operational_event[\s\S]*?p_price_hkd = 0[\s\S]*?requires_rsvp[\s\S]*?capacity/i,
+const createOperationalEventFunction = freeEventRsvpMigrationSource.match(
+  /create or replace function public\.create_operational_event[\s\S]*?\n\$\$;/i
+)?.[0] || "";
+assert.match(createOperationalEventFunction,
+  /p_price_hkd = 0[\s\S]*?requires_rsvp[\s\S]*?capacity/i,
   "future free one-offs must normalize to RSVP and null capacity");
+assert.match(createOperationalEventFunction, /'event-'\s*\|\|\s*gen_random_uuid\(\)/i,
+  "one-off event IDs must remain unique when multiple events are created in one second");
+assert.doesNotMatch(createOperationalEventFunction, /extract\s*\(\s*epoch/i,
+  "one-off event IDs must not use collision-prone second-resolution epochs");
 assert.match(freeEventRsvpMigrationSource,
   /create or replace function public\.join_operational_queue[\s\S]*?v_is_rsvp[\s\S]*?raise exception[^;]*queue/i,
   "joining any queue for an explicit free RSVP session must be rejected");
