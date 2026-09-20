@@ -193,6 +193,222 @@ To use live mode locally, edit `app/index.html`'s inline `<script>` block to set
 project's values. Refresh the page after changes. Manage live identities in
 Supabase Admin; this cleanup does not change the schema or delete live users.
 
+## Free-event RSVP cancellation: deployment and acceptance
+
+Migration `20260920000001_free_event_rsvp_cancellation.sql` makes `wnt`, `run`,
+and `water` authoritative recurring free sessions in live mode. It also makes
+zero-price one-offs explicit uncapped RSVP sessions and adds RSVP-aware
+cancellation, reopening, and targeted change notifications. RSVP remains
+optional: these events have no payment, checkout, capacity, waitlist, or
+attendance gate, and walk-ins remain welcome.
+
+Approved members may use **I’m coming**, **Can’t make it**, and the member-only
+**Who’s coming** roster with existing private avatar rules. Visitors and
+pending/declined profiles may see public event and cancellation information but
+not attendee identities or participation controls. Admin and Super Admin see
+the expected count and can change venue/time, cancel one dated occurrence with
+a required reason, or reopen it before its Hong Kong start. Active RSVPs are
+cancelled and never deferred. Reopening does not restore cancelled RSVPs;
+members must choose **I’m coming** again.
+
+Cancellation, reopening, venue, and time notifications are in-app only. Web
+Push, push subscriptions, service workers, phone notification sounds, email,
+and SMS are deferred. This feature does not require a new Edge Function
+deployment. Keep the exact Testing frontend origin in the existing
+`ITC_APP_ORIGINS` allowlist where profile-photo functions are exercised; do not
+replace it with a wildcard.
+
+### Pre-deployment migration review
+
+The production project has known migration-history drift. Do not blindly replay
+all local migrations, use `--include-all`, or mark unverified historical
+versions as applied. Confirm the target project and backup/PITR status, then
+inspect local and remote history and the dry-run plan before any write:
+
+```bash
+export SUPABASE_PROJECT_REF="<confirmed-project-ref>"
+supabase projects list
+supabase migration list --project-ref "$SUPABASE_PROJECT_REF"
+supabase db push --dry-run --project-ref "$SUPABASE_PROJECT_REF"
+```
+
+Stop if the project reference is wrong, if the dry run proposes older
+migrations, or if the remote schema does not contain the operational backend
+expected by this migration. Reconcile drift with a separate schema audit. If
+history has been fully reconciled, apply the reviewed pending migration through
+the normal ordered `supabase db push`. For the already-verified production
+history-gap condition only, apply this exact migration explicitly instead of
+replaying the chain:
+
+```bash
+supabase db query --linked --project-ref "$SUPABASE_PROJECT_REF" \
+  --file supabase/migrations/20260920000001_free_event_rsvp_cancellation.sql
+```
+
+Do not record it from command success alone. Run the checks below first; only
+when they pass, record this exact version and re-list history:
+
+```bash
+supabase migration repair 20260920000001 --status applied --linked \
+  --project-ref "$SUPABASE_PROJECT_REF" --yes
+supabase migration list --project-ref "$SUPABASE_PROJECT_REF"
+```
+
+### Database verification before frontend deployment
+
+In trusted SQL, verify the recurring template contract and generated occurrence
+window. The first query must return exactly `wnt`, `run`, and `water`, each with
+`price_hkd = 0`, `capacity is null`, `requires_rsvp = true`, and weekday
+`3`, `1`, and `2` respectively:
+
+```sql
+select activity_id, weekday, start_time, price_hkd, capacity, requires_rsvp,
+       active
+  from public.operational_activity_templates
+ where activity_id in ('wnt', 'run', 'water')
+ order by activity_id;
+
+select s.id, s.activity_id, s.session_date, s.start_time, s.price_hkd,
+       s.capacity, s.cancelled_at, s.cancel_reason
+  from public.operational_sessions s
+ where s.activity_id in ('wnt', 'run', 'water')
+   and s.session_date >= (now() at time zone 'Asia/Hong_Kong')::date
+   and s.session_date < (now() at time zone 'Asia/Hong_Kong')::date + 112
+ order by s.session_date, s.activity_id;
+
+select s.activity_id, count(*) as invalid_occurrences
+  from public.operational_sessions s
+  join public.operational_activity_templates t using (activity_id)
+ where s.activity_id in ('wnt', 'run', 'water')
+   and s.session_date >= (now() at time zone 'Asia/Hong_Kong')::date
+   and (extract(isodow from s.session_date)::integer <> t.weekday
+        or s.price_hkd <> 0 or s.capacity is not null
+        or not t.requires_rsvp)
+ group by s.activity_id;
+```
+
+The occurrence query should show one dated row per template weekday throughout
+the generated window; the invalid-occurrences query must return no rows. Also
+verify existing zero-price `event-%` templates are RSVP-enabled and uncapped:
+
+```sql
+select activity_id, price_hkd, capacity, requires_rsvp
+  from public.operational_activity_templates
+ where activity_id like 'event-%' and price_hkd = 0
+ order by activity_id;
+```
+
+Before live acceptance, run the static and headless regression suites from the
+repository root:
+
+```bash
+node app/avatar-smoke.mjs
+node app/smoke.mjs
+node app/live-auth-smoke.mjs
+node app/replacement-operations-smoke.mjs
+node app/rsvp-whos-coming-smoke.mjs
+bash supabase/tests/free_event_rsvp_cancellation_safety.sh
+```
+
+Disposable SQL integration is destructive and optional. Run it only when both
+`ITC_FREE_EVENT_TEST_DATABASE_URL` is an explicitly disposable reset-safe URL
+and `ITC_ALLOW_DATABASE_RESET=1` is present. The operational wrapper applies the
+ordered migration chain and checks that the target is empty; the second command
+then executes this feature's transactional integration file:
+
+```bash
+ITC_OPERATIONS_TEST_DATABASE_URL="$ITC_FREE_EVENT_TEST_DATABASE_URL" \
+ITC_ALLOW_DATABASE_RESET="$ITC_ALLOW_DATABASE_RESET" \
+  bash supabase/tests/verify_operational_backend.sh
+
+psql "$ITC_FREE_EVENT_TEST_DATABASE_URL" -X -P pager=off \
+  -v ON_ERROR_STOP=1 \
+  -f supabase/tests/free_event_rsvp_cancellation_integration.sql
+```
+
+Never connect either command to production, staging, a shared database, or a
+database containing user/application data. If either required variable is
+absent, do not connect and record database integration as **unexecuted**, not
+passing.
+
+### Deployment order
+
+1. Apply migration `20260920000001_free_event_rsvp_cancellation.sql` using the
+   drift-safe procedure above.
+2. Verify templates, generated sessions, RPC behavior, grants, and notification
+   records against the intended database.
+3. Deploy the frontend only after the database migration and verification have
+   succeeded. A frontend-first rollout exposes controls whose RPC/schema
+   contract is not yet available.
+4. Confirm the deployed frontend points at that same project. Verify the exact
+   Testing origin remains configured where `ITC_APP_ORIGINS` is used; no new
+   Edge Function deployment is required.
+5. Complete the authenticated browser acceptance below before promotion.
+
+### Authenticated browser and mobile acceptance
+
+Use distinct approved member, withdrawn member, unrelated approved member,
+Admin, pending/declined, and signed-out sessions. Exercise current Safari/iOS,
+Chrome/Android, and desktop Chrome; include 375 px portrait and a narrow
+landscape viewport.
+
+1. As the approved member, open future Wednesday Night Training, Run Club,
+   Swimming, and a free one-off. Confirm each remains labelled **Free**, says
+   RSVP is optional/walk-ins are welcome, has no price, checkout, capacity, or
+   waitlist, and remains usable without an RSVP.
+2. Tap **I’m coming**. Confirm the going state and expected count update once,
+   then open **Who’s coming** and verify the member's name and private avatar
+   (or initials fallback). Confirm signed-out and pending/declined sessions see
+   neither the action nor roster identities.
+3. Tap **Can’t make it** before the Hong Kong start. Confirm the member leaves
+   the count/roster and can RSVP again. Confirm RSVP and withdrawal controls
+   close at start time and duplicate taps do not create duplicate rows.
+4. As Admin, verify each dated card's expected-attendee count and avatar roster.
+   Cancel one occurrence with a trimmed required reason. Confirm Schedule and
+   Activity Details show **Cancelled** plus that reason, its active RSVP is
+   cancelled without a deferral/future booking, and the recurring template and
+   adjacent future occurrence remain active.
+5. Before start, choose **Reopen event**. Confirm the previous booking remains
+   cancelled, the count remains zero, and the member must RSVP afresh. Confirm
+   blank cancellation reasons and post-start reopening fail without losing the
+   current route or form state.
+6. With an active RSVP, change venue and then start time. Confirm the effective
+   values update on Schedule and Activity Details. Repeat each unchanged save
+   and confirm no duplicate notification is created.
+7. For each cancellation, reopening, venue change, and time change, inspect the
+   notification bell and trusted notification rows. The applicable active or
+   occurrence-cancelled RSVP member must receive exactly one linked in-app
+   notification. The signed-out visitor, pending/declined profile, member who
+   withdrew before the change, and unrelated approved member must receive none.
+   Confirm existing Admin audit notifications still reach non-actor Admins
+   where applicable and the acting Admin is not duplicated when also RSVP'd.
+8. Verify one-occurrence isolation explicitly: cancellation, reopening, venue,
+   time, count, and roster changes for the test date must not alter the next
+   recurring date. Confirm a walk-in can still attend and Admin attendance does
+   not treat RSVP as an admission requirement.
+9. On mobile, verify tap targets, roster/avatar rows, cancellation reason form,
+   reopen control, notifications, loading/disabled states, error copy, focus
+   order, back navigation, narrow-layout wrapping, and portrait/landscape
+   scrolling without clipping or horizontal overflow.
+
+### Rollback
+
+Rollback is access-first and preserves evidence:
+
+1. Deploy a frontend revision that hides/disables member RSVP/withdraw/roster
+   controls and Admin count/cancel/reopen/change controls. Verify browsers no
+   longer invoke the new RPC paths.
+2. Only after access is removed, create and review a forward rollback migration
+   that restores/replaces database functions if required. Do not edit or delete
+   the applied migration file, and do not blindly replay migration history.
+3. Never delete `operational_bookings.cancelled_at`, `cancellation_source`, RSVP
+   rows, notification rows, or other booking/audit history. Leave authoritative
+   session and booking evidence in place while retention and recovery are
+   decided.
+4. Re-run the smoke and SQL safety suites, verify paid/HYROX behavior, and
+   retain an operator record of the affected occurrence IDs and rollback
+   revision.
+
 ## Profile photos: deployment, acceptance, and rollback
 
 Profile photos are a live-Supabase feature. Local mode always renders initials:

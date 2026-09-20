@@ -1267,6 +1267,20 @@ if (/eyJ[a-zA-Z0-9_-]{20,}[.][a-zA-Z0-9_-]{20,}[.][a-zA-Z0-9_-]{20,}/.test(liveA
 }
 console.log("ok  profile-photo deployment and rollback are documented without secrets");
 
+for (const marker of [
+  "20260920000001_free_event_rsvp_cancellation.sql",
+  "authoritative recurring free sessions",
+  "never deferred",
+  "Reopening does not restore cancelled RSVPs",
+  "in-app only",
+  "Deploy the frontend only after",
+]) {
+  if (!liveAuthRunbookSource.includes(marker)) {
+    throw new Error(`free-event RSVP deployment runbook missing ${marker}`);
+  }
+}
+console.log("ok  free-event RSVP deployment order and rollback semantics are documented");
+
 if (!/values\s*\([\s\S]*?'pending'\s*\)/i.test(profilesMigrationSource)
     || /existing_count|count\s*\(\s*\*\s*\)[\s\S]*super_admin/i.test(profilesMigrationSource)) {
   throw new Error("fresh OAuth profiles must always bootstrap as pending");
