@@ -170,6 +170,18 @@ function assertPrimaryNav(user, expected, label) {
 store.load();
 const bftSeed = data.SEED_ACTIVITIES.find((activity) => activity.id === "hyrox-bft");
 const quarryBaySeed = data.SEED_ACTIVITIES.find((activity) => activity.id === "hyrox-quarry-bay");
+for (const activityId of ["wnt", "run", "water"]) {
+  const freeSeed = data.SEED_ACTIVITIES.find((activity) => activity.id === activityId);
+  assert.deepEqual(freeSeed && {
+    kind: freeSeed.kind,
+    requiresRsvp: freeSeed.requiresRsvp,
+    capacity: freeSeed.capacity,
+  }, {
+    kind: "free",
+    requiresRsvp: true,
+    capacity: null,
+  }, `${activityId} must remain free while enabling uncapped RSVP headcounts`);
+}
 assert.ok(bftSeed, "BFT HYROX must use the canonical hyrox-bft activity id");
 assert.equal(data.SEED_ACTIVITIES.some((activity) => activity.id === "hyrox"), false,
   "the ambiguous legacy hyrox activity id must not remain canonical");
@@ -559,6 +571,130 @@ const rsvpIntegrityMigrationSource = readFileSync(
   resolve(__dirnameSmoke, "../supabase/migrations/20260829000008_rsvp_integrity.sql"),
   "utf8"
 );
+const freeEventRsvpMigrationPath = resolve(
+  __dirnameSmoke, "../supabase/migrations/20260920000001_free_event_rsvp_cancellation.sql"
+);
+assert.ok(existsSync(freeEventRsvpMigrationPath),
+  "authoritative free-event RSVP cancellation migration must exist");
+const freeEventRsvpMigrationSource = readFileSync(freeEventRsvpMigrationPath, "utf8");
+const freeEventRsvpIntegrationSource = readFileSync(
+  resolve(__dirnameSmoke, "../supabase/tests/free_event_rsvp_cancellation_integration.sql"),
+  "utf8"
+);
+for (const activityId of ["wnt", "run", "water"]) {
+  assert.match(freeEventRsvpMigrationSource,
+    new RegExp(`\\('${activityId}',[\\s\\S]*?null, 0,[\\s\\S]*?true\\)`),
+    `${activityId} live template must remain uncapped, zero-price, and RSVP-enabled`);
+}
+for (const marker of [
+  "cancelled_at timestamptz",
+  "cancellation_source text",
+  "cancellation_source in ('member', 'session')",
+  "ensure_operational_sessions(current_date, 16)",
+  "at time zone 'Asia/Hong_Kong'",
+  "operational_session_cancelled",
+  "operational_rsvp_reopened",
+]) {
+  assert.ok(freeEventRsvpMigrationSource.includes(marker),
+    `free-event RSVP migration missing ${marker}`);
+}
+const freeEventCancellationDispatcher = freeEventRsvpMigrationSource.match(
+  /create or replace function public\.cancel_operational_session\([\s\S]*?\n\$\$;/i
+)?.[0] || "";
+const freeEventRsvpBranch = freeEventCancellationDispatcher.match(
+  /if v_is_rsvp then[\s\S]*?return v_session;[\s\S]*?end if;/i
+)?.[0] || "";
+assert.match(freeEventRsvpBranch, /status = 'confirmed'/,
+  "RSVP cancellation must target active confirmed rows");
+assert.match(freeEventRsvpBranch,
+  /cancelled_at = v_cancelled_at[\s\S]*?cancellation_source = 'session'/,
+  "RSVP cancellation must atomically link booking metadata to the occurrence");
+assert.match(freeEventRsvpBranch,
+  /v_cancelled_at\s*:=\s*clock_timestamp\(\)[\s\S]*?session_date\s*\+\s*v_session\.start_time[\s\S]*?at time zone 'Asia\/Hong_Kong'\s*<=\s*v_cancelled_at[\s\S]*?already started/i,
+  "RSVP cancellation must decide the inclusive Hong Kong cutoff with a captured wall clock");
+const freeEventSessionLockIndex = freeEventCancellationDispatcher.search(
+  /from public\.operational_sessions[\s\S]*?for update/i
+);
+const freeEventWallClockIndex = freeEventCancellationDispatcher.search(
+  /v_cancelled_at\s*:=\s*clock_timestamp\(\)/i
+);
+const freeEventFirstMutationIndex = freeEventCancellationDispatcher.search(
+  /update public\.operational_sessions/i
+);
+assert.ok(
+  freeEventSessionLockIndex !== -1
+    && freeEventSessionLockIndex < freeEventWallClockIndex
+    && freeEventWallClockIndex < freeEventFirstMutationIndex,
+  "RSVP cancellation must capture wall-clock decision time after the session lock and before mutation"
+);
+assert.match(freeEventRsvpBranch,
+  /set cancelled_at = v_cancelled_at[\s\S]*?resolved_at = v_cancelled_at[\s\S]*?cancelled_at = v_cancelled_at[\s\S]*?v_cancelled_at[\s\S]*?from cancelled_rsvps/i,
+  "RSVP cancellation must use one captured wall-clock timestamp for session, queue, bookings, and notifications");
+assert.ok(
+  freeEventRsvpBranch.search(/already started/i)
+    < freeEventRsvpBranch.search(/update public\.operational_sessions/i),
+  "RSVP cancellation start validation must precede every occurrence mutation"
+);
+assert.doesNotMatch(freeEventRsvpBranch, /defer|cancel_operational_session_legacy/i,
+  "RSVP cancellation must return before paid deferral behavior");
+assert.ok(
+  freeEventCancellationDispatcher.indexOf("return v_session;")
+    < freeEventCancellationDispatcher.indexOf("cancel_operational_session_legacy"),
+  "RSVP cancellation must return before the paid legacy dispatcher"
+);
+assert.match(freeEventRsvpMigrationSource,
+  /cancellation_source = 'session'[\s\S]*?cancelled_at = v_session\.cancelled_at[\s\S]*?operational_rsvp_reopened|cancelled_at = v_session\.cancelled_at[\s\S]*?cancellation_source = 'session'[\s\S]*?operational_rsvp_reopened/,
+  "reopening must select only recipients linked to that session cancellation");
+assert.match(freeEventRsvpMigrationSource,
+  /operational_activity_templates_free_one_off_rsvp_check[\s\S]*?activity_id not like 'event-%'[\s\S]*?requires_rsvp[\s\S]*?capacity is null/i,
+  "zero-price one-off templates must be guaranteed explicit RSVP and uncapped");
+const createOperationalEventFunction = freeEventRsvpMigrationSource.match(
+  /create or replace function public\.create_operational_event[\s\S]*?\n\$\$;/i
+)?.[0] || "";
+assert.match(createOperationalEventFunction,
+  /p_price_hkd = 0[\s\S]*?requires_rsvp[\s\S]*?capacity/i,
+  "future free one-offs must normalize to RSVP and null capacity");
+assert.match(createOperationalEventFunction, /'event-'\s*\|\|\s*gen_random_uuid\(\)/i,
+  "one-off event IDs must remain unique when multiple events are created in one second");
+assert.doesNotMatch(createOperationalEventFunction, /extract\s*\(\s*epoch/i,
+  "one-off event IDs must not use collision-prone second-resolution epochs");
+assert.match(freeEventRsvpMigrationSource,
+  /create or replace function public\.join_operational_queue[\s\S]*?v_is_rsvp[\s\S]*?raise exception[^;]*queue/i,
+  "joining any queue for an explicit free RSVP session must be rejected");
+assert.match(freeEventRsvpMigrationSource,
+  /create or replace function public\.leave_operational_queue[\s\S]*?v_is_rsvp[\s\S]*?raise exception[^;]*queue/i,
+  "leaving a legacy queue row for an explicit free RSVP session must be rejected");
+assert.match(freeEventRsvpBranch,
+  /operational_queue_entries[\s\S]*?status = 'dissolved'/i,
+  "RSVP cancellation must dissolve active legacy queue rows");
+const withdrawRsvpFunction = freeEventRsvpMigrationSource.match(
+  /create or replace function public\.withdraw_operational_rsvp[\s\S]*?\n\$\$;/i
+)?.[0] || "";
+assert.match(withdrawRsvpFunction,
+  /current_user_role\(\)[\s\S]*?'member'[\s\S]*?'admin'[\s\S]*?'super_admin'/i,
+  "RSVP withdrawal must require a currently approved role");
+assert.doesNotMatch(freeEventRsvpMigrationSource,
+  /grant\s+(?:all|insert|update|delete)[^\n]*on\s+(?:table\s+)?public\./i,
+  "free-event RSVP migration must keep browser writes behind RPCs");
+for (const marker of [
+  "begin;", "rollback;", "unauthorized", "duplicate active RSVP",
+  "booking RLS hides another attendee identity", "RSVP cancellation never enters paid deferral",
+  "cancellation notifications target active attendees only",
+  "reopening targets only attendees cancelled by that occurrence",
+  "member can create a fresh RSVP after reopening",
+  "future occurrence unchanged", "existing free one-off is normalized",
+  "future free one-off defaults to uncapped RSVP", "paid one-off remains capacity-limited",
+  "RSVP queue joins are rejected", "RSVP queue leave is rejected",
+  "pending withdrawal is rejected", "declined withdrawal is rejected",
+  "pending attendee roster access is rejected", "declined attendee roster access is rejected",
+  "recurring occurrences use declared weekdays", "cancellation dissolves active RSVP queues",
+  "started RSVP cancellation is rejected without mutation",
+  "cancellation uses one captured wall-clock timestamp",
+]) {
+  assert.ok(freeEventRsvpIntegrationSource.includes(marker),
+    `free-event RSVP integration evidence missing ${marker}`);
+}
+console.log("ok  authoritative free-event RSVP migration preserves transactional routing and privacy");
 const attendeeNamesMigrationPath = resolve(
   __dirnameSmoke, "../supabase/migrations/20260905000001_operational_attendee_names.sql"
 );
@@ -1166,6 +1302,64 @@ if (/eyJ[a-zA-Z0-9_-]{20,}[.][a-zA-Z0-9_-]{20,}[.][a-zA-Z0-9_-]{20,}/.test(liveA
 }
 console.log("ok  profile-photo deployment and rollback are documented without secrets");
 
+const freeEventRunbookSection = liveAuthRunbookSource.match(
+  /## Free-event RSVP cancellation: deployment and acceptance[\s\S]*?(?=\n## )/,
+)?.[0] || "";
+for (const marker of [
+  "20260920000001_free_event_rsvp_cancellation.sql",
+  "authoritative recurring free sessions",
+  "never deferred",
+  "Reopening does not restore cancelled RSVPs",
+  "in-app only",
+  'supabase link --project-ref "$SUPABASE_PROJECT_REF"',
+  "supabase migration list --linked",
+  "supabase migration repair --status applied 20260920000001 --linked",
+  'psql "$ITC_PRODUCTION_DATABASE_URL" -v ON_ERROR_STOP=1 -f',
+  "required release gate",
+  "security-definer",
+  "read-only production verification",
+  "controlled Testing/preview frontend",
+  "production frontend promotion",
+]) {
+  if (!freeEventRunbookSection.includes(marker)) {
+    throw new Error(`free-event RSVP deployment runbook missing ${marker}`);
+  }
+}
+if (/^\s*supabase db query/m.test(freeEventRunbookSection)
+    || /^\s*supabase[^\n]*(?:--linked[^\n]*--project-ref|--project-ref[^\n]*--linked)/m.test(freeEventRunbookSection)) {
+  throw new Error("free-event RSVP runbook must not mix linked/project-ref flags or use db query");
+}
+for (const marker of [
+  "acceptance_finished_at",
+  "expected_recipient_kinds",
+  "Unexpected notification recipients/kinds",
+  "must return zero rows",
+]) {
+  if (!freeEventRunbookSection.includes(marker)) {
+    throw new Error(`free-event RSVP notification anti-join documentation missing ${marker}`);
+  }
+}
+if (!/n\.destination\s*=\s*'#\/activity\/'\s*\|\|\s*p\.session_id[\s\S]*?n\.created_at\s*>=\s*p\.acceptance_started_at[\s\S]*?n\.created_at\s*<\s*p\.acceptance_finished_at/i.test(freeEventRunbookSection)
+    || !/from\s+observed\s+o[\s\S]*?left\s+join\s+expected_recipient_kinds\s+e\s+using\s*\(\s*profile_id\s*,\s*kind\s*\)[\s\S]*?where\s+e\.profile_id\s+is\s+null/i.test(freeEventRunbookSection)) {
+  throw new Error("free-event RSVP notification verification must anti-join bounded observed rows against exact expected recipients");
+}
+const freeEventRolloutMarkers = [
+  "Apply the backend migration",
+  "Run read-only production verification",
+  "Deploy the controlled Testing/preview frontend",
+  "Complete authenticated RSVP/cancel/reopen/venue/time/notification acceptance",
+  "Promote the production frontend",
+];
+let previousRolloutMarker = -1;
+for (const marker of freeEventRolloutMarkers) {
+  const markerIndex = freeEventRunbookSection.indexOf(marker);
+  if (markerIndex <= previousRolloutMarker) {
+    throw new Error(`free-event RSVP rollout order missing or invalid at ${marker}`);
+  }
+  previousRolloutMarker = markerIndex;
+}
+console.log("ok  free-event RSVP deployment order and rollback semantics are documented");
+
 if (!/values\s*\([\s\S]*?'pending'\s*\)/i.test(profilesMigrationSource)
     || /existing_count|count\s*\(\s*\*\s*\)[\s\S]*super_admin/i.test(profilesMigrationSource)) {
   throw new Error("fresh OAuth profiles must always bootstrap as pending");
@@ -1253,8 +1447,8 @@ assert.match(integratedAppSource, /form\.id === "form-privacy"[\s\S]*?updateMyPr
   "Privacy & Notifications must persist reminder preferences through the form delegate");
 assert.equal(typeof store.attendeeCountFor, "function",
   "store must export attendeeCountFor for identity-independent RSVP counts");
-assert.equal((integratedViewSource.match(/store\.attendeeCountFor\(s\)/g) || []).length, 4,
-  "Schedule Going/RSVP states, RSVP Activity Details, and Admin controls must use attendeeCountFor");
+assert.equal((integratedViewSource.match(/store\.attendeeCountFor\([^)]*\)/g) || []).length, 4,
+  "Schedule Going/RSVP states, capability-driven Activity Details, and Admin controls must use attendeeCountFor");
 assert.doesNotMatch(integratedViewSource, /store\.attendeesFor\(s\)\.length/,
   "RSVP count surfaces must not derive counts from attendee identities");
 const combinedRuntimeSource = `${integratedViewSource}\n${integratedAppSource}`;
@@ -1459,6 +1653,10 @@ if (
 // --- Visitor state ---
 store.signOut();
 const allUpcoming = store.upcomingSessions(14);
+for (const activityId of ["wnt", "run", "water"]) {
+  assert.ok(allUpcoming.some((session) => session.activityId === activityId),
+    `local mode must continue generating recurring ${activityId} sessions`);
+}
 // booking tests need a session that hasn't started yet — today's sessions
 // are unbookable once their start time passes
 const paid = allUpcoming.find((s) => s.kind === "paid" && !data.sessionStarted(s));
@@ -4417,7 +4615,15 @@ store.signIn("admin@example.test");
     name: "Community Picnic", dateISO: oneOffDate(2), time: "15:00",
     durationMin: 120, location: "Tamar Park", category: "Other",
   });
-  if (freeEvent.kind !== "free") throw new Error("zero-price one-off should be free");
+  assert.deepEqual({
+    kind: freeEvent.kind,
+    requiresRsvp: freeEvent.requiresRsvp,
+    capacity: freeEvent.capacity,
+  }, {
+    kind: "free",
+    requiresRsvp: true,
+    capacity: null,
+  }, "local zero-price one-offs must remain uncapped free RSVP sessions");
   const freeEventHtml = views.viewActivity(freeEvent.id);
   if (!freeEventHtml.includes("Free · No booking needed"))
     throw new Error("free one-off should render the free banner");
@@ -4431,6 +4637,22 @@ store.signIn("admin@example.test");
       || freeCancellationHtml.includes("Paid bookings were moved to the next available session — check your account."))
     throw new Error("free cancellation Activity Details must render the exact social follow-up copy");
   const adminActivitiesHtml = await views.viewAdmin("activities");
+  const freeOneOffCard = adminActivitiesHtml.slice(
+    adminActivitiesHtml.lastIndexOf('<div class="card mt16', adminActivitiesHtml.indexOf(freeEvent.name)),
+    adminActivitiesHtml.indexOf('</div></div>', adminActivitiesHtml.indexOf(freeEvent.name)) + 12,
+  );
+  assert.match(freeOneOffCard, /0 going/,
+    "an active zero-price one-off Admin card must display its RSVP count");
+  assert.match(freeOneOffCard, new RegExp(`id="form-cancel-week"[^>]*data-session="${freeEvent.id}"`),
+    "an active zero-price one-off Admin card must expose per-occurrence cancellation");
+  const cancelledOneOffCard = adminActivitiesHtml.slice(
+    adminActivitiesHtml.lastIndexOf('<div class="card mt16', adminActivitiesHtml.indexOf(freeCancelledEvent.name)),
+    adminActivitiesHtml.indexOf('</div></div>', adminActivitiesHtml.indexOf(freeCancelledEvent.name)) + 12,
+  );
+  assert.match(cancelledOneOffCard, /Session cancelled by ITC — Weather warning/);
+  assert.match(cancelledOneOffCard,
+    new RegExp(`data-action="repost-rsvp"[^>]*data-session="${freeCancelledEvent.id}"[^>]*>Reopen event<`),
+    "a cancelled future zero-price one-off must expose Reopen event");
   if (!adminActivitiesHtml.includes("One-off Events")
       || !adminActivitiesHtml.includes("form-one-off-event")
       || !adminActivitiesHtml.includes("HYROX Race Day Send-off"))
@@ -4466,6 +4688,463 @@ store.signIn("admin@example.test");
   if (store.getSession(paidEvent.id)?.cancelled !== true)
     throw new Error("cancelled one-off should read as cancelled");
   console.log("ok  one-off events: create, list, book, delete guard, cancel");
+}
+
+// --- Free-event RSVP contract and local cancellation parity ---
+store.resetLocalData();
+installLocalFixtures();
+{
+  const member = store.allUsers().find((user) => user.id === "fixture-member");
+  const freeSession = store.upcomingSessions(14).find(
+    (session) => session.kind === "free" && !data.sessionStarted(session)
+  );
+  assert.ok(freeSession, "free RSVP contract needs an upcoming free session");
+  assert.equal(store.sessionRequiresRsvp(freeSession), true);
+  const freeRsvpAction = /data-action="rsvp-(?:join|withdraw)"/;
+  store.signIn("member@example.test");
+  const freeMemberHtml = views.viewActivity(freeSession.id);
+  assert.match(freeMemberHtml, /badge free">Free/);
+  assert.match(freeMemberHtml, /Free · No booking needed/);
+  assert.match(freeMemberHtml, /RSVP helps the team plan; walk-ins are welcome/);
+  assert.match(freeMemberHtml, /data-action="rsvp-join"[^>]*>I’m coming</);
+  assert.doesNotMatch(freeMemberHtml, /Book &amp; pay|Book & pay|checkout|spots? left|capacity/i);
+
+  const withdrawn = await store.rsvpSession(member.id, freeSession);
+  assert.equal(withdrawn.status, "confirmed");
+  const freeGoingHtml = views.viewActivity(freeSession.id);
+  assert.match(freeGoingHtml, /You’re going/);
+  assert.match(freeGoingHtml, /data-action="rsvp-withdraw"[^>]*>Can’t make it</);
+  assert.match(freeGoingHtml, /Who’s coming/);
+  assert.match(freeGoingHtml, /Tester M\./);
+  assert.match(freeGoingHtml, /attendee-avatar/);
+  const freeBookingHtml = views.viewBooking(withdrawn.id);
+  assert.match(freeBookingHtml, /You’re going/);
+  assert.doesNotMatch(freeBookingHtml, /payment|pay your own bill|View receipt|>Receipt<|checkout|capacity|waitlist/i);
+  const freeAccountHtml = await views.viewAccount("bookings");
+  assert.match(freeAccountHtml, /· RSVP/);
+  assert.doesNotMatch(freeAccountHtml, /paid HK\$0|HK\$0 to be paid/i);
+  assert.equal(withdrawn.snapshot.price, 0);
+  assert.equal(store.attendeeCountFor(freeSession), 1);
+  await store.withdrawRsvp(withdrawn.id);
+  assert.doesNotMatch(await views.viewAccount("bookings"), new RegExp(`#/booking/${withdrawn.id}`),
+    "withdrawn free RSVPs must not remain in member booking history");
+  assert.equal(store.getBooking(withdrawn.id).cancelledSource, "member");
+  assert.equal(typeof store.getBooking(withdrawn.id).cancelledAt, "number");
+
+  const active = await store.rsvpSession(member.id, freeSession, withdrawn.createdAt + 1000);
+  const nextOccurrence = store.upcomingSessions(28).find(
+    (session) => session.activityId === freeSession.activityId && session.id !== freeSession.id
+  );
+  assert.ok(nextOccurrence, "free cancellation contract needs a later occurrence");
+  const bookingCountBeforeCancellation = store.bookingsForUser(member.id).length;
+  const cancellationTime = active.createdAt + 1000;
+  store.signIn("admin@example.test");
+  const activeAdminHtml = await views.viewAdmin("activities");
+  const activeCardMarker = activeAdminHtml.indexOf(`data-session="${freeSession.id}"`);
+  const activeCardStart = activeAdminHtml.lastIndexOf('<div class="card mt16', activeCardMarker);
+  const activeCard = activeAdminHtml.slice(activeCardStart,
+    activeAdminHtml.indexOf('</div></div>', activeCardStart) + 12);
+  assert.match(activeCard, /1 going/,
+    "every upcoming RSVP-enabled free Admin card must display its attendee count");
+  assert.match(activeCard,
+    new RegExp(`id="form-cancel-week"[^>]*data-session="${freeSession.id}"`),
+    "every upcoming RSVP-enabled free Admin card must expose cancellation");
+  assert.throws(
+    () => store.cancelSessionWeek(freeSession.id, "   \t  ", cancellationTime),
+    /reason.*required/i,
+    "free-event cancellation must reject a whitespace-only reason"
+  );
+  assert.equal(store.getSession(freeSession.id).cancelled, undefined,
+    "invalid cancellation must not mutate the session override");
+  assert.equal(store.getBooking(active.id).status, "confirmed",
+    "invalid cancellation must not cancel active RSVPs");
+  store.cancelSessionWeek(freeSession.id, "Weather warning", cancellationTime);
+  assert.doesNotMatch(views.viewActivity(freeSession.id), freeRsvpAction,
+    "cancelled free occurrences must not offer RSVP actions");
+  const cancelled = store.getBooking(active.id);
+  assert.equal(cancelled.status, "cancelled");
+  assert.equal(cancelled.cancelledAt, cancellationTime);
+  assert.equal(cancelled.cancelledSource, "session");
+  assert.equal(store.bookingsForUser(member.id).length, bookingCountBeforeCancellation,
+    "free cancellation must not create a deferred future booking");
+  assert.equal(store.getSession(freeSession.id).cancelled, true);
+  assert.equal(store.getSession(nextOccurrence.id).cancelled, undefined,
+    "free cancellation must affect only the selected occurrence");
+  const cancelledAdminHtml = await views.viewAdmin("activities");
+  const cancelledCardMarker = cancelledAdminHtml.indexOf(`data-session="${freeSession.id}"`);
+  const cancelledCardStart = cancelledAdminHtml.lastIndexOf(
+    '<div class="card mt16', cancelledCardMarker
+  );
+  const cancelledCard = cancelledAdminHtml.slice(cancelledCardStart,
+    cancelledAdminHtml.indexOf('</div></div>', cancelledCardStart) + 12);
+  assert.match(cancelledCard, /Session cancelled by ITC — Weather warning/,
+    "Admin must retain the cancellation state and reason on the selected occurrence");
+  assert.match(cancelledCard,
+    new RegExp(`data-action="repost-rsvp"[^>]*data-session="${freeSession.id}"[^>]*>Reopen event<`),
+    "a cancelled future RSVP-enabled free occurrence must expose Reopen event");
+  assert.doesNotMatch(cancelledCard,
+    new RegExp(`id="form-cancel-week"[^>]*data-session="${freeSession.id}"`),
+    "a cancelled free occurrence must not offer a second cancellation form");
+  assert.throws(
+    () => store.cancelSessionWeek(freeSession.id, "Duplicate warning", cancellationTime + 1),
+    /already cancelled/i,
+    "duplicate free-event cancellation must preserve the original cancellation cohort"
+  );
+  assert.equal(store.notificationsFor(member.id).filter(
+    (notification) => notification.kind === "session-cancelled"
+      && notification.link === `#/activity/${freeSession.id}`
+  ).length, 1, "only the active attendee should receive one cancellation notification");
+
+  await store.repostRsvpEvent(freeSession.id);
+  assert.equal(store.getSession(freeSession.id).cancelled, undefined);
+  assert.equal(store.getBooking(active.id).status, "cancelled",
+    "reopening must leave the old RSVP inactive");
+  assert.equal(store.notificationsFor(member.id).filter(
+    (notification) => notification.kind === "session-reopened"
+      && notification.link === `#/activity/${freeSession.id}`
+  ).length, 1, "only session-cancelled attendees should receive one reopening notification");
+  store.signIn("member@example.test");
+  const freshRsvp = await store.rsvpSession(member.id, freeSession, cancellationTime + 1000);
+  assert.equal(freshRsvp.status, "confirmed");
+  assert.notEqual(freshRsvp.id, active.id);
+  assert.equal(store.attendeeCountFor(freeSession), 1);
+  const freeRosterHtml = views.viewActivity(freeSession.id);
+  assert.match(freeRosterHtml, /Who’s coming/);
+  assert.match(freeRosterHtml, /Tester M\./);
+  store.signOut();
+  const visitorFreeHtml = views.viewActivity(freeSession.id);
+  assert.doesNotMatch(visitorFreeHtml, freeRsvpAction);
+  assert.doesNotMatch(visitorFreeHtml, /Tester M\.|attendee-avatar/);
+  store.signIn("member@example.test");
+  const startedDate = data.addDays(freeSession.date, -7);
+  const startedFreeId = `${freeSession.activityId}-${data.isoDate(startedDate)}`;
+  assert.doesNotMatch(views.viewActivity(startedFreeId), freeRsvpAction,
+    "started free occurrences must not offer RSVP actions");
+  store.signIn("admin@example.test");
+  assert.throws(
+    () => store.cancelSessionWeek(startedFreeId, "Historical cancellation", cancellationTime + 2000),
+    /already started/i,
+    "post-start free-event cancellation must fail closed"
+  );
+  assert.equal(store.getSession(startedFreeId).cancelled, undefined,
+    "rejected historical cancellation must not create an override");
+  console.log("ok  free-event RSVP controls, roster privacy, withdrawal, cancellation and reopening preserve local parity");
+}
+
+// Direct or stale local RSVP withdrawals must use the supplied clock against
+// the occurrence's Hong Kong start instant and fail closed when its session
+// can no longer be resolved.
+for (const boundary of [
+  { label: "before", offsetMs: -1, rejected: false },
+  { label: "at", offsetMs: 0, rejected: true },
+  { label: "after", offsetMs: 1, rejected: true },
+]) {
+  store.resetLocalData();
+  installLocalFixtures();
+  store.signIn("member@example.test");
+  const session = store.upcomingSessions(21).find(
+    (item) => item.activityId === "wnt" && !data.sessionStarted(item)
+  );
+  assert.ok(session, `${boundary.label}-start withdrawal needs an upcoming free RSVP occurrence`);
+  const startsAt = data.hktEventStartMs(session.dateISO, session.time);
+  const booking = await store.rsvpSession("fixture-member", session.id, startsAt - 1000);
+  if (boundary.rejected) {
+    await assert.rejects(
+      () => store.withdrawRsvp(booking.id, startsAt + boundary.offsetMs),
+      /already started/i,
+      `withdrawal ${boundary.label} Hong Kong start must fail closed`
+    );
+    assert.equal(store.getBooking(booking.id).status, "confirmed",
+      `rejected ${boundary.label}-start withdrawal must not mutate the booking`);
+  } else {
+    const withdrawn = await store.withdrawRsvp(booking.id, startsAt + boundary.offsetMs);
+    assert.equal(withdrawn.status, "cancelled",
+      "withdrawal immediately before Hong Kong start must remain allowed");
+  }
+}
+{
+  store.resetLocalData();
+  installLocalFixtures();
+  store.signIn("member@example.test");
+  const session = store.upcomingSessions(21).find(
+    (item) => item.activityId === "wnt" && !data.sessionStarted(item)
+  );
+  assert.ok(session, "missing-session withdrawal needs an upcoming free RSVP occurrence");
+  const booking = await store.rsvpSession("fixture-member", session.id);
+  const corrupted = JSON.parse(mem.get("itc.prototype.v1"));
+  corrupted.bookings.find((item) => item.id === booking.id).sessionId = "missing-session-2099-01-01";
+  mem.set("itc.prototype.v1", JSON.stringify(corrupted));
+  store.load();
+  await assert.rejects(
+    () => store.withdrawRsvp(booking.id),
+    /session not found/i,
+    "withdrawal must fail closed when the booking session is missing"
+  );
+  assert.equal(store.getBooking(booking.id).status, "confirmed",
+    "missing-session withdrawal must not mutate the booking");
+}
+console.log("ok  local RSVP withdrawal enforces missing-session and HKT start boundaries");
+
+// Direct or stale local Admin cancellation must resolve the occurrence before
+// creating an override and enforce the same exact HKT start boundary.
+{
+  store.resetLocalData();
+  installLocalFixtures();
+  store.signIn("admin@example.test");
+  const before = JSON.parse(mem.get("itc.prototype.v1")).sessionOverrides;
+  assert.throws(
+    () => store.cancelSessionWeek("missing-session-2099-01-01", "Weather warning"),
+    /session not found/i,
+    "unknown local cancellation must fail closed"
+  );
+  assert.deepEqual(JSON.parse(mem.get("itc.prototype.v1")).sessionOverrides, before,
+    "unknown local cancellation must not create a ghost override");
+}
+for (const boundary of [
+  { label: "before", offsetMs: -1, rejected: false },
+  { label: "at", offsetMs: 0, rejected: true },
+  { label: "after", offsetMs: 1, rejected: true },
+]) {
+  store.resetLocalData();
+  installLocalFixtures();
+  store.signIn("member@example.test");
+  const session = store.upcomingSessions(21).find(
+    (item) => item.activityId === "wnt" && !data.sessionStarted(item)
+  );
+  assert.ok(session, `${boundary.label}-start cancellation needs an upcoming free RSVP occurrence`);
+  const startsAt = data.hktEventStartMs(session.dateISO, session.time);
+  const booking = await store.rsvpSession("fixture-member", session.id, startsAt - 1000);
+  store.signIn("admin@example.test");
+  if (boundary.rejected) {
+    assert.throws(
+      () => store.cancelSessionWeek(session.id, "Weather warning", startsAt + boundary.offsetMs),
+      /already started/i,
+      `cancellation ${boundary.label} Hong Kong start must fail closed`
+    );
+    assert.equal(store.getSession(session.id).cancelled, undefined,
+      `rejected ${boundary.label}-start cancellation must not create an override`);
+    assert.equal(store.getBooking(booking.id).status, "confirmed",
+      `rejected ${boundary.label}-start cancellation must not mutate active RSVPs`);
+    assert.equal(store.notificationsFor("fixture-member").filter(
+      (notification) => notification.kind === "session-cancelled"
+        && notification.link === `#/activity/${session.id}`
+    ).length, 0, `rejected ${boundary.label}-start cancellation must not notify attendees`);
+  } else {
+    store.cancelSessionWeek(session.id, "Weather warning", startsAt + boundary.offsetMs);
+    assert.equal(store.getSession(session.id).cancelled, true,
+      "cancellation immediately before Hong Kong start must remain allowed");
+    assert.equal(store.getBooking(booking.id).status, "cancelled");
+  }
+}
+
+// RSVP capability only permits an explicit finite numeric zero. Persisted
+// null/empty prices must not be coerced into the free cancellation path.
+for (const malformedPrice of [null, ""]) {
+  store.resetLocalData();
+  installLocalFixtures();
+  store.signIn("admin@example.test");
+  const session = await store.createOneOffEvent({
+    name: "Malformed price RSVP",
+    dateISO: data.isoDate(data.addDays(data.parseISO(data.todayHktISO()), 10)),
+    time: "18:00",
+    durationMin: 60,
+    location: "TBC",
+    category: "Other",
+    price: 180,
+    capacity: 20,
+  });
+  store.signIn("member@example.test");
+  store.reserveSession("fixture-member", session.id);
+  const corrupted = JSON.parse(mem.get("itc.prototype.v1"));
+  const corruptedEvent = corrupted.oneOffEvents.find((event) => event.id === session.activityId);
+  corruptedEvent.requiresRsvp = true;
+  corruptedEvent.price = malformedPrice;
+  mem.set("itc.prototype.v1", JSON.stringify(corrupted));
+  store.load();
+  store.signIn("admin@example.test");
+  const before = JSON.parse(mem.get("itc.prototype.v1"));
+  assert.throws(
+    () => store.cancelSessionWeek(session.id, "Weather warning"),
+    /RSVP.*price|price.*RSVP/i,
+    `RSVP cancellation must reject malformed ${malformedPrice === null ? "null" : "empty"} price`
+  );
+  const after = JSON.parse(mem.get("itc.prototype.v1"));
+  assert.deepEqual(after.sessionOverrides, before.sessionOverrides,
+    "malformed RSVP price must not create an override");
+  assert.deepEqual(after.bookings, before.bookings,
+    "malformed RSVP price must not mutate bookings");
+  assert.deepEqual(after.notifications, before.notifications,
+    "malformed RSVP price must not create notifications");
+}
+console.log("ok  local RSVP cancellation rejects unknown, malformed-price, and started occurrences without mutation");
+
+// Persisted prototype state can predate uniqueness guarantees. Cancellation
+// repairs every duplicate active row while notifying each profile only once.
+{
+  store.resetLocalData();
+  installLocalFixtures();
+  store.signIn("member@example.test");
+  const session = store.upcomingSessions(21).find(
+    (item) => item.activityId === "wnt" && !data.sessionStarted(item)
+  );
+  assert.ok(session, "duplicate-RSVP cancellation needs an upcoming free occurrence");
+  const booking = await store.rsvpSession("fixture-member", session.id);
+  const corrupted = JSON.parse(mem.get("itc.prototype.v1"));
+  const persistedBooking = corrupted.bookings.find((item) => item.id === booking.id);
+  corrupted.bookings.push({ ...persistedBooking, id: "duplicate-active-rsvp" });
+  mem.set("itc.prototype.v1", JSON.stringify(corrupted));
+  store.load();
+  store.signIn("admin@example.test");
+  store.cancelSessionWeek(session.id, "Weather warning");
+  assert.deepEqual(
+    [booking.id, "duplicate-active-rsvp"].map((id) => store.getBooking(id).status),
+    ["cancelled", "cancelled"],
+    "cancellation must update every duplicate active RSVP row"
+  );
+  assert.equal(store.notificationsFor("fixture-member").filter(
+    (notification) => notification.kind === "session-cancelled"
+      && notification.link === `#/activity/${session.id}`
+  ).length, 1, "duplicate active RSVP rows must emit one cancellation notification per profile");
+}
+console.log("ok  local RSVP cancellation deduplicates corrupted active booking recipients");
+
+// After reopening and a fresh RSVP, notification copy must come from the
+// current active row rather than an older cancelled row for the same member.
+{
+  store.resetLocalData();
+  installLocalFixtures();
+  store.signIn("member@example.test");
+  const session = store.upcomingSessions(21).find(
+    (item) => item.activityId === "wnt" && !data.sessionStarted(item)
+  );
+  assert.ok(session, "active-snapshot cancellation needs an upcoming free RSVP occurrence");
+  const startsAt = data.hktEventStartMs(session.dateISO, session.time);
+  const older = await store.rsvpSession("fixture-member", session.id, startsAt - 5000);
+  store.signIn("admin@example.test");
+  store.cancelSessionWeek(session.id, "First warning", startsAt - 4000);
+  await store.repostRsvpEvent(session.id);
+  store.signIn("member@example.test");
+  const current = await store.rsvpSession("fixture-member", session.id, startsAt - 3000);
+  const persisted = JSON.parse(mem.get("itc.prototype.v1"));
+  persisted.bookings.find((booking) => booking.id === older.id).snapshot.name = "Older cancelled copy";
+  persisted.bookings.find((booking) => booking.id === current.id).snapshot.name = "Current active copy";
+  persisted.notifications = [];
+  mem.set("itc.prototype.v1", JSON.stringify(persisted));
+  store.load();
+  store.signIn("admin@example.test");
+  store.cancelSessionWeek(session.id, "Second warning", startsAt - 2000);
+  const notifications = store.notificationsFor("fixture-member").filter(
+    (notification) => notification.kind === "session-cancelled"
+      && notification.link === `#/activity/${session.id}`
+  );
+  assert.equal(notifications.length, 1,
+    "re-RSVP cancellation must notify the eligible member exactly once");
+  assert.match(notifications[0].body, /Current active copy/,
+    "cancellation copy must use the current active RSVP snapshot");
+  assert.doesNotMatch(notifications[0].body, /Older cancelled copy/,
+    "cancellation copy must not use an older cancelled RSVP snapshot");
+}
+console.log("ok  local RSVP cancellation snapshots active rows before deduplicated fan-out");
+
+// Event-change and cancellation fan-out follows the occurrence's active RSVP
+// cohort, not the member directory. A later role downgrade also closes the
+// notification channel without preventing the booking audit row being updated.
+store.resetLocalData();
+installLocalFixtures();
+{
+  const raw = JSON.parse(mem.get("itc.prototype.v1"));
+  raw.users.push(
+    {
+      id: "rsvp-withdrawn", role: "member", status: "approved", fullName: "Withdrawn Member",
+      preferredName: "Withdrawn", email: "withdrawn-rsvp@example.test",
+      indemnityAcceptedAt: Date.now(), privacyAcceptedAt: Date.now(),
+    },
+    {
+      id: "rsvp-unrelated", role: "member", status: "approved", fullName: "Unrelated Member",
+      preferredName: "Unrelated", email: "unrelated-rsvp@example.test",
+      indemnityAcceptedAt: Date.now(), privacyAcceptedAt: Date.now(),
+    },
+    {
+      id: "rsvp-pending", role: "member", status: "approved", fullName: "Pending Later",
+      preferredName: "Pending", email: "pending-rsvp@example.test",
+      indemnityAcceptedAt: Date.now(), privacyAcceptedAt: Date.now(),
+    },
+    {
+      id: "rsvp-declined", role: "member", status: "approved", fullName: "Declined Later",
+      preferredName: "Declined", email: "declined-rsvp@example.test",
+      indemnityAcceptedAt: Date.now(), privacyAcceptedAt: Date.now(),
+    },
+  );
+  mem.set("itc.prototype.v1", JSON.stringify(raw));
+  store.load();
+  const session = store.upcomingSessions(21).find(
+    (item) => item.activityId === "wnt" && !data.sessionStarted(item)
+  );
+  assert.ok(session, "targeted notification test needs an upcoming free RSVP occurrence");
+
+  for (const [email, userId] of [
+    ["member@example.test", "fixture-member"],
+    ["withdrawn-rsvp@example.test", "rsvp-withdrawn"],
+    ["pending-rsvp@example.test", "rsvp-pending"],
+    ["declined-rsvp@example.test", "rsvp-declined"],
+  ]) {
+    store.signIn(email);
+    const booking = await store.rsvpSession(userId, session.id);
+    if (userId === "rsvp-withdrawn") await store.withdrawRsvp(booking.id);
+  }
+
+  const downgraded = JSON.parse(mem.get("itc.prototype.v1"));
+  Object.assign(downgraded.users.find((user) => user.id === "rsvp-pending"), {
+    role: "pending", status: "pending",
+  });
+  Object.assign(downgraded.users.find((user) => user.id === "rsvp-declined"), {
+    role: "pending", status: "declined",
+  });
+  mem.set("itc.prototype.v1", JSON.stringify(downgraded));
+  store.load();
+  store.signIn("admin@example.test");
+
+  const linkedNotes = (userId, kind) => store.notificationsFor(userId).filter(
+    (notification) => notification.kind === kind
+      && notification.link === `#/activity/${session.id}`
+  );
+  store.setWeekVenue(session.id, {
+    location: "Central Harbourfront", mapsQuery: "Central Harbourfront, Hong Kong",
+  });
+  store.setWeekVenue(session.id, {
+    location: "Central Harbourfront", mapsQuery: "Central Harbourfront, Hong Kong",
+  });
+  store.setSessionTime(session.id, "20:15");
+  store.setSessionTime(session.id, "20:15");
+
+  assert.equal(linkedNotes("fixture-member", "operational_session_venue_updated").length, 1,
+    "one effective venue change must notify an active confirmed RSVP exactly once");
+  assert.equal(linkedNotes("fixture-member", "operational_session_time_updated").length, 1,
+    "one effective time change must notify an active confirmed RSVP exactly once");
+  for (const userId of ["rsvp-withdrawn", "rsvp-unrelated", "rsvp-pending", "rsvp-declined"]) {
+    assert.equal(linkedNotes(userId, "operational_session_venue_updated").length, 0,
+      `${userId} must not receive the RSVP venue change`);
+    assert.equal(linkedNotes(userId, "operational_session_time_updated").length, 0,
+      `${userId} must not receive the RSVP time change`);
+  }
+
+  store.cancelSessionWeek(session.id, "Lightning warning", Date.now());
+  assert.equal(linkedNotes("fixture-member", "session-cancelled").length, 1);
+  for (const userId of ["rsvp-withdrawn", "rsvp-unrelated", "rsvp-pending", "rsvp-declined"]) {
+    assert.equal(linkedNotes(userId, "session-cancelled").length, 0,
+      `${userId} must not receive the RSVP cancellation`);
+  }
+  await store.repostRsvpEvent(session.id);
+  assert.equal(linkedNotes("fixture-member", "session-reopened").length, 1);
+  for (const userId of ["rsvp-withdrawn", "rsvp-unrelated", "rsvp-pending", "rsvp-declined"]) {
+    assert.equal(linkedNotes(userId, "session-reopened").length, 0,
+      `${userId} must not receive the RSVP reopening`);
+  }
+  const anonymousLinked = JSON.parse(mem.get("itc.prototype.v1")).notifications.filter(
+    (notification) => !notification.userId && notification.link === `#/activity/${session.id}`
+  );
+  assert.equal(anonymousLinked.length, 0, "visitors must never receive in-app occurrence notifications");
+  console.log("ok  local RSVP notifications target only the active or cancellation cohort exactly once");
 }
 
 // --- RSVP events (local): the recurring post-training lunch ---
@@ -6177,6 +6856,15 @@ installLocalFixtures();
     isMinor: false, appliedAt: Date.now() - 3600000,
     whatsappReminders: false, emailReceipts: false, communityNews: false,
   });
+  raw.users.push({
+    id: "fixture-unrelated-member", role: "member", status: "approved",
+    fullName: "Test Unrelated", preferredName: "Unrelated",
+    email: "unrelated@example.test",
+    isMinor: false, appliedAt: Date.now() - 7200000,
+    indemnityAcceptedAt: Date.now() - 7200000,
+    privacyAcceptedAt: Date.now() - 7200000,
+    whatsappReminders: false, emailReceipts: false, communityNews: false,
+  });
   mem.set("itc.prototype.v1", JSON.stringify(raw));
   store.load();
 }
@@ -6186,28 +6874,58 @@ const wntSession = store.upcomingSessions(21).find(
 if (!wntSession) throw new Error("expected an upcoming wnt session for venue tests");
 store.signIn("admin@example.test");
 
-// A partial TBC override remains incomplete: it may retain the independent
-// maps query, but it must not consume member dedupe or claim confirmation.
+// A visible partial override must notify the active RSVP cohort even while
+// the map remains unresolved. A non-actor RSVP Admin gets the audit row instead
+// of a second attendee row; an ordinary member gets the attendee row.
 const partialSwimmingSession = store.upcomingSessions(21).find(
   (s) => s.activityId === "water" && !data.sessionStarted(s)
 );
 if (!partialSwimmingSession) throw new Error("expected an upcoming Swimming session for partial venue tests");
+store.signIn("member@example.test");
+const partialMemberBooking = await store.rsvpSession("fixture-member", partialSwimmingSession.id);
+store.signIn("other-admin@example.test");
+const partialAdminBooking = await store.rsvpSession("fixture-other-admin", partialSwimmingSession.id);
+store.signIn("admin@example.test");
 store.setWeekVenue(partialSwimmingSession.id, {
-  location: "",
-  mapsQuery: "Victoria Park Swimming Pool, Hong Kong",
+  location: "Victoria Park Swimming Pool",
+  mapsQuery: "",
 });
 const partialSwimming = store.getSession(partialSwimmingSession.id);
 const partialSwimmingOverride = store.weekVenueOverride(partialSwimmingSession.id);
-const partialMemberNotes = store.notificationsFor("fixture-member").filter(
+const partialVenueNotesFor = (userId) => store.notificationsFor(userId).filter(
   (n) => n.kind === "operational_session_venue_updated"
-    && n.destination === `#/activity/${partialSwimmingSession.id}`
+    && n.link === `#/activity/${partialSwimmingSession.id}`
 );
-if (partialSwimming.location !== "TBC" || partialSwimming.venueTBC === false) {
-  throw new Error("a maps-query-only Swimming override must remain TBC");
+const partialMemberNotes = partialVenueNotesFor("fixture-member");
+const partialAdminNotes = partialVenueNotesFor("fixture-other-admin");
+if (partialSwimming.location !== "Victoria Park Swimming Pool" || partialSwimming.mapsQuery) {
+  throw new Error("a location-only Swimming override must render its visible location without a map");
 }
-if (partialSwimmingOverride.venueMemberNotifiedAt || partialMemberNotes.length !== 0) {
-  throw new Error("an incomplete Swimming override must not consume member notification dedupe");
+if (!partialSwimmingOverride.venueMemberNotifiedAt || partialMemberNotes.length !== 1) {
+  throw new Error("a visible partial venue change must notify an ordinary active RSVP exactly once");
 }
+if (partialMemberNotes[0]?.title !== "Venue updated"
+    || partialMemberNotes[0]?.body !== `ITC Swimming on ${partialSwimmingSession.dateISO} has a venue update. Check the activity page for details.`) {
+  throw new Error("an ordinary RSVP member must receive attendee venue-update semantics");
+}
+if (partialAdminNotes.length !== 1
+    || partialAdminNotes[0]?.title !== "Session venue updated"
+    || partialAdminNotes[0]?.body !== `Test Admin set the venue for ${partialSwimmingSession.id} to Victoria Park Swimming Pool.`) {
+  throw new Error("a non-actor RSVP Admin must receive exactly one audit venue notification");
+}
+store.setWeekVenue(partialSwimmingSession.id, {
+  location: "Victoria Park Swimming Pool",
+  mapsQuery: "",
+});
+if (partialVenueNotesFor("fixture-member").length !== 1
+    || partialVenueNotesFor("fixture-other-admin").length !== 1) {
+  throw new Error("an exact partial venue repeat must not notify any recipient again");
+}
+store.signIn("other-admin@example.test");
+await store.withdrawRsvp(partialAdminBooking.id);
+store.signIn("member@example.test");
+await store.withdrawRsvp(partialMemberBooking.id);
+store.signIn("admin@example.test");
 
 // Legacy free-event venueTBC flags must be superseded by both direct reset
 // and save-then-reset so the recurring default becomes visible again.
@@ -6240,6 +6958,7 @@ if (restoredLegacyRun.location !== "Recurring Run Venue" || restoredLegacyRun.ve
 
 store.setWeekVenue(wntSession.id, { location: null, mapsQuery: null });
 store.signIn("member@example.test");
+await store.rsvpSession("fixture-member", wntSession.id);
 const wntTbcDetail = views.viewActivity(wntSession.id);
 if (!wntTbcDetail.includes("Meeting point to be confirmed — check back before Wednesday. Bring water and a friend.")) {
   throw new Error("WNT TBC detail must include the complete meeting-point note");
@@ -6276,8 +6995,9 @@ const memberNotes = venueNotesFor("fixture-member", wntSession.id);
 const otherAdminNotes = venueNotesFor("fixture-other-admin", wntSession.id);
 const actorNotes = venueNotesFor("fixture-admin", wntSession.id);
 const pendingNotes = venueNotesFor("fixture-pending-user", wntSession.id);
+const unrelatedNotes = venueNotesFor("fixture-unrelated-member", wntSession.id);
 if (memberNotes.length !== 1) {
-  throw new Error("first confirmation must notify each member exactly once");
+  throw new Error("first confirmation must notify each active RSVP exactly once");
 }
 if (otherAdminNotes.length !== 1) {
   throw new Error("other admin must receive audit notification on actual save");
@@ -6287,6 +7007,9 @@ if (actorNotes.length) {
 }
 if (pendingNotes.length) {
   throw new Error("pending profile must not receive venue notifications");
+}
+if (unrelatedNotes.length) {
+  throw new Error("an unrelated approved member must not receive venue notifications");
 }
 const memberDestination = memberNotes[0];
 if (memberDestination?.link !== `#/activity/${wntSession.id}`) {
@@ -6313,13 +7036,13 @@ store.setWeekVenue(wntSession.id, {
 if (venueNotesFor("fixture-member", wntSession.id).length !== 1) {
   throw new Error("no-op save must not duplicate member notification");
 }
-// Edit must notify only other Admins (not members).
+// Every effective edit notifies the active RSVP cohort and other Admins.
 store.setWeekVenue(wntSession.id, {
   location: "Wan Chai Promenade — 7pm sharp",
   mapsQuery: "Wan Chai Promenade, Hong Kong",
 });
-if (venueNotesFor("fixture-member", wntSession.id).length !== 1) {
-  throw new Error("subsequent edits must not re-notify members");
+if (venueNotesFor("fixture-member", wntSession.id).length !== 2) {
+  throw new Error("an effective venue edit must notify the active RSVP once");
 }
 if (venueNotesFor("fixture-other-admin", wntSession.id).length !== 2) {
   throw new Error("second save must notify other Admins again");
@@ -6331,16 +7054,16 @@ if (resetDecorated.location === "Central Harbourfront — 7pm sharp"
     || resetDecorated.mapsQuery === "Central Harbourfront, Hong Kong") {
   throw new Error("reset should restore the activity-template venue values");
 }
-if (venueNotesFor("fixture-member", wntSession.id).length !== 1) {
-  throw new Error("reset must not re-notify members");
+if (venueNotesFor("fixture-member", wntSession.id).length !== 3) {
+  throw new Error("resetting an effective venue must notify the active RSVP once");
 }
-// Reconfirmation does not re-notify members.
+// A later effective confirmation also notifies the still-active RSVP once.
 store.setWeekVenue(wntSession.id, {
   location: "Causeway Bay Promenade — 7pm sharp",
   mapsQuery: "Causeway Bay Promenade, Hong Kong",
 });
-if (venueNotesFor("fixture-member", wntSession.id).length !== 1) {
-  throw new Error("reconfirmation after reset must not re-notify members");
+if (venueNotesFor("fixture-member", wntSession.id).length !== 4) {
+  throw new Error("reconfirmation after reset must notify the active RSVP once");
 }
 const weekOverride = store.weekVenueOverride(wntSession.id);
 if (weekOverride.location !== "Causeway Bay Promenade — 7pm sharp"
@@ -6487,17 +7210,26 @@ const swimmingSession = store.upcomingSessions(21).find(
   (s) => s.activityId === "water" && !data.sessionStarted(s)
 );
 if (!swimmingSession) throw new Error("expected an upcoming swimming session for admin IA checks");
+const swimmingNotesBeforeCompletion = venueNotesFor("fixture-member", swimmingSession.id).length;
+store.signIn("member@example.test");
+await store.rsvpSession("fixture-member", swimmingSession.id);
+store.signIn("admin@example.test");
 store.setWeekVenue(swimmingSession.id, {
   location: "Victoria Park Swimming Pool",
   mapsQuery: "Victoria Park Swimming Pool, Hong Kong",
 });
 const completedSwimmingOverride = store.weekVenueOverride(swimmingSession.id);
 const completedSwimmingNotes = venueNotesFor("fixture-member", swimmingSession.id);
-if (!completedSwimmingOverride.venueMemberNotifiedAt || completedSwimmingNotes.length !== 1) {
-  throw new Error("completing a partial Swimming override must notify members exactly once");
+const completedSwimmingNote = completedSwimmingNotes.find(
+  (note) => note.title === "Venue confirmed"
+    && note.body === `ITC Swimming on ${swimmingSession.dateISO} is at Victoria Park Swimming Pool. Check the activity page for details.`
+);
+if (!completedSwimmingOverride.venueMemberNotifiedAt
+    || completedSwimmingNotes.length !== swimmingNotesBeforeCompletion + 1) {
+  throw new Error("completing a partial Swimming override must notify its active RSVP exactly once");
 }
-if (completedSwimmingNotes[0].body !== `ITC Swimming on ${swimmingSession.dateISO} is at Victoria Park Swimming Pool. Check the activity page for details.`) {
-  throw new Error(`Swimming member copy must use its display name; got: ${completedSwimmingNotes[0].body}`);
+if (!completedSwimmingNote) {
+  throw new Error("Swimming member copy must use its display name and confirmed-venue semantics");
 }
 store.signIn("admin@example.test");
 store.setWeekVenue(wntSession.id, {

@@ -204,7 +204,7 @@ function sessionRow(s, { past, showDate = true, highlight } = {}) {
   if (s.cancelled) {
     end = `<span class="badge danger">Cancelled</span>`;
   } else if (booked) {
-    end = s.kind === "rsvp"
+    end = store.sessionRequiresRsvp(s)
       ? `<span class="badge free booked">Going</span><span class="spots">${store.attendeeCountFor(s)} going</span>`
       : `<span class="badge free booked">${booked.status === "attended" ? "Arrived" : "Booked"}</span>`;
   } else if (reserved) {
@@ -466,36 +466,19 @@ export function viewSchedule() {
   if (!scheduleState.selected) {
     scheduleState.selected = scheduleSelectionForWeek(t, scheduleState.weekOffset);
   }
-  let sourceActivities;
+  let weekSessions;
   if (isLive()) {
-    const liveTemplates = liveOps.liveActivityTemplates();
-    const templateActivities = liveTemplates.map((tpl) => ({
-      id: tpl.activity_id,
-      weekday: tpl.weekday,
-      price: tpl.price_hkd,
-      capacity: tpl.capacity,
-      kind: "paid",
-      name: tpl.name,
-      venue: tpl.venue,
-      durationMin: tpl.duration_minutes,
-      start_time: tpl.start_time,
-      category: "HYROX",
-      published: true,
-    }));
-    const freeActivities = store.activities().filter((a) => a.kind === "free");
-    sourceActivities = [...templateActivities, ...freeActivities];
+    const weekStartISO = isoDate(weekStart);
+    const weekEndISO = isoDate(addDays(weekStart, 6));
+    weekSessions = liveOps.listLiveSessions()
+      .filter((session) => session.dateISO >= weekStartISO && session.dateISO <= weekEndISO)
+      .map((session) => store.getSession(session.id))
+      .filter(Boolean);
   } else {
-    sourceActivities = store.activities();
+    weekSessions = sessionsInRange(store.activities(), weekStart, 7)
+      .map((session) => store.getSession(session.id))
+      .filter(Boolean);
   }
-  const weekSessions = sessionsInRange(sourceActivities, weekStart, 7)
-    .map((s) => {
-      if (isLive()) {
-        if (s.kind === "free") return store.getSession(s.id);
-        return liveOps.getLiveSession(s.id);
-      }
-      return store.getSession(s.id);
-    })
-    .filter(Boolean);
   const dayNames = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
   const cells = Array.from({ length: 7 }, (_, i) => {
@@ -681,22 +664,44 @@ export function viewActivity(sessionId, options) {
       </div>`;
   } else if (past) {
     actionBlock = `<div class="banner mt16"><p>This session has already happened. See you at the next one.</p></div>`;
-  } else if (s.kind === "free") {
-    // Product rule: free activities never show booking, capacity or checkout.
-    actionBlock = `
-      <div class="free-banner">
-        ${ICONS.pin}
-        <div><strong>Free · No booking needed.</strong><br><span class="muted small">Everyone is welcome — just show up.</span></div>
-      </div>
-      <div class="btn-row ${showDirections ? "two" : ""}">
-        <button class="btn" type="button" data-action="ics" data-session="${s.id}">Add to calendar</button>
-        ${directionsLink}
-      </div>`;
-  } else if (s.kind === "rsvp") {
-    // RSVP sessions (e.g. the post-training lunch): no payment moves in-app,
-    // but the organizer needs a headcount — joining confirms instantly.
+  } else if (store.sessionRequiresRsvp(s)) {
+    // RSVP capability controls participation independently of the activity's
+    // presentation kind. Free activities retain walk-in framing, while Lunch
+    // retains its organizer and pay-your-own-bill copy.
     const goingCount = store.attendeeCountFor(s);
-    if (booking) {
+    if (s.kind === "free") {
+      const freeBanner = `
+        <div class="free-banner">
+          ${ICONS.pin}
+          <div><strong>Free · No booking needed.</strong><br><span class="muted small">Everyone is welcome — just show up. RSVP helps the team plan; walk-ins are welcome.</span></div>
+        </div>`;
+      const calendarButton = `<button class="btn ghost" type="button" data-action="ics" data-session="${s.id}">Add to calendar</button>`;
+      if (booking && isMember) {
+        actionBlock = `${freeBanner}
+          <div class="banner mt16">
+            <span class="kicker">You’re going</span>
+            <p>${goingCount} going — see you there. Walk-ins are still welcome.</p>
+          </div>
+          <div class="btn-row">
+            <button class="btn ghost" type="button" data-action="rsvp-withdraw" data-booking="${booking.id}">Can’t make it</button>
+            ${calendarButton}
+            ${directionsLink}
+          </div>`;
+      } else if (isMember) {
+        actionBlock = `${freeBanner}
+          <div class="btn-row">
+            <button class="btn" type="button" data-action="rsvp-join" data-session="${s.id}">I’m coming</button>
+            ${calendarButton}
+            ${directionsLink}
+          </div>`;
+      } else {
+        actionBlock = `${freeBanner}
+          <div class="btn-row ${showDirections ? "two" : ""}">
+            ${calendarButton}
+            ${directionsLink}
+          </div>`;
+      }
+    } else if (booking && isMember) {
       actionBlock = `
         <div class="banner mt16">
           <span class="kicker">You're going</span>
@@ -814,7 +819,7 @@ export function viewActivity(sessionId, options) {
       ? '<p class="muted small">Attendee names are temporarily unavailable. Try again shortly.</p>'
       : '<p class="muted small">No confirmed bookings yet.</p>';
   const attendees =
-    (s.kind === "paid" || s.kind === "rsvp")
+    (s.kind === "paid" || store.sessionRequiresRsvp(s))
       ? isMember
         ? `
       <div class="section-head"><h2>Who’s coming</h2></div>
@@ -1784,6 +1789,7 @@ function bookingDisplaySnapshot(b) {
     location: snapshot.location ?? session?.location ?? (cycle ? "Venue pending" : undefined),
     durationMin: snapshot.durationMin ?? session?.durationMin,
     kind: snapshot.kind ?? session?.kind ?? (cycle ? "paid" : undefined),
+    requiresRsvp: snapshot.requiresRsvp ?? session?.requiresRsvp ?? snapshot.kind === "rsvp",
     price: snapshot.price ?? session?.price ?? snapshot.priceHkd,
   };
 }
@@ -1811,7 +1817,7 @@ function bookingCard(b) {
           : started
             ? '<span class="badge neutral">Ended</span>'
             : '<span class="badge free">Confirmed</span>';
-  const amount = s.kind === "rsvp"
+  const amount = store.sessionRequiresRsvp(s)
     ? "RSVP"
     : (b.paymentMarkedAt != null || ["confirmed", "attended"].includes(b.status))
       ? `paid ${fmtMoney(s.price)}`
@@ -1856,8 +1862,8 @@ function dedupeBookings(records) {
   records.forEach((booking) => {
     const key = bookingIdentity(booking);
     const current = unique.get(key);
-    const rsvpHistory = bookingDisplaySnapshot(booking).kind === "rsvp"
-      || (current && bookingDisplaySnapshot(current).kind === "rsvp");
+    const rsvpHistory = store.sessionRequiresRsvp(bookingDisplaySnapshot(booking))
+      || (current && store.sessionRequiresRsvp(bookingDisplaySnapshot(current)));
     if (!current
         || (rsvpHistory && bookingTimestamp(booking) > bookingTimestamp(current))
         || (!rsvpHistory && bookingPriority(booking) > bookingPriority(current))
@@ -1872,7 +1878,7 @@ function dedupeBookings(records) {
 function visibleBookingsForUser(userId) {
   return dedupeBookings(store.bookingsForUser(userId)).filter((booking) => {
     const inactiveRsvp = ["cancelled", "withdrawn"].includes(booking.status);
-    return !(inactiveRsvp && bookingDisplaySnapshot(booking).kind === "rsvp");
+    return !(inactiveRsvp && store.sessionRequiresRsvp(bookingDisplaySnapshot(booking)));
   });
 }
 
@@ -2365,6 +2371,7 @@ export function viewBooking(bookingId) {
   const started = assignedSession ? sessionStarted(assignedSession) : false;
   const receipt = store.receiptForBooking(b.id);
   const mine = b.userId === user.id;
+  const requiresRsvp = store.sessionRequiresRsvp(assignedSession || s);
 
   let head = "";
   let actions = "";
@@ -2392,7 +2399,9 @@ export function viewBooking(bookingId) {
     head = `
       <div class="confirm-mark">${ICONS.check}</div>
       <h1 class="display sm center mt16">You’re going.</h1>
-      <p class="subcopy center mt8">No payment needed — everyone pays their own bill at the venue.</p>`;
+      <p class="subcopy center mt8">${s.kind === "free"
+        ? "You’re on the headcount. Walk-ins are still welcome."
+        : "No payment needed — everyone pays their own bill at the venue."}</p>`;
     actions = `
       <button class="btn ghost" type="button" data-action="ics-booking" data-booking="${b.id}">Add to calendar</button>
       ${mine ? `<button class="btn ghost" type="button" data-action="rsvp-withdraw" data-booking="${b.id}">Can’t make it</button>` : ""}`;
@@ -2485,7 +2494,11 @@ export function viewBooking(bookingId) {
         <div class="line"><span>When</span><strong>${esc(fmtDate(s.dateISO))}${s.time ? ` · ${fmtTime(s.time)}` : ""}</strong></div>
         <div class="line"><span>Where</span><strong>${esc(assignedVenue || s.location || "Venue pending")}</strong></div>
         <div class="line"><span>Status</span><strong>${esc(b.status)}</strong></div>
-        <div class="line total"><span>Price</span><strong>${Number(s.price) > 0 ? fmtMoney(s.price) : "Pay your own bill"}</strong></div>
+        ${requiresRsvp && s.kind === "free"
+          ? b.status === "confirmed"
+            ? '<div class="line total"><span>Attendance</span><strong>RSVP confirmed</strong></div>'
+            : ""
+          : `<div class="line total"><span>Price</span><strong>${Number(s.price) > 0 ? fmtMoney(s.price) : "Pay your own bill"}</strong></div>`}
       </div>
     </div></div>
     ${venuePreferenceCard}
@@ -3086,6 +3099,30 @@ function adminFinalizeGym(memberUsers, groupedDates = null) {
     </section>`;
 }
 
+function adminRsvpOccurrenceControls(session, {
+  cancelLabel = "Cancel this week's event",
+  cancelFieldLabel = "Cancel this week — reason (required)",
+  cancelPlaceholder = "e.g. Organizer away",
+  allowDelete = false,
+} = {}) {
+  if (!store.sessionRequiresRsvp(session) || Number(session.price ?? 0) !== 0) return "";
+  const safeId = esc(session.id);
+  const count = `<p class="muted small mt8">${store.attendeeCountFor(session)} going${session.capacity != null ? ` · cap ${session.capacity}` : ""}</p>`;
+  if (session.cancelled) {
+    return `${count}
+      <p class="badge danger">${esc(sessionCancellationCopy(session))}</p>
+      <button class="btn ghost sm mt8" type="button" data-action="repost-rsvp" data-session="${safeId}">Reopen event</button>`;
+  }
+  return `${count}
+    <form id="form-cancel-week" data-session="${safeId}" class="mt8">
+      <div class="field"><label>${cancelFieldLabel}</label><input name="reason" placeholder="${cancelPlaceholder}" required></div>
+      <div class="btn-row">
+        <button class="btn danger sm" type="submit">${cancelLabel}</button>
+        ${allowDelete ? `<button class="btn ghost sm" type="button" data-action="delete-event" data-session="${safeId}">Delete</button>` : ""}
+      </div>
+    </form>`;
+}
+
 function adminFreeEventControls() {
   const upcoming = store.upcomingSessions(21)
     .filter((s) => !s.oneOff && s.kind !== "paid" && !sessionStarted(s));
@@ -3133,12 +3170,7 @@ function adminFreeEventControls() {
               <button class="btn ghost sm" type="button" data-action="reset-week-venue" data-session="${safeId}">Reset to Recurring Default</button>
             </div>
           </form>
-          ${s.kind === "rsvp" ? `
-          <p class="muted small mt8">${store.attendeeCountFor(s)} going${s.capacity != null ? ` · cap ${s.capacity}` : ""}</p>
-          <form id="form-cancel-week" data-session="${safeId}" class="mt8">
-            <div class="field"><label>Cancel this week — reason (required)</label><input name="reason" placeholder="e.g. Organizer away" required></div>
-            <button class="btn danger sm" type="submit">Cancel this week's event</button>
-          </form>` : ""}
+          ${adminRsvpOccurrenceControls(s)}
         </div></div>`;
     }).join("") : `<div class="empty mt8">No upcoming free or RSVP events.</div>`}`;
 }
@@ -3313,21 +3345,29 @@ function adminOneOffEvents() {
   const cards = upcoming.map((s) => {
     const override = store.getSession(s.id);
     const cancelled = override?.cancelled;
+    const rsvpOccurrence = store.sessionRequiresRsvp(override) && Number(override?.price ?? 0) === 0;
     return `
       <div class="card mt16 ${cancelled ? "is-cancelled" : ""}"><div class="card-body">
         <div class="kicker dim" style="margin-top:0">${esc(fmtDate(s.dateISO))} · ${fmtTime(s.time)}</div>
         <h3 class="mt8">${esc(s.name)}</h3>
-        <p class="muted small mt8">${esc(s.location)} · ${s.kind === "paid" ? `${fmtMoney(s.price)} · cap ${s.capacity}` : "Free · no booking"}</p>
-        ${cancelled
-          ? `<p class="badge danger">${esc(sessionCancellationCopy(override))}</p>`
-          : `
-          <form id="form-cancel-week" data-session="${esc(s.id)}" class="mt8">
-            <div class="field"><label>Cancel this event — reason (required)</label><input name="reason" placeholder="e.g. Venue unavailable" required></div>
-            <div class="btn-row">
-              <button class="btn danger sm" type="submit">Cancel event</button>
-              <button class="btn ghost sm" type="button" data-action="delete-event" data-session="${esc(s.id)}">Delete</button>
-            </div>
-          </form>`}
+        <p class="muted small mt8">${esc(s.location)} · ${s.kind === "paid" ? `${fmtMoney(s.price)} · cap ${s.capacity}` : "Free · RSVP optional"}</p>
+        ${rsvpOccurrence
+          ? adminRsvpOccurrenceControls(override, {
+            cancelLabel: "Cancel event",
+            cancelFieldLabel: "Cancel this event — reason (required)",
+            cancelPlaceholder: "e.g. Venue unavailable",
+            allowDelete: true,
+          })
+          : cancelled
+            ? `<p class="badge danger">${esc(sessionCancellationCopy(override))}</p>`
+            : `
+            <form id="form-cancel-week" data-session="${esc(s.id)}" class="mt8">
+              <div class="field"><label>Cancel this event — reason (required)</label><input name="reason" placeholder="e.g. Venue unavailable" required></div>
+              <div class="btn-row">
+                <button class="btn danger sm" type="submit">Cancel event</button>
+                <button class="btn ghost sm" type="button" data-action="delete-event" data-session="${esc(s.id)}">Delete</button>
+              </div>
+            </form>`}
       </div></div>`;
   }).join("");
   return `

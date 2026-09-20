@@ -11,7 +11,8 @@ No production application has been built yet. The `app/` directory contains a cl
 The prototype implements the selected "Night Circuit" direction and the confirmed product rules from the phase-one brief:
 
 - Free vs paid activity classification everywhere (home, schedule, detail).
-- Wednesday Night Training is free, open attendance — no booking, no capacity, no checkout. Actions are Add to Calendar (.ics download) and Get Directions.
+- Wednesday Night Training, ITC Run Club, ITC Swimming, and zero-price one-off events remain free, uncapped, and open to walk-ins. Approved members may optionally tap **I’m coming**, withdraw before the Hong Kong start time, and view the member-only attendee roster; there is no checkout, payment, waitlist, or attendance gate.
+- Admins manage each dated free/RSVP occurrence independently: expected count, venue/time changes, cancellation with a required reason, and pre-start reopening. Cancellation never defers an RSVP, reopening requires a fresh RSVP, and only the applicable RSVP cohort receives in-app event notifications.
 - Weekly HYROX uses one shared 32-place BFT/Midtown pool at a fixed price, with automatic recurring parent-card provisioning, Monday opening, venue allocation, confirmation, receipt, and member-area management. Quarry Bay remains a separate direct-booking session. A manual replacement workflow lets an approved member accept a single-use invite; Admin confirmation changes only the effective attendee, never the original payer or receipt owner. A manual replacement workflow lets an approved member accept a single-use invite; Admin confirmation changes only the effective attendee, never the original payer or receipt owner.
 - Account lifecycle: public visitor → application → leader approval → member. Pending applicants keep public access only.
 - Member area: upcoming bookings, receipts, payment history, profile.
@@ -46,6 +47,7 @@ The design review remains available at `http://127.0.0.1:4173/references/itc-mob
 - `app/js/store.js` remains the backend seam across both ownership domains until a production backend is selected.
 - Static Vercel deployment has no env-injection/build step. Live Supabase browser configuration is set explicitly in `app/index.html`; deployment steps and credential boundaries are documented in `docs/runbooks/live-auth.md`.
 - Profile photos use the private Supabase `profile-avatars` bucket through authenticated Edge Functions only. Signed URLs live in memory, never in `localStorage`; follow the [profile-photo deployment, acceptance, and rollback procedure](docs/runbooks/live-auth.md#profile-photos-deployment-acceptance-and-rollback).
+- Free-event RSVP live mode uses authoritative recurring operational sessions and scoped RPCs. Apply and verify migration `20260920000001_free_event_rsvp_cancellation.sql` before deploying its frontend; follow the [free-event RSVP deployment and acceptance procedure](docs/runbooks/live-auth.md#free-event-rsvp-cancellation-deployment-and-acceptance).
 - Giving's `PGRST205` fallback keeps the member route reachable but does not enable donations. Functional Giving requires the ordered schema migrations and a real campaign published through **Admin Tools → Giving**; follow the [Giving schema and campaign recovery steps](docs/runbooks/live-auth.md#giving-schema-and-campaign). No fake campaign data is restored.
 - Administrative testing requires Supabase live mode or the historical `archive/demo` branch. The archive is demonstration-only and must not be used as a production source branch.
 - `app/smoke.mjs` is a headless regression check for the product rules (`node smoke.mjs` from `app/`).
@@ -53,7 +55,7 @@ The design review remains available at `http://127.0.0.1:4173/references/itc-mob
 ### Deliberately not in the prototype
 
 - Merchandise shop (deferred in the phase-one brief).
-- Real payments, delivered email receipts, automated booking/reminder delivery by WhatsApp or email, and a service worker (manifest is included; a cache layer would fight the refinement loop). Supabase may deliver authentication magic links through configured transactional SMTP. Replacement sharing opens a user-initiated WhatsApp link; live in-app notifications are Supabase-backed when configured.
+- Real payments, delivered email receipts, automated booking/reminder delivery by WhatsApp or email, Web Push, phone notification sounds, SMS, and a service worker (manifest is included; a cache layer would fight the refinement loop). Supabase may deliver authentication magic links through configured transactional SMTP. Replacement sharing opens a user-initiated WhatsApp link; live event notifications are in-app only and Supabase-backed when configured.
 - Final privacy/guidelines copy and any post-workshop legal/policy revisions. The supplied Hyrox indemnity source is implemented; privacy and guidelines remain provisional.
 
 ## Selected Direction

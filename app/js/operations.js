@@ -32,10 +32,13 @@ const LIVE_TABLES = [
 
 const cutoverMarker = "itc.live.operations.backend.v1";
 
-const PAID_ACTIVITY_METADATA = new Map(
+const ACTIVITY_PRESENTATION = new Map(
+  SEED_ACTIVITIES.map((activity) => [activity.id, activity])
+);
+const FREE_PRESENTATION_ACTIVITY_IDS = new Set(
   SEED_ACTIVITIES
-    .filter((activity) => activity.kind === "paid")
-    .map((activity) => [activity.id, activity])
+    .filter((activity) => activity.kind === "free")
+    .map((activity) => activity.id)
 );
 
 const liveCache = {
@@ -138,9 +141,10 @@ function buildSessionRow(row, templatesById = null) {
     ? row.session_date.slice(0, 10)
     : new Date(row.session_date).toISOString().slice(0, 10);
   const date = new Date(`${dateISO}T00:00:00`);
-  const metadata = PAID_ACTIVITY_METADATA.get(row.activity_id);
+  const metadata = ACTIVITY_PRESENTATION.get(row.activity_id);
   const template = templatesById?.get(row.activity_id) ?? null;
   const oneOff = String(row.activity_id).startsWith("event-");
+  const freePresentation = oneOff || FREE_PRESENTATION_ACTIVITY_IDS.has(row.activity_id);
   const legacyMidtown = row.activity_id === "hyrox-midtown"
     && row.venue === "Midtown 28";
   const venue = legacyMidtown
@@ -155,11 +159,16 @@ function buildSessionRow(row, templatesById = null) {
     // One-off events take their display name/category from their template;
     // the recurring HYROX templates keep the historical labels.
     name: template?.name || "ITC HYROX",
-    // Paid sessions take the reserve/pay pipeline; price-0 sessions are RSVP
-    // (headcount needed, e.g. the post-training lunch) when the template says
-    // so, otherwise plain free show-up events.
-    kind: Number(row.price_hkd) > 0 ? "paid" : (template?.requires_rsvp ? "rsvp" : "free"),
-    category: template?.category || (oneOff ? "Other" : "HYROX"),
+    // RSVP capability is separate from presentation: recurring community
+    // sessions and free one-offs stay `free`, while Lunch keeps its dedicated
+    // RSVP presentation. Paid sessions retain the reserve/pay pipeline.
+    kind: Number(row.price_hkd) > 0
+      ? "paid"
+      : freePresentation
+        ? "free"
+        : template?.requires_rsvp ? "rsvp" : "free",
+    requiresRsvp: !!template?.requires_rsvp,
+    category: template?.category || metadata?.category || (oneOff ? "Other" : "HYROX"),
     weekday: date.getDay(),
     oneOff,
     dateISO,
@@ -169,7 +178,9 @@ function buildSessionRow(row, templatesById = null) {
     location: venue,
     mapsQuery,
     venue,
-    photo: metadata?.photo || "../assets/itc/hyrox.webp",
+    photo: metadata?.photo || (oneOff ? "../assets/itc/main.webp" : "../assets/itc/hyrox.webp"),
+    blurb: metadata?.blurb || "",
+    memberNote: metadata?.memberNote || "",
     capacity: row.capacity,
     price: row.price_hkd,
     isOpen: row.is_open,
@@ -379,7 +390,7 @@ function replaceState(payload) {
   liveCache.rsvpCountError = payload.rsvpCountError || null;
   if (!liveCache.rsvpCountError) {
     for (const session of payload.sessions) {
-      if (session.kind === "rsvp") liveCache.rsvpCounts.set(session.id, 0);
+      if (session.requiresRsvp) liveCache.rsvpCounts.set(session.id, 0);
     }
     for (const row of payload.rsvpCounts || []) {
       const count = Number(row.going_count);
@@ -1098,7 +1109,8 @@ export async function liveCreateEvent(payload) {
     p_maps_query: payload.mapsQuery || null,
     p_category: payload.category || "Other",
     p_price_hkd: payload.price ?? 0,
-    p_capacity: payload.capacity ?? 20,
+    p_capacity: Number(payload.price ?? 0) === 0 ? null : (payload.capacity ?? 20),
+    p_requires_rsvp: Number(payload.price ?? 0) === 0,
   });
   return row;
 }
