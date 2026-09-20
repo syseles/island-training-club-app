@@ -505,7 +505,8 @@ async function render(generation = renderGeneration) {
           console.warn("Unable to load attendee names", err);
           attendeeNames = null;
         }
-        if (session?.kind === "paid" && canManageOwnAvatar(viewer)) {
+        if ((session?.kind === "paid" || store.sessionRequiresRsvp(session))
+            && canManageOwnAvatar(viewer)) {
           try {
             avatarRows = await store.getSessionAvatars(arg);
             if (Array.isArray(attendeeNames)) {
@@ -1376,7 +1377,7 @@ document.addEventListener("click", async (e) => {
       withBusyControl(el, "Counting you in…", async () => {
         try {
           await store.rsvpSession(store.currentUser()?.id, el.dataset.session);
-          toast("You're in — see you at lunch");
+          toast("You’re coming");
           await renderWithFeedback();
         } catch (err) {
           toast(err.message || "Unable to RSVP", true);
@@ -1386,14 +1387,14 @@ document.addEventListener("click", async (e) => {
     }
 
     case "rsvp-withdraw": {
-      if (!confirm("Withdraw your RSVP? The organizer is counting heads.")) return;
+      if (!confirm("Cancel your RSVP? The team is counting heads.")) return;
       withBusyControl(el, "Withdrawing…", async () => {
         try {
           await store.withdrawRsvp(el.dataset.booking);
-          toast("RSVP withdrawn");
+          toast("RSVP cancelled");
           await renderWithFeedback();
         } catch (err) {
-          toast(err.message || "Unable to withdraw", true);
+          toast(err.message || "Unable to cancel RSVP", true);
         }
       }, { busyKey: el });
       break;

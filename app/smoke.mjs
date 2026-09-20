@@ -1354,8 +1354,8 @@ assert.match(integratedAppSource, /form\.id === "form-privacy"[\s\S]*?updateMyPr
   "Privacy & Notifications must persist reminder preferences through the form delegate");
 assert.equal(typeof store.attendeeCountFor, "function",
   "store must export attendeeCountFor for identity-independent RSVP counts");
-assert.equal((integratedViewSource.match(/store\.attendeeCountFor\(s\)/g) || []).length, 4,
-  "Schedule Going/RSVP states, RSVP Activity Details, and Admin controls must use attendeeCountFor");
+assert.equal((integratedViewSource.match(/store\.attendeeCountFor\(s\)/g) || []).length, 5,
+  "Schedule Going/RSVP states, free and RSVP Activity Details, and Admin controls must use attendeeCountFor");
 assert.doesNotMatch(integratedViewSource, /store\.attendeesFor\(s\)\.length/,
   "RSVP count surfaces must not derive counts from attendee identities");
 const combinedRuntimeSource = `${integratedViewSource}\n${integratedAppSource}`;
@@ -4591,12 +4591,34 @@ installLocalFixtures();
   );
   assert.ok(freeSession, "free RSVP contract needs an upcoming free session");
   assert.equal(store.sessionRequiresRsvp(freeSession), true);
+  const freeRsvpAction = /data-action="rsvp-(?:join|withdraw)"/;
   store.signIn("member@example.test");
+  const freeMemberHtml = views.viewActivity(freeSession.id);
+  assert.match(freeMemberHtml, /badge free">Free/);
+  assert.match(freeMemberHtml, /Free · No booking needed/);
+  assert.match(freeMemberHtml, /RSVP helps the team plan; walk-ins are welcome/);
+  assert.match(freeMemberHtml, /data-action="rsvp-join"[^>]*>I’m coming</);
+  assert.doesNotMatch(freeMemberHtml, /Book &amp; pay|Book & pay|checkout|spots? left|capacity/i);
+
   const withdrawn = await store.rsvpSession(member.id, freeSession);
   assert.equal(withdrawn.status, "confirmed");
+  const freeGoingHtml = views.viewActivity(freeSession.id);
+  assert.match(freeGoingHtml, /You’re going/);
+  assert.match(freeGoingHtml, /data-action="rsvp-withdraw"[^>]*>Can’t make it</);
+  assert.match(freeGoingHtml, /Who’s coming/);
+  assert.match(freeGoingHtml, /Tester M\./);
+  assert.match(freeGoingHtml, /attendee-avatar/);
+  const freeBookingHtml = views.viewBooking(withdrawn.id);
+  assert.match(freeBookingHtml, /You’re going/);
+  assert.doesNotMatch(freeBookingHtml, /payment|pay your own bill|View receipt|>Receipt<|checkout|capacity|waitlist/i);
+  const freeAccountHtml = await views.viewAccount("bookings");
+  assert.match(freeAccountHtml, /· RSVP/);
+  assert.doesNotMatch(freeAccountHtml, /paid HK\$0|HK\$0 to be paid/i);
   assert.equal(withdrawn.snapshot.price, 0);
   assert.equal(store.attendeeCountFor(freeSession), 1);
   await store.withdrawRsvp(withdrawn.id);
+  assert.doesNotMatch(await views.viewAccount("bookings"), new RegExp(`#/booking/${withdrawn.id}`),
+    "withdrawn free RSVPs must not remain in member booking history");
   assert.equal(store.getBooking(withdrawn.id).cancelledSource, "member");
   assert.equal(typeof store.getBooking(withdrawn.id).cancelledAt, "number");
 
@@ -4618,6 +4640,8 @@ installLocalFixtures();
   assert.equal(store.getBooking(active.id).status, "confirmed",
     "invalid cancellation must not cancel active RSVPs");
   store.cancelSessionWeek(freeSession.id, "Weather warning", cancellationTime);
+  assert.doesNotMatch(views.viewActivity(freeSession.id), freeRsvpAction,
+    "cancelled free occurrences must not offer RSVP actions");
   const cancelled = store.getBooking(active.id);
   assert.equal(cancelled.status, "cancelled");
   assert.equal(cancelled.cancelledAt, cancellationTime);
@@ -4650,7 +4674,19 @@ installLocalFixtures();
   assert.equal(freshRsvp.status, "confirmed");
   assert.notEqual(freshRsvp.id, active.id);
   assert.equal(store.attendeeCountFor(freeSession), 1);
-  console.log("ok  free-event RSVP withdrawal, cancellation and reopening preserve local parity");
+  const freeRosterHtml = views.viewActivity(freeSession.id);
+  assert.match(freeRosterHtml, /Who’s coming/);
+  assert.match(freeRosterHtml, /Tester M\./);
+  store.signOut();
+  const visitorFreeHtml = views.viewActivity(freeSession.id);
+  assert.doesNotMatch(visitorFreeHtml, freeRsvpAction);
+  assert.doesNotMatch(visitorFreeHtml, /Tester M\.|attendee-avatar/);
+  store.signIn("member@example.test");
+  const startedDate = data.addDays(freeSession.date, -7);
+  const startedFreeId = `${freeSession.activityId}-${data.isoDate(startedDate)}`;
+  assert.doesNotMatch(views.viewActivity(startedFreeId), freeRsvpAction,
+    "started free occurrences must not offer RSVP actions");
+  console.log("ok  free-event RSVP controls, roster privacy, withdrawal, cancellation and reopening preserve local parity");
 }
 
 // --- RSVP events (local): the recurring post-training lunch ---
