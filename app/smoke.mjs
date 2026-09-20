@@ -1403,28 +1403,27 @@ for (const assetReference of [
 }
 assert.deepEqual(vercelConfig.rewrites, [{ source: "/", destination: "/app/index.html" }],
   "the canonical production root must serve the app without exposing /app/");
+const legacyProductionHosts = [
+  "island-training-club-app-island-training-club.vercel.app",
+  "island-training-club-app.vercel.app",
+  "island-training-club-island-training-club.vercel.app",
+];
+const hostRedirect = (host, source, destination) => ({
+  source,
+  has: [{ type: "host", value: host }],
+  destination,
+  permanent: true,
+});
 assert.deepEqual(vercelConfig.redirects, [
-  {
-    source: "/:path*",
-    has: [{ type: "host", value: "island-training-club-app-island-training-club.vercel.app" }],
-    destination: `${canonicalProductionOrigin}/:path*`,
-    permanent: true,
-  },
-  {
-    source: "/:path*",
-    has: [{ type: "host", value: "island-training-club-app.vercel.app" }],
-    destination: `${canonicalProductionOrigin}/:path*`,
-    permanent: true,
-  },
-  {
-    source: "/:path*",
-    has: [{ type: "host", value: "island-training-club-island-training-club.vercel.app" }],
-    destination: `${canonicalProductionOrigin}/:path*`,
-    permanent: true,
-  },
+  ...legacyProductionHosts.flatMap((host) => [
+    hostRedirect(host, "/", `${canonicalProductionOrigin}/`),
+    hostRedirect(host, "/app", `${canonicalProductionOrigin}/`),
+    hostRedirect(host, "/app/", `${canonicalProductionOrigin}/`),
+    hostRedirect(host, "/:path*", `${canonicalProductionOrigin}/:path*`),
+  ]),
   { source: "/app", destination: "/", permanent: true },
   { source: "/app/", destination: "/", permanent: true },
-], "legacy-host redirects must precede the exact app-document redirects with no conflicting rules");
+], "legacy exact document routes must canonicalize before generic app-document redirects");
 assert.ok(liveAuthRunbookSource.includes(`${canonicalProductionOrigin}/`),
   "the live-auth runbook must name the canonical production root");
 if (/## Vercel env vars|Vercel project settings[^\n]*Environment Variables/i.test(liveAuthRunbookSource)) {

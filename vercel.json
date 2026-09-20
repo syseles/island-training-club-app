@@ -1,35 +1,74 @@
 {
   "redirects": [
     {
-      "source": "/:path*",
-      "has": [
-        {
-          "type": "host",
-          "value": "island-training-club-app-island-training-club.vercel.app"
-        }
-      ],
-      "destination": "https://island-training-club.vercel.app/:path*",
+      "source": "/",
+      "has": [{ "type": "host", "value": "island-training-club-app-island-training-club.vercel.app" }],
+      "destination": "https://island-training-club.vercel.app/",
+      "permanent": true
+    },
+    {
+      "source": "/app",
+      "has": [{ "type": "host", "value": "island-training-club-app-island-training-club.vercel.app" }],
+      "destination": "https://island-training-club.vercel.app/",
+      "permanent": true
+    },
+    {
+      "source": "/app/",
+      "has": [{ "type": "host", "value": "island-training-club-app-island-training-club.vercel.app" }],
+      "destination": "https://island-training-club.vercel.app/",
       "permanent": true
     },
     {
       "source": "/:path*",
-      "has": [
-        {
-          "type": "host",
-          "value": "island-training-club-app.vercel.app"
-        }
-      ],
+      "has": [{ "type": "host", "value": "island-training-club-app-island-training-club.vercel.app" }],
       "destination": "https://island-training-club.vercel.app/:path*",
       "permanent": true
     },
     {
+      "source": "/",
+      "has": [{ "type": "host", "value": "island-training-club-app.vercel.app" }],
+      "destination": "https://island-training-club.vercel.app/",
+      "permanent": true
+    },
+    {
+      "source": "/app",
+      "has": [{ "type": "host", "value": "island-training-club-app.vercel.app" }],
+      "destination": "https://island-training-club.vercel.app/",
+      "permanent": true
+    },
+    {
+      "source": "/app/",
+      "has": [{ "type": "host", "value": "island-training-club-app.vercel.app" }],
+      "destination": "https://island-training-club.vercel.app/",
+      "permanent": true
+    },
+    {
       "source": "/:path*",
-      "has": [
-        {
-          "type": "host",
-          "value": "island-training-club-island-training-club.vercel.app"
-        }
-      ],
+      "has": [{ "type": "host", "value": "island-training-club-app.vercel.app" }],
+      "destination": "https://island-training-club.vercel.app/:path*",
+      "permanent": true
+    },
+    {
+      "source": "/",
+      "has": [{ "type": "host", "value": "island-training-club-island-training-club.vercel.app" }],
+      "destination": "https://island-training-club.vercel.app/",
+      "permanent": true
+    },
+    {
+      "source": "/app",
+      "has": [{ "type": "host", "value": "island-training-club-island-training-club.vercel.app" }],
+      "destination": "https://island-training-club.vercel.app/",
+      "permanent": true
+    },
+    {
+      "source": "/app/",
+      "has": [{ "type": "host", "value": "island-training-club-island-training-club.vercel.app" }],
+      "destination": "https://island-training-club.vercel.app/",
+      "permanent": true
+    },
+    {
+      "source": "/:path*",
+      "has": [{ "type": "host", "value": "island-training-club-island-training-club.vercel.app" }],
       "destination": "https://island-training-club.vercel.app/:path*",
       "permanent": true
     },
