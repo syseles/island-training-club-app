@@ -1360,14 +1360,14 @@ document.addEventListener("click", async (e) => {
     }
 
     case "repost-rsvp": {
-      if (!confirm("Reopen this RSVP event? It will become active again using the same event and schedule.")) return;
-      withBusyControl(el, "Reposting…", async () => {
+      if (!confirm("Reopen this event? Existing cancelled RSVPs stay cancelled, so members must RSVP again.")) return;
+      await withBusyControl(el, "Reopening…", async () => {
         try {
           await store.repostRsvpEvent(el.dataset.session);
-          toast("RSVP event reopened");
+          toast("Event reopened");
           await renderWithFeedback();
         } catch (err) {
-          toast(err.message || "Unable to reopen RSVP event", true);
+          toast(err.message || "Unable to reopen event", true);
         }
       }, { busyKey: el });
       break;

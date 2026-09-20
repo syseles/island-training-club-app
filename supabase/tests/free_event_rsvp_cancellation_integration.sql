@@ -85,7 +85,8 @@ insert into auth.users (id, email, raw_user_meta_data) values
   ('f2000000-0000-0000-0000-000000000003', 'free-rsvp-b@itc.invalid', '{}'::jsonb),
   ('f2000000-0000-0000-0000-000000000004', 'free-rsvp-c@itc.invalid', '{}'::jsonb),
   ('f2000000-0000-0000-0000-000000000005', 'free-rsvp-pending@itc.invalid', '{}'::jsonb),
-  ('f2000000-0000-0000-0000-000000000006', 'free-rsvp-declined@itc.invalid', '{}'::jsonb);
+  ('f2000000-0000-0000-0000-000000000006', 'free-rsvp-declined@itc.invalid', '{}'::jsonb),
+  ('f2000000-0000-0000-0000-000000000007', 'free-rsvp-unrelated@itc.invalid', '{}'::jsonb);
 
 update public.profiles set role = 'admin', full_name = 'Free RSVP Admin'
  where id = 'f2000000-0000-0000-0000-000000000001';
@@ -99,6 +100,8 @@ update public.profiles set role = 'pending', full_name = 'Free RSVP Pending'
  where id = 'f2000000-0000-0000-0000-000000000005';
 update public.profiles set role = 'declined', full_name = 'Free RSVP Declined'
  where id = 'f2000000-0000-0000-0000-000000000006';
+update public.profiles set role = 'member', full_name = 'Free RSVP Unrelated'
+ where id = 'f2000000-0000-0000-0000-000000000007';
 
 do $$
 declare
@@ -108,6 +111,7 @@ declare
   v_member_c constant uuid := 'f2000000-0000-0000-0000-000000000004';
   v_pending constant uuid := 'f2000000-0000-0000-0000-000000000005';
   v_declined constant uuid := 'f2000000-0000-0000-0000-000000000006';
+  v_unrelated constant uuid := 'f2000000-0000-0000-0000-000000000007';
   v_session_id text;
   v_future_session_id text;
   v_free_one_off_id text;
@@ -118,6 +122,8 @@ declare
   v_booking_a_cancelled uuid;
   v_booking_b_cancelled uuid;
   v_booking_c_withdrawn uuid;
+  v_booking_pending uuid;
+  v_booking_declined uuid;
   v_booking_a_fresh uuid;
   v_cancelled_at timestamptz;
   v_rejected boolean;
@@ -356,6 +362,76 @@ begin
   perform set_config('request.jwt.claim.sub', '', true);
   perform pg_temp.rsvp_assert(v_count = 2, 'approved attendee roster access succeeds');
 
+  -- Profiles that RSVP while approved but become pending/declined before an
+  -- operational change retain auditable bookings without receiving notices.
+  update public.profiles set role = 'member' where id = v_pending;
+  perform set_config('request.jwt.claim.sub', v_pending::text, true);
+  set local role authenticated;
+  select id into v_booking_pending
+    from public.reserve_operational_session(v_session_id);
+  reset role;
+  update public.profiles set role = 'pending' where id = v_pending;
+
+  update public.profiles set role = 'member' where id = v_declined;
+  perform set_config('request.jwt.claim.sub', v_declined::text, true);
+  set local role authenticated;
+  select id into v_booking_declined
+    from public.reserve_operational_session(v_session_id);
+  reset role;
+  update public.profiles set role = 'declined' where id = v_declined;
+  perform set_config('request.jwt.claim.sub', '', true);
+
+  delete from public.operational_session_venue_overrides where session_id = v_session_id;
+  delete from public.notifications
+   where destination = '#/activity/' || v_session_id
+     and kind in ('operational_session_venue_updated', 'operational_session_time_updated');
+
+  -- Effective venue/time changes target active, currently approved RSVP
+  -- profiles exactly once. No-op submissions create no member rows.
+  perform set_config('request.jwt.claim.sub', v_admin::text, true);
+  set local role authenticated;
+  perform public.set_session_venue(
+    v_session_id, 'Central Harbourfront', 'Central Harbourfront, Hong Kong',
+    true, null, null
+  );
+  perform public.set_session_venue(
+    v_session_id, 'Central Harbourfront', 'Central Harbourfront, Hong Kong',
+    false, null, null
+  );
+  perform public.set_operational_session_time(v_session_id, '19:31');
+  perform public.set_operational_session_time(v_session_id, '19:31');
+  reset role;
+  perform set_config('request.jwt.claim.sub', '', true);
+
+  perform pg_temp.rsvp_assert(
+    (select count(*) = 2
+       from public.notifications
+      where kind = 'operational_session_venue_updated'
+        and destination = '#/activity/' || v_session_id
+        and profile_id in (v_member_a, v_member_b))
+    and not exists (
+      select 1 from public.notifications
+       where kind = 'operational_session_venue_updated'
+         and destination = '#/activity/' || v_session_id
+         and profile_id in (v_member_c, v_pending, v_declined, v_unrelated)
+    ),
+    'venue changes notify active approved RSVPs exactly once'
+  );
+  perform pg_temp.rsvp_assert(
+    (select count(*) = 2
+       from public.notifications
+      where kind = 'operational_session_time_updated'
+        and destination = '#/activity/' || v_session_id
+        and profile_id in (v_member_a, v_member_b))
+    and not exists (
+      select 1 from public.notifications
+       where kind = 'operational_session_time_updated'
+         and destination = '#/activity/' || v_session_id
+         and profile_id in (v_member_c, v_pending, v_declined, v_unrelated)
+    ),
+    'time changes notify active approved RSVPs exactly once'
+  );
+
   perform set_config('request.jwt.claim.sub', v_admin::text, true);
   set local role authenticated;
   perform public.cancel_operational_session(v_session_id, 'Weather warning.');
@@ -372,13 +448,14 @@ begin
     'cancellation dissolves active RSVP queues'
   );
   perform pg_temp.rsvp_assert(
-    (select count(*) = 2
+    (select count(*) = 4
        from public.operational_bookings
-      where id in (v_booking_a_cancelled, v_booking_b_cancelled)
+      where id in (v_booking_a_cancelled, v_booking_b_cancelled,
+                   v_booking_pending, v_booking_declined)
         and status = 'cancelled'
         and cancellation_source = 'session'
         and cancelled_at = v_cancelled_at),
-    'session cancellation marks only active confirmed RSVPs'
+    'session cancellation marks every active confirmed RSVP for audit'
   );
   perform pg_temp.rsvp_assert(
     (select cancellation_source = 'member' and cancelled_at <> v_cancelled_at
@@ -403,9 +480,9 @@ begin
       select 1 from public.notifications
        where kind = 'operational_session_cancelled'
          and destination = '#/activity/' || v_session_id
-         and profile_id = v_member_c
+         and profile_id in (v_member_c, v_pending, v_declined, v_unrelated)
     ),
-    'cancellation notifications target active attendees only'
+    'cancellation notifications target active attendees only; currently approved profiles only'
   );
   perform pg_temp.rsvp_assert(
     (select to_jsonb(s) = v_future_before
@@ -435,9 +512,9 @@ begin
       select 1 from public.notifications
        where kind = 'operational_rsvp_reopened'
          and destination = '#/activity/' || v_session_id
-         and profile_id = v_member_c
+         and profile_id in (v_member_c, v_pending, v_declined, v_unrelated)
     ),
-    'reopening targets only attendees cancelled by that occurrence'
+    'reopening targets only attendees cancelled by that occurrence; currently approved profiles only'
   );
   perform pg_temp.rsvp_assert(
     (select count(*) = 2

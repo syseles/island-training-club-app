@@ -3099,6 +3099,30 @@ function adminFinalizeGym(memberUsers, groupedDates = null) {
     </section>`;
 }
 
+function adminRsvpOccurrenceControls(session, {
+  cancelLabel = "Cancel this week's event",
+  cancelFieldLabel = "Cancel this week — reason (required)",
+  cancelPlaceholder = "e.g. Organizer away",
+  allowDelete = false,
+} = {}) {
+  if (!store.sessionRequiresRsvp(session) || Number(session.price ?? 0) !== 0) return "";
+  const safeId = esc(session.id);
+  const count = `<p class="muted small mt8">${store.attendeeCountFor(session)} going${session.capacity != null ? ` · cap ${session.capacity}` : ""}</p>`;
+  if (session.cancelled) {
+    return `${count}
+      <p class="badge danger">${esc(sessionCancellationCopy(session))}</p>
+      <button class="btn ghost sm mt8" type="button" data-action="repost-rsvp" data-session="${safeId}">Reopen event</button>`;
+  }
+  return `${count}
+    <form id="form-cancel-week" data-session="${safeId}" class="mt8">
+      <div class="field"><label>${cancelFieldLabel}</label><input name="reason" placeholder="${cancelPlaceholder}" required></div>
+      <div class="btn-row">
+        <button class="btn danger sm" type="submit">${cancelLabel}</button>
+        ${allowDelete ? `<button class="btn ghost sm" type="button" data-action="delete-event" data-session="${safeId}">Delete</button>` : ""}
+      </div>
+    </form>`;
+}
+
 function adminFreeEventControls() {
   const upcoming = store.upcomingSessions(21)
     .filter((s) => !s.oneOff && s.kind !== "paid" && !sessionStarted(s));
@@ -3146,12 +3170,7 @@ function adminFreeEventControls() {
               <button class="btn ghost sm" type="button" data-action="reset-week-venue" data-session="${safeId}">Reset to Recurring Default</button>
             </div>
           </form>
-          ${s.kind === "rsvp" ? `
-          <p class="muted small mt8">${store.attendeeCountFor(s)} going${s.capacity != null ? ` · cap ${s.capacity}` : ""}</p>
-          <form id="form-cancel-week" data-session="${safeId}" class="mt8">
-            <div class="field"><label>Cancel this week — reason (required)</label><input name="reason" placeholder="e.g. Organizer away" required></div>
-            <button class="btn danger sm" type="submit">Cancel this week's event</button>
-          </form>` : ""}
+          ${adminRsvpOccurrenceControls(s)}
         </div></div>`;
     }).join("") : `<div class="empty mt8">No upcoming free or RSVP events.</div>`}`;
 }
@@ -3326,21 +3345,29 @@ function adminOneOffEvents() {
   const cards = upcoming.map((s) => {
     const override = store.getSession(s.id);
     const cancelled = override?.cancelled;
+    const rsvpOccurrence = store.sessionRequiresRsvp(override) && Number(override?.price ?? 0) === 0;
     return `
       <div class="card mt16 ${cancelled ? "is-cancelled" : ""}"><div class="card-body">
         <div class="kicker dim" style="margin-top:0">${esc(fmtDate(s.dateISO))} · ${fmtTime(s.time)}</div>
         <h3 class="mt8">${esc(s.name)}</h3>
-        <p class="muted small mt8">${esc(s.location)} · ${s.kind === "paid" ? `${fmtMoney(s.price)} · cap ${s.capacity}` : "Free · no booking"}</p>
-        ${cancelled
-          ? `<p class="badge danger">${esc(sessionCancellationCopy(override))}</p>`
-          : `
-          <form id="form-cancel-week" data-session="${esc(s.id)}" class="mt8">
-            <div class="field"><label>Cancel this event — reason (required)</label><input name="reason" placeholder="e.g. Venue unavailable" required></div>
-            <div class="btn-row">
-              <button class="btn danger sm" type="submit">Cancel event</button>
-              <button class="btn ghost sm" type="button" data-action="delete-event" data-session="${esc(s.id)}">Delete</button>
-            </div>
-          </form>`}
+        <p class="muted small mt8">${esc(s.location)} · ${s.kind === "paid" ? `${fmtMoney(s.price)} · cap ${s.capacity}` : "Free · RSVP optional"}</p>
+        ${rsvpOccurrence
+          ? adminRsvpOccurrenceControls(override, {
+            cancelLabel: "Cancel event",
+            cancelFieldLabel: "Cancel this event — reason (required)",
+            cancelPlaceholder: "e.g. Venue unavailable",
+            allowDelete: true,
+          })
+          : cancelled
+            ? `<p class="badge danger">${esc(sessionCancellationCopy(override))}</p>`
+            : `
+            <form id="form-cancel-week" data-session="${esc(s.id)}" class="mt8">
+              <div class="field"><label>Cancel this event — reason (required)</label><input name="reason" placeholder="e.g. Venue unavailable" required></div>
+              <div class="btn-row">
+                <button class="btn danger sm" type="submit">Cancel event</button>
+                <button class="btn ghost sm" type="button" data-action="delete-event" data-session="${esc(s.id)}">Delete</button>
+              </div>
+            </form>`}
       </div></div>`;
   }).join("");
   return `

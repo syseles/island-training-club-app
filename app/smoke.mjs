@@ -1354,7 +1354,7 @@ assert.match(integratedAppSource, /form\.id === "form-privacy"[\s\S]*?updateMyPr
   "Privacy & Notifications must persist reminder preferences through the form delegate");
 assert.equal(typeof store.attendeeCountFor, "function",
   "store must export attendeeCountFor for identity-independent RSVP counts");
-assert.equal((integratedViewSource.match(/store\.attendeeCountFor\(s\)/g) || []).length, 4,
+assert.equal((integratedViewSource.match(/store\.attendeeCountFor\([^)]*\)/g) || []).length, 4,
   "Schedule Going/RSVP states, capability-driven Activity Details, and Admin controls must use attendeeCountFor");
 assert.doesNotMatch(integratedViewSource, /store\.attendeesFor\(s\)\.length/,
   "RSVP count surfaces must not derive counts from attendee identities");
@@ -4544,6 +4544,22 @@ store.signIn("admin@example.test");
       || freeCancellationHtml.includes("Paid bookings were moved to the next available session — check your account."))
     throw new Error("free cancellation Activity Details must render the exact social follow-up copy");
   const adminActivitiesHtml = await views.viewAdmin("activities");
+  const freeOneOffCard = adminActivitiesHtml.slice(
+    adminActivitiesHtml.lastIndexOf('<div class="card mt16', adminActivitiesHtml.indexOf(freeEvent.name)),
+    adminActivitiesHtml.indexOf('</div></div>', adminActivitiesHtml.indexOf(freeEvent.name)) + 12,
+  );
+  assert.match(freeOneOffCard, /0 going/,
+    "an active zero-price one-off Admin card must display its RSVP count");
+  assert.match(freeOneOffCard, new RegExp(`id="form-cancel-week"[^>]*data-session="${freeEvent.id}"`),
+    "an active zero-price one-off Admin card must expose per-occurrence cancellation");
+  const cancelledOneOffCard = adminActivitiesHtml.slice(
+    adminActivitiesHtml.lastIndexOf('<div class="card mt16', adminActivitiesHtml.indexOf(freeCancelledEvent.name)),
+    adminActivitiesHtml.indexOf('</div></div>', adminActivitiesHtml.indexOf(freeCancelledEvent.name)) + 12,
+  );
+  assert.match(cancelledOneOffCard, /Session cancelled by ITC — Weather warning/);
+  assert.match(cancelledOneOffCard,
+    new RegExp(`data-action="repost-rsvp"[^>]*data-session="${freeCancelledEvent.id}"[^>]*>Reopen event<`),
+    "a cancelled future zero-price one-off must expose Reopen event");
   if (!adminActivitiesHtml.includes("One-off Events")
       || !adminActivitiesHtml.includes("form-one-off-event")
       || !adminActivitiesHtml.includes("HYROX Race Day Send-off"))
@@ -4630,6 +4646,16 @@ installLocalFixtures();
   const bookingCountBeforeCancellation = store.bookingsForUser(member.id).length;
   const cancellationTime = active.createdAt + 1000;
   store.signIn("admin@example.test");
+  const activeAdminHtml = await views.viewAdmin("activities");
+  const activeCardMarker = activeAdminHtml.indexOf(`data-session="${freeSession.id}"`);
+  const activeCardStart = activeAdminHtml.lastIndexOf('<div class="card mt16', activeCardMarker);
+  const activeCard = activeAdminHtml.slice(activeCardStart,
+    activeAdminHtml.indexOf('</div></div>', activeCardStart) + 12);
+  assert.match(activeCard, /1 going/,
+    "every upcoming RSVP-enabled free Admin card must display its attendee count");
+  assert.match(activeCard,
+    new RegExp(`id="form-cancel-week"[^>]*data-session="${freeSession.id}"`),
+    "every upcoming RSVP-enabled free Admin card must expose cancellation");
   assert.throws(
     () => store.cancelSessionWeek(freeSession.id, "   \t  ", cancellationTime),
     /reason.*required/i,
@@ -4651,6 +4677,21 @@ installLocalFixtures();
   assert.equal(store.getSession(freeSession.id).cancelled, true);
   assert.equal(store.getSession(nextOccurrence.id).cancelled, undefined,
     "free cancellation must affect only the selected occurrence");
+  const cancelledAdminHtml = await views.viewAdmin("activities");
+  const cancelledCardMarker = cancelledAdminHtml.indexOf(`data-session="${freeSession.id}"`);
+  const cancelledCardStart = cancelledAdminHtml.lastIndexOf(
+    '<div class="card mt16', cancelledCardMarker
+  );
+  const cancelledCard = cancelledAdminHtml.slice(cancelledCardStart,
+    cancelledAdminHtml.indexOf('</div></div>', cancelledCardStart) + 12);
+  assert.match(cancelledCard, /Session cancelled by ITC — Weather warning/,
+    "Admin must retain the cancellation state and reason on the selected occurrence");
+  assert.match(cancelledCard,
+    new RegExp(`data-action="repost-rsvp"[^>]*data-session="${freeSession.id}"[^>]*>Reopen event<`),
+    "a cancelled future RSVP-enabled free occurrence must expose Reopen event");
+  assert.doesNotMatch(cancelledCard,
+    new RegExp(`id="form-cancel-week"[^>]*data-session="${freeSession.id}"`),
+    "a cancelled free occurrence must not offer a second cancellation form");
   assert.throws(
     () => store.cancelSessionWeek(freeSession.id, "Duplicate warning", cancellationTime + 1),
     /already cancelled/i,
@@ -4686,7 +4727,115 @@ installLocalFixtures();
   const startedFreeId = `${freeSession.activityId}-${data.isoDate(startedDate)}`;
   assert.doesNotMatch(views.viewActivity(startedFreeId), freeRsvpAction,
     "started free occurrences must not offer RSVP actions");
+  store.signIn("admin@example.test");
+  store.cancelSessionWeek(startedFreeId, "Historical cancellation", cancellationTime + 2000);
+  await assert.rejects(
+    () => store.repostRsvpEvent(startedFreeId),
+    /already started/i,
+    "post-start reopening must fail closed"
+  );
   console.log("ok  free-event RSVP controls, roster privacy, withdrawal, cancellation and reopening preserve local parity");
+}
+
+// Event-change and cancellation fan-out follows the occurrence's active RSVP
+// cohort, not the member directory. A later role downgrade also closes the
+// notification channel without preventing the booking audit row being updated.
+store.resetLocalData();
+installLocalFixtures();
+{
+  const raw = JSON.parse(mem.get("itc.prototype.v1"));
+  raw.users.push(
+    {
+      id: "rsvp-withdrawn", role: "member", status: "approved", fullName: "Withdrawn Member",
+      preferredName: "Withdrawn", email: "withdrawn-rsvp@example.test",
+      indemnityAcceptedAt: Date.now(), privacyAcceptedAt: Date.now(),
+    },
+    {
+      id: "rsvp-unrelated", role: "member", status: "approved", fullName: "Unrelated Member",
+      preferredName: "Unrelated", email: "unrelated-rsvp@example.test",
+      indemnityAcceptedAt: Date.now(), privacyAcceptedAt: Date.now(),
+    },
+    {
+      id: "rsvp-pending", role: "member", status: "approved", fullName: "Pending Later",
+      preferredName: "Pending", email: "pending-rsvp@example.test",
+      indemnityAcceptedAt: Date.now(), privacyAcceptedAt: Date.now(),
+    },
+    {
+      id: "rsvp-declined", role: "member", status: "approved", fullName: "Declined Later",
+      preferredName: "Declined", email: "declined-rsvp@example.test",
+      indemnityAcceptedAt: Date.now(), privacyAcceptedAt: Date.now(),
+    },
+  );
+  mem.set("itc.prototype.v1", JSON.stringify(raw));
+  store.load();
+  const session = store.upcomingSessions(21).find(
+    (item) => item.activityId === "wnt" && !data.sessionStarted(item)
+  );
+  assert.ok(session, "targeted notification test needs an upcoming free RSVP occurrence");
+
+  for (const [email, userId] of [
+    ["member@example.test", "fixture-member"],
+    ["withdrawn-rsvp@example.test", "rsvp-withdrawn"],
+    ["pending-rsvp@example.test", "rsvp-pending"],
+    ["declined-rsvp@example.test", "rsvp-declined"],
+  ]) {
+    store.signIn(email);
+    const booking = await store.rsvpSession(userId, session.id);
+    if (userId === "rsvp-withdrawn") await store.withdrawRsvp(booking.id);
+  }
+
+  const downgraded = JSON.parse(mem.get("itc.prototype.v1"));
+  Object.assign(downgraded.users.find((user) => user.id === "rsvp-pending"), {
+    role: "pending", status: "pending",
+  });
+  Object.assign(downgraded.users.find((user) => user.id === "rsvp-declined"), {
+    role: "pending", status: "declined",
+  });
+  mem.set("itc.prototype.v1", JSON.stringify(downgraded));
+  store.load();
+  store.signIn("admin@example.test");
+
+  const linkedNotes = (userId, kind) => store.notificationsFor(userId).filter(
+    (notification) => notification.kind === kind
+      && notification.link === `#/activity/${session.id}`
+  );
+  store.setWeekVenue(session.id, {
+    location: "Central Harbourfront", mapsQuery: "Central Harbourfront, Hong Kong",
+  });
+  store.setWeekVenue(session.id, {
+    location: "Central Harbourfront", mapsQuery: "Central Harbourfront, Hong Kong",
+  });
+  store.setSessionTime(session.id, "20:15");
+  store.setSessionTime(session.id, "20:15");
+
+  assert.equal(linkedNotes("fixture-member", "operational_session_venue_updated").length, 1,
+    "one effective venue change must notify an active confirmed RSVP exactly once");
+  assert.equal(linkedNotes("fixture-member", "operational_session_time_updated").length, 1,
+    "one effective time change must notify an active confirmed RSVP exactly once");
+  for (const userId of ["rsvp-withdrawn", "rsvp-unrelated", "rsvp-pending", "rsvp-declined"]) {
+    assert.equal(linkedNotes(userId, "operational_session_venue_updated").length, 0,
+      `${userId} must not receive the RSVP venue change`);
+    assert.equal(linkedNotes(userId, "operational_session_time_updated").length, 0,
+      `${userId} must not receive the RSVP time change`);
+  }
+
+  store.cancelSessionWeek(session.id, "Lightning warning", Date.now());
+  assert.equal(linkedNotes("fixture-member", "session-cancelled").length, 1);
+  for (const userId of ["rsvp-withdrawn", "rsvp-unrelated", "rsvp-pending", "rsvp-declined"]) {
+    assert.equal(linkedNotes(userId, "session-cancelled").length, 0,
+      `${userId} must not receive the RSVP cancellation`);
+  }
+  await store.repostRsvpEvent(session.id);
+  assert.equal(linkedNotes("fixture-member", "session-reopened").length, 1);
+  for (const userId of ["rsvp-withdrawn", "rsvp-unrelated", "rsvp-pending", "rsvp-declined"]) {
+    assert.equal(linkedNotes(userId, "session-reopened").length, 0,
+      `${userId} must not receive the RSVP reopening`);
+  }
+  const anonymousLinked = JSON.parse(mem.get("itc.prototype.v1")).notifications.filter(
+    (notification) => !notification.userId && notification.link === `#/activity/${session.id}`
+  );
+  assert.equal(anonymousLinked.length, 0, "visitors must never receive in-app occurrence notifications");
+  console.log("ok  local RSVP notifications target only the active or cancellation cohort exactly once");
 }
 
 // --- RSVP events (local): the recurring post-training lunch ---
@@ -6398,6 +6547,15 @@ installLocalFixtures();
     isMinor: false, appliedAt: Date.now() - 3600000,
     whatsappReminders: false, emailReceipts: false, communityNews: false,
   });
+  raw.users.push({
+    id: "fixture-unrelated-member", role: "member", status: "approved",
+    fullName: "Test Unrelated", preferredName: "Unrelated",
+    email: "unrelated@example.test",
+    isMinor: false, appliedAt: Date.now() - 7200000,
+    indemnityAcceptedAt: Date.now() - 7200000,
+    privacyAcceptedAt: Date.now() - 7200000,
+    whatsappReminders: false, emailReceipts: false, communityNews: false,
+  });
   mem.set("itc.prototype.v1", JSON.stringify(raw));
   store.load();
 }
@@ -6461,6 +6619,7 @@ if (restoredLegacyRun.location !== "Recurring Run Venue" || restoredLegacyRun.ve
 
 store.setWeekVenue(wntSession.id, { location: null, mapsQuery: null });
 store.signIn("member@example.test");
+await store.rsvpSession("fixture-member", wntSession.id);
 const wntTbcDetail = views.viewActivity(wntSession.id);
 if (!wntTbcDetail.includes("Meeting point to be confirmed — check back before Wednesday. Bring water and a friend.")) {
   throw new Error("WNT TBC detail must include the complete meeting-point note");
@@ -6497,8 +6656,9 @@ const memberNotes = venueNotesFor("fixture-member", wntSession.id);
 const otherAdminNotes = venueNotesFor("fixture-other-admin", wntSession.id);
 const actorNotes = venueNotesFor("fixture-admin", wntSession.id);
 const pendingNotes = venueNotesFor("fixture-pending-user", wntSession.id);
+const unrelatedNotes = venueNotesFor("fixture-unrelated-member", wntSession.id);
 if (memberNotes.length !== 1) {
-  throw new Error("first confirmation must notify each member exactly once");
+  throw new Error("first confirmation must notify each active RSVP exactly once");
 }
 if (otherAdminNotes.length !== 1) {
   throw new Error("other admin must receive audit notification on actual save");
@@ -6508,6 +6668,9 @@ if (actorNotes.length) {
 }
 if (pendingNotes.length) {
   throw new Error("pending profile must not receive venue notifications");
+}
+if (unrelatedNotes.length) {
+  throw new Error("an unrelated approved member must not receive venue notifications");
 }
 const memberDestination = memberNotes[0];
 if (memberDestination?.link !== `#/activity/${wntSession.id}`) {
@@ -6534,13 +6697,13 @@ store.setWeekVenue(wntSession.id, {
 if (venueNotesFor("fixture-member", wntSession.id).length !== 1) {
   throw new Error("no-op save must not duplicate member notification");
 }
-// Edit must notify only other Admins (not members).
+// Every effective edit notifies the active RSVP cohort and other Admins.
 store.setWeekVenue(wntSession.id, {
   location: "Wan Chai Promenade — 7pm sharp",
   mapsQuery: "Wan Chai Promenade, Hong Kong",
 });
-if (venueNotesFor("fixture-member", wntSession.id).length !== 1) {
-  throw new Error("subsequent edits must not re-notify members");
+if (venueNotesFor("fixture-member", wntSession.id).length !== 2) {
+  throw new Error("an effective venue edit must notify the active RSVP once");
 }
 if (venueNotesFor("fixture-other-admin", wntSession.id).length !== 2) {
   throw new Error("second save must notify other Admins again");
@@ -6552,16 +6715,16 @@ if (resetDecorated.location === "Central Harbourfront — 7pm sharp"
     || resetDecorated.mapsQuery === "Central Harbourfront, Hong Kong") {
   throw new Error("reset should restore the activity-template venue values");
 }
-if (venueNotesFor("fixture-member", wntSession.id).length !== 1) {
-  throw new Error("reset must not re-notify members");
+if (venueNotesFor("fixture-member", wntSession.id).length !== 3) {
+  throw new Error("resetting an effective venue must notify the active RSVP once");
 }
-// Reconfirmation does not re-notify members.
+// A later effective confirmation also notifies the still-active RSVP once.
 store.setWeekVenue(wntSession.id, {
   location: "Causeway Bay Promenade — 7pm sharp",
   mapsQuery: "Causeway Bay Promenade, Hong Kong",
 });
-if (venueNotesFor("fixture-member", wntSession.id).length !== 1) {
-  throw new Error("reconfirmation after reset must not re-notify members");
+if (venueNotesFor("fixture-member", wntSession.id).length !== 4) {
+  throw new Error("reconfirmation after reset must notify the active RSVP once");
 }
 const weekOverride = store.weekVenueOverride(wntSession.id);
 if (weekOverride.location !== "Causeway Bay Promenade — 7pm sharp"
@@ -6708,6 +6871,9 @@ const swimmingSession = store.upcomingSessions(21).find(
   (s) => s.activityId === "water" && !data.sessionStarted(s)
 );
 if (!swimmingSession) throw new Error("expected an upcoming swimming session for admin IA checks");
+store.signIn("member@example.test");
+await store.rsvpSession("fixture-member", swimmingSession.id);
+store.signIn("admin@example.test");
 store.setWeekVenue(swimmingSession.id, {
   location: "Victoria Park Swimming Pool",
   mapsQuery: "Victoria Park Swimming Pool, Hong Kong",
@@ -6715,7 +6881,7 @@ store.setWeekVenue(swimmingSession.id, {
 const completedSwimmingOverride = store.weekVenueOverride(swimmingSession.id);
 const completedSwimmingNotes = venueNotesFor("fixture-member", swimmingSession.id);
 if (!completedSwimmingOverride.venueMemberNotifiedAt || completedSwimmingNotes.length !== 1) {
-  throw new Error("completing a partial Swimming override must notify members exactly once");
+  throw new Error("completing a partial Swimming override must notify its active RSVP exactly once");
 }
 if (completedSwimmingNotes[0].body !== `ITC Swimming on ${swimmingSession.dateISO} is at Victoria Park Swimming Pool. Check the activity page for details.`) {
   throw new Error(`Swimming member copy must use its display name; got: ${completedSwimmingNotes[0].body}`);

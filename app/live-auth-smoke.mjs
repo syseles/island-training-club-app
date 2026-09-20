@@ -2478,6 +2478,20 @@ const liveOneOffEventsStart = liveActivitiesHtml.indexOf(">One-off Events<");
 const liveWeeklyControlsHtml = liveWeeklyControlsStart === -1 || liveOneOffEventsStart === -1
   ? ""
   : liveActivitiesHtml.slice(liveWeeklyControlsStart, liveOneOffEventsStart);
+for (const sessionId of authoritativeFreeSessionIds) {
+  const cardMarker = `data-session="${sessionId}"`;
+  assert.ok(liveWeeklyControlsHtml.includes(cardMarker),
+    `${sessionId} must render dated Admin controls`);
+  const markerIndex = liveWeeklyControlsHtml.indexOf(cardMarker);
+  const cardStart = liveWeeklyControlsHtml.lastIndexOf('<div class="card mt16', markerIndex);
+  const cardEnd = liveWeeklyControlsHtml.indexOf('</div></div>', markerIndex);
+  const cardHtml = liveWeeklyControlsHtml.slice(cardStart, cardEnd + 12);
+  assert.match(cardHtml, /\d+ going/,
+    `${sessionId} must display its attendee count even though its presentation kind is free`);
+  assert.match(cardHtml,
+    new RegExp(`id="form-cancel-week"[^>]*data-session="${sessionId}"`),
+    `${sessionId} must expose per-occurrence cancellation`);
+}
 for (const marker of [
   'data-action="form-week-venue"',
   'data-action="reset-week-venue"',
@@ -3399,7 +3413,24 @@ if (store.getSession(otherLunchSession.id)?.location !== "TBC") {
 }
 console.log("ok  live sessions order by start time and lunch accepts isolated weekly venue overrides");
 
+const futureLunchBeforeCancellation = structuredClone(
+  operationalTableRows.operational_sessions.find((row) => row.activity_id === "lunch"
+    && row.id !== lunchSession.id && row.session_date > lunchSession.dateISO)
+);
 await store.cancelSessionWeek(lunchSession.id, "Organizer away");
+const cancelledLiveAdminHtml = await views.viewAdmin("activities");
+const cancelledLunchMarker = cancelledLiveAdminHtml.indexOf(`data-session="${lunchSession.id}"`);
+const cancelledLunchCardStart = cancelledLiveAdminHtml.lastIndexOf('<div class="card mt16', cancelledLunchMarker);
+const cancelledLunchCardEnd = cancelledLiveAdminHtml.indexOf('</div></div>', cancelledLunchMarker);
+const cancelledLunchCard = cancelledLiveAdminHtml.slice(cancelledLunchCardStart, cancelledLunchCardEnd + 12);
+assert.match(cancelledLunchCard, /Session cancelled by ITC — Organizer away/);
+assert.match(cancelledLunchCard,
+  new RegExp(`data-action="repost-rsvp"[^>]*data-session="${lunchSession.id}"[^>]*>Reopen event<`));
+assert.deepEqual(
+  operationalTableRows.operational_sessions.find((row) => row.id === futureLunchBeforeCancellation?.id),
+  futureLunchBeforeCancellation,
+  "live per-occurrence cancellation must not mutate a future lunch occurrence"
+);
 const reopenedLiveRsvpRow = await store.repostRsvpEvent(lunchSession.id);
 const reopenedLiveRsvp = store.getSession(lunchSession.id);
 if (!reopenedLiveRsvpRow || reopenedLiveRsvpRow.id !== lunchSession.id
@@ -4896,6 +4927,7 @@ console.log("ok  live reserve and mark-paid forms await, guard duplicates, and c
 // must remain busy and duplicate-safe until its exact RPC settles.
 const delayedClickMutation = async ({
   action, dataset, rpcName, expectedArgs, result = null, beforeResolve = () => {}, successToast,
+  controlLabel = "Action", pendingLabel = null, expectedRoute = null,
 }) => {
   const gate = deferred();
   operationalRpcHandler = (name, args) => {
@@ -4905,7 +4937,7 @@ const delayedClickMutation = async ({
     }
     return delegatedBaseOperationalRpcHandler(name, args);
   };
-  const control = operationControl("BUTTON", "", "Action");
+  const control = operationControl("BUTTON", "", controlLabel);
   control.dataset = { action, ...dataset };
   control.closest = () => control;
   toastStack.children.length = 0;
@@ -4921,12 +4953,17 @@ const delayedClickMutation = async ({
     expectedArgs, `${action} must send the normalized RPC payload`);
   assert.equal(control.disabled, true, `${action} must disable its control while pending`);
   assert.equal(control.getAttribute("aria-busy"), "true");
+  if (pendingLabel) assert.equal(control.textContent, pendingLabel);
+  if (expectedRoute) assert.equal(location.hash, expectedRoute,
+    `${action} must preserve the current route while pending`);
   assert.equal(toastStack.children.length, 0, `${action} success must wait for settlement`);
   beforeResolve();
   gate.resolve({ data: structuredClone(result), error: null });
   await Promise.all([first, duplicate]);
   assert.equal(control.disabled, false);
   assert.equal(control.hasAttribute("aria-busy"), false);
+  if (expectedRoute) assert.equal(location.hash, expectedRoute,
+    `${action} must preserve the current route after success`);
   assert.ok(toastStack.children.some((item) => item.textContent === successToast),
     `${action} must report success after settlement`);
 };
@@ -5135,6 +5172,33 @@ await delayedClickMutation({
 });
 const paidControlServerRow = operationalTableRows.operational_sessions
   .find((row) => row.id === routingSessions[0].id);
+const reopenControlServerRow = operationalTableRows.operational_sessions
+  .find((row) => row.id === authoritativeFreeSessionIds[0]);
+Object.assign(reopenControlServerRow, {
+  cancelled_at: fixedIso, cancelled_by: authUser.id,
+  cancelled_source: "admin", cancel_reason: "Weather warning",
+});
+await operations.refreshOperationalState();
+window.confirm = () => true;
+globalThis.confirm = window.confirm;
+location.hash = "#/admin/activities";
+await delayedClickMutation({
+  action: "repost-rsvp",
+  dataset: { session: reopenControlServerRow.id },
+  rpcName: "reopen_operational_rsvp",
+  expectedArgs: { p_session_id: reopenControlServerRow.id },
+  result: {
+    ...reopenControlServerRow, cancelled_at: null, cancelled_by: null,
+    cancelled_source: null, cancel_reason: null,
+  },
+  beforeResolve: () => Object.assign(reopenControlServerRow, {
+    cancelled_at: null, cancelled_by: null, cancelled_source: null, cancel_reason: null,
+  }),
+  successToast: "Event reopened",
+  controlLabel: "Reopen event",
+  pendingLabel: "Reopening…",
+  expectedRoute: "#/admin/activities",
+});
 await delayedClickMutation({
   action: "venue-tbc-toggle",
   dataset: { session: routingSessions[0].id, on: "1" },
@@ -5250,6 +5314,39 @@ await delayedFormMutation({
   ),
   successToast: "Session cancelled — members notified",
 });
+
+const rejectedCancellationForm = new HTMLFormElement();
+rejectedCancellationForm.id = "form-cancel-week";
+rejectedCancellationForm.dataset = { session: authoritativeFreeSessionIds[1] };
+rejectedCancellationForm.reportValidity = () => true;
+const rejectedCancellationControls = equipOperationForm(rejectedCancellationForm, {
+  reason: "Keep this exact reason",
+});
+const rejectedCancellationGate = deferred();
+operationalRpcHandler = (name, args) => {
+  if (name === "cancel_operational_session") {
+    operationalRpcCalls.push({ name, args: structuredClone(args) });
+    return rejectedCancellationGate.promise;
+  }
+  return delegatedBaseOperationalRpcHandler(name, args);
+};
+location.hash = "#/admin/activities";
+toastStack.children.length = 0;
+const rejectedCancellation = domListeners.get("submit")({
+  target: rejectedCancellationForm, preventDefault() {},
+});
+await new Promise(setImmediate);
+assert.equal(rejectedCancellationControls.submit.getAttribute("aria-busy"), "true");
+assert.ok(rejectedCancellationControls.controls.every((control) => control.disabled));
+rejectedCancellationGate.reject(new Error("Cancellation transport unavailable"));
+await rejectedCancellation;
+assert.equal(rejectedCancellationForm.fields.reason, "Keep this exact reason",
+  "a failed cancellation must preserve the entered reason");
+assert.equal(location.hash, "#/admin/activities",
+  "a failed cancellation must preserve the current Admin route");
+assert.equal(rejectedCancellationControls.submit.hasAttribute("aria-busy"), false);
+assert.ok(rejectedCancellationControls.controls.every((control) => !control.disabled));
+assert.ok(toastStack.children.some((item) => item.textContent === "Cancellation transport unavailable"));
 
 const rejectedMidtownGate = deferred();
 operationalRpcHandler = (name, args) => {

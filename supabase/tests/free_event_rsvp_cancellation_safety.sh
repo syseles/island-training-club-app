@@ -22,6 +22,35 @@ rg -q "create or replace function public.join_operational_queue" "$migration"
 rg -q "create or replace function public.leave_operational_queue" "$migration"
 rg -q "Approved membership required" "$migration"
 rg -q "set status = 'dissolved'" "$migration"
+rg -q "create or replace function public.set_operational_session_time" "$migration"
+rg -q "create or replace function public.set_session_venue" "$migration"
+rg -q "operational_session_time_updated" "$migration"
+
+venue_rpc="$(awk '
+  /create or replace function public.set_session_venue\(/ { capture = 1 }
+  capture { print }
+  capture && /^\$\$;$/ { exit }
+' "$migration")"
+if [[ -z "$venue_rpc" ]] || ! grep -q "p_meeting_lat double precision" <<<"$venue_rpc" \
+    || ! grep -q "operational_bookings" <<<"$venue_rpc" \
+    || ! grep -q "status = 'confirmed'" <<<"$venue_rpc" \
+    || ! grep -q "#/activity/" <<<"$venue_rpc"; then
+  echo "FAIL: latest six-argument venue RPC must retain meeting-point validation and target active RSVP bookings" >&2
+  exit 1
+fi
+
+time_rpc="$(awk '
+  /create or replace function public.set_operational_session_time\(/ { capture = 1 }
+  capture { print }
+  capture && /^\$\$;$/ { exit }
+' "$migration")"
+if [[ -z "$time_rpc" ]] || ! grep -Eq "is (not )?distinct from" <<<"$time_rpc" \
+    || ! grep -q "operational_bookings" <<<"$time_rpc" \
+    || ! grep -q "status = 'confirmed'" <<<"$time_rpc" \
+    || ! grep -q "#/activity/" <<<"$time_rpc"; then
+  echo "FAIL: time RPC must dedupe unchanged values and target active RSVP bookings" >&2
+  exit 1
+fi
 
 if rg -ni 'grant\s+(all|[^;]*\*)' "$migration"; then
   echo "FAIL: wildcard grants are forbidden" >&2

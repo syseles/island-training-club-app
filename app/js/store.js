@@ -1529,6 +1529,19 @@ function notify(userId, kind, body, link) {
   state.notifications.push({ id: uid("n"), userId, kind, body, link, read: false, createdAt: Date.now() });
 }
 
+function canReceiveRsvpNotification(userId) {
+  const user = state.users.find((candidate) => candidate.id === userId);
+  return user?.status === "approved"
+    && ["member", "admin", "superadmin", "super_admin"].includes(user.role);
+}
+
+function activeRsvpNotificationRecipients(sessionId) {
+  return [...new Set(state.bookings
+    .filter((booking) => booking.sessionId === sessionId && booking.status === "confirmed")
+    .map((booking) => booking.userId)
+    .filter(canReceiveRsvpNotification))];
+}
+
 export function notificationsFor(userId) {
   return state.notifications
     .filter((n) => n.userId === userId)
@@ -3237,7 +3250,8 @@ export async function repostRsvpEvent(sessionId) {
       && booking.status === "cancelled"
       && booking.cancelledSource === "session"
       && booking.cancelledAt === cancelledAt)
-    .map((booking) => booking.userId));
+    .map((booking) => booking.userId)
+    .filter(canReceiveRsvpNotification));
   for (const userId of recipients) {
     notify(userId, "session-reopened",
       `${source.name} · ${fmtDate(source.date)} has reopened. RSVP again if you're coming.`,
@@ -3282,6 +3296,9 @@ export function cancelSessionWeek(sessionId, reason, now = Date.now()) {
   if (rsvpOccurrence) o.cancelledAt = now;
   const cancellationCopy = `Session cancelled by ITC — ${o.cancelled}`;
   const cancellationLink = `#/activity/${sessionId}`;
+  const cancellationRecipients = rsvpOccurrence
+    ? new Set(activeRsvpNotificationRecipients(sessionId))
+    : null;
   const venueActivityId = sessionId.replace(/-\d{4}-\d{2}-\d{2}$/, "");
   for (const b of state.bookings.filter((x) => x.sessionId === sessionId)) {
     if (b.status === "confirmed") {
@@ -3289,9 +3306,11 @@ export function cancelSessionWeek(sessionId, reason, now = Date.now()) {
         b.status = "cancelled";
         b.cancelledAt = now;
         b.cancelledSource = "session";
-        notify(b.userId, "session-cancelled",
-          `${cancellationCopy}. ${b.snapshot.name} · ${fmtDate(b.snapshot.dateISO)}.`,
-          cancellationLink);
+        if (cancellationRecipients.has(b.userId)) {
+          notify(b.userId, "session-cancelled",
+            `${cancellationCopy}. ${b.snapshot.name} · ${fmtDate(b.snapshot.dateISO)}.`,
+            cancellationLink);
+        }
         continue;
       }
       const target = deferTargetsFor(b).find((s) => s.activityId === venueActivityId);
@@ -3334,8 +3353,21 @@ export function setSessionTime(sessionId, time) {
     return liveOps.liveSetSessionTime(sessionId, time);
   }
   requirePaymentAdminActor();
-  (state.sessionOverrides[sessionId] ||= {}).time = time;
+  const session = getSession(sessionId);
+  const nextTime = String(time || "").trim();
+  if (!session) throw new Error("Session not found.");
+  if (!nextTime) throw new Error("Pick the start time.");
+  if (session.time === nextTime) return session;
+  (state.sessionOverrides[sessionId] ||= {}).time = nextTime;
+  if (sessionRequiresRsvp(session) && Number(session.price ?? 0) === 0) {
+    for (const userId of activeRsvpNotificationRecipients(sessionId)) {
+      notify(userId, "operational_session_time_updated",
+        `${session.name} · ${fmtDate(session.date)} now starts at ${fmtTime(nextTime)}.`,
+        `#/activity/${sessionId}`);
+    }
+  }
   save();
+  return getSession(sessionId);
 }
 
 export function setVenueTBC(sessionId, on) {
@@ -3426,6 +3458,14 @@ export function setWeekVenue(sessionId, {
   const effectiveLocation = cleanLocation || recurring?.location || "";
   const effectiveMapsQuery = cleanMapsQuery || recurring?.mapsQuery || "";
   const confirmed = hasConfirmedVenue(effectiveLocation, effectiveMapsQuery);
+  const previouslyConfirmed = hasConfirmedVenue(before.location, before.mapsQuery);
+  const effectiveVenueChanged = previouslyConfirmed !== confirmed
+    || (confirmed && (
+      before.location !== effectiveLocation
+      || before.mapsQuery !== effectiveMapsQuery
+      || (before.meetingLat ?? null) !== (meetingPoint?.lat ?? null)
+      || (before.meetingLng ?? null) !== (meetingPoint?.lng ?? null)
+    ));
   const nextVenueTBC = cleared || confirmed ? false : Boolean(override.venueTBC);
   const pointChanged = (previousPoint?.lat ?? null) !== (meetingPoint?.lat ?? null)
     || (previousPoint?.lng ?? null) !== (meetingPoint?.lng ?? null);
@@ -3451,16 +3491,18 @@ export function setWeekVenue(sessionId, {
   override.venueMemberNotifiedAt = previousNotified;
   const destination = `#/activity/${sessionId}`;
   const sessionLabel = `${before.name || recurring?.name || overrideActivityId} on ${before.dateISO}`;
-  if (wasTBC && !cleared && confirmed && !override.venueMemberNotifiedAt) {
+  if (effectiveVenueChanged) {
     override.venueMemberNotifiedAt = Date.now();
-    for (const user of state.users) {
-      if (user?.status !== "approved" || user.role !== "member") continue;
+    const body = confirmed
+      ? `${sessionLabel} is at ${effectiveLocation}. Check the activity page for details.`
+      : `${sessionLabel} has a venue update. Check the activity page for details.`;
+    for (const userId of activeRsvpNotificationRecipients(sessionId)) {
       state.notifications.push({
         id: uid("n"),
-        userId: user.id,
+        userId,
         kind: "operational_session_venue_updated",
-        title: "Venue confirmed",
-        body: `${sessionLabel} is at ${effectiveLocation}. Check the activity page for details.`,
+        title: confirmed ? "Venue confirmed" : "Venue updated",
+        body,
         link: destination,
         read: false,
         createdAt: Date.now(),
