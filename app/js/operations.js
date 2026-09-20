@@ -23,14 +23,22 @@ const LIVE_TABLES = [
   "collector_assignments",
   "collector_payout_profiles",
   "operational_session_venue_overrides",
+  "operational_rsvp_counts",
+  "operational_hyrox_cycles",
+  "operational_hyrox_queue_entries",
+  "operational_booking_replacement_requests",
+  "operational_booking_replacement_audit",
 ];
 
 const cutoverMarker = "itc.live.operations.backend.v1";
 
-const PAID_ACTIVITY_METADATA = new Map(
+const ACTIVITY_PRESENTATION = new Map(
+  SEED_ACTIVITIES.map((activity) => [activity.id, activity])
+);
+const FREE_PRESENTATION_ACTIVITY_IDS = new Set(
   SEED_ACTIVITIES
-    .filter((activity) => activity.kind === "paid")
-    .map((activity) => [activity.id, activity])
+    .filter((activity) => activity.kind === "free")
+    .map((activity) => activity.id)
 );
 
 const liveCache = {
@@ -42,9 +50,15 @@ const liveCache = {
   assignments: new Map(),
   payout: new Map(),
   venueOverrides: new Map(),
+  rsvpCounts: new Map(),
+  hyroxCycles: new Map(),
+  hyroxQueues: [],
+  replacementRequests: [],
+  rsvpCountError: null,
   loaded: false,
   loading: null,
   error: null,
+  payoutError: null,
   updatedAt: 0,
 };
 
@@ -69,15 +83,68 @@ function buildTemplateRow(row) {
     price_hkd: row.price_hkd,
     default_open: row.default_open,
     active: row.active,
+    category: row.category || null,
+    maps_query: row.maps_query || null,
+    requires_rsvp: !!row.requires_rsvp,
   };
 }
 
-function buildSessionRow(row) {
+function buildHyroxCycleRow(row) {
+  return {
+    id: row.id,
+    dateISO: String(row.session_date).slice(0, 10),
+    bftSessionId: row.bft_session_id,
+    midtownSessionId: row.midtown_session_id,
+    registrationState: row.registration_state,
+    venuePlan: row.venue_plan,
+    capacity: row.registration_capacity,
+    paymentDeadlineAt: parseTimestamp(row.payment_deadline_at),
+    venueChoiceDeadlineAt: parseTimestamp(row.venue_choice_deadline_at),
+    registrationOpensAt: parseTimestamp(row.registration_opens_at),
+    holderGraceDeadlineAt: parseTimestamp(row.holder_grace_deadline_at),
+    promotedPaymentDeadlineAt: parseTimestamp(row.promoted_payment_deadline_at),
+    capacityWarningSentAt: parseTimestamp(row.capacity_warning_sent_at),
+    paymentReminderSentAt: parseTimestamp(row.payment_reminder_sent_at),
+    collectorPaymentReminderSentAt: parseTimestamp(row.collector_payment_reminder_sent_at),
+    venueChoiceReminderSentAt: parseTimestamp(row.venue_choice_reminder_sent_at),
+    venueFinalizationReminderSentAt: parseTimestamp(row.venue_finalization_reminder_sent_at),
+    holderGraceStartedAt: parseTimestamp(row.holder_grace_started_at),
+    waitlistPromotedAt: parseTimestamp(row.waitlist_promoted_at),
+    reconciliationStartedAt: parseTimestamp(row.reconciliation_started_at),
+    openedAt: parseTimestamp(row.opened_at),
+    planConfirmedAt: parseTimestamp(row.plan_confirmed_at),
+    planConfirmedBy: row.plan_confirmed_by,
+    planConfirmedSource: row.plan_confirmed_source || null,
+    allocationClosedAt: parseTimestamp(row.allocation_closed_at),
+    cancelledAt: parseTimestamp(row.cancelled_at),
+    cancelReason: row.cancel_reason || null,
+  };
+}
+
+function buildHyroxQueueRow(row) {
+  return {
+    id: row.id,
+    cycleId: row.cycle_id,
+    userId: row.profile_id,
+    kind: row.kind,
+    targetSessionId: row.target_session_id || null,
+    venuePreference: row.venue_preference || null,
+    fallbackAcknowledgedAt: parseTimestamp(row.fallback_acknowledged_at),
+    status: row.status,
+    joinedAt: parseTimestamp(row.joined_at),
+    resolvedAt: parseTimestamp(row.resolved_at),
+  };
+}
+
+function buildSessionRow(row, templatesById = null) {
   const dateISO = typeof row.session_date === "string"
     ? row.session_date.slice(0, 10)
     : new Date(row.session_date).toISOString().slice(0, 10);
   const date = new Date(`${dateISO}T00:00:00`);
-  const metadata = PAID_ACTIVITY_METADATA.get(row.activity_id);
+  const metadata = ACTIVITY_PRESENTATION.get(row.activity_id);
+  const template = templatesById?.get(row.activity_id) ?? null;
+  const oneOff = String(row.activity_id).startsWith("event-");
+  const freePresentation = oneOff || FREE_PRESENTATION_ACTIVITY_IDS.has(row.activity_id);
   const legacyMidtown = row.activity_id === "hyrox-midtown"
     && row.venue === "Midtown 28";
   const venue = legacyMidtown
@@ -85,14 +152,25 @@ function buildSessionRow(row) {
     : row.venue;
   const mapsQuery = legacyMidtown
     ? (metadata?.mapsQuery || row.venue)
-    : row.venue;
+    : (template?.maps_query || row.venue);
   return {
     id: row.id,
     activityId: row.activity_id,
-    name: row.activity_id === "hyrox-midtown" ? "ITC HYROX" : "ITC HYROX",
-    kind: "paid",
-    category: "HYROX",
-    weekday: 6,
+    // One-off events take their display name/category from their template;
+    // the recurring HYROX templates keep the historical labels.
+    name: template?.name || "ITC HYROX",
+    // RSVP capability is separate from presentation: recurring community
+    // sessions and free one-offs stay `free`, while Lunch keeps its dedicated
+    // RSVP presentation. Paid sessions retain the reserve/pay pipeline.
+    kind: Number(row.price_hkd) > 0
+      ? "paid"
+      : freePresentation
+        ? "free"
+        : template?.requires_rsvp ? "rsvp" : "free",
+    requiresRsvp: !!template?.requires_rsvp,
+    category: template?.category || metadata?.category || (oneOff ? "Other" : "HYROX"),
+    weekday: date.getDay(),
+    oneOff,
     dateISO,
     date,
     time: String(row.start_time || "").slice(0, 5),
@@ -100,7 +178,9 @@ function buildSessionRow(row) {
     location: venue,
     mapsQuery,
     venue,
-    photo: metadata?.photo || "../assets/itc/hyrox.webp",
+    photo: metadata?.photo || (oneOff ? "../assets/itc/main.webp" : "../assets/itc/hyrox.webp"),
+    blurb: metadata?.blurb || "",
+    memberNote: metadata?.memberNote || "",
     capacity: row.capacity,
     price: row.price_hkd,
     isOpen: row.is_open,
@@ -118,30 +198,100 @@ function buildSessionRow(row) {
   };
 }
 
-function buildBookingRow(row) {
-  const dateISO = row.snapshot?.session_date
-    ? String(row.snapshot.session_date).slice(0, 10)
-    : null;
+function parseTimestamp(value) {
+  const timestamp = typeof value === "number" ? value : Date.parse(value);
+  return Number.isFinite(timestamp) ? timestamp : null;
+}
+
+function buildReplacementRequestRow(row) {
+  if (!row) return null;
+  const value = Array.isArray(row) ? row[0] : row;
+  if (!value) return null;
+  const rawSnapshot = value.snapshot || {};
+  const snapshot = {
+    name: rawSnapshot.name || null,
+    dateISO: rawSnapshot.dateISO || rawSnapshot.session_date || null,
+    time: rawSnapshot.time || rawSnapshot.start_time || null,
+    location: rawSnapshot.location || rawSnapshot.venue || null,
+    price: rawSnapshot.price ?? rawSnapshot.price_hkd ?? null,
+  };
+  return {
+    requestId: value.requestId ?? value.request_id ?? null,
+    bookingId: value.bookingId ?? value.booking_id ?? null,
+    status: value.status || null,
+    originalDisplayName: value.originalDisplayName ?? value.original_display_name ?? null,
+    replacementDisplayName: value.replacementDisplayName ?? value.replacement_display_name ?? null,
+    sessionId: value.sessionId ?? value.session_id ?? null,
+    cycleId: value.cycleId ?? value.cycle_id ?? null,
+    snapshot: Object.values(snapshot).some((item) => item !== null) ? snapshot : null,
+    createdAt: parseTimestamp(value.createdAt ?? value.created_at),
+    expiresAt: parseTimestamp(value.expiresAt ?? value.expires_at),
+    acceptedAt: parseTimestamp(value.acceptedAt ?? value.accepted_at),
+    declinedAt: parseTimestamp(value.declinedAt ?? value.declined_at),
+    cancelledAt: parseTimestamp(value.cancelledAt ?? value.cancelled_at),
+    rejectedAt: parseTimestamp(value.rejectedAt ?? value.rejected_at),
+    confirmedAt: parseTimestamp(value.confirmedAt ?? value.confirmed_at),
+    decisionReason: value.decisionReason ?? value.decision_reason ?? null,
+  };
+}
+
+function cacheReplacementRequest(row) {
+  const request = buildReplacementRequestRow(row);
+  if (!request?.requestId) return request;
+  const index = liveCache.replacementRequests.findIndex((item) => item.requestId === request.requestId);
+  if (index >= 0) liveCache.replacementRequests[index] = request;
+  else liveCache.replacementRequests.push(request);
+  return request;
+}
+
+function buildBookingRow(row, sessionsById = null) {
+  const snapshot = row.snapshot || {};
+  const session = sessionsById?.get(row.session_id) || null;
+  const rawDateISO = snapshot.session_date || snapshot.dateISO || session?.dateISO || null;
+  const dateISO = rawDateISO ? String(rawDateISO).slice(0, 10) : null;
+  const snapshotTime = snapshot.start_time || snapshot.time || session?.time || null;
   return {
     id: row.id,
     userId: row.profile_id,
     sessionId: row.session_id,
     status: row.status,
-    createdAt: Date.parse(row.created_at) || Date.now(),
-    reservedAt: row.reserved_at ? Date.parse(row.reserved_at) : null,
-    payDeadlineAt: row.pay_deadline_at ? Date.parse(row.pay_deadline_at) : null,
-    paymentMarkedAt: row.payment_marked_at ? Date.parse(row.payment_marked_at) : null,
+    createdAt: parseTimestamp(row.created_at),
+    reservedAt: parseTimestamp(row.reserved_at),
+    payDeadlineAt: parseTimestamp(row.pay_deadline_at),
+    paymentMarkedAt: parseTimestamp(row.payment_marked_at),
     paidMethod: row.payment_method ? String(row.payment_method).toUpperCase() : null,
     paymentRef: row.payment_reference || null,
-    paidAt: row.paid_at ? Date.parse(row.paid_at) : null,
+    paidAt: parseTimestamp(row.paid_at),
     confirmedBy: row.confirmed_by || null,
     deferredFrom: row.deferred_from_booking_id || null,
     deferredTo: row.deferred_to_booking_id || null,
+    cycleId: row.hyrox_cycle_id || null,
+    venuePreference: row.venue_preference || null,
+    fallbackAcknowledgedAt: parseTimestamp(row.fallback_acknowledged_at),
+    promotedFromWaitlistAt: parseTimestamp(row.promoted_from_waitlist_at),
+    allocationState: row.allocation_state || null,
+    allocationSource: row.allocation_source || null,
+    allocatedAt: parseTimestamp(row.allocated_at),
+    allocationSnapshot: row.allocation_snapshot || null,
+    paymentRejectedAt: parseTimestamp(row.payment_rejected_at),
+    paymentRejectedBy: row.payment_rejected_by || null,
+    paymentRejectionReason: row.payment_rejection_reason || null,
+    attendedAt: parseTimestamp(row.attended_at),
+    attendedBy: row.attended_by || null,
+    replacementUserId: row.replacement_profile_id || null,
+    replacementConfirmedAt: parseTimestamp(row.replacement_confirmed_at),
+    replacementConfirmedBy: row.replacement_confirmed_by || null,
     snapshot: {
-      ...row.snapshot,
-      price: row.snapshot?.price_hkd ?? row.snapshot?.price ?? null,
-      location: row.snapshot?.venue ?? row.snapshot?.location ?? null,
-      name: row.snapshot?.name || (row.snapshot?.activity_id === "hyrox-midtown" ? "ITC HYROX" : "ITC HYROX"),
+      ...snapshot,
+      price: snapshot.price_hkd ?? snapshot.price ?? session?.price ?? null,
+      location: snapshot.venue || snapshot.location || session?.location || null,
+      name: snapshot.name || session?.name
+        || (snapshot.activity_id === "hyrox-midtown" ? "ITC HYROX" : "ITC HYROX"),
+      // DB snapshots store start_time ("HH:MM:SS"); the UI expects time
+      // ("HH:MM"). Map it or use the authoritative session.
+      time: snapshotTime ? String(snapshotTime).slice(0, 5) : null,
+      durationMin: snapshot.duration_min ?? snapshot.durationMin ?? session?.durationMin ?? null,
+      kind: snapshot.kind ?? session?.kind ?? "paid",
       dateISO,
     },
     dateISO,
@@ -172,7 +322,8 @@ function buildReceiptRow(row) {
     method: String(row.payment_method || "").toUpperCase(),
     status: row.status,
     issuedAt: Date.parse(row.issued_at) || Date.now(),
-    line: `ITC HYROX — ${row.session_id}`,
+    cycleId: row.hyrox_cycle_id || null,
+    line: row.session_id ? `ITC HYROX — ${row.session_id}` : "ITC HYROX",
   };
 }
 
@@ -192,6 +343,8 @@ function buildPayoutRow(row) {
     profileId: row.profile_id,
     paymeLink: row.payme_link || null,
     fpsPhone: row.fps_phone || null,
+    ...(row.full_name ? { fullName: row.full_name } : {}),
+    ...(row.preferred_name ? { preferredName: row.preferred_name } : {}),
   };
 }
 
@@ -212,6 +365,14 @@ function buildVenueOverrideRow(row) {
 
 function replaceState(payload) {
   liveCache.sessions = new Map(payload.sessions.map((row) => [row.id, row]));
+  liveCache.hyroxCycles = new Map(
+    (payload.hyroxCycles || []).map((row) => [row.id, row])
+  );
+  liveCache.hyroxQueues = payload.hyroxQueues || [];
+  if (payload.replacementRequests) {
+    liveCache.replacementRequests = payload.replacementRequests
+      .map(buildReplacementRequestRow).filter(Boolean);
+  }
   liveCache.templates = payload.templates || [];
   liveCache.bookings = payload.bookings;
   liveCache.queues = payload.queues;
@@ -225,14 +386,31 @@ function replaceState(payload) {
   liveCache.venueOverrides = new Map(
     (payload.venueOverrides || []).map((row) => [row.sessionId, row])
   );
+  liveCache.rsvpCounts = new Map();
+  liveCache.rsvpCountError = payload.rsvpCountError || null;
+  if (!liveCache.rsvpCountError) {
+    for (const session of payload.sessions) {
+      if (session.requiresRsvp) liveCache.rsvpCounts.set(session.id, 0);
+    }
+    for (const row of payload.rsvpCounts || []) {
+      const count = Number(row.going_count);
+      if (row.session_id && Number.isInteger(count) && count >= 0) {
+        liveCache.rsvpCounts.set(row.session_id, count);
+      }
+    }
+  }
   liveCache.loaded = true;
   liveCache.error = null;
+  liveCache.payoutError = payload.payoutError || null;
   liveCache.updatedAt = Date.now();
 }
 
 function operationalProblem(error) {
   if (!error) return new Error("Unable to save — try again.");
   const message = String(error.message || error);
+  if (error.code === "PGRST202" && message.includes("operational_replacement")) {
+    return new Error("Replacement setup is temporarily unavailable. Please contact ITC.");
+  }
   if (message.includes("Session is cancelled")) return new Error("Session is cancelled.");
   if (message.includes("Session is full")) return new Error("Session is full.");
   if (message.includes("Session is not open")) return new Error("Session is not open.");
@@ -258,22 +436,96 @@ function operationalProblem(error) {
   if (message.includes("Booking not found")) return new Error("Booking not found.");
   if (message.includes("Queue entry not found")) return new Error("Queue entry not found.");
   if (message.includes("Authentication required")) return new Error("Authentication required.");
+  if (message.includes("Choose BFT, Midtown, or Either")) return new Error("Choose BFT, Midtown, or Either.");
+  if (message.includes("Fallback acknowledgement is required")) return new Error("Fallback acknowledgement is required.");
+  if (message.includes("HYROX cycle not found")) return new Error("HYROX cycle not found.");
+  if (message.includes("This HYROX cycle is cancelled")) return new Error("This HYROX cycle is cancelled.");
+  if (message.includes("HYROX registration opens Monday")) return new Error("HYROX registration opens Monday at 6 PM HKT.");
+  if (message.includes("HYROX registration is closed")) return new Error("HYROX registration is closed.");
+  if (message.includes("HYROX registration is full")) return new Error("HYROX registration is full. Join the weekly waitlist.");
+  if (message.includes("You already joined this HYROX registration")) return new Error("You already joined this HYROX registration.");
+  if (message.includes("You already have a HYROX booking for this Saturday")) return new Error("You already have a HYROX booking for this Saturday.");
+  if (message.includes("HYROX places are still available")) return new Error("HYROX places are still available.");
+  if (message.includes("HYROX queue entry not found")) return new Error("HYROX queue entry not found.");
+  if (message.includes("Queue entry is no longer active")) return new Error("Queue entry is no longer active.");
+  if (message.includes("Use the weekly HYROX registration")) return new Error("Use the weekly HYROX registration.");
+  if (message.includes("Payment rejection reason is required")) return new Error("Payment rejection reason is required.");
+  if (message.includes("Booking has no pending payment claim")) return new Error("Booking has no pending payment claim.");
+  if (message.includes("Venue changes are available only when both gyms open")) return new Error("Venue changes are available only when both gyms open.");
+  if (message.includes("Booking allocation is not changeable")) return new Error("Booking allocation is not changeable.");
+  if (message.includes("Venue changes closed Friday at 9 PM HKT")) return new Error("Venue changes closed Friday at 9 PM HKT.");
+  if (message.includes("Venue changes close Friday at 9 PM HKT")) return new Error("Venue changes close Friday at 9 PM HKT.");
+  if (message.includes("Target venue is not part of this HYROX cycle")) return new Error("Target venue is not part of this HYROX cycle.");
+  if (message.includes("Target venue is full")) return new Error("Target venue is full.");
+  if (message.includes("Choose the other venue in this HYROX cycle")) return new Error("Choose the other venue in this HYROX cycle.");
+  if (message.includes("You already have an active HYROX queue request")) return new Error("You already have an active HYROX queue request.");
+  if (message.includes("Venue-switch request is no longer active")) return new Error("Venue-switch request is no longer active.");
+  if (message.includes("HYROX venue plan is not ready")) return new Error("HYROX venue plan is not ready.");
+  if (message.includes("HYROX cycle is already cancelled")) return new Error("HYROX cycle is already cancelled.");
+  if (message.includes("Cancel the weekly HYROX cycle instead")) return new Error("Cancel the weekly HYROX cycle instead.");
+  if (message.includes("Midtown availability is derived from the weekly HYROX plan")) return new Error("Midtown availability is derived from the weekly HYROX plan.");
+  if (message.includes("HYROX venue allocation must be closed first")) return new Error("HYROX venue allocation must be closed first.");
+  if (message.includes("HYROX child venue is not enabled by the weekly plan")) return new Error("HYROX child venue is not enabled by the weekly plan.");
   if (message.includes("Midtown toggle is only valid")) return new Error("Midtown toggle is only valid for Midtown sessions.");
   if (message.includes("Interest list is only for closed Midtown")) return new Error("Interest list is only for closed Midtown sessions.");
   if (message.includes("Waitlist is only for open sessions")) return new Error("Waitlist is only for open sessions.");
   if (message.includes("Waitlist is only for full sessions")) return new Error("Waitlist is only for full sessions.");
   if (message.includes("Session is not full")) return new Error("Session is not full.");
   if (message.includes("Interest list is only")) return new Error("Interest list is only for closed Midtown sessions.");
-  if (message.includes("Activity venue is fixed.")) return new Error("Activity venue is fixed.");
+  if (message.includes("Activity venue is fixed.")
+      || message.includes("replacement invite")
+      || message.includes("replacement request")
+      || message.includes("replacement")) return new Error(message);
   return new Error(message || "Unable to save — try again.");
 }
 
 let hydrationPromise = null;
 
-async function fetchOperationalState() {
+async function fetchAssignedPayoutRows() {
+  try {
+    const { data, error } = await supabase.rpc("get_assigned_collector_payout_profiles");
+    if (error) return { rows: [], error: operationalProblem(error) };
+    return { rows: data || [], error: null };
+  } catch (error) {
+    return { rows: [], error: operationalProblem(error) };
+  }
+}
+
+async function fetchRsvpCounts() {
+  try {
+    const { data, error } = await supabase.rpc("get_operational_rsvp_counts");
+    if (error) throw operationalProblem(error);
+    return { rows: data || [], error: null };
+  } catch (err) {
+    return { rows: [], error: operationalProblem(err) };
+  }
+}
+
+async function fetchOperationalState({ authenticated } = {}) {
   if (!isLive() || !supabase) return null;
+  if (authenticated === undefined) {
+    try {
+      const { data } = await supabase.auth.getSession();
+      authenticated = Boolean(data?.session);
+    } catch {
+      authenticated = false;
+    }
+  }
   const since = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
-  const [sessions, bookings, queues, receipts, assignments, payouts, templates, venueOverrides] = await Promise.all([
+  const [
+    sessions,
+    bookings,
+    queues,
+    receipts,
+    assignments,
+    payouts,
+    assignedPayouts,
+    templates,
+    venueOverrides,
+    rsvpCounts,
+    hyroxCycles,
+    hyroxQueues,
+  ] = await Promise.all([
     supabase.from("operational_sessions").select("*").gte("session_date", since).order("session_date"),
     supabase.from("operational_bookings").select("*"),
     supabase.from("operational_queue_entries").select("*")
@@ -282,21 +534,76 @@ async function fetchOperationalState() {
     supabase.from("operational_receipts").select("*").order("issued_at", { ascending: false }),
     supabase.from("collector_assignments").select("*"),
     supabase.from("collector_payout_profiles").select("*"),
-    supabase.from("operational_activity_templates").select("*").eq("active", true).order("activity_id"),
+    fetchAssignedPayoutRows(),
+    supabase.from("operational_activity_templates").select("*").order("activity_id"),
     supabase.from("operational_session_venue_overrides").select("*"),
+    fetchRsvpCounts(),
+    supabase.from("operational_hyrox_cycles").select("*").order("session_date"),
+    authenticated
+      ? supabase.from("operational_hyrox_queue_entries").select("*").order("joined_at")
+      : Promise.resolve({ data: [], error: null }),
   ]);
-  for (const result of [sessions, bookings, queues, receipts, assignments, payouts, templates, venueOverrides]) {
+  for (const result of [
+    sessions,
+    bookings,
+    queues,
+    receipts,
+    assignments,
+    payouts,
+    templates,
+    venueOverrides,
+    hyroxCycles,
+    hyroxQueues,
+  ]) {
     if (result.error) throw operationalProblem(result.error);
   }
+  // Templates hydrate before sessions so one-off event rows (inactive
+  // templates) can lend their name, category and maps query to the session.
+  const templateRows = (templates.data || []).map(buildTemplateRow);
+  const templatesById = new Map(templateRows.map((t) => [t.activity_id, t]));
+  const currentSessionRows = sessions.data || [];
+  const currentSessionIds = new Set(currentSessionRows.map((row) => row.id));
+  const missingSessionIds = [...new Set((bookings.data || [])
+    .map((row) => row.session_id)
+    .filter((id) => id && !currentSessionIds.has(id)))];
+  let historicalSessionRows = [];
+  if (missingSessionIds.length) {
+    const historicalSessions = await supabase
+      .from("operational_sessions")
+      .select("*")
+      .in("id", missingSessionIds);
+    if (historicalSessions.error) throw operationalProblem(historicalSessions.error);
+    historicalSessionRows = historicalSessions.data || [];
+  }
+  // Keep the Schedule horizon query narrow while adding only sessions needed
+  // to give a user's historical booking its authoritative display metadata.
+  const sessionRowsById = new Map();
+  for (const row of [...currentSessionRows, ...historicalSessionRows]) {
+    if (!sessionRowsById.has(row.id)) {
+      sessionRowsById.set(row.id, buildSessionRow(row, templatesById));
+    }
+  }
+  const sessionRows = [...sessionRowsById.values()];
+  const sessionsById = new Map(sessionRows.map((session) => [session.id, session]));
+  const payoutRowsByProfile = new Map();
+  for (const row of payouts.data || []) payoutRowsByProfile.set(row.profile_id, row);
+  // The narrow assigned-collector RPC supplies authoritative applications.mobile;
+  // it wins over any duplicated, stale payout-table phone on the same profile.
+  for (const row of assignedPayouts.rows) payoutRowsByProfile.set(row.profile_id, row);
   return {
-    sessions: (sessions.data || []).map(buildSessionRow),
-    templates: (templates.data || []).map(buildTemplateRow),
-    bookings: (bookings.data || []).map(buildBookingRow),
+    sessions: sessionRows,
+    templates: templateRows,
+    hyroxCycles: (hyroxCycles.data || []).map(buildHyroxCycleRow),
+    hyroxQueues: (hyroxQueues.data || []).map(buildHyroxQueueRow),
+    bookings: (bookings.data || []).map((row) => buildBookingRow(row, sessionsById)),
     queues: (queues.data || []).map(buildQueueRow),
     receipts: (receipts.data || []).map(buildReceiptRow),
     assignments: (assignments.data || []).map(buildAssignmentRow),
-    payouts: (payouts.data || []).map(buildPayoutRow),
+    payouts: [...payoutRowsByProfile.values()].map(buildPayoutRow),
+    payoutError: assignedPayouts.error,
     venueOverrides: (venueOverrides.data || []).map(buildVenueOverrideRow),
+    rsvpCounts: rsvpCounts.rows,
+    rsvpCountError: rsvpCounts.error,
   };
 }
 
@@ -309,19 +616,30 @@ export async function ensureLiveSessionWindow() {
       p_weeks: 16,
     });
     if (error) throw operationalProblem(error);
+    const { error: hyroxError } = await supabase.rpc("ensure_hyrox_cycles", {
+      p_start_date: iso,
+      p_weeks: 16,
+    });
+    if (hyroxError) throw operationalProblem(hyroxError);
   } catch (err) {
     console.warn("ensureLiveSessionWindow failed", err);
   }
   return null;
 }
 
-export async function hydrateOperationalState({ force = false } = {}) {
+export async function hydrateOperationalState({ force = false, authenticated } = {}) {
   if (!isLive() || !supabase) return null;
   if (liveCache.loaded && !force) return liveCache;
-  if (hydrationPromise) return hydrationPromise;
+  if (hydrationPromise) {
+    const pending = hydrationPromise;
+    if (!force) return pending;
+    try { await pending; } catch {}
+    if (hydrationPromise && hydrationPromise !== pending) return hydrationPromise;
+    if (hydrationPromise === pending) hydrationPromise = null;
+  }
   liveCache.loading = Promise.resolve().then(async () => {
     try {
-      const payload = await fetchOperationalState();
+      const payload = await fetchOperationalState({ authenticated });
       replaceState(payload);
       try { localStorage.setItem(cutoverMarker, "supabase"); } catch {}
       notifyListeners();
@@ -334,11 +652,12 @@ export async function hydrateOperationalState({ force = false } = {}) {
       liveCache.loading = null;
     }
   });
-  hydrationPromise = liveCache.loading;
+  const pending = liveCache.loading;
+  hydrationPromise = pending;
   try {
-    return await hydrationPromise;
+    return await pending;
   } finally {
-    hydrationPromise = null;
+    if (hydrationPromise === pending) hydrationPromise = null;
   }
 }
 
@@ -357,6 +676,12 @@ export function operationalStateStatus() {
     loading: !!liveCache.loading,
     loaded: liveCache.loaded,
     error: liveCache.error ? String(liveCache.error.message || liveCache.error) : null,
+    payoutError: liveCache.payoutError
+      ? String(liveCache.payoutError.message || liveCache.payoutError)
+      : null,
+    rsvpCountError: liveCache.rsvpCountError
+      ? String(liveCache.rsvpCountError.message || liveCache.rsvpCountError)
+      : null,
     updatedAt: liveCache.updatedAt,
   };
 }
@@ -386,6 +711,21 @@ export async function startOperationalRealtime() {
     .on("postgres_changes",
       { event: "*", schema: "public", table: "operational_session_venue_overrides" },
       () => scheduleRealtimeRefresh())
+    .on("postgres_changes",
+      { event: "*", schema: "public", table: "operational_rsvp_counts" },
+      () => scheduleRealtimeRefresh())
+    .on("postgres_changes",
+      { event: "*", schema: "public", table: "operational_hyrox_cycles" },
+      () => scheduleRealtimeRefresh())
+    .on("postgres_changes",
+      { event: "*", schema: "public", table: "operational_hyrox_queue_entries" },
+      () => scheduleRealtimeRefresh())
+    .on("postgres_changes",
+      { event: "*", schema: "public", table: "operational_booking_replacement_requests" },
+      () => scheduleRealtimeRefresh())
+    .on("postgres_changes",
+      { event: "*", schema: "public", table: "operational_booking_replacement_audit" },
+      () => scheduleRealtimeRefresh())
     .subscribe();
   subscription = channel;
   return channel;
@@ -413,16 +753,60 @@ export async function runOperationalRpc(name, args, options = {}) {
   const { data, error } = await supabase.rpc(name, args);
   if (error) throw operationalProblem(error);
   options.applyResult?.(data);
-  try { await refreshOperationalState(); } catch (err) { console.warn("operations refresh after rpc failed", err); }
+  if (!options.skipRefresh) {
+    try { await refreshOperationalState(); } catch (err) { console.warn("operations refresh after rpc failed", err); }
+  }
   return data;
 }
 
+// Weekly venue overrides apply to live sessions too (e.g. the RSVP lunch),
+// not just locally-seeded free events. Read paths merge the override in so
+// every surface sees the current venue.
+function applyLiveVenueOverride(session) {
+  if (!session) return session;
+  const o = liveCache.venueOverrides.get(session.id);
+  if (!o) return session;
+  const out = { ...session };
+  if (o.location) out.location = o.location;
+  if (o.mapsQuery) out.mapsQuery = o.mapsQuery;
+  if (o.meetingLat != null && o.meetingLng != null) {
+    out.meetingLat = o.meetingLat;
+    out.meetingLng = o.meetingLng;
+  }
+  const display = String(out.location || "").trim();
+  const query = String(out.mapsQuery || "").trim();
+  if (display && display.toUpperCase() !== "TBC" && query && query.toUpperCase() !== "TBC") {
+    out.venueTBC = false;
+  }
+  return out;
+}
+
 export function getLiveSession(id) {
-  return liveCache.sessions.get(id) || null;
+  return applyLiveVenueOverride(liveCache.sessions.get(id)) || null;
 }
 
 export function listLiveSessions() {
-  return [...liveCache.sessions.values()];
+  return [...liveCache.sessions.values()].map(applyLiveVenueOverride);
+}
+
+export function listLiveHyroxCycles() {
+  return [...liveCache.hyroxCycles.values()];
+}
+
+export function getLiveHyroxCycle(id) {
+  return liveCache.hyroxCycles.get(id) || null;
+}
+
+export function liveHyroxQueuesForCycle(id) {
+  const rows = liveCache.hyroxQueues.filter((row) => row.cycleId === id);
+  return {
+    weeklyWaitlist: rows
+      .filter((row) => row.kind === "weekly_waitlist")
+      .sort((a, b) => (a.joinedAt - b.joinedAt) || a.id.localeCompare(b.id)),
+    venueSwitches: rows
+      .filter((row) => row.kind === "venue_switch")
+      .sort((a, b) => (a.joinedAt - b.joinedAt) || a.id.localeCompare(b.id)),
+  };
 }
 
 export function liveActivityTemplates() {
@@ -449,14 +833,32 @@ export function livePendingBookings() {
 
 export function liveHeldBookingsForSession(sessionId) {
   return liveCache.bookings.filter(
-    (b) => b.sessionId === sessionId && (b.status === "reserved" || b.status === "confirmed")
+    (b) => b.sessionId === sessionId
+      && (b.status === "reserved" || b.status === "confirmed" || b.status === "attended")
   );
 }
 
 export function liveConfirmedBookingsForSession(sessionId) {
   return liveCache.bookings.filter(
-    (b) => b.sessionId === sessionId && b.status === "confirmed"
+    (b) => b.sessionId === sessionId && (b.status === "confirmed" || b.status === "attended")
   );
+}
+
+export function liveRsvpCountFor(sessionId) {
+  return liveCache.rsvpCounts.has(sessionId)
+    ? liveCache.rsvpCounts.get(sessionId)
+    : null;
+}
+
+export async function liveAttendeeNamesForSession(sessionId) {
+  if (!isLive() || !supabase) return null;
+  const { data, error } = await supabase.rpc("get_operational_attendee_names", {
+    p_session_id: sessionId,
+  });
+  if (error) throw operationalProblem(error);
+  return (data || [])
+    .map((row) => String(row.display_name || "").trim())
+    .filter(Boolean);
 }
 
 export function liveQueueForSession(sessionId) {
@@ -497,9 +899,184 @@ export function liveBookingById(id) {
   return liveCache.bookings.find((b) => b.id === id) || null;
 }
 
+export function liveReplacementRequestForBooking(bookingId) {
+  return liveCache.replacementRequests
+    .filter((request) => request.bookingId === bookingId)
+    .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0))[0] || null;
+}
+
+export function liveReplacementRequestByToken() {
+  // Raw invite tokens are intentionally never cached in memory or localStorage.
+  return null;
+}
+
 export function liveReceiptById(id) {
   return liveCache.receipts.find((r) => r.id === id) || null;
 }
+
+export async function hashReplacementToken(token) {
+  const value = String(token || "");
+  if (!value || !globalThis.crypto?.subtle) {
+    throw new Error("Secure replacement invite hashing is unavailable.");
+  }
+  const bytes = new TextEncoder().encode(value);
+  const digest = await globalThis.crypto.subtle.digest("SHA-256", bytes);
+  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+function replacementExpiryISO(expiresAt) {
+  const timestamp = expiresAt instanceof Date ? expiresAt.getTime() : Number(expiresAt);
+  if (Number.isFinite(timestamp)) return new Date(timestamp).toISOString();
+  const parsed = Date.parse(expiresAt);
+  if (!Number.isFinite(parsed)) throw new Error("Replacement invite expiry is invalid.");
+  return new Date(parsed).toISOString();
+}
+
+export async function liveCreateReplacementRequest(bookingId, tokenHash, expiresAt) {
+  const row = await runOperationalRpc("create_operational_replacement_request", {
+    p_booking_id: bookingId,
+    p_token_hash: tokenHash,
+    p_expires_at: replacementExpiryISO(expiresAt),
+  });
+  return cacheReplacementRequest(row);
+}
+
+export async function liveReplacementInvite(tokenHash) {
+  const row = await runOperationalRpc("get_operational_replacement_invite", {
+    p_token_hash: tokenHash,
+  }, { skipRefresh: true });
+  return buildReplacementRequestRow(row);
+}
+
+export async function liveAcceptReplacement(tokenHash) {
+  const row = await runOperationalRpc("accept_operational_replacement_request", {
+    p_token_hash: tokenHash,
+  });
+  return cacheReplacementRequest(row);
+}
+
+export async function liveDeclineReplacement(tokenHash) {
+  const row = await runOperationalRpc("decline_operational_replacement_request", {
+    p_token_hash: tokenHash,
+  });
+  return cacheReplacementRequest(row);
+}
+
+export async function liveCancelReplacement(requestId) {
+  const row = await runOperationalRpc("cancel_operational_replacement_request", {
+    p_request_id: requestId,
+  });
+  return cacheReplacementRequest(row);
+}
+
+export async function liveListReplacementRequests() {
+  const rows = await runOperationalRpc("list_operational_replacement_requests", {}, { skipRefresh: true });
+  const requests = (rows || []).map(buildReplacementRequestRow).filter(Boolean);
+  liveCache.replacementRequests = requests;
+  return requests;
+}
+
+export async function liveDecideReplacement(requestId, confirm, reason) {
+  const row = await runOperationalRpc("admin_decide_operational_replacement", {
+    p_request_id: requestId,
+    p_confirm: !!confirm,
+    p_reason: String(reason || "").trim() || null,
+  });
+  return cacheReplacementRequest(row);
+}
+
+export async function liveSweepHyroxDeadlines({ refresh = true, now = Date.now() } = {}) {
+  try {
+    const pNow = now instanceof Date ? now.toISOString() : new Date(now).toISOString();
+    await runOperationalRpc(
+      "send_hyrox_member_payment_reminders",
+      { p_now: pNow },
+      { skipRefresh: true }
+    );
+    const result = await runOperationalRpc(
+      "sweep_hyrox_cycle_deadlines",
+      { p_now: pNow },
+      { skipRefresh: true }
+    );
+    await runOperationalRpc(
+      "send_hyrox_collector_payment_reminder",
+      { p_now: pNow },
+      { skipRefresh: true }
+    );
+    await runOperationalRpc(
+      "send_hyrox_venue_reminders",
+      { p_now: pNow },
+      { skipRefresh: true }
+    );
+    if (refresh) await refreshOperationalState();
+    return result;
+  } catch (error) {
+    liveCache.error = operationalProblem(error);
+    notifyListeners();
+    throw liveCache.error;
+  }
+}
+
+export const liveReserveHyroxCycle = (cycleId, preference, fallbackAcknowledged) =>
+  runOperationalRpc("reserve_hyrox_cycle", {
+    p_cycle_id: cycleId,
+    p_preference: preference,
+    p_fallback_acknowledged: fallbackAcknowledged,
+  });
+
+export const liveJoinHyroxCycleWaitlist = (cycleId, preference, fallbackAcknowledged) =>
+  runOperationalRpc("join_hyrox_cycle_waitlist", {
+    p_cycle_id: cycleId,
+    p_preference: preference,
+    p_fallback_acknowledged: fallbackAcknowledged,
+  });
+
+export const liveLeaveHyroxCycleQueue = (entryId) =>
+  runOperationalRpc("leave_hyrox_cycle_queue", { p_entry_id: entryId });
+
+export const liveRejectHyroxPayment = (bookingId, reason) =>
+  runOperationalRpc("reject_hyrox_cycle_payment", {
+    p_booking_id: bookingId,
+    p_reason: reason,
+  });
+
+export async function liveSetOperationalAttendance(bookingId, arrived) {
+  await runOperationalRpc("set_operational_attendance", {
+    p_booking_id: bookingId,
+    p_arrived: !!arrived,
+  });
+  return liveBookingById(bookingId);
+}
+
+export const liveScheduleHyroxCycle = (cycleId) =>
+  runOperationalRpc("schedule_hyrox_cycle", { p_cycle_id: cycleId });
+
+export const liveFinalizeHyroxVenuePlan = (cycleId) =>
+  runOperationalRpc("finalize_hyrox_venue_plan", { p_cycle_id: cycleId });
+
+export const liveSelectHyroxVenue = (bookingId, sessionId) =>
+  runOperationalRpc("select_hyrox_cycle_venue", {
+    p_booking_id: bookingId,
+    p_target_session_id: sessionId,
+  });
+
+export const liveJoinHyroxVenueSwitchQueue = (bookingId, sessionId) =>
+  runOperationalRpc("join_hyrox_venue_switch_queue", {
+    p_booking_id: bookingId,
+    p_target_session_id: sessionId,
+  });
+
+export const liveLeaveHyroxVenueSwitchQueue = (entryId) =>
+  runOperationalRpc("leave_hyrox_venue_switch_queue", { p_entry_id: entryId });
+
+export const liveCloseHyroxVenueAllocation = (cycleId) =>
+  runOperationalRpc("close_hyrox_venue_allocation", { p_cycle_id: cycleId });
+
+export const liveCancelHyroxCycle = (cycleId, reason) =>
+  runOperationalRpc("cancel_hyrox_cycle", {
+    p_cycle_id: cycleId,
+    p_reason: reason,
+  });
 
 export async function liveReserveSession(sessionId) {
   const row = await runOperationalRpc("reserve_operational_session", { p_session_id: sessionId });
@@ -511,6 +1088,59 @@ export async function liveCancelSession(sessionId, reason) {
     p_session_id: sessionId,
     p_reason: reason,
   });
+}
+
+export async function liveReopenRsvp(sessionId) {
+  return runOperationalRpc("reopen_operational_rsvp", {
+    p_session_id: sessionId,
+  });
+}
+
+// One-off events: an inactive template + a single session row, created and
+// removed atomically server-side. Deletion is only allowed while the event
+// has no active bookings; afterwards admins cancel instead.
+export async function liveCreateEvent(payload) {
+  const row = await runOperationalRpc("create_operational_event", {
+    p_name: payload.name,
+    p_session_date: payload.dateISO,
+    p_start_time: payload.time,
+    p_duration_minutes: payload.durationMin,
+    p_venue: payload.location,
+    p_maps_query: payload.mapsQuery || null,
+    p_category: payload.category || "Other",
+    p_price_hkd: payload.price ?? 0,
+    p_capacity: Number(payload.price ?? 0) === 0 ? null : (payload.capacity ?? 20),
+    p_requires_rsvp: Number(payload.price ?? 0) === 0,
+  });
+  return row;
+}
+
+export async function liveDeleteEvent(sessionId) {
+  return runOperationalRpc("delete_operational_event", {
+    p_session_id: sessionId,
+  });
+}
+
+// RSVP withdraw is member self-service on price-0 sessions only.
+export async function liveWithdrawRsvp(bookingId) {
+  return runOperationalRpc("withdraw_operational_rsvp", {
+    p_booking_id: bookingId,
+  });
+}
+
+export async function liveReleaseReservation(bookingId) {
+  const row = await runOperationalRpc("release_operational_reservation", {
+    p_booking_id: bookingId,
+  }, {
+    applyResult(result) {
+      if (!result?.id) return;
+      const booking = buildBookingRow(result);
+      const index = liveCache.bookings.findIndex((item) => item.id === booking.id);
+      if (index >= 0) liveCache.bookings[index] = booking;
+      else liveCache.bookings.push(booking);
+    },
+  });
+  return buildBookingRow(row);
 }
 
 export async function liveMarkBookingPaid(bookingId, method, reference) {

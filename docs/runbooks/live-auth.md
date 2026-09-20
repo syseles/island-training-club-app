@@ -5,27 +5,33 @@ identity, notifications, Giving, Admin, and approval workflows.
 
 ## Candidate ownership and surfaces
 
-- **Supabase owns:** identity, roles, applications, notifications, Giving
-  campaigns, donor profiles, and the full HYROX operational workflow:
-  activity templates, weekly sessions, bookings, queue entries, receipts,
-  collector duty, payout profiles, and the gym finalization record. All
-  operational mutations route through SECURITY DEFINER RPCs and are
-  synchronized across devices via Realtime.
-- **`localStorage` owns:** the device-local Community prototype interactions
-  (prayer requests, draft applications) and the UUID-keyed collector payout
-  profile that the on-duty admin edits locally. Operations state is never
-  stored in `localStorage` once live mode is enabled.
+- **Supabase owns in configured live mode:** identity, roles, applications,
+  notifications, Giving campaigns, donor profiles, and the full operational
+  workflow: activity templates, dated sessions, paid/RSVP bookings, queue
+  entries, receipts, collector duty, payout profiles, and gym finalization.
+  Browser mutations route through scoped SECURITY DEFINER RPCs. Realtime
+  invalidates authorized rows and identity-free RSVP totals; an assigned
+  collector's foreign payout row is refreshed through its narrow RPC on
+  Payment route entry and tab restore because payout-table RLS can suppress
+  that Realtime event.
+- **`localStorage` owns:** local-mode prototype state plus device-local
+  Community interactions and application drafts. Live payout saves may cache
+  the UUID-keyed handoff details on that device only after Supabase settles;
+  forced operational hydration remains authoritative.
 - **Navigation:** Notification bell plus a signed-in-only Giving tab.
-- **Admin tabs:** Approvals, Members, Activities, Giving, and HYROX.
-  Each Admin route exposes exactly one active tab.
-- **State compatibility:** the current local state is v14; v9, v10, v11, v12,
-  and v13 persisted snapshots are accepted and migrated while preserving
-  genuine records.
+- **Admin tabs:** Approvals, Members, Activities, Giving, and Payments.
+  Dated controls appear under **Activities → Weekly Event Controls**, split
+  into Free & RSVP Events and Paid Sessions. Each Admin route exposes exactly
+  one active tab.
+- **State compatibility:** the current local state is v16; v9 through v15
+  persisted snapshots are accepted and migrated while preserving genuine
+  records.
 
 Pending and declined profiles can browse public surfaces but cannot render or
 invoke Payment reservation, queue, or pay controls, and cannot use Giving
-transfer controls. Signing out clears the Supabase session but preserves the
-UUID-owned device-local Payment records.
+transfer controls. Signing out clears the Supabase session while leaving only
+prototype-local drafts/interactions and any post-settlement payout handoff
+cache on the device; authoritative live operational rows remain in Supabase.
 
 ## Static Vercel configuration
 
@@ -51,8 +57,8 @@ Use this safe deployment process:
 3. Edit only those two assignments in `app/index.html` with the
    **deployment-specific values**. An anon key is public by design; RLS is the
    security boundary. Do not duplicate the values in this runbook.
-4. Configure every exact OAuth redirect URL as described below, including the
-   deployed `/app/` path.
+4. Configure every exact authentication redirect URL as described below,
+   including the deployed `/app/` path.
 5. Serve the candidate locally, inspect `window.SUPABASE_URL` in the browser,
    sign in to the intended project, and run the smoke suites before committing
    and deploying that exact revision.
@@ -64,9 +70,10 @@ Use this safe deployment process:
 For localStorage-only operation, set both assignments to empty strings in a
 local, uncommitted copy.
 
-## Google OAuth redirect URL
+## Authentication redirect URLs
 
-The prototype requests the callback with:
+Google OAuth and email magic links request the callback with the exact deployed
+origin and pathname:
 
 ```js
 `${location.origin}${location.pathname}`
@@ -75,12 +82,101 @@ The prototype requests the callback with:
 In Supabase Dashboard → Authentication → URL Configuration → Redirect URLs,
 add the exact deployed Testing candidate URL ending in `/app/`. Preview and
 production domains are different origins, so add every deployed URL that will
-be tested. The callback must remain the exact origin plus deployed pathname;
-a missing or mismatched trailing `/app/` path causes Google to return to an
-unapproved URL.
+be tested. A missing or mismatched trailing `/app/` path causes an OAuth or
+magic-link callback to return to an unapproved URL.
 
-For local OAuth testing, also add `http://127.0.0.1:4173/app/` (and the exact
-`localhost` form separately if you use it).
+For local authentication testing, also add `http://127.0.0.1:4173/app/` (and
+the exact `localhost` form separately if you use it).
+
+## Email magic links and custom SMTP
+
+Google remains the primary sign-in button. Email magic links are the secondary
+path for members without Google accounts. Supabase Auth creates and verifies
+the token. Until ITC owns a domain, Gmail SMTP delivers it from the approved
+interim operational account.
+
+Interim launch configuration:
+
+1. Enable the Email provider in Supabase Authentication settings. Leave new
+   user creation enabled: the database trigger creates a `pending` profile,
+   never an approved member.
+2. Use sender name **Island Training Club** and sender email
+   `itc.admin.ops@gmail.com`. This shared mailbox also handles approved admin
+   operations, payments, and enquiries; its wider blast radius is accepted
+   temporarily until ITC owns a domain.
+3. Enable two-step verification on the Google account and generate a dedicated
+   Google App Password labelled for Supabase SMTP. Do not use the account's
+   ordinary Google password.
+4. In Supabase custom SMTP settings, configure:
+   - host: `smtp.gmail.com`;
+   - port: `465` with SSL or `587` with STARTTLS, according to the dashboard;
+   - username/sender email: `itc.admin.ops@gmail.com`;
+   - password: the dedicated Google App Password;
+   - sender name: `Island Training Club`.
+5. Keep the App Password only in Supabase project settings. Never add it to
+   `app/index.html`, Git, browser storage, client JavaScript, screenshots, or
+   this runbook. Preserve Google recovery methods and backup codes separately.
+6. Add the exact local, preview, and production `/app/` URLs to Supabase's
+   redirect allowlist. Magic links use the same exact callback path as Google.
+7. Set the Email OTP expiry to exactly `900` seconds so the configured lifetime
+   matches the 15-minute security statement in the branded templates. Configure
+   Supabase request throttling as well. The browser already suppresses duplicate
+   in-flight submissions; Gmail/Supabase limits remain the authoritative abuse
+   control.
+8. Use the account only for its approved low-volume operations and
+   authentication. Do not use it for newsletters or bulk marketing. Monitor
+   Gmail quota, throttling, bounces, and delivery failures; free Gmail SMTP is
+   not a transactional-delivery guarantee.
+
+### Branded template deployment
+
+The email-safe Night Circuit bodies, exact subjects, and acceptance checklist
+are in `supabase/email-templates/README.md`. The two templates deliberately
+have different messages:
+
+- **Confirm signup** explains that email confirmation continues an application
+  and does not grant membership approval.
+- **Magic Link** provides secure returning-account access without a password.
+
+Both templates load the optimized approved logo from an immutable public GitHub
+asset URL pinned in their HTML. This avoids depending on an unpromoted Vercel
+build. Verify the URL returns `image/png` without authentication before pasting
+the templates into Supabase. Move the asset to an ITC-owned public host when one
+is available. Keep `{{ .ConfirmationURL }}` unchanged.
+
+When ITC owns a domain, replace this interim sender with a dedicated domain
+address through a transactional provider and configure SPF, DKIM, and DMARC.
+
+The browser always responds with generic copy — **Check your inbox** on success
+or a generic retry message on failure — and never says whether an address was
+already registered. Phase one supports opening the link on the same device
+that requested it. If a link has expired or was already used, return to Account
+and request a new one. Cross-device callback behavior must be recorded during
+deployment acceptance; a numeric email-code fallback is not implemented.
+
+Before production enablement, test identity continuity against the actual
+Supabase project in both directions:
+
+1. Sign in with Google, record the `auth.users.id`, role, bookings, and receipts,
+   then request a magic link for the same exact verified email. All values must
+   remain attached to the original UUID.
+2. Create a magic-link identity first, record its UUID, then sign in with Google
+   using the same exact verified email. The UUID must remain unchanged.
+
+A Gmail alias, `+tag`, work address, or other different address is a separate
+identity. Do not normalize or merge it in browser code. If the same exact email
+produces a second UUID in either acceptance test, block rollout and correct the
+Supabase identity-linking/provider configuration before continuing.
+
+Production acceptance also covers branded inbox delivery, spam placement,
+expired and reused links, rate limits, and current Safari/iOS, Chrome/Android,
+and desktop Chrome. Zero-cost Gmail SMTP is an interim expectation, not a
+permanent availability or delivery guarantee.
+
+Rollback is configuration-first: disable the Supabase Email provider, then
+remove the email form in a follow-up deploy. Google OAuth remains available.
+Do not delete identities, profiles, applications, bookings, or receipts during
+rollback.
 
 ## Local development
 
@@ -96,6 +192,666 @@ To use live mode locally, edit `app/index.html`'s inline `<script>` block to set
 `window.SUPABASE_URL` and `window.SUPABASE_ANON_KEY` to your dev Supabase
 project's values. Refresh the page after changes. Manage live identities in
 Supabase Admin; this cleanup does not change the schema or delete live users.
+
+## Free-event RSVP cancellation: deployment and acceptance
+
+Migration `20260920000001_free_event_rsvp_cancellation.sql` makes `wnt`, `run`,
+and `water` authoritative recurring free sessions in live mode. It also makes
+zero-price one-offs explicit uncapped RSVP sessions and adds RSVP-aware
+cancellation, reopening, and targeted change notifications. RSVP remains
+optional: these events have no payment, checkout, capacity, waitlist, or
+attendance gate, and walk-ins remain welcome.
+
+Approved members may use **I’m coming**, **Can’t make it**, and the member-only
+**Who’s coming** roster with existing private avatar rules. Visitors and
+pending/declined profiles may see public event and cancellation information but
+not attendee identities or participation controls. Admin and Super Admin see
+the expected count and can change venue/time, cancel one dated occurrence with
+a required reason, or reopen it before its Hong Kong start. Active RSVPs are
+cancelled and never deferred. Reopening does not restore cancelled RSVPs;
+members must choose **I’m coming** again.
+
+Cancellation, reopening, venue, and time notifications are in-app only. Web
+Push, push subscriptions, service workers, phone notification sounds, email,
+and SMS are deferred. This feature does not require a new Edge Function
+deployment. Keep the exact Testing frontend origin in the existing
+`ITC_APP_ORIGINS` allowlist where profile-photo functions are exercised; do not
+replace it with a wildcard.
+
+### Required disposable integration gate
+
+Before any production change, the reset-safe disposable SQL integration is a
+**required release gate**. Run it only when both
+`ITC_FREE_EVENT_TEST_DATABASE_URL` is an explicitly disposable, empty,
+reset-safe URL and `ITC_ALLOW_DATABASE_RESET=1` is present. The operational
+wrapper checks the target before applying the ordered migration chain; the
+focused integration then runs transactional RSVP, withdrawal, cancel, reopen,
+venue/time notification, role, grant, and no-deferral assertions and rolls its
+fixtures back:
+
+```bash
+ITC_OPERATIONS_TEST_DATABASE_URL="$ITC_FREE_EVENT_TEST_DATABASE_URL" \
+ITC_ALLOW_DATABASE_RESET="$ITC_ALLOW_DATABASE_RESET" \
+  bash supabase/tests/verify_operational_backend.sh
+
+psql "$ITC_FREE_EVENT_TEST_DATABASE_URL" -X -P pager=off \
+  -v ON_ERROR_STOP=1 \
+  -f supabase/tests/free_event_rsvp_cancellation_integration.sql
+```
+
+Never connect either command to production, staging, a shared database, or a
+database containing user/application data. If either required variable is
+absent, do not connect: record this gate as **unexecuted** and block the release.
+It is not optional and must never be reported as passing without its output.
+
+Before live acceptance, also run the static and headless regression suites from
+the repository root:
+
+```bash
+node app/avatar-smoke.mjs
+node app/smoke.mjs
+node app/live-auth-smoke.mjs
+node app/replacement-operations-smoke.mjs
+node app/rsvp-whos-coming-smoke.mjs
+bash supabase/tests/free_event_rsvp_cancellation_safety.sh
+```
+
+### Production migration review and application
+
+The production project has known migration-history drift. Do not use `db push`,
+`--include-all`, or any command that could replay the local migration chain. Do
+not mark unverified historical versions as applied. Confirm the target project,
+backup/PITR status, reviewed commit, and disposable-gate evidence first.
+
+The following command forms were checked against Supabase CLI 2.117.0 help.
+Establish the project link once, verify the project shown by the link operation,
+and use only the supported `--linked` form after that; do not combine
+`--linked` with `--project-ref`:
+
+```bash
+export SUPABASE_PROJECT_REF="<confirmed-project-ref>"
+supabase link --project-ref "$SUPABASE_PROJECT_REF"
+supabase migration list --linked
+```
+
+Stop if the project is wrong, the migration list is unexpected, or the remote
+schema does not contain the operational backend required by this migration.
+Apply **only** the reviewed contents of
+`supabase/migrations/20260920000001_free_event_rsvp_cancellation.sql`, preferably
+through the trusted Supabase SQL Editor. The explicitly approved alternative is
+a trusted workstation with a production URL loaded ephemerally from the secret
+manager:
+
+```bash
+psql "$ITC_PRODUCTION_DATABASE_URL" -v ON_ERROR_STOP=1 -f supabase/migrations/20260920000001_free_event_rsvp_cancellation.sql
+```
+
+Never print, log, paste into shell history, or store the production database
+URL; disable shell tracing and unset the variable when finished. Command success
+alone is insufficient. Run every read-only production verification below. Only
+when all rows and invariants pass, record this one migration version and re-list
+history:
+
+```bash
+supabase migration repair --status applied 20260920000001 --linked
+supabase migration list --linked
+```
+
+Do not repair any older version as part of this release. Reconcile historical
+drift separately through a reviewed schema audit.
+
+### Read-only production verification before any frontend
+
+Run these statements in trusted SQL after applying the backend migration and
+before deploying this frontend revision anywhere. They are read-only and must
+not be replaced with browser-table mutations.
+
+First verify the recurring template contract and generated occurrence window.
+The first query must return exactly `wnt`, `run`, and `water`, each with
+`price_hkd = 0`, `capacity is null`, `requires_rsvp = true`, and weekday
+`3`, `1`, and `2` respectively:
+
+```sql
+select activity_id, weekday, start_time, price_hkd, capacity, requires_rsvp,
+       active
+  from public.operational_activity_templates
+ where activity_id in ('wnt', 'run', 'water')
+ order by activity_id;
+
+select s.id, s.activity_id, s.session_date, s.start_time, s.price_hkd,
+       s.capacity, s.cancelled_at, s.cancel_reason
+  from public.operational_sessions s
+ where s.activity_id in ('wnt', 'run', 'water')
+   and s.session_date >= (now() at time zone 'Asia/Hong_Kong')::date
+   and s.session_date < (now() at time zone 'Asia/Hong_Kong')::date + 112
+ order by s.session_date, s.activity_id;
+
+select s.activity_id, count(*) as invalid_occurrences
+  from public.operational_sessions s
+  join public.operational_activity_templates t using (activity_id)
+ where s.activity_id in ('wnt', 'run', 'water')
+   and s.session_date >= (now() at time zone 'Asia/Hong_Kong')::date
+   and (extract(isodow from s.session_date)::integer <> t.weekday
+        or s.price_hkd <> 0 or s.capacity is not null
+        or not t.requires_rsvp)
+ group by s.activity_id;
+
+select activity_id, price_hkd, capacity, requires_rsvp
+  from public.operational_activity_templates
+ where activity_id like 'event-%' and price_hkd = 0
+ order by activity_id;
+```
+
+The occurrence query must show one dated row per template weekday throughout
+the generated window; the invalid-occurrences query must return no rows. Every
+zero-price `event-%` result must be RSVP-enabled and uncapped.
+
+Next verify the exact deployed RPC signatures, security-definer setting, fixed
+`search_path`, and execute privileges. Every returned `ok` value must be `true`;
+`anon` may execute only the session-window generator, while `authenticated` may
+execute every listed RPC:
+
+```sql
+with expected(signature, anon_execute, authenticated_execute) as (
+  values
+    ('public.ensure_operational_sessions(date,integer)', true, true),
+    ('public.create_operational_event(text,date,time without time zone,integer,text,text,text,integer,integer,boolean)', false, true),
+    ('public.reserve_operational_session(text)', false, true),
+    ('public.get_operational_attendee_names(text)', false, true),
+    ('public.join_operational_queue(text,text)', false, true),
+    ('public.leave_operational_queue(uuid)', false, true),
+    ('public.withdraw_operational_rsvp(uuid)', false, true),
+    ('public.cancel_operational_session(text,text)', false, true),
+    ('public.reopen_operational_rsvp(text)', false, true),
+    ('public.set_session_venue(text,text,text,boolean)', false, true),
+    ('public.set_session_venue(text,text,text,boolean,double precision,double precision)', false, true),
+    ('public.set_operational_session_time(text,time without time zone)', false, true)
+), checks as (
+  select e.signature,
+         p.oid is not null as function_exists,
+         coalesce(p.prosecdef, false) as security_definer,
+         coalesce('search_path=public' = any(p.proconfig), false) as fixed_search_path,
+         coalesce(has_function_privilege('anon', p.oid, 'EXECUTE'), false)
+           as anon_execute,
+         coalesce(has_function_privilege('authenticated', p.oid, 'EXECUTE'), false)
+           as authenticated_execute,
+         coalesce(
+           p.oid is not null
+             and p.prosecdef
+             and 'search_path=public' = any(p.proconfig)
+             and has_function_privilege('anon', p.oid, 'EXECUTE') = e.anon_execute
+             and has_function_privilege('authenticated', p.oid, 'EXECUTE') = e.authenticated_execute,
+           false
+         ) as ok
+    from expected e
+    left join pg_proc p on p.oid = to_regprocedure(e.signature)
+)
+select * from checks order by signature;
+```
+
+Finally confirm browser roles have no direct mutation privilege on the feature's
+authoritative tables. This query must return no rows:
+
+```sql
+with checked(role_name, table_name) as (
+  select role_name, table_name
+    from (values ('anon'), ('authenticated')) roles(role_name)
+   cross join (values
+     ('operational_activity_templates'),
+     ('operational_sessions'),
+     ('operational_bookings'),
+     ('operational_queue_entries'),
+     ('operational_rsvp_counts'),
+     ('operational_session_venue_overrides'),
+     ('notifications')
+   ) tables(table_name)
+)
+select role_name, table_name
+  from checked
+ where has_table_privilege(
+   role_name,
+   format('public.%I', table_name),
+   'INSERT,UPDATE,DELETE'
+ );
+```
+
+### Staged rollout and production promotion
+
+1. **Apply the backend migration** only after the required disposable gate, using
+   the reviewed SQL-only path above. No frontend deployment may precede it.
+2. **Run read-only production verification** for templates, generated sessions,
+   exact RPC signatures, security-definer settings, execute grants, and direct
+   table privileges. Repair only migration history version `20260920000001`
+   after these checks pass.
+3. **Deploy the controlled Testing/preview frontend** only after steps 1–2. Point
+   it at the same migrated project, restrict access to the named acceptance
+   testers, and do not promote that revision to the production frontend URL.
+   Verify the exact Testing origin remains configured where `ITC_APP_ORIGINS`
+   is used; no new Edge Function deployment is required.
+4. **Complete authenticated RSVP/cancel/reopen/venue/time/notification acceptance**
+   with the checklist and read-only notification query below. This controlled
+   acceptance must pass before production frontend promotion.
+5. **Promote the production frontend** only after the disposable gate, backend
+   verification, preview acceptance, and notification recipient/non-recipient
+   evidence all pass. A failed or unexecuted gate blocks promotion.
+
+### Authenticated browser and mobile acceptance
+
+Use distinct approved member, withdrawn member, unrelated approved member,
+Admin, pending/declined, and signed-out sessions. Exercise current Safari/iOS,
+Chrome/Android, and desktop Chrome; include 375 px portrait and a narrow
+landscape viewport.
+
+1. As the approved member, open future Wednesday Night Training, Run Club,
+   Swimming, and a free one-off. Confirm each remains labelled **Free**, says
+   RSVP is optional/walk-ins are welcome, has no price, checkout, capacity, or
+   waitlist, and remains usable without an RSVP.
+2. Tap **I’m coming**. Confirm the going state and expected count update once,
+   then open **Who’s coming** and verify the member's name and private avatar
+   (or initials fallback). Confirm signed-out and pending/declined sessions see
+   neither the action nor roster identities.
+3. In the distinct withdrawn-member session, tap **I’m coming** and then
+   **Can’t make it** before the Hong Kong start. Confirm that member leaves the
+   count/roster and receives no later change notification. Confirm RSVP and
+   withdrawal controls close at start time and duplicate taps do not create
+   duplicate rows.
+4. Have the acting Admin RSVP too, then verify each dated card's
+   expected-attendee count and avatar roster. As that Admin, cancel one
+   occurrence with a trimmed required reason. Confirm Schedule and
+   Activity Details show **Cancelled** plus that reason, its active RSVP is
+   cancelled without a deferral/future booking, and the recurring template and
+   adjacent future occurrence remain active.
+5. Before start, choose **Reopen event**. Confirm the previous bookings remain
+   cancelled and the count remains zero. Have the approved member and acting
+   Admin each RSVP afresh and confirm each gets one new active booking. Confirm
+   blank cancellation reasons and post-start reopening fail without losing the
+   current route or form state.
+6. With those active RSVPs, have the same acting Admin change venue and then
+   start time. Confirm the effective values update on Schedule and Activity
+   Details. Repeat each unchanged save and confirm no duplicate notification is
+   created.
+7. For each cancellation, reopening, venue change, and time change, inspect the
+   notification bell and trusted notification rows. The applicable active or
+   occurrence-cancelled RSVP member must receive exactly one linked in-app
+   notification. The signed-out visitor, pending/declined profile, member who
+   withdrew before the change, and unrelated approved member must receive none.
+   Confirm existing Admin audit notifications still reach non-actor Admins
+   where applicable and the acting Admin is not duplicated when also RSVP'd.
+8. Verify one-occurrence isolation explicitly: cancellation, reopening, venue,
+   time, count, and roster changes for the test date must not alter the next
+   recurring date. Confirm a walk-in can still attend and Admin attendance does
+   not treat RSVP as an admission requirement.
+9. On mobile, verify tap targets, roster/avatar rows, cancellation reason form,
+   reopen control, notifications, loading/disabled states, error copy, focus
+   order, back navigation, narrow-layout wrapping, and portrait/landscape
+   scrolling without clipping or horizontal overflow.
+
+### Read-only notification acceptance evidence
+
+Immediately before the Admin cancellation, record the acceptance start
+timestamp; immediately after the final time-change notification commits, record
+the acceptance finish timestamp. After the controlled acceptance, replace the
+six UUIDs, exact session ID, and both timestamps below with those recorded
+fixture values. Run all three queries through trusted read-only production SQL
+before promotion. The UUID placeholders are valid but deliberately cannot pass
+the positive checks; do not edit expected counts. Every `ok` value and every
+boolean in the state query must be `true`, and the final anti-join must return
+zero rows.
+
+The first query proves exact recipient and non-recipient notification behavior,
+including no duplicate notification for the acting Admin who also RSVP'd:
+
+```sql
+with params as (
+  select 'REPLACE_WITH_SESSION_ID'::text as session_id,
+         '2099-01-01 00:00:00+00'::timestamptz as acceptance_started_at,
+         '2099-01-01 01:00:00+00'::timestamptz as acceptance_finished_at
+), cohorts(profile_id, cohort, expected_count) as (
+  values
+    ('00000000-0000-0000-0000-000000000001'::uuid, 'active member', 1),
+    ('00000000-0000-0000-0000-000000000002'::uuid, 'acting RSVP Admin', 1),
+    ('00000000-0000-0000-0000-000000000003'::uuid, 'withdrawn member', 0),
+    ('00000000-0000-0000-0000-000000000004'::uuid, 'unrelated member', 0),
+    ('00000000-0000-0000-0000-000000000005'::uuid, 'pending profile', 0),
+    ('00000000-0000-0000-0000-000000000006'::uuid, 'declined profile', 0)
+), kinds(kind) as (
+  values
+    ('operational_session_cancelled'),
+    ('operational_rsvp_reopened'),
+    ('operational_session_venue_updated'),
+    ('operational_session_time_updated')
+), expected as (
+  select c.profile_id, c.cohort, k.kind, c.expected_count
+    from cohorts c cross join kinds k
+), observed as (
+  select n.profile_id, n.kind, count(*)::integer as actual_count
+    from public.notifications n
+    cross join params p
+   where n.destination = '#/activity/' || p.session_id
+     and n.created_at >= p.acceptance_started_at
+     and n.created_at < p.acceptance_finished_at
+     and n.kind in (select kind from kinds)
+   group by n.profile_id, n.kind
+)
+select e.cohort, e.kind, e.expected_count,
+       coalesce(o.actual_count, 0) as actual_count,
+       coalesce(o.actual_count, 0) = e.expected_count as ok
+  from expected e
+  left join observed o using (profile_id, kind)
+ order by e.cohort, e.kind;
+```
+
+The second query proves reopening preserved the occurrence-cancelled RSVP
+history, produced one fresh active RSVP for each positive cohort, and never
+entered paid deferral:
+
+```sql
+with params as (
+  select 'REPLACE_WITH_SESSION_ID'::text as session_id,
+         '00000000-0000-0000-0000-000000000001'::uuid as active_member_id,
+         '00000000-0000-0000-0000-000000000002'::uuid as acting_admin_id
+)
+select count(*) filter (
+         where b.profile_id = p.active_member_id
+           and b.status = 'cancelled'
+           and b.cancellation_source = 'session'
+       ) >= 1 as active_member_cancelled_history,
+       count(*) filter (
+         where b.profile_id = p.acting_admin_id
+           and b.status = 'cancelled'
+           and b.cancellation_source = 'session'
+       ) >= 1 as acting_admin_cancelled_history,
+       count(*) filter (
+         where b.profile_id = p.active_member_id and b.status = 'confirmed'
+       ) = 1 as active_member_one_fresh_rsvp,
+       count(*) filter (
+         where b.profile_id = p.acting_admin_id and b.status = 'confirmed'
+       ) = 1 as acting_admin_one_fresh_rsvp,
+       count(*) filter (where b.status = 'deferred') = 0 as no_paid_deferral,
+       bool_and(s.cancelled_at is null) as occurrence_is_reopened
+  from params p
+  join public.operational_sessions s on s.id = p.session_id
+  left join public.operational_bookings b on b.session_id = s.id
+ group by p.active_member_id, p.acting_admin_id;
+```
+
+The third query is the observed-led safety check that the cohort-led first query
+cannot provide. Its expected set includes the two fresh RSVP confirmations that
+occur inside the bounded window. Before running it, add one explicit
+`operational_session_venue_updated` pair for every non-acting Admin or Super
+Admin who is expected to receive the existing venue-audit fan-out. Do not add
+any other profile merely to make the output empty.
+
+**Unexpected notification recipients/kinds:** this query must return zero rows
+before production promotion. Any row is an unexpected `(profile_id, kind)` or a
+missing expected-set entry that must be investigated. Because it uses the exact
+dated-session destination and the recorded half-open acceptance window, older
+notifications for this session and notifications for other sessions cannot
+create false positives.
+
+```sql
+with params as (
+  select 'REPLACE_WITH_SESSION_ID'::text as session_id,
+         '2099-01-01 00:00:00+00'::timestamptz as acceptance_started_at,
+         '2099-01-01 01:00:00+00'::timestamptz as acceptance_finished_at
+), expected_recipient_kinds(profile_id, kind) as (
+  values
+    ('00000000-0000-0000-0000-000000000001'::uuid, 'operational_session_cancelled'),
+    ('00000000-0000-0000-0000-000000000002'::uuid, 'operational_session_cancelled'),
+    ('00000000-0000-0000-0000-000000000001'::uuid, 'operational_rsvp_reopened'),
+    ('00000000-0000-0000-0000-000000000002'::uuid, 'operational_rsvp_reopened'),
+    ('00000000-0000-0000-0000-000000000001'::uuid, 'operational_rsvp_confirmed'),
+    ('00000000-0000-0000-0000-000000000002'::uuid, 'operational_rsvp_confirmed'),
+    ('00000000-0000-0000-0000-000000000001'::uuid, 'operational_session_venue_updated'),
+    ('00000000-0000-0000-0000-000000000002'::uuid, 'operational_session_venue_updated'),
+    -- Add each expected non-acting Admin venue-audit pair here.
+    ('00000000-0000-0000-0000-000000000001'::uuid, 'operational_session_time_updated'),
+    ('00000000-0000-0000-0000-000000000002'::uuid, 'operational_session_time_updated')
+), observed as (
+  select n.profile_id, n.kind, count(*)::integer as actual_count
+    from public.notifications n
+    cross join params p
+   where n.destination = '#/activity/' || p.session_id
+     and n.created_at >= p.acceptance_started_at
+     and n.created_at < p.acceptance_finished_at
+   group by n.profile_id, n.kind
+)
+select o.profile_id, o.kind, o.actual_count
+  from observed o
+  left join expected_recipient_kinds e using (profile_id, kind)
+ where e.profile_id is null
+ order by o.profile_id, o.kind;
+```
+
+Attach all query output and authenticated screenshots to the release record.
+Only then is notification acceptance complete and production frontend promotion
+permitted.
+
+### Rollback
+
+Rollback is access-first and preserves evidence:
+
+1. Deploy a frontend revision that hides/disables member RSVP/withdraw/roster
+   controls and Admin count/cancel/reopen/change controls. Verify browsers no
+   longer invoke the new RPC paths.
+2. Only after access is removed, create and review a forward rollback migration
+   that restores/replaces database functions if required. Do not edit or delete
+   the applied migration file, and do not blindly replay migration history.
+3. Never delete `operational_bookings.cancelled_at`, `cancellation_source`, RSVP
+   rows, notification rows, or other booking/audit history. Leave authoritative
+   session and booking evidence in place while retention and recovery are
+   decided.
+4. Re-run the smoke and SQL safety suites, verify paid/HYROX behavior, and
+   retain an operator record of the affected occurrence IDs and rollback
+   revision.
+
+## Profile photos: deployment, acceptance, and rollback
+
+Profile photos are a live-Supabase feature. Local mode always renders initials:
+it does not upload, persist, or place image bytes/base64 data in `localStorage`.
+Approved members, Admins, and Super Admins may manage photos. Public, pending,
+and declined viewers cannot resolve other members' photos.
+
+### Pre-deployment checks and secrets
+
+1. Select the intended Supabase project and confirm its backup/point-in-time
+   recovery status. Do not use a production database for the destructive test
+   harness. Set and visibly verify the public project reference, then inspect
+   both local and remote migration history before any write:
+
+   ```bash
+   export SUPABASE_PROJECT_REF="<confirmed-project-ref>"
+   supabase projects list
+   supabase migration list --project-ref "$SUPABASE_PROJECT_REF"
+   supabase db push --dry-run --project-ref "$SUPABASE_PROJECT_REF"
+   ```
+
+   `supabase/config.toml` is versioned so the CLI discovers local migrations
+   and each function's shared `supabase/functions/deno.json` import map. If the
+   dry run reports no migrations while local files exist, stop: the CLI is not
+   reading the repository configuration.
+2. In Supabase Dashboard → Edge Functions → Secrets, confirm the managed
+   `SUPABASE_SERVICE_ROLE_KEY` is available to functions. Never copy its value
+   into the browser, Vercel, logs, screenshots, this runbook, or any repository
+   file.
+3. Configure `ITC_APP_ORIGINS` as a comma-separated list of exact allowed
+   origins, with no paths and no wildcard. Include each deployed preview/test
+   origin that is intentionally supported and, only when needed, the exact
+   local origin such as `http://127.0.0.1:4173`. Use the Dashboard secret editor
+   or a placeholder command locally; never commit the real list:
+
+   ```bash
+   supabase secrets set ITC_APP_ORIGINS="<exact-origin-1>,<exact-origin-2>"
+   supabase secrets list
+   ```
+
+4. Confirm the deployed frontend contains only the browser-safe Supabase URL
+   and anon/publishable key. Search the deployment output for service-role and
+   database credentials before continuing.
+
+### Deploy in order
+
+The migration `20260917000001_profile_avatars.sql` creates the private
+`profile-avatars` bucket, metadata and immutable audit tables, upload-attempt
+rate enforcement, and service-only transition functions. When local and remote
+migration histories align, deploy in this exact order:
+
+```bash
+supabase db push --project-ref "$SUPABASE_PROJECT_REF"
+supabase functions deploy process-profile-avatar --project-ref "$SUPABASE_PROJECT_REF"
+supabase functions deploy resolve-profile-avatars --project-ref "$SUPABASE_PROJECT_REF"
+supabase functions deploy moderate-profile-avatar --project-ref "$SUPABASE_PROJECT_REF"
+```
+
+The production project had a legacy migration-history gap before the avatar
+rollout on 18 September 2026: its existing schema was present while older
+migration-history rows were absent. An unqualified `db push` would therefore
+try to replay old migrations. For that verified condition only, the avatar
+migration was applied and recorded explicitly:
+
+```bash
+supabase db query --linked --project-ref "$SUPABASE_PROJECT_REF" \
+  --file supabase/migrations/20260917000001_profile_avatars.sql
+# Verify the bucket, tables, RLS, grants, and functions before recording it.
+supabase migration repair 20260917000001 --status applied --linked \
+  --project-ref "$SUPABASE_PROJECT_REF" --yes
+```
+
+Do not use `--include-all`, and do not mark older versions applied without a
+separate schema audit. Reconcile that historical drift before the next normal
+migration rollout.
+
+Do not deploy the photo-enabled frontend until all four commands succeed. Edge
+Functions accept CORS only from `ITC_APP_ORIGINS`; they must never return
+`Access-Control-Allow-Origin: *`. Browser code has no direct Storage mutation
+policy. Sanitized objects are delivered through signed URLs valid for 600 seconds
+and cached only in page memory.
+
+### Post-deployment verification
+
+Verify the bucket in Dashboard → Storage and with trusted SQL:
+
+```sql
+select id, public, file_size_limit, allowed_mime_types
+  from storage.buckets
+ where id = 'profile-avatars';
+```
+
+Expected: one row, `public = false`, `file_size_limit = 2097152`, and only
+`image/jpeg`. Confirm anon/authenticated users have no direct insert, update,
+or delete policy for this bucket. A direct browser Storage upload/delete must
+fail; only the three Edge Functions may own object paths.
+
+Before live acceptance, run all automated checks from the repository root:
+
+```bash
+node app/avatar-smoke.mjs
+node app/smoke.mjs
+node app/live-auth-smoke.mjs
+deno test --config supabase/functions/deno.json --allow-net supabase/functions/_shared/*_test.ts \
+  supabase/functions/process-profile-avatar/index_test.ts \
+  supabase/functions/resolve-profile-avatars/index_test.ts \
+  supabase/functions/moderate-profile-avatar/index_test.ts
+bash supabase/tests/verify_profile_avatars_safety.sh
+```
+
+When an explicitly disposable, empty Supabase-compatible database is available,
+run the destructive migration integration suite. The acknowledgement flag is a
+safety boundary, not boilerplate:
+
+```bash
+ITC_AVATAR_TEST_DATABASE_URL="$DISPOSABLE_DATABASE_URL" \
+ITC_ALLOW_DATABASE_RESET=1 \
+bash supabase/tests/verify_profile_avatars.sh
+```
+
+If no acknowledged disposable database is available, record this check as
+**unexecuted deployment acceptance**. Never report it as passing, and never
+point it at production, staging, a shared database, or a database containing
+users/application objects.
+
+Use separate approved Google and email magic-link accounts, plus pending,
+declined, Admin, and Super Admin accounts, for browser acceptance:
+
+1. On current Safari/iOS and Chrome/Android, tap the approved Profile avatar.
+   Confirm the standard picker offers camera and photo library where supported;
+   it must not force camera-only capture.
+2. Select JPEG, PNG, and WebP sources. Drag the square crop with pointer/touch,
+   zoom from 1–4×, move it with arrow keys, and save. Confirm progress copy,
+   duplicate-submit disabling, a 512×512 JPEG result, and Profile/top-navigation
+   updates without a page reload.
+3. Confirm a verified Google account photo appears automatically when no custom
+   image exists. Remove a custom photo and verify Google fallback, or initials
+   for a magic-link account without Google imagery.
+4. Confirm approved Activity Details shows only confirmed attendee avatar/name
+   rows. Signed-out, pending, and declined sessions must retain the member-only
+   gate and receive no cross-member image URLs.
+5. As Admin and Super Admin, hide an active photo with a required reason. Upload
+   a replacement as that moderated member, verify it remains pending, then test
+   approve and reject (with reason) independently. Ordinary members must never
+   see moderation controls or pending previews.
+6. Let a signed URL expire or deliberately break an image request. Confirm the
+   initials sibling appears without exposing an object path or server error.
+7. Test 375 px portrait and a narrow landscape viewport. Confirm attendee rows,
+   review cards, dialogs, focus order, Escape close, focus restoration, and
+   reduced-motion behavior remain usable.
+8. Download one processed object through a temporary signed URL in trusted
+   Admin context. Verify exact 512×512 JPEG dimensions and no EXIF/GPS/comment
+   metadata. Do not retain the downloaded member image after the check.
+
+### Storage and audit cleanup checks
+
+After upload replacement, custom removal, Admin rejection, and a forced failed
+transition, inspect metadata/audit rows and look for unreferenced objects:
+
+```sql
+select profile_id, state, moderated_by, moderation_reason, moderated_at
+  from public.profile_avatars
+ order by updated_at desc;
+
+select profile_id, actor_id, action, reason, created_at
+  from public.profile_avatar_audit
+ order by created_at desc
+ limit 100;
+
+select o.name, o.created_at
+  from storage.objects o
+  left join public.profile_avatars p
+    on o.name in (p.google_object_path, p.active_object_path, p.pending_object_path)
+ where o.bucket_id = 'profile-avatars'
+   and p.profile_id is null
+ order by o.created_at;
+```
+
+The audit should show attempts and transitions without image bytes. Investigate
+recent in-flight objects before removal. Delete only confirmed stale objects
+through trusted operator tooling after the retention decision; never add a
+browser cleanup policy.
+
+### Rollback
+
+Treat rollback as an access shutdown first and data cleanup second:
+
+1. Deploy a frontend revision that removes/disables photo upload, attendee
+   resolution, and Admin moderation entry points. Confirm clients no longer call
+   any avatar function.
+2. Disable or delete `process-profile-avatar`, `resolve-profile-avatars`, and
+   `moderate-profile-avatar` in the target project. Removing
+   `ITC_APP_ORIGINS` alone is not a substitute for disabling function access.
+3. Confirm no browser/function requests remain. Preserve the private bucket,
+   metadata, and immutable audit rows while leadership decides retention and
+   member-notification obligations.
+4. If deletion is approved, export the required audit evidence, delete bucket
+   objects with trusted service-side tooling, and only then remove the empty
+   `profile-avatars` bucket. Verify the object count is zero.
+5. Database migrations are append-only. Do not edit or delete the applied
+   `20260917000001_profile_avatars.sql` file. Create and review a new rollback
+   migration to revoke/drop avatar RPCs and tables only after object cleanup and
+   retention approval. Re-run the complete smoke and SQL safety suites.
+
+For a code-only rollback, stop after steps 1–3 and leave private data in place;
+this is safer and reversible. Never drop metadata first, because doing so loses
+references needed to identify and clean stored objects safely.
 
 ## Giving schema and campaign
 
@@ -136,19 +892,22 @@ bash supabase/tests/verify_giving_campaigns_safety.sh
 
 ## Free-event venue overrides
 
-Weekly free-event venues (`wnt`, `run`, `water`) live in the new
-`operational_session_venue_overrides` table and the
+Dated free/RSVP venues (`wnt`, `run`, `water`, `lunch`) live in
+`operational_session_venue_overrides` and use
 `set_session_venue(p_session_id text, p_location text, p_maps_query text,
-p_was_tbc boolean)` RPC. The RPC is the only mutation path. HYROX sessions
-are rejected with `Activity venue is fixed.`. Members see the first
-confirmation per session; Admins see an audit notification on every actual
-save/reset, excluding the actor.
+p_was_tbc boolean, p_meeting_lat double precision, p_meeting_lng double
+precision)`. The four-argument compatibility wrapper remains available. The
+RPC is the only mutation path. Paid HYROX sessions are rejected with
+`Activity venue is fixed.`. Members see the first confirmation per session;
+Admins see an audit notification on every actual save/reset, excluding the
+actor.
 
-The Admin UI exposes these controls at **Admin Tools → Activities → Weekly
-Venue Overrides**.
+The Admin UI exposes these dated controls at **Admin Tools → Activities →
+Weekly Event Controls → Free & RSVP Events**. Paid time, venue-status, notice,
+and cancellation controls are in the adjacent **Paid Sessions** group.
 
-Recurring Swimming remains `TBC` in the activity template. Only dated weekly
-free-event overrides are shared through `set_session_venue`.
+Recurring Swimming and lunch may remain `TBC` in their activity templates.
+Only dated overrides are shared through `set_session_venue`.
 
 Mapping privacy: Nominatim receives the venue text submitted for geocoding and
 the browser's IP address. The browser cache is device-local and stores only
@@ -179,8 +938,9 @@ Run it via the Supabase SQL editor or `psql` against the live database URL.
 
 Browser-level acceptance on the deployed environment:
 
-1. As an Admin, sign in and open **Admin Tools → Activities → Weekly Venue
-   Overrides**. Save a dated display location and geocode query.
+1. As an Admin, sign in and open **Admin Tools → Activities → Weekly Event
+   Controls → Free & RSVP Events**. Save a dated display location and geocode
+   query.
 2. Open the dated activity page with `localStorage.removeItem("itc.geocode.v1")`.
    Confirm the Leaflet marker, attribution, and external Get directions link.
 3. Confirm an approved member receives **Venue confirmed** and another Admin
@@ -199,7 +959,7 @@ operation; confirm the selected project and backups before running
 
 ## Initial Super Admin bootstrap
 
-Every OAuth-created profile starts `pending`, including the first profile in a
+Every Supabase Auth-created profile starts `pending`, including the first profile in a
 fresh project. There is no browser or first-user promotion path. After all
 migrations have run and the intended owner has signed in once, an operator must
 verify that person's identity out of band and promote the **known profile UUID**
@@ -304,7 +1064,7 @@ order by rc.created_at desc;
 
 ## Application drafts and approval states
 
-- Google OAuth creates `public.profiles(role = 'pending')`. Until an `applications` row exists, Admin shows the profile under **Awaiting application** and approval controls remain locked.
+- Google OAuth or email magic-link authentication creates `public.profiles(role = 'pending')`. Until an `applications` row exists, Admin shows the profile under **Awaiting application** and approval controls remain locked.
 - The live membership form calls `saveMyApplication()` and upserts `public.applications`. Successful submission moves the profile to **Ready for review**.
 - Unfinished forms auto-save every 500 ms to `itc.apply.draft.v1` on that browser only. Drafts are not uploaded to Supabase and do not appear to administrators.
 - Home, Account, and Apply expose Continue / Discard controls while a local draft exists.
@@ -358,6 +1118,24 @@ a shared environment — add a new one instead.
 adding `not null` constraints. Apply it before deploying any UI revision
 that writes the versioned indemnity fields so live application submits and
 Profile > Indemnity updates do not fail on missing columns.
+
+The latest operational corrections are forward migrations and must remain in
+this order after `20260829000008_rsvp_integrity.sql`:
+
+1. `20260830000001_rsvp_count_trigger_locking.sql` narrows RSVP count triggers
+   to confirmed contribution changes and serializes exact RSVP recounts with
+   per-session advisory transaction locks.
+2. `20260830000002_release_operational_reservation.sql` adds the owner/Admin
+   RPC for releasing only unmarked paid reservations. It does not perform a
+   client-side or fake live waitlist promotion.
+3. `20260830000003_notification_event_destinations.sql` corrects notification
+   routes for zero-price/RSVP events and preserves the Schedule fallback for
+   paid cancellation rows.
+
+`verify_operational_backend.sh` replays the ordered chain and then runs a
+bounded concurrency harness. It still requires a fresh, explicitly
+acknowledged disposable Supabase-compatible database; a source-only safety
+run does not verify PostgreSQL execution.
 
 ## ⏳ Awaiting ITC leadership workshop
 

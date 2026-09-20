@@ -9,8 +9,10 @@ import {
   SEED_ACTIVITIES,
   sessionsInRange,
   sessionStarted,
+  hktEventStartMs,
   parseISO,
   findSession,
+  todayHktISO,
   todayLocal,
   isoDate,
   saturdayOnOrAfter,
@@ -21,16 +23,42 @@ import {
   normalizeDonorId,
   donorIdProblem,
 } from "./data.js";
-import { supabase, isLive } from "./config.js";
+import { config, supabase, isLive } from "./config.js";
 import { INDEMNITY_VERSION } from "./documents.js";
+import { normalizeAvatarPresentation } from "./avatar.js";
 import { normalizeMeetingPoint, normalizeVenueLocation } from "./venue.js";
 import * as liveOps from "./operations.js";
+import {
+  hyroxCycleId,
+  hyroxRegistrationOpensAt,
+  hyroxPaymentReminderAt,
+  hyroxPaymentDeadline,
+  hyroxHolderGraceDeadline,
+  hyroxPromotedPaymentDeadline,
+  hyroxChoiceDeadline,
+  allocateHyroxVenues,
+  HYROX_POOL_CAPACITY,
+} from "./hyrox-cycle.js";
 
 const STORAGE_KEY = "itc.prototype.v1";
 const APPLY_DEVICE_KEY = "itc.device.id";
 const APPLY_DRAFT_KEY = "itc.apply.draft.v1";
 const APPLY_DRAFT_VERSION = 1;
-const STATE_VERSION = 14;
+const LAST_ROUTE_KEY = "itc.last-route.v1";
+const LAST_ROUTE_VERSION = 1;
+const STATE_VERSION = 22;
+
+const ROUTE_ID = "[A-Za-z0-9._~-]+";
+const RESTORABLE_ROUTE_PATTERNS = [
+  /^#\/(?:home|schedule|giving|notifications|apply)$/,
+  /^#\/community(?:\/(?:prayers|fellowship|meals|announcements|about))?$/,
+  /^#\/account(?:\/(?:details(?:\/edit)?|indemnity|donor|payments|privacy(?:\/edit)?|bookings(?:\/attended)?|history))?$/,
+  new RegExp(`^#/(?:activity|checkout|pay|booking|receipt)/${ROUTE_ID}$`),
+  new RegExp(`^#/hyrox/${ROUTE_ID}(?:/register)?$`),
+  new RegExp(`^#/replacement/${ROUTE_ID}$`),
+  /^#\/admin(?:\/(?:members|activities|giving|payments))?$/,
+  new RegExp(`^#/admin/(?:activity|campaign)/${ROUTE_ID}$`),
+];
 
 // Live-mode (Supabase) session cache. Avoids hammering the DB on every
 // page load. The TTL is short so role flips and welcome notifications
@@ -42,9 +70,66 @@ let liveGivingCampaign = null;
 // Supabase remains the identity directory. Payment Ops caches live profiles
 // in memory only; device-local persistence stores UUID-keyed operations.
 let livePaymentDirectory = new Map();
+const liveReplacementTokens = new Map();
 const LIVE_PROFILE_TTL_MS = 30_000;
+const AVATAR_CACHE_EXPIRY_SKEW_MS = 30_000;
+const AVATAR_APPROVED_ROLES = new Set(["member", "admin", "superadmin", "super_admin"]);
+let ownAvatarCache = null;
+let ownAvatarRequest = null;
+let avatarRequestGeneration = 0;
+const sessionAvatarCache = new Map();
+let adminAvatarCache = null;
 
 let state = null;
+
+export function isRestorableRoute(route) {
+  return typeof route === "string"
+    && route.length <= 240
+    && RESTORABLE_ROUTE_PATTERNS.some((pattern) => pattern.test(route));
+}
+
+function routeOwner(userId) {
+  return userId ? `user:${String(userId)}` : "visitor";
+}
+
+export function rememberLastRoute(route, userId = null) {
+  if (!isRestorableRoute(route)) return false;
+  try {
+    localStorage.setItem(LAST_ROUTE_KEY, JSON.stringify({
+      version: LAST_ROUTE_VERSION,
+      owner: routeOwner(userId),
+      route,
+    }));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function lastRouteFor(userId = null) {
+  try {
+    const raw = localStorage.getItem(LAST_ROUTE_KEY);
+    if (!raw) return null;
+    const record = JSON.parse(raw);
+    if (record?.version !== LAST_ROUTE_VERSION || !isRestorableRoute(record?.route)) {
+      localStorage.removeItem(LAST_ROUTE_KEY);
+      return null;
+    }
+    return record.owner === routeOwner(userId) ? record.route : null;
+  } catch {
+    try { localStorage.removeItem(LAST_ROUTE_KEY); } catch {}
+    return null;
+  }
+}
+
+export function clearLastRoute() {
+  try { localStorage.removeItem(LAST_ROUTE_KEY); } catch {}
+}
+
+export function startupRoute(currentHash, userId = null) {
+  const explicitRoute = typeof currentHash === "string" ? currentHash.trim() : "";
+  return explicitRoute || lastRouteFor(userId) || "#/home";
+}
 
 function freshState() {
   return {
@@ -59,8 +144,13 @@ function freshState() {
     campaigns: [],
     donations: [],
     prayers: [],
+    oneOffEvents: [],
     sessionOverrides: {},
     queues: {},
+    hyroxCycles: {},
+    hyroxCycleQueues: {},
+    replacementRequests: [],
+    replacementAudit: [],
     notifications: [],
     duty: {},
   };
@@ -79,7 +169,7 @@ export function load() {
   return state;
 }
 
-export async function hydrateLiveOperations({ ensureWindow = false } = {}) {
+export async function hydrateLiveOperations({ ensureWindow = false, force = false } = {}) {
   if (!isLive()) return null;
   if (ensureWindow) {
     try {
@@ -88,7 +178,15 @@ export async function hydrateLiveOperations({ ensureWindow = false } = {}) {
       console.warn("ensureLiveSessionWindow failed", err);
     }
   }
-  await liveOps.hydrateOperationalState();
+  let authenticated = false;
+  try {
+    const { data } = await supabase.auth.getSession();
+    authenticated = Boolean(data?.session);
+  } catch {
+    authenticated = false;
+  }
+  if (authenticated) await liveOps.liveSweepHyroxDeadlines({ refresh: false });
+  await liveOps.hydrateOperationalState({ force, authenticated });
   await liveOps.startOperationalRealtime();
   return liveOps.operationalStateStatus();
 }
@@ -108,7 +206,7 @@ function normalizeReceiptCounter() {
 function migrate() {
   // Persisted prototypes may predate individual collections or contain null
   // values. Normalize every collection before a legacy step or early return.
-  for (const key of ["users", "activities", "bookings", "receipts", "campaigns", "donations", "prayers", "notifications"]) {
+  for (const key of ["users", "activities", "bookings", "receipts", "campaigns", "donations", "prayers", "notifications", "oneOffEvents"]) {
     if (!Array.isArray(state[key])) state[key] = [];
   }
   if (!state.queues || typeof state.queues !== "object" || Array.isArray(state.queues)) {
@@ -121,6 +219,12 @@ function migrate() {
   if (!state.duty || typeof state.duty !== "object" || Array.isArray(state.duty)) state.duty = {};
   if (!state.paymentPayouts || typeof state.paymentPayouts !== "object"
       || Array.isArray(state.paymentPayouts)) state.paymentPayouts = {};
+  if (!state.hyroxCycles || typeof state.hyroxCycles !== "object"
+      || Array.isArray(state.hyroxCycles)) state.hyroxCycles = {};
+  if (!state.hyroxCycleQueues || typeof state.hyroxCycleQueues !== "object"
+      || Array.isArray(state.hyroxCycleQueues)) state.hyroxCycleQueues = {};
+  if (!Array.isArray(state.replacementRequests)) state.replacementRequests = [];
+  if (!Array.isArray(state.replacementAudit)) state.replacementAudit = [];
   // v14 carries forward the additive UUID-keyed operations map for every
   // accepted v9-v13 snapshot.
   for (const user of state.users) {
@@ -131,14 +235,171 @@ function migrate() {
     };
   }
   normalizeReceiptCounter();
+  for (const booking of state.bookings) {
+    booking.replacementUserId ??= null;
+    booking.replacementConfirmedAt ??= null;
+    booking.replacementConfirmedBy ??= null;
+    booking.cancelledAt ??= null;
+    booking.cancelledSource ??= null;
+  }
+  for (const activity of state.activities) {
+    if (!["wnt", "run", "water"].includes(activity.id)) continue;
+    activity.requiresRsvp = true;
+    activity.price = 0;
+    activity.capacity = null;
+  }
+  for (const event of state.oneOffEvents) {
+    if (event.kind !== "free") continue;
+    event.requiresRsvp = true;
+    event.price = 0;
+    event.capacity = null;
+  }
 
   const v = state.version || 0;
   if (v >= STATE_VERSION) return;
+  if (v < 19) {
+    // v19: all Quarry Bay session capacity is expanded to 30, including
+    // sessions already materialized in local state.
+    for (const activity of state.activities) {
+      if (activity.id === "hyrox-quarry-bay") activity.capacity = 30;
+    }
+  }
+  if (v < 18) {
+    // v18: Quarry Bay's member-facing venue uses the recognizable Island ECC
+    // name while directions use an unambiguous Hong Kong maps query. Only
+    // exact prior values are replaced so later Admin edits remain intact.
+    const quarryBay = state.activities.find((activity) => activity.id === "hyrox-quarry-bay");
+    if (quarryBay?.location === "10/F, 633 King's Road, Quarry Bay, Hong Kong") {
+      quarryBay.location = "10/F, Island ECC, Quarry Bay";
+    }
+    if (quarryBay?.mapsQuery === "10/F, 633 King's Road, Quarry Bay, Hong Kong") {
+      quarryBay.mapsQuery = "Island ECC, Quarry Bay, Hong Kong";
+    }
+    for (const booking of state.bookings) {
+      if (booking.sessionId?.startsWith("hyrox-quarry-bay-")
+          && booking.snapshot?.location === "10/F, 633 King's Road, Quarry Bay, Hong Kong") {
+        booking.snapshot.location = "10/F, Island ECC, Quarry Bay";
+      }
+    }
+  }
+  if (v < 17) {
+    // v17: the BFT activity gets an explicit canonical id and Quarry Bay
+    // joins as a third recurring HYROX session. Rewrite every device-local
+    // session reference so existing bookings and operational state survive.
+    const renameBftSessionId = (value) =>
+      typeof value === "string" && /^hyrox-\d{4}-\d{2}-\d{2}$/.test(value)
+        ? value.replace(/^hyrox-/, "hyrox-bft-")
+        : value;
+    const legacyBft = state.activities.find((activity) => activity.id === "hyrox");
+    const canonicalBft = state.activities.find((activity) => activity.id === "hyrox-bft");
+    if (legacyBft && !canonicalBft) legacyBft.id = "hyrox-bft";
+    else if (legacyBft) state.activities = state.activities.filter((activity) => activity !== legacyBft);
+    for (const id of ["hyrox-bft", "hyrox-quarry-bay"]) {
+      if (!state.activities.some((activity) => activity.id === id)) {
+        const seed = SEED_ACTIVITIES.find((activity) => activity.id === id);
+        if (seed) state.activities.push(structuredClone(seed));
+      }
+    }
+    for (const booking of state.bookings) {
+      booking.sessionId = renameBftSessionId(booking.sessionId);
+      booking.deferredTo = renameBftSessionId(booking.deferredTo);
+    }
+    for (const receipt of state.receipts) {
+      receipt.sessionId = renameBftSessionId(receipt.sessionId);
+    }
+    for (const collection of [state.queues, state.sessionOverrides]) {
+      for (const [legacyId, value] of Object.entries(collection)) {
+        const canonicalId = renameBftSessionId(legacyId);
+        if (canonicalId === legacyId) continue;
+        if (!(canonicalId in collection)) collection[canonicalId] = value;
+        delete collection[legacyId];
+      }
+    }
+    for (const notification of state.notifications) {
+      for (const field of ["link", "destination"]) {
+        if (typeof notification[field] === "string") {
+          notification[field] = notification[field].replace(
+            /([/#])hyrox-(\d{4}-\d{2}-\d{2})(?=$|[/?#])/g,
+            "$1hyrox-bft-$2"
+          );
+        }
+      }
+    }
+  }
+  if (v < 22) {
+    // v22: attendance is additive. Existing financial, allocation and booking
+    // state is preserved while the two new audit fields start empty.
+    for (const booking of state.bookings) {
+      if (!Object.prototype.hasOwnProperty.call(booking, "attendedAt")) booking.attendedAt = null;
+      if (!Object.prototype.hasOwnProperty.call(booking, "attendedBy")) booking.attendedBy = null;
+    }
+  }
+  if (v < 21) {
+    // v21: Friday venue-choice and venue-finalization reminders are additive
+    // cycle checkpoints; existing bookings and allocations remain intact.
+    for (const cycle of Object.values(state.hyroxCycles || {})) {
+      if (!Object.prototype.hasOwnProperty.call(cycle, "venueChoiceReminderSentAt")) {
+        cycle.venueChoiceReminderSentAt = null;
+      }
+      if (!Object.prototype.hasOwnProperty.call(cycle, "venueFinalizationReminderSentAt")) {
+        cycle.venueFinalizationReminderSentAt = null;
+      }
+    }
+  }
+  if (v < 20) {
+    // v20: HYROX payment reminders are enabled by default and each cycle
+    // tracks the separate collector reminder independently of member notices.
+    for (const user of state.users) {
+      if (!Object.prototype.hasOwnProperty.call(user, "hyroxPaymentReminders")) {
+        user.hyroxPaymentReminders = true;
+      }
+    }
+    for (const cycle of Object.values(state.hyroxCycles || {})) {
+      if (!Object.prototype.hasOwnProperty.call(cycle, "collectorPaymentReminderSentAt")) {
+        cycle.collectorPaymentReminderSentAt = null;
+      }
+    }
+  }
+  if (v < 19) {
+    // v19: pooled HYROX cycles and their weekly/venue-switch queues are
+    // additive local collections. Existing sessions, bookings and receipts
+    // remain untouched until a cycle explicitly references them.
+    if (!state.hyroxCycles || Array.isArray(state.hyroxCycles)) state.hyroxCycles = {};
+    if (!state.hyroxCycleQueues || Array.isArray(state.hyroxCycleQueues)) state.hyroxCycleQueues = {};
+  }
+  if (v < 20) {
+    // v20: manual HYROX replacement requests are additive. The booking owner
+    // remains payer/receipt owner; replacement fields affect identity only
+    // after an Admin confirms the handover.
+    if (!Array.isArray(state.replacementRequests)) state.replacementRequests = [];
+    if (!Array.isArray(state.replacementAudit)) state.replacementAudit = [];
+    for (const booking of state.bookings) {
+      booking.replacementUserId ??= null;
+      booking.replacementConfirmedAt ??= null;
+      booking.replacementConfirmedBy ??= null;
+    }
+  }
+  if (v < 16) {
+    // v16: the recurring post-training lunch (RSVP kind, Meals category)
+    // joins the seed activities. Existing states get it appended without
+    // touching admin edits.
+    if (Array.isArray(state.activities) && !state.activities.some((a) => a.id === "lunch")) {
+      const lunch = SEED_ACTIVITIES.find((a) => a.id === "lunch");
+      if (lunch) state.activities.push(structuredClone(lunch));
+    }
+  }
+  if (v < 15) {
+    // v15: admin-created one-off events live in state.oneOffEvents
+    // (activity-shaped entries with oneOff + dateISO). The collection
+    // normalization above guarantees the array; this step only documents
+    // the version boundary.
+    if (!Array.isArray(state.oneOffEvents)) state.oneOffEvents = [];
+  }
   if (v < 2) {
     // v2: Sunday Trail Run removed; HYROX moved to Sat 11:15 at Causeway Bay
     // BFT (HK$180) and a second Saturday session added at Midtown 28 (11:00).
     state.activities = state.activities.filter(
-      (a) => a.id !== "trail" && a.id !== "hyrox" && a.id !== "hyrox-midtown"
+      (a) => !["trail", "hyrox", "hyrox-bft", "hyrox-midtown", "hyrox-quarry-bay"].includes(a.id)
     );
     state.activities.push(
       ...SEED_ACTIVITIES.filter((a) => a.category === "HYROX").map((a) =>
@@ -162,7 +423,7 @@ function migrate() {
     // (activity location + any booking snapshots carrying the old string).
     // Only exact old-string matches are rewritten so admin edits made
     // since are preserved.
-    const hyrox = state.activities.find((a) => a.id === "hyrox");
+    const hyrox = state.activities.find((a) => a.id === "hyrox-bft" || a.id === "hyrox");
     if (hyrox && hyrox.location === "Causeway Bay BFT") {
       hyrox.location = "BFT Causeway Bay";
     }
@@ -225,7 +486,7 @@ function migrate() {
     // overrides, waitlist/interest queues, duty roster, notifications.
     // (Collection normalization above initializes the structures.)
     for (const a of state.activities) {
-      if (a.id === "hyrox" && a.capacity === 18) a.capacity = 20;
+      if ((a.id === "hyrox-bft" || a.id === "hyrox") && a.capacity === 18) a.capacity = 20;
       if (a.id === "hyrox-midtown" && a.capacity === 18) a.capacity = 12;
     }
   }
@@ -387,6 +648,25 @@ export function resetLocalData() {
   return load();
 }
 
+export function paymentStateForBooking(booking) {
+  if (!booking) return null;
+  if (booking.status === "reserved") {
+    return booking.paymentMarkedAt != null ? "awaiting_confirmation" : "payment_due";
+  }
+  return booking.status === "confirmed" || booking.status === "attended" ? "paid" : null;
+}
+
+export function attendanceWindowForSession(session, now = Date.now()) {
+  const start = hktEventStartMs(session.dateISO, session.time);
+  const opensAt = start - 15 * 60_000;
+  const closesAt = start + Number(session.durationMin) * 60_000 + 24 * 60 * 60_000;
+  return {
+    opensAt,
+    closesAt,
+    state: now < opensAt ? "upcoming" : now <= closesAt ? "open" : "locked",
+  };
+}
+
 // --- Session / auth ----------------------------------------------------------
 
 export function currentUser() {
@@ -466,6 +746,7 @@ export function signIn(email) {
 }
 
 export function signOut() {
+  clearAvatarCache();
   state.sessionUserId = null;
   save();
 }
@@ -567,7 +848,7 @@ function normalizeIndemnityAcceptance({
   const validDate = /^\d{4}-\d{2}-\d{2}$/.test(normalizedSignedAt)
     && isoDate(parseISO(normalizedSignedAt)) === normalizedSignedAt;
   if (!validDate) throw new Error("Enter a valid signing date");
-  if (normalizedSignedAt > isoDate(todayLocal())) {
+  if (normalizedSignedAt > todayHktISO()) {
     throw new Error("Signing date cannot be in the future");
   }
   if (formVersion !== INDEMNITY_VERSION) {
@@ -772,32 +1053,105 @@ export function pendingPaymentBookings() {
     .sort((a, b) => a.snapshot.dateISO.localeCompare(b.snapshot.dateISO));
 }
 
+export function paymentRosterBookings() {
+  requirePaymentAdminActor();
+  const bookings = isLive() ? liveOps.listLiveBookings() : state.bookings;
+  return bookings.filter((booking) => {
+    const session = booking.sessionId ? getSession(booking.sessionId) : null;
+    const price = session?.price ?? booking.snapshot?.price;
+    return Number(price) > 0 && paymentStateForBooking(booking);
+  });
+}
+
+export function attendanceBookingsForSession(sessionId) {
+  requirePaymentAdminActor();
+  const session = getSession(sessionId);
+  if (!session || session.kind !== "paid" || session.cancelled) return [];
+  const bookings = isLive()
+    ? liveOps.liveBookingsForSession(sessionId)
+    : state.bookings.filter((booking) => booking.sessionId === sessionId);
+  return bookings.filter((booking) =>
+    booking.status === "confirmed" || booking.status === "attended"
+  );
+}
+
+export async function setBookingAttendance(bookingId, arrived, now = Date.now()) {
+  const actor = requirePaymentAdminActor();
+  if (typeof arrived !== "boolean") throw new Error("Attendance state is required.");
+  const booking = getBooking(bookingId);
+  if (!booking) throw new Error("Booking not found.");
+  if (isLive()) return liveOps.liveSetOperationalAttendance(bookingId, arrived);
+  if (!booking.sessionId) throw new Error("Attendance requires an assigned session.");
+  const session = getSession(booking.sessionId);
+  if (!session) throw new Error("Assigned session not found.");
+  if (session.cancelled) throw new Error("Session is cancelled.");
+  if (session.kind !== "paid" || Number(session.price) <= 0) {
+    throw new Error("Attendance check-in is for paid sessions only.");
+  }
+  if (booking.status !== "confirmed" && booking.status !== "attended") {
+    throw new Error("Only confirmed-paid bookings can be checked in.");
+  }
+  if (attendanceWindowForSession(session, now).state !== "open") {
+    throw new Error("Attendance is outside the check-in window.");
+  }
+  if ((arrived && booking.status === "attended")
+      || (!arrived && booking.status === "confirmed")) return booking;
+  booking.status = arrived ? "attended" : "confirmed";
+  booking.attendedAt = arrived ? now : null;
+  booking.attendedBy = arrived ? actor.id : null;
+  save();
+  return booking;
+}
+
 export function activeBookingsForSession(sessionId) {
   if (isLive()) {
     return liveOps.liveConfirmedBookingsForSession(sessionId);
   }
   return state.bookings.filter(
-    (b) => b.sessionId === sessionId && b.status === "confirmed"
+    (b) => b.sessionId === sessionId && (b.status === "confirmed" || b.status === "attended")
   );
 }
 
 export function spotsLeft(session) {
   if (!session) return null;
+  if (session.kind === "free") return null;
+  if (session.capacity == null) return null; // uncapped (e.g. the RSVP lunch)
   if (isLive()) {
-    if (session.kind !== "paid") return null;
     return Math.max(0, session.capacity - liveOps.liveHeldBookingsForSession(session.id).length);
   }
-  if (session.kind !== "paid") return null;
   return Math.max(0, session.capacity - heldBookingsForSession(session.id).length);
 }
 
+export function sessionRequiresRsvp(session) {
+  return Boolean(session?.requiresRsvp || session?.kind === "rsvp");
+}
+
+export function attendeeCountFor(session) {
+  if (!session?.id || (session.kind !== "paid" && !sessionRequiresRsvp(session))) return 0;
+  if (isLive()) {
+    const exactCount = liveOps.liveRsvpCountFor(session.id);
+    if (exactCount !== null) return exactCount;
+  }
+  return activeBookingsForSession(session.id).length;
+}
+
 export function attendeesFor(session) {
+  if (!session?.id || (session.kind !== "paid" && !sessionRequiresRsvp(session))) return [];
   const names = [];
   for (const b of activeBookingsForSession(session.id)) {
-    const u = state.users.find((x) => x.id === b.userId);
+    const u = isLive()
+      ? paymentUserById(effectiveAttendeeId(b))
+      : state.users.find((x) => x.id === effectiveAttendeeId(b));
     if (u) names.push(`${u.preferredName || u.fullName} ${u.fullName.split(" ").pop()[0]}.`);
   }
   return names;
+}
+
+export async function attendeeNamesFor(sessionId) {
+  if (!sessionId) return [];
+  if (isLive()) return liveOps.liveAttendeeNamesForSession(sessionId);
+  const session = getSession(sessionId);
+  return session ? attendeesFor(session) : [];
 }
 
 // --- Booking & payment ------------------------------------------------------------
@@ -813,11 +1167,12 @@ export function attendeesFor(session) {
 export function userBookingFor(userId, sessionId) {
   if (isLive()) {
     return liveOps.liveBookingsForUser(userId).find(
-      (b) => b.sessionId === sessionId && b.status === "confirmed"
+      (b) => b.sessionId === sessionId && (b.status === "confirmed" || b.status === "attended")
     ) || null;
   }
   return state.bookings.find(
-    (b) => b.userId === userId && b.sessionId === sessionId && b.status === "confirmed"
+    (b) => b.userId === userId && b.sessionId === sessionId
+      && (b.status === "confirmed" || b.status === "attended")
   );
 }
 
@@ -846,6 +1201,320 @@ export function getBooking(id) {
   return state.bookings.find((b) => b.id === id) ?? null;
 }
 
+export function replacementRequestForBooking(bookingId) {
+  if (isLive()) return liveOps.liveReplacementRequestForBooking?.(bookingId) ?? null;
+  return state.replacementRequests
+    .filter((request) => request.bookingId === bookingId)
+    .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0))[0] ?? null;
+}
+
+export function replacementInviteTokenForBooking(bookingId) {
+  if (isLive()) return liveReplacementTokens.get(bookingId) || null;
+  return replacementRequestForBooking(bookingId)?.inviteToken || null;
+}
+
+export function replacementRequestByToken(token) {
+  const value = String(token || "").trim();
+  if (!value) return null;
+  if (isLive()) return liveOps.liveReplacementRequestByToken?.(value) ?? null;
+  return state.replacementRequests.find((request) => request.inviteToken === value) ?? null;
+}
+
+export function effectiveAttendeeId(booking) {
+  return booking?.replacementUserId || booking?.userId || null;
+}
+
+export function replacementEligible(booking, now = Date.now()) {
+  if (!booking?.userId) return { ok: false, reason: "missing-owner" };
+  if (booking.status !== "confirmed") return { ok: false, reason: "not-confirmed" };
+  if (booking.replacementUserId) return { ok: false, reason: "already-replaced" };
+  const snapshot = booking.snapshot || {};
+  const isHyrox = snapshot.kind === "paid"
+    && (String(snapshot.name || "").toUpperCase().includes("HYROX")
+      || String(booking.sessionId || "").startsWith("hyrox-"));
+  if (!isHyrox) return { ok: false, reason: "not-paid-hyrox" };
+  const session = booking.sessionId ? getSession(booking.sessionId) : null;
+  if (session?.cancelled) return { ok: false, reason: "cancelled" };
+  const startsAt = hktEventStartMs(snapshot.dateISO, snapshot.time);
+  if (!Number.isFinite(startsAt) || startsAt <= now) return { ok: false, reason: "started" };
+  const expiresAt = Math.min(startsAt, now + 24 * 60 * 60 * 1000);
+  return { ok: true, expiresAt };
+}
+
+export function replacementInviteForToken(token) {
+  if (isLive()) return null;
+  const request = replacementRequestByToken(token);
+  if (!request) return null;
+  const { inviteToken, ...redacted } = request;
+  return redacted;
+}
+
+export function replacementAuditForRequest(requestId) {
+  if (isLive()) return [];
+  return state.replacementAudit.filter((entry) => entry.requestId === requestId);
+}
+
+export async function replacementRequestsForAdmin() {
+  requirePaymentAdminActor();
+  if (isLive()) {
+    return (await liveOps.liveListReplacementRequests()).filter((request) =>
+      ["pending", "accepted", "confirmed", "rejected"].includes(request.status)
+    );
+  }
+  return state.replacementRequests
+    .filter((request) => ["pending", "accepted", "confirmed", "rejected"].includes(request.status))
+    .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0))
+    .map((request) => {
+      const original = state.users.find((user) => user.id === request.originalUserId);
+      const replacement = state.users.find((user) => user.id === request.replacementUserId);
+      const booking = state.bookings.find((item) => item.id === request.bookingId);
+      return {
+        requestId: request.id,
+        bookingId: request.bookingId,
+        status: request.status,
+        originalDisplayName: original?.preferredName || original?.fullName || "ITC member",
+        replacementDisplayName: replacement?.preferredName || replacement?.fullName || null,
+        sessionId: booking?.sessionId || null,
+        cycleId: booking?.cycleId || null,
+        snapshot: booking?.snapshot ? {
+          name: booking.snapshot.name || null,
+          dateISO: booking.snapshot.dateISO || null,
+          time: booking.snapshot.time || null,
+          location: booking.snapshot.location || null,
+          price: booking.snapshot.price ?? null,
+        } : null,
+        createdAt: request.createdAt || null,
+        expiresAt: request.expiresAt || null,
+        acceptedAt: request.acceptedAt || null,
+        confirmedAt: request.confirmedAt || null,
+        decisionReason: request.decisionReason || null,
+      };
+    });
+}
+
+function replacementActor() {
+  const actor = currentUser();
+  if (!actor || actor.status !== "approved") throw new Error("Approved membership required.");
+  return actor;
+}
+
+function replacementIsHyrox(booking) {
+  return booking?.snapshot?.kind === "paid"
+    && (String(booking.snapshot?.name || "").toUpperCase().includes("HYROX")
+      || String(booking.sessionId || "").startsWith("hyrox-"));
+}
+
+function replacementDuplicateForUser(userId, booking) {
+  return state.bookings.some((candidate) => candidate.id !== booking.id
+    && candidate.userId === userId
+    && ["reserved", "confirmed"].includes(candidate.status)
+    && replacementIsHyrox(candidate)
+    && candidate.snapshot?.dateISO === booking.snapshot?.dateISO);
+}
+
+function recordReplacementAudit(request, action, actorId, reason = null, now = Date.now()) {
+  state.replacementAudit.push({
+    id: uid("replacement-audit"),
+    requestId: request.id,
+    bookingId: request.bookingId,
+    action,
+    originalUserId: request.originalUserId,
+    replacementUserId: request.replacementUserId || null,
+    actorUserId: actorId || null,
+    reason,
+    createdAt: now,
+  });
+}
+
+function replacementRequestError(message) {
+  throw new Error(message);
+}
+
+export async function createReplacementRequest(bookingId, now = Date.now()) {
+  const booking = getBooking(bookingId);
+  if (!booking) replacementRequestError("Booking not found.");
+  const eligibility = replacementEligible(booking, now);
+  if (!eligibility.ok) replacementRequestError("This booking cannot arrange a replacement.");
+  if (isLive()) {
+    requireAuthorizedPaymentOwner(booking.userId);
+    const token = globalThis.crypto?.randomUUID?.() || uid("replacement-invite");
+    const hash = await liveOps.hashReplacementToken(token);
+    const request = await liveOps.liveCreateReplacementRequest(bookingId, hash, eligibility.expiresAt);
+    liveReplacementTokens.set(bookingId, token);
+    return { ...request, inviteToken: token };
+  }
+  requireAuthorizedPaymentOwner(booking.userId);
+  if (currentUser()?.id !== booking.userId) replacementRequestError("Payment mutation not authorized");
+  const active = replacementRequestForBooking(booking.id);
+  if (active && ["pending", "accepted"].includes(active.status)) {
+    replacementRequestError("A replacement invite is already active for this booking.");
+  }
+  const request = {
+    id: uid("replacement-request"),
+    bookingId: booking.id,
+    originalUserId: booking.userId,
+    replacementUserId: null,
+    inviteToken: uid("replacement-invite"),
+    status: "pending",
+    createdAt: now,
+    expiresAt: eligibility.expiresAt,
+    acceptedAt: null,
+    acceptedBy: null,
+    declinedAt: null,
+    declinedBy: null,
+    cancelledAt: null,
+    cancelledBy: null,
+    rejectedAt: null,
+    rejectedBy: null,
+    confirmedAt: null,
+    confirmedBy: null,
+    decisionReason: null,
+  };
+  state.replacementRequests.push(request);
+  recordReplacementAudit(request, "created", booking.userId, null, now);
+  save();
+  return request;
+}
+
+export async function acceptReplacement(token, now = Date.now()) {
+  if (isLive()) {
+    const hash = await liveOps.hashReplacementToken(token);
+    return liveOps.liveAcceptReplacement(hash);
+  }
+  const actor = replacementActor();
+  const request = replacementRequestByToken(token);
+  if (!request || request.status !== "pending") replacementRequestError("This replacement invite is no longer available.");
+  if (request.expiresAt <= now) {
+    request.status = "expired";
+    request.decisionReason = "Invite expired.";
+    recordReplacementAudit(request, "expired", actor.id, request.decisionReason, now);
+    save();
+    replacementRequestError("This replacement invite has expired.");
+  }
+  if (actor.id === request.originalUserId) replacementRequestError("The original member cannot accept their own replacement invite.");
+  const booking = getBooking(request.bookingId);
+  if (!booking || !replacementEligible(booking, now).ok || replacementDuplicateForUser(actor.id, booking)) {
+    replacementRequestError("This booking is no longer available for replacement.");
+  }
+  request.status = "accepted";
+  request.replacementUserId = actor.id;
+  request.acceptedAt = now;
+  request.acceptedBy = actor.id;
+  recordReplacementAudit(request, "accepted", actor.id, null, now);
+  notify(request.originalUserId, "hyrox-replacement-accepted",
+    "An approved member accepted your replacement invite. ITC must confirm the handover before the attendee changes.",
+    `#/booking/${request.bookingId}`);
+  state.users.filter((user) => ["admin", "super_admin"].includes(user.role)
+    && user.status === "approved").forEach((user) => notify(
+      user.id, "hyrox-replacement-review",
+      "A HYROX replacement needs Admin confirmation.", "#/admin/ops"));
+  save();
+  return request;
+}
+
+export async function declineReplacement(token, now = Date.now()) {
+  if (isLive()) {
+    const hash = await liveOps.hashReplacementToken(token);
+    return liveOps.liveDeclineReplacement(hash);
+  }
+  const actor = replacementActor();
+  const request = replacementRequestByToken(token);
+  if (!request || request.status !== "pending") replacementRequestError("This replacement invite is no longer available.");
+  if (request.expiresAt <= now) replacementRequestError("This replacement invite has expired.");
+  request.status = "declined";
+  request.declinedAt = now;
+  request.declinedBy = actor.id;
+  recordReplacementAudit(request, "declined", actor.id, null, now);
+  notify(request.originalUserId, "hyrox-replacement-declined",
+    "The approved member declined your replacement invite.", `#/booking/${request.bookingId}`);
+  save();
+  return request;
+}
+
+export async function cancelReplacement(requestId, now = Date.now()) {
+  if (isLive()) return liveOps.liveCancelReplacement(requestId);
+  const request = state.replacementRequests.find((item) => item.id === requestId);
+  if (!request) return null;
+  requireAuthorizedPaymentOwner(request.originalUserId);
+  if (currentUser()?.id !== request.originalUserId) replacementRequestError("Payment mutation not authorized");
+  if (request.status !== "pending") replacementRequestError("Only an unclaimed replacement invite can be cancelled.");
+  request.status = "cancelled";
+  request.cancelledAt = now;
+  request.cancelledBy = request.originalUserId;
+  recordReplacementAudit(request, "cancelled", request.originalUserId, null, now);
+  save();
+  return request;
+}
+
+export async function decideReplacement(requestId, confirm, reason = null, now = Date.now()) {
+  if (isLive()) {
+    requirePaymentAdminActor();
+    return liveOps.liveDecideReplacement(requestId, confirm, reason);
+  }
+  const actor = requirePaymentAdminActor();
+  const request = state.replacementRequests.find((item) => item.id === requestId);
+  if (!request) replacementRequestError("Replacement request not found.");
+  if (request.status === "confirmed" && confirm) return request;
+  if (request.status === "rejected" && !confirm) return request;
+  if (confirm) {
+    if (request.status !== "accepted") replacementRequestError("Only an accepted replacement can be confirmed.");
+    if (request.expiresAt <= now) replacementRequestError("This replacement request has expired.");
+    const booking = getBooking(request.bookingId);
+    if (!booking || !replacementEligible(booking, now).ok || replacementDuplicateForUser(request.replacementUserId, booking)) {
+      replacementRequestError("This booking is no longer available for replacement.");
+    }
+    booking.replacementUserId = request.replacementUserId;
+    booking.replacementConfirmedAt = now;
+    booking.replacementConfirmedBy = actor.id;
+    request.status = "confirmed";
+    request.confirmedAt = now;
+    request.confirmedBy = actor.id;
+    request.decisionReason = reason || null;
+    recordReplacementAudit(request, "confirmed", actor.id, request.decisionReason, now);
+    notify(request.originalUserId, "hyrox-replacement-confirmed",
+      "ITC confirmed the replacement. You remain the payer and receipt owner; the approved member is now the attendee.",
+      `#/booking/${request.bookingId}`);
+    notify(request.replacementUserId, "hyrox-replacement-confirmed",
+      "ITC confirmed your HYROX replacement. Check the session details before attending.",
+      `#/booking/${request.bookingId}`);
+  } else {
+    if (!["pending", "accepted"].includes(request.status)) return request;
+    request.status = "rejected";
+    request.rejectedAt = now;
+    request.rejectedBy = actor.id;
+    request.decisionReason = reason || "Admin rejected the replacement request.";
+    recordReplacementAudit(request, "rejected", actor.id, request.decisionReason, now);
+    notify(request.originalUserId, "hyrox-replacement-rejected",
+      "ITC did not confirm the replacement. Your original booking remains unchanged.",
+      `#/booking/${request.bookingId}`);
+    if (request.replacementUserId) notify(request.replacementUserId, "hyrox-replacement-rejected",
+      "ITC did not confirm this replacement request. The original booking remains unchanged.",
+      `#/booking/${request.bookingId}`);
+  }
+  save();
+  return request;
+}
+
+export function effectiveAttendeeForBooking(booking) {
+  if (isLive()) return paymentUserById(effectiveAttendeeId(booking));
+  return state.users.find((user) => user.id === effectiveAttendeeId(booking)) || null;
+}
+
+export function listHyroxCycles() {
+  if (isLive()) return liveOps.listLiveHyroxCycles();
+  return [];
+}
+
+export function getHyroxCycle(id) {
+  if (isLive()) return liveOps.getLiveHyroxCycle(id);
+  return hyroxCycleById(id);
+}
+
+export function hyroxCycleBookings(cycleId) {
+  if (isLive()) return liveOps.listLiveBookings((booking) => booking.cycleId === cycleId);
+  return state.bookings.filter((booking) => booking.cycleId === cycleId);
+}
+
 export function getReceipt(id) {
   if (isLive()) return liveOps.liveReceiptById(id);
   return state.receipts.find((r) => r.id === id) ?? null;
@@ -860,6 +1529,19 @@ function notify(userId, kind, body, link) {
   state.notifications.push({ id: uid("n"), userId, kind, body, link, read: false, createdAt: Date.now() });
 }
 
+function canReceiveRsvpNotification(userId) {
+  const user = state.users.find((candidate) => candidate.id === userId);
+  return user?.status === "approved"
+    && ["member", "admin", "superadmin", "super_admin"].includes(user.role);
+}
+
+function activeRsvpNotificationRecipients(sessionId) {
+  return [...new Set(state.bookings
+    .filter((booking) => booking.sessionId === sessionId && booking.status === "confirmed")
+    .map((booking) => booking.userId)
+    .filter(canReceiveRsvpNotification))];
+}
+
 export function notificationsFor(userId) {
   return state.notifications
     .filter((n) => n.userId === userId)
@@ -869,7 +1551,8 @@ export function notificationsFor(userId) {
 export function heldBookingsForSession(sessionId) {
   if (isLive()) return liveOps.liveHeldBookingsForSession(sessionId);
   return state.bookings.filter(
-    (b) => b.sessionId === sessionId && (b.status === "reserved" || b.status === "confirmed")
+    (b) => b.sessionId === sessionId
+      && (b.status === "reserved" || b.status === "confirmed" || b.status === "attended")
   );
 }
 
@@ -969,6 +1652,12 @@ function reserveApprovedSession(userId, sessionOrId, now = Date.now()) {
   if (!session) throw new Error("Unknown session");
   if (session.kind !== "paid") throw new Error("Session is not paid");
   if (session.cancelled) throw new Error("Session is cancelled");
+  if (session.activityId === "hyrox-quarry-bay") {
+    const cycle = hyroxCycleForDateLocal(session.dateISO);
+    if (cycle && hyroxActiveBookings(cycle.id).some((booking) => booking.userId === userId)) {
+      throw new Error("You already have a HYROX booking for this Saturday.");
+    }
+  }
   if (sessionStarted(session)) throw new Error("Session has already started");
   if (isMidtown(session) && !midtownOpenFor(session)) throw new Error("Session is not open");
   if (spotsLeft(session) <= 0) throw new Error("Session is full");
@@ -992,6 +1681,8 @@ function reserveApprovedSession(userId, sessionOrId, now = Date.now()) {
     deferredTo: null,
     deferredFrom: null,
     reminderSentAt: null,
+    attendedAt: null,
+    attendedBy: null,
     snapshot: snapshotFor(session),
   };
   state.bookings.push(booking);
@@ -1012,7 +1703,7 @@ export function markBookingPaid(bookingId, method, ref, now = Date.now()) {
   b.paymentMarkedAt = now;
   b.paidMethod = method === "FPS" ? "FPS" : "PayMe";
   b.paymentRef = String(ref ?? "").trim() || null;
-  const collector = collectorFor(b.sessionId);
+  const collector = b.cycleId ? null : collectorFor(b.sessionId);
   if (collector) {
     const who = state.users.find((u) => u.id === b.userId);
     notify(
@@ -1022,12 +1713,20 @@ export function markBookingPaid(bookingId, method, ref, now = Date.now()) {
       "#/admin/ops"
     );
   }
+  if (b.cycleId) {
+    state.users.filter((user) => ["admin", "super_admin"].includes(user.role)
+      && user.status === "approved").forEach((user) => notify(
+        user.id, "payment-marked",
+        `A member marked a ${b.paidMethod} HYROX pool payment for ${fmtDate(b.snapshot.dateISO)}.`,
+        "#/admin/ops",
+      ));
+  }
   save();
   return b;
 }
 
-// Collector confirms the money arrived. Payment = commitment: any other
-// venue hold the member had for the same Saturday is released.
+// Collector confirms the money arrived. Payment = commitment: every other
+// HYROX venue hold the member had for the same Saturday is released.
 export function confirmBookingPayment(bookingId, now = Date.now()) {
   if (isLive()) {
     return liveOps.liveApproveBookingPayment(bookingId);
@@ -1049,47 +1748,71 @@ export function confirmBookingPayment(bookingId, now = Date.now()) {
     method: b.paidMethod || "PayMe",
     status: "paid",
     issuedAt: now,
-    line: `${b.snapshot.name} — ${fmtDate(b.snapshot.dateISO)} ${fmtTime(b.snapshot.time)}`,
+    sessionId: b.sessionId || null,
+    cycleId: b.cycleId || null,
+    line: b.cycleId
+      ? `${b.snapshot.name} — ${fmtDate(b.snapshot.dateISO)}`
+      : `${b.snapshot.name} — ${fmtDate(b.snapshot.dateISO)} ${fmtTime(b.snapshot.time)}`,
   };
   state.receipts.push(receipt);
-  // Payment = commitment. Release the member's holds and queue spots at the
-  // OTHER venue for the same Saturday; freed spots cascade immediately.
-  const otherVenueId = isMidtown(b.sessionId)
-    ? `hyrox-${b.snapshot.dateISO}`
-    : `hyrox-midtown-${b.snapshot.dateISO}`;
-  const other = state.bookings.find(
-    (x) => x.userId === b.userId && x.sessionId === otherVenueId && x.status === "reserved"
-  );
-  if (other) {
-    other.status = "cancelled";
-    notify(b.userId, "hold-released",
-      `You're booked for ${b.snapshot.location} — your unpaid ${other.snapshot.location} spot was released to the waitlist.`,
-      `#/booking/${b.id}`);
-    cascadeSession(other.sessionId, now);
-  }
-  const q = paymentQueueFor(otherVenueId);
-  const wasQueued =
-    q.waitlist.some((e) => e.userId === b.userId) || q.interest.some((e) => e.userId === b.userId);
-  q.waitlist = q.waitlist.filter((e) => e.userId !== b.userId);
-  q.interest = q.interest.filter((e) => e.userId !== b.userId);
-  if (wasQueued && !other) {
-    notify(b.userId, "hold-released",
-      `You're booked for ${b.snapshot.location} — your spot in the other venue queue was released.`,
-      `#/booking/${b.id}`);
+  // Payment = commitment for legacy venue holds. Pooled bookings have no
+  // child-session hold to release; venue assignment happens in Task 8.
+  const siblingSessionIds = b.cycleId ? [] : state.activities
+    .filter((activity) => activity.category === "HYROX")
+    .map((activity) => `${activity.id}-${b.snapshot.dateISO}`)
+    .filter((sessionId) => sessionId !== b.sessionId);
+  for (const siblingSessionId of siblingSessionIds) {
+    const other = state.bookings.find(
+      (x) => x.userId === b.userId && x.sessionId === siblingSessionId && x.status === "reserved"
+    );
+    if (other) {
+      other.status = "cancelled";
+      notify(b.userId, "hold-released",
+        `You're booked for ${b.snapshot.location} — your unpaid ${other.snapshot.location} spot was released to the waitlist.`,
+        `#/booking/${b.id}`);
+      cascadeSession(other.sessionId, now);
+    }
+    const q = paymentQueueFor(siblingSessionId);
+    const wasQueued =
+      q.waitlist.some((e) => e.userId === b.userId) || q.interest.some((e) => e.userId === b.userId);
+    q.waitlist = q.waitlist.filter((e) => e.userId !== b.userId);
+    q.interest = q.interest.filter((e) => e.userId !== b.userId);
+    if (wasQueued && !other) {
+      notify(b.userId, "hold-released",
+        `You're booked for ${b.snapshot.location} — your spot in another HYROX venue queue was released.`,
+        `#/booking/${b.id}`);
+    }
   }
   notify(b.userId, "payment-confirmed",
     `Payment confirmed — you're booked for ${b.snapshot.name} · ${fmtDate(b.snapshot.dateISO)}.`,
     `#/booking/${b.id}`);
   save();
+  if (b.cycleId && now >= hyroxCycleById(b.cycleId).paymentDeadlineAt
+      && state.bookings.every((item) => item.cycleId !== b.cycleId
+        || item.status !== "reserved" || !item.paymentMarkedAt)) {
+    finalizeHyroxVenuePlan(b.cycleId, now);
+  }
   return { booking: b, receipt };
 }
 
 // Releasing an unpaid reservation is member self-service; confirmed booking
 // cancellation/refund remains an Admin operation while policy is unresolved.
 export function releaseReservation(bookingId, now = Date.now()) {
+  if (isLive()) {
+    return liveOps.liveReleaseReservation(bookingId);
+  }
   const booking = getBooking(bookingId);
   if (!booking || booking.status !== "reserved" || booking.paymentMarkedAt) return null;
   requireAuthorizedPaymentOwner(booking.userId);
+  if (booking.cycleId) {
+    const cycle = hyroxCycleById(booking.cycleId);
+    booking.status = "cancelled";
+    if (cycle && now < cycle.paymentDeadlineAt && cycle.registrationState === "open") {
+      promoteNextHyroxWaitlist(cycle, now);
+    }
+    save();
+    return booking;
+  }
   booking.status = "cancelled";
   cascadeSession(booking.sessionId, now);
   save();
@@ -1103,12 +1826,721 @@ export function cancelBooking(bookingId) {
   booking.status = "cancelled";
   const receipt = receiptForBooking(bookingId);
   if (receipt) receipt.status = "refunded";
+  if (booking.cycleId) fillHyroxSwitchVacancy(hyroxCycleById(booking.cycleId), booking.sessionId, Date.now());
   save();
   return booking;
 }
 
 // --- Checkpoint sweep & cascade --------------------------------------------
 // Deterministic: called internally on load with now = Date.now(). No timers.
+
+function hyroxCycleById(cycleId) {
+  return state.hyroxCycles?.[cycleId] || null;
+}
+
+function hyroxActiveBookings(cycleId) {
+  return state.bookings.filter((booking) => booking.cycleId === cycleId
+    && ["reserved", "confirmed"].includes(booking.status));
+}
+
+function hyroxQueueEntries(cycleId) {
+  return state.hyroxCycleQueues?.[cycleId] || [];
+}
+
+function hyroxQueueEntryForUser(cycleId, userId, kind = null) {
+  return hyroxQueueEntries(cycleId).find((entry) => entry.userId === userId
+    && (!kind || entry.kind === kind) && entry.status === "active") || null;
+}
+
+function hyroxCycleSnapshot(cycle) {
+  const bft = getSession(cycle.bftSessionId);
+  const midtown = getSession(cycle.midtownSessionId);
+  return {
+    venues: [bft, midtown].filter(Boolean).map((session) => ({
+      sessionId: session.id,
+      venue: session.location,
+      startTime: session.time,
+      capacity: session.capacity,
+    })),
+    name: "ITC HYROX",
+    kind: "paid",
+    bookingMode: "weekly_pool",
+    sessionDate: cycle.dateISO,
+    dateISO: cycle.dateISO,
+    time: null,
+    durationMin: null,
+    location: null,
+    price: bft?.price ?? 0,
+    priceHkd: bft?.price ?? 0,
+  };
+}
+
+function hyroxCycleForDateLocal(dateISO) {
+  return Object.values(state.hyroxCycles || {}).find((cycle) => cycle.dateISO === dateISO) || null;
+}
+
+export function hyroxCycles() {
+  if (isLive()) return liveOps.listLiveHyroxCycles();
+  return Object.values(state.hyroxCycles || {}).sort((a, b) => a.dateISO.localeCompare(b.dateISO));
+}
+
+export function hyroxCycleForDate(dateISO) {
+  if (isLive()) return liveOps.listLiveHyroxCycles().find((cycle) => cycle.dateISO === dateISO) || null;
+  return hyroxCycleForDateLocal(dateISO);
+}
+
+export function scheduleHyroxCycle(dateISO) {
+  if (isLive()) return liveOps.liveScheduleHyroxCycle(hyroxCycleId(dateISO));
+  requirePaymentAdminActor();
+  const id = hyroxCycleId(dateISO);
+  const date = new Date(`${dateISO}T00:00:00Z`);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(dateISO) || date.getUTCDay() !== 6) {
+    throw new Error("HYROX cycle date must be a Saturday.");
+  }
+  const existing = hyroxCycleById(id);
+  if (existing) return existing;
+  const bftSession = getSession(`hyrox-bft-${dateISO}`);
+  const midtownSession = getSession(`hyrox-midtown-${dateISO}`);
+  if (!bftSession || !midtownSession) throw new Error("HYROX cycle sessions are unavailable.");
+  for (const sessionId of [bftSession.id, midtownSession.id]) {
+    if (state.bookings.some((booking) => booking.sessionId === sessionId
+      && ["reserved", "confirmed"].includes(booking.status))) {
+      throw new Error("Active venue-specific bookings must be resolved before scheduling.");
+    }
+    const queue = state.queues?.[sessionId];
+    if (queue?.waitlist?.length || queue?.interest?.length) {
+      throw new Error("Active venue-specific queues must be resolved before scheduling.");
+    }
+  }
+  const cycle = {
+    id,
+    dateISO,
+    bftSessionId: bftSession.id,
+    midtownSessionId: midtownSession.id,
+    registrationState: "draft",
+    venuePlan: "pending",
+    capacity: HYROX_POOL_CAPACITY,
+    registrationOpensAt: hyroxRegistrationOpensAt(dateISO),
+    paymentDeadlineAt: hyroxPaymentDeadline(dateISO),
+    holderGraceDeadlineAt: hyroxHolderGraceDeadline(dateISO),
+    promotedPaymentDeadlineAt: hyroxPromotedPaymentDeadline(dateISO),
+    venueChoiceDeadlineAt: hyroxChoiceDeadline(dateISO),
+    capacityWarningSentAt: null,
+    paymentReminderSentAt: null,
+    collectorPaymentReminderSentAt: null,
+    venueChoiceReminderSentAt: null,
+    venueFinalizationReminderSentAt: null,
+    holderGraceStartedAt: null,
+    waitlistPromotedAt: null,
+    reconciliationStartedAt: null,
+    openedAt: null,
+    planConfirmedAt: null,
+    planConfirmedBy: null,
+    planConfirmedSource: null,
+    allocationClosedAt: null,
+    cancelledAt: null,
+    cancelReason: null,
+    createdAt: Date.now(),
+  };
+  state.hyroxCycles[id] = cycle;
+  state.hyroxCycleQueues[id] = [];
+  save();
+  return cycle;
+}
+
+export function reserveHyroxCycle(userId, cycleId, preference, fallbackAcknowledged, now = Date.now()) {
+  if (isLive()) return liveOps.liveReserveHyroxCycle(cycleId, preference, fallbackAcknowledged);
+  requireAuthorizedPaymentOwner(userId);
+  const cycle = hyroxCycleById(cycleId);
+  if (!cycle) throw new Error("HYROX cycle not found.");
+  if (!["bft", "midtown", "either"].includes(preference)) {
+    throw new Error("Choose BFT, Midtown, or Either.");
+  }
+  if (!fallbackAcknowledged) throw new Error("Fallback acknowledgement is required.");
+  if (cycle.registrationState === "cancelled") throw new Error("This HYROX cycle is cancelled.");
+  if (now < cycle.registrationOpensAt) throw new Error("HYROX registration opens Monday at 6 PM HKT.");
+  if (now >= cycle.paymentDeadlineAt) throw new Error("HYROX registration is closed.");
+  if (cycle.registrationState === "draft") {
+    cycle.registrationState = "open";
+    cycle.openedAt ||= now;
+  } else if (cycle.registrationState !== "open") {
+    throw new Error("HYROX registration is closed.");
+  }
+  if (hyroxActiveBookings(cycleId).some((booking) => booking.userId === userId)
+      || hyroxQueueEntryForUser(cycleId, userId)) {
+    throw new Error("You already joined this HYROX registration.");
+  }
+  const quarryBooking = state.bookings.find((booking) => booking.userId === userId
+    && ["reserved", "confirmed"].includes(booking.status)
+    && booking.sessionId === `hyrox-quarry-bay-${cycle.dateISO}`);
+  if (quarryBooking) throw new Error("You already have a HYROX booking for this Saturday.");
+  if (hyroxActiveBookings(cycleId).length >= cycle.capacity) {
+    throw new Error("HYROX registration is full. Join the weekly waitlist.");
+  }
+  const booking = {
+    id: uid("b"), userId, sessionId: null, cycleId, status: "reserved",
+    createdAt: now, reservedAt: now, payDeadlineAt: cycle.holderGraceDeadlineAt,
+    paymentMarkedAt: null, paidAt: null, paidMethod: null, paymentRef: null,
+    confirmedBy: null, deferredTo: null, deferredFrom: null,
+    attendedAt: null, attendedBy: null,
+    venuePreference: preference, fallbackAcknowledgedAt: now,
+    promotedFromWaitlistAt: null, allocationState: null, allocationSource: null,
+    allocatedAt: null, allocationSnapshot: null, paymentRejectedAt: null,
+    paymentRejectedBy: null, paymentRejectionReason: null,
+    snapshot: hyroxCycleSnapshot(cycle),
+  };
+  state.bookings.push(booking);
+  notify(userId, "hyrox-reserved", "HYROX place reserved — mark payment by Thursday at 6 PM HKT.", `#/pay/${booking.id}`);
+  save();
+  return booking;
+}
+
+function createHyroxWaitlistBooking(cycle, entry, now, deadline, promoted = false) {
+  const booking = {
+    id: uid("b"), userId: entry.userId, sessionId: null, cycleId: cycle.id,
+    status: "reserved", createdAt: now, reservedAt: now, payDeadlineAt: deadline,
+    paymentMarkedAt: null, paidAt: null, paidMethod: null, paymentRef: null,
+    confirmedBy: null, deferredTo: null, deferredFrom: null,
+    attendedAt: null, attendedBy: null,
+    venuePreference: entry.venuePreference, fallbackAcknowledgedAt: entry.fallbackAcknowledgedAt,
+    promotedFromWaitlistAt: promoted ? now : null, allocationState: null,
+    allocationSource: null, allocatedAt: null, allocationSnapshot: null,
+    paymentRejectedAt: null, paymentRejectedBy: null, paymentRejectionReason: null,
+    snapshot: hyroxCycleSnapshot(cycle),
+  };
+  state.bookings.push(booking);
+  entry.status = "promoted";
+  entry.resolvedAt = now;
+  notify(entry.userId, promoted ? "hyrox-promoted" : "hyrox-waitlist-promoted",
+    promoted
+      ? "A HYROX place opened — mark payment by the promoted deadline."
+      : "A HYROX place opened — mark payment by Thursday at 6 PM HKT.",
+    `#/pay/${booking.id}`);
+  return booking;
+}
+
+function promoteNextHyroxWaitlist(cycle, now) {
+  const entry = hyroxQueueEntries(cycle.id)
+    .filter((item) => item.kind === "weekly_waitlist" && item.status === "active")
+    .sort((a, b) => (a.joinedAt - b.joinedAt) || a.id.localeCompare(b.id))[0];
+  if (!entry) return null;
+  return createHyroxWaitlistBooking(cycle, entry, now, cycle.holderGraceDeadlineAt);
+}
+
+export function joinHyroxCycleWaitlist(userId, cycleId, preference, fallbackAcknowledged, now = Date.now()) {
+  if (isLive()) return liveOps.liveJoinHyroxCycleWaitlist(cycleId, preference, fallbackAcknowledged);
+  requireAuthorizedPaymentOwner(userId);
+  const cycle = hyroxCycleById(cycleId);
+  if (!cycle) throw new Error("HYROX cycle not found.");
+  if (!["bft", "midtown", "either"].includes(preference)) throw new Error("Choose BFT, Midtown, or Either.");
+  if (!fallbackAcknowledged) throw new Error("Fallback acknowledgement is required.");
+  if (cycle.registrationState === "cancelled") throw new Error("This HYROX cycle is cancelled.");
+  if (now < cycle.registrationOpensAt) throw new Error("HYROX registration opens Monday at 6 PM HKT.");
+  if (now >= cycle.paymentDeadlineAt) throw new Error("HYROX registration is closed.");
+  if (cycle.registrationState === "draft") {
+    cycle.registrationState = "open";
+    cycle.openedAt ||= now;
+  } else if (cycle.registrationState !== "open") {
+    throw new Error("HYROX registration is closed.");
+  }
+  if (hyroxActiveBookings(cycleId).some((booking) => booking.userId === userId)
+      || hyroxQueueEntryForUser(cycleId, userId)) {
+    throw new Error("You already joined this HYROX registration.");
+  }
+  if (hyroxActiveBookings(cycleId).length < cycle.capacity) throw new Error("HYROX places are still available.");
+  const entry = {
+    id: uid("hq"), cycleId, userId, kind: "weekly_waitlist", targetSessionId: null,
+    venuePreference: preference, fallbackAcknowledgedAt: now, status: "active",
+    joinedAt: now, resolvedAt: null,
+  };
+  (state.hyroxCycleQueues[cycleId] ||= []).push(entry);
+  notify(userId, "hyrox-waitlisted", "HYROX is full — you are on the weekly waitlist.", "#/schedule");
+  save();
+  return entry;
+}
+
+export function leaveHyroxCycleQueue(userId, entryId) {
+  if (isLive()) return liveOps.liveLeaveHyroxCycleQueue(entryId);
+  const entry = Object.values(state.hyroxCycleQueues || {}).flat().find((item) => item.id === entryId);
+  if (!entry || entry.userId !== userId || entry.status !== "active") return null;
+  entry.status = "left";
+  entry.resolvedAt = Date.now();
+  save();
+  return entry;
+}
+
+export function hyroxCycleQueues(cycleId) {
+  if (isLive()) return liveOps.liveHyroxQueuesForCycle(cycleId);
+  const rows = hyroxQueueEntries(cycleId);
+  return {
+    weeklyWaitlist: rows.filter((entry) => entry.kind === "weekly_waitlist" && entry.status === "active")
+      .sort((a, b) => (a.joinedAt - b.joinedAt) || a.id.localeCompare(b.id)),
+    venueSwitches: rows.filter((entry) => entry.kind === "venue_switch" && entry.status === "active")
+      .sort((a, b) => (a.joinedAt - b.joinedAt) || a.id.localeCompare(b.id)),
+  };
+}
+
+export function hyroxCycleQueuePosition(userId, cycleId, kind = "weekly_waitlist", targetSessionId = null) {
+  const queue = hyroxCycleQueues(cycleId)[kind === "venue_switch" ? "venueSwitches" : "weeklyWaitlist"]
+    .filter((entry) => targetSessionId == null || entry.targetSessionId === targetSessionId);
+  const index = queue.findIndex((entry) => entry.userId === userId);
+  return index < 0 ? null : index + 1;
+}
+
+export function sweepHyroxCycleDeadlines(now = Date.now()) {
+  if (isLive()) return liveOps.liveSweepHyroxDeadlines({ now });
+  let dirty = false;
+  for (const cycle of Object.values(state.hyroxCycles || {})) {
+    if (cycle.registrationState === "cancelled") continue;
+    if (cycle.registrationState === "draft" && now >= cycle.registrationOpensAt) {
+      cycle.registrationState = "open";
+      cycle.openedAt ||= now;
+      dirty = true;
+      for (const user of state.users.filter((item) => ["member", "admin", "super_admin"].includes(item.role)
+        && item.status === "approved")) {
+        notify(user.id, "hyrox-registration-opened",
+          `HYROX registration is open for Saturday ${cycle.dateISO}.`, "#/schedule");
+      }
+    }
+    if (now >= hyroxPaymentReminderAt(cycle.dateISO) && !cycle.paymentReminderSentAt) {
+      cycle.paymentReminderSentAt = now;
+      dirty = true;
+      state.bookings.filter((booking) => booking.cycleId === cycle.id
+        && booking.status === "reserved" && !booking.paymentMarkedAt
+        && !booking.promotedFromWaitlistAt)
+        .forEach((booking) => {
+          const user = state.users.find((candidate) => candidate.id === booking.userId);
+          if (user?.hyroxPaymentReminders !== false) {
+            notify(booking.userId, "hyrox-payment-reminder",
+              "HYROX payment reminder — mark payment by Thursday at 6 PM HKT.", `#/pay/${booking.id}`);
+          }
+        });
+    }
+    if (now >= hyroxPaymentReminderAt(cycle.dateISO) && !cycle.collectorPaymentReminderSentAt) {
+      const collector = collectorFor(cycle.bftSessionId || cycle.midtownSessionId);
+      if (collector?.id) {
+        const bookings = state.bookings.filter((booking) => booking.cycleId === cycle.id
+          && booking.status === "reserved" && !booking.promotedFromWaitlistAt);
+        const queues = hyroxQueueEntries(cycle.id).filter((entry) => entry.kind === "weekly_waitlist"
+          && entry.status === "active");
+        const marked = bookings.filter((booking) => booking.paymentMarkedAt).length;
+        const unmarked = bookings.length - marked;
+        notify(collector.id, "hyrox-collector-payment-reminder",
+          `HYROX payments due at 6 PM HKT — ${marked} payment claims, ${unmarked} unmarked holders, ${queues.length} weekly waitlist for ${cycle.dateISO}.`,
+          "#/admin/payments");
+        cycle.collectorPaymentReminderSentAt = now;
+        dirty = true;
+      }
+    }
+    if (now >= cycle.venueChoiceDeadlineAt - 2 * 3600 * 1000
+        && !cycle.venueChoiceReminderSentAt) {
+      cycle.venueChoiceReminderSentAt = now;
+      dirty = true;
+      state.bookings.filter((booking) => booking.cycleId === cycle.id
+        && booking.status === "confirmed"
+        && booking.allocationState === "provisional")
+        .forEach((booking) => notify(booking.userId, "hyrox-venue-choice-reminder",
+          "Venue changes close Friday at 9 PM HKT. Review your HYROX venue preference before then.",
+          `#/booking/${booking.id}`));
+    }
+    if (now >= cycle.venueChoiceDeadlineAt && !cycle.venueFinalizationReminderSentAt) {
+      const venueSessionIds = cycle.venuePlan === "bft_only"
+        ? [cycle.bftSessionId]
+        : [cycle.bftSessionId, cycle.midtownSessionId];
+      const incomplete = !cycle.allocationClosedAt
+        || venueSessionIds.filter(Boolean).some((sessionId) => !getSession(sessionId)?.gymConfirmedAt);
+      const collector = collectorFor(cycle.bftSessionId || cycle.midtownSessionId);
+      if (collector?.id) {
+        if (incomplete) {
+          notify(collector.id, "hyrox-venue-finalization-reminder",
+            `HYROX venue finalization is due — close the allocation and confirm each enabled venue for ${cycle.dateISO}.`,
+            "#/admin/payments");
+        }
+        cycle.venueFinalizationReminderSentAt = now;
+        dirty = true;
+      }
+    }
+    if (now >= cycle.paymentDeadlineAt && !cycle.holderGraceStartedAt) {
+      cycle.holderGraceStartedAt = now;
+      cycle.reconciliationStartedAt ||= now;
+      if (cycle.registrationState === "open") cycle.registrationState = "reconciling";
+      dirty = true;
+      state.bookings.filter((booking) => booking.cycleId === cycle.id
+        && booking.status === "reserved" && !booking.paymentMarkedAt)
+        .forEach((booking) => notify(booking.userId, "hyrox-holder-grace",
+          "Your HYROX place is held until Thursday at 7 PM HKT.", `#/pay/${booking.id}`));
+    }
+    if (now >= cycle.holderGraceDeadlineAt && !cycle.waitlistPromotedAt) {
+      const originalHolders = state.bookings.filter((booking) => booking.cycleId === cycle.id
+        && booking.status === "reserved" && !booking.paymentMarkedAt
+        && !booking.promotedFromWaitlistAt);
+      for (const booking of originalHolders) {
+        booking.status = "expired";
+        const entries = hyroxQueueEntries(cycle.id);
+        if (!entries.some((entry) => entry.userId === booking.userId && entry.status === "active")) {
+          entries.push({
+            id: uid("hq"), cycleId: cycle.id, userId: booking.userId,
+            kind: "weekly_waitlist", targetSessionId: null,
+            venuePreference: booking.venuePreference,
+            fallbackAcknowledgedAt: booking.fallbackAcknowledgedAt,
+            status: "active", joinedAt: now, resolvedAt: null,
+          });
+        }
+        notify(booking.userId, "hyrox-moved-to-waitlist",
+          "Your unpaid HYROX place moved to the back of the weekly waitlist.", "#/schedule");
+      }
+      const preExisting = hyroxQueueEntries(cycle.id)
+        .filter((entry) => entry.kind === "weekly_waitlist" && entry.status === "active"
+          && entry.joinedAt < cycle.holderGraceDeadlineAt)
+        .sort((a, b) => (a.joinedAt - b.joinedAt) || a.id.localeCompare(b.id));
+      for (const entry of preExisting) {
+        if (hyroxActiveBookings(cycle.id).length >= cycle.capacity) break;
+        createHyroxWaitlistBooking(cycle, entry, now, cycle.promotedPaymentDeadlineAt, true);
+      }
+      cycle.waitlistPromotedAt = now;
+      dirty = true;
+    }
+    if (now >= cycle.promotedPaymentDeadlineAt) {
+      state.bookings.filter((booking) => booking.cycleId === cycle.id
+        && booking.status === "reserved" && booking.promotedFromWaitlistAt
+        && !booking.paymentMarkedAt)
+        .forEach((booking) => {
+          booking.status = "expired";
+          notify(booking.userId, "hyrox-promotion-expired",
+            "Your promoted HYROX place expired at Thursday 8 PM HKT.", "#/schedule");
+          dirty = true;
+        });
+      const activeEntries = hyroxQueueEntries(cycle.id).filter((entry) => entry.status === "active");
+      for (const entry of activeEntries) {
+        entry.status = "dissolved";
+        entry.resolvedAt = now;
+        notify(entry.userId, "hyrox-waitlist-closed",
+          "The HYROX weekly waitlist is now closed for this week.", "#/schedule");
+        dirty = true;
+      }
+      if (cycle.registrationState !== "closed") {
+        cycle.registrationState = "closed";
+        dirty = true;
+      }
+    }
+  }
+  if (dirty) save();
+  return state.hyroxCycles;
+}
+
+function hyroxAllocationVenue(sessionId) {
+  const session = getSession(sessionId);
+  return session ? {
+    sessionId: session.id,
+    venue: session.location,
+    startTime: session.time,
+    capacity: session.capacity,
+  } : { sessionId, venue: null, startTime: null, capacity: null };
+}
+
+function appendHyroxAllocation(booking, sessionId, source, now) {
+  booking.allocationSnapshot = [
+    ...(Array.isArray(booking.allocationSnapshot) ? booking.allocationSnapshot : []),
+    { ...hyroxAllocationVenue(sessionId), source, assignedAt: now },
+  ];
+  booking.sessionId = sessionId;
+  booking.allocationState = "provisional";
+  booking.allocationSource = source;
+  booking.allocatedAt = now;
+}
+
+function hyroxCycleForSession(sessionId) {
+  return Object.values(state.hyroxCycles || {}).find((cycle) =>
+    cycle.bftSessionId === sessionId || cycle.midtownSessionId === sessionId) || null;
+}
+
+function hyroxAssertSwitchable(booking, cycle, now) {
+  if (!cycle || cycle.venuePlan !== "both") throw new Error("Venue changes are available only when both gyms open.");
+  if (booking.status !== "confirmed" || booking.allocationState !== "provisional") {
+    throw new Error("Booking allocation is not changeable.");
+  }
+  if (now >= cycle.venueChoiceDeadlineAt) throw new Error("Venue changes closed Friday at 9 PM HKT.");
+}
+
+function hyroxAssertTarget(cycle, sessionId) {
+  if (![cycle.bftSessionId, cycle.midtownSessionId].includes(sessionId)) {
+    throw new Error("Target venue is not part of this HYROX cycle.");
+  }
+  return getSession(sessionId);
+}
+
+function hyroxConfirmedCount(cycleId, sessionId = null) {
+  return state.bookings.filter((booking) => booking.cycleId === cycleId
+    && booking.status === "confirmed" && (sessionId == null || booking.sessionId === sessionId)).length;
+}
+
+function fillHyroxSwitchVacancy(cycle, sessionId, now) {
+  if (!cycle || !sessionId) return null;
+  const target = getSession(sessionId);
+  if (!target) return null;
+  if (hyroxConfirmedCount(cycle.id, sessionId) >= target.capacity) return null;
+  const entry = hyroxQueueEntries(cycle.id)
+    .filter((item) => item.kind === "venue_switch" && item.status === "active"
+      && item.targetSessionId === sessionId)
+    .sort((a, b) => (a.joinedAt - b.joinedAt) || a.id.localeCompare(b.id))[0];
+  if (!entry) return null;
+  const booking = state.bookings.find((item) => item.cycleId === cycle.id
+    && item.userId === entry.userId && item.status === "confirmed");
+  if (!booking) {
+    entry.status = "dissolved";
+    entry.resolvedAt = now;
+    return null;
+  }
+  appendHyroxAllocation(booking, sessionId, "member", now);
+  booking.allocationState = "provisional";
+  entry.status = "matched";
+  entry.resolvedAt = now;
+  const receipt = receiptForBooking(booking.id);
+  if (receipt) receipt.sessionId = sessionId;
+  notify(booking.userId, "hyrox-venue-switch-matched", "Your HYROX venue switch is confirmed.", `#/booking/${booking.id}`);
+  return booking;
+}
+
+export function rejectHyroxCyclePayment(bookingId, reason, now = Date.now()) {
+  if (isLive()) return liveOps.liveRejectHyroxPayment(bookingId, reason);
+  const actor = requirePaymentAdminActor();
+  const booking = getBooking(bookingId);
+  const cleanReason = String(reason || "").trim();
+  if (!cleanReason) throw new Error("Payment rejection reason is required.");
+  if (!booking?.cycleId) throw new Error("Pooled HYROX booking not found.");
+  if (booking.status !== "reserved" || !booking.paymentMarkedAt) {
+    throw new Error("Booking has no pending payment claim.");
+  }
+  if (now < booking.payDeadlineAt) {
+    booking.paymentMarkedAt = null;
+    booking.paidMethod = null;
+    booking.paymentRef = null;
+  } else {
+    booking.status = "expired";
+  }
+  booking.paymentRejectedAt = now;
+  booking.paymentRejectedBy = actor.id;
+  booking.paymentRejectionReason = cleanReason;
+  notify(booking.userId, "hyrox-payment-rejected", cleanReason,
+    booking.status === "reserved" ? `#/pay/${booking.id}` : "#/schedule");
+  save();
+  const cycle = hyroxCycleById(booking.cycleId);
+  if (cycle && now >= cycle.paymentDeadlineAt
+      && state.bookings.every((item) => item.cycleId !== cycle.id
+        || item.status !== "reserved" || !item.paymentMarkedAt)) {
+    finalizeHyroxVenuePlan(cycle.id, now);
+  }
+  return booking;
+}
+
+export function finalizeHyroxVenuePlan(cycleId, now = Date.now()) {
+  if (isLive()) return liveOps.liveFinalizeHyroxVenuePlan(cycleId);
+  const actor = requirePaymentAdminActor();
+  const cycle = hyroxCycleById(cycleId);
+  if (!cycle) throw new Error("HYROX cycle not found.");
+  if (cycle.venuePlan !== "pending") return cycle;
+  if (now < cycle.paymentDeadlineAt) throw new Error("Payment reconciliation has not started.");
+  if (state.bookings.some((booking) => booking.cycleId === cycleId
+      && booking.status === "reserved" && booking.paymentMarkedAt)) {
+    throw new Error("Unresolved marked HYROX payments remain.");
+  }
+  const confirmed = hyroxActiveBookings(cycleId).filter((booking) => booking.status === "confirmed");
+  if (confirmed.length > cycle.capacity) throw new Error("Confirmed HYROX payments exceed cycle capacity.");
+  const mode = confirmed.length <= 20 ? "bft_only" : "both";
+  const allocationState = mode === "bft_only" || now >= cycle.venueChoiceDeadlineAt ? "final" : "provisional";
+  const candidates = mode === "bft_only"
+    ? confirmed.map((booking) => ({ ...booking, venuePreference: "bft" }))
+    : confirmed;
+  const allocations = allocateHyroxVenues(candidates, {
+    bftSessionId: cycle.bftSessionId,
+    midtownSessionId: cycle.midtownSessionId,
+  });
+  for (const allocation of allocations) {
+    const booking = state.bookings.find((item) => item.id === allocation.bookingId);
+    appendHyroxAllocation(booking, allocation.sessionId, allocation.source, now);
+    booking.allocationState = allocationState;
+    const receipt = receiptForBooking(booking.id);
+    if (receipt) receipt.sessionId = allocation.sessionId;
+    notify(booking.userId, "hyrox-venue-allocated",
+      `Your HYROX venue is ${hyroxAllocationVenue(allocation.sessionId).venue}.`
+        + (allocationState === "provisional" ? " Venue changes close Friday at 9 PM HKT." : ""),
+      `#/booking/${booking.id}`);
+  }
+  cycle.registrationState = "closed";
+  cycle.venuePlan = mode;
+  cycle.reconciliationStartedAt ||= now;
+  cycle.planConfirmedAt = now;
+  cycle.planConfirmedBy = actor.id;
+  cycle.planConfirmedSource = "payment_reconciliation";
+  cycle.allocationClosedAt = allocationState === "final" ? now : null;
+  save();
+  return cycle;
+}
+
+export function selectHyroxCycleVenue(bookingId, sessionId, now = Date.now()) {
+  if (isLive()) return liveOps.liveSelectHyroxVenue(bookingId, sessionId);
+  const booking = getBooking(bookingId);
+  if (!booking?.cycleId) throw new Error("Pooled HYROX booking not found.");
+  requireAuthorizedPaymentOwner(booking.userId);
+  const cycle = hyroxCycleById(booking.cycleId);
+  hyroxAssertSwitchable(booking, cycle, now);
+  const target = hyroxAssertTarget(cycle, sessionId);
+  if (booking.sessionId === sessionId) return booking;
+  if (hyroxConfirmedCount(cycle.id, sessionId) >= target.capacity) throw new Error("Target venue is full.");
+  appendHyroxAllocation(booking, sessionId, "member", now);
+  const request = hyroxQueueEntries(cycle.id).find((entry) => entry.kind === "venue_switch"
+    && entry.userId === booking.userId && entry.status === "active");
+  if (request) { request.status = "matched"; request.resolvedAt = now; }
+  const receipt = receiptForBooking(booking.id);
+  if (receipt) receipt.sessionId = sessionId;
+  notify(booking.userId, "hyrox-venue-changed", `Your HYROX venue is now ${target.location}.`, `#/booking/${booking.id}`);
+  save();
+  return booking;
+}
+
+export function joinHyroxVenueSwitchQueue(bookingId, sessionId, now = Date.now()) {
+  if (isLive()) return liveOps.liveJoinHyroxVenueSwitchQueue(bookingId, sessionId);
+  const booking = getBooking(bookingId);
+  if (!booking?.cycleId) throw new Error("Pooled HYROX booking not found.");
+  requireAuthorizedPaymentOwner(booking.userId);
+  const cycle = hyroxCycleById(booking.cycleId);
+  hyroxAssertSwitchable(booking, cycle, now);
+  const target = hyroxAssertTarget(cycle, sessionId);
+  if (booking.sessionId === sessionId) throw new Error("Choose the other venue in this HYROX cycle.");
+  const entries = hyroxQueueEntries(cycle.id);
+  if (entries.some((entry) => entry.userId === booking.userId && entry.kind === "venue_switch" && entry.status === "active")) {
+    throw new Error("You already have an active HYROX queue request.");
+  }
+  const targetFull = hyroxConfirmedCount(cycle.id, sessionId) >= target.capacity;
+  if (!targetFull) {
+    appendHyroxAllocation(booking, sessionId, "member", now);
+    const entry = {
+      id: uid("hq"), cycleId: cycle.id, userId: booking.userId, kind: "venue_switch",
+      targetSessionId: sessionId, venuePreference: null, fallbackAcknowledgedAt: null,
+      status: "matched", joinedAt: now, resolvedAt: now,
+    };
+    entries.push(entry);
+    const receipt = receiptForBooking(booking.id);
+    if (receipt) receipt.sessionId = sessionId;
+    notify(booking.userId, "hyrox-venue-changed", `Your HYROX venue is now ${target.location}.`, `#/booking/${booking.id}`);
+    save();
+    return entry;
+  }
+  const opposite = entries
+    .filter((entry) => entry.kind === "venue_switch" && entry.status === "active"
+      && entry.targetSessionId === booking.sessionId)
+    .map((entry) => ({ entry, booking: state.bookings.find((item) => item.userId === entry.userId
+      && item.cycleId === cycle.id && item.status === "confirmed") }))
+    .find(({ booking: other }) => other?.sessionId === sessionId);
+  if (opposite) {
+    const currentSessionId = booking.sessionId;
+    appendHyroxAllocation(booking, sessionId, "switch_match", now);
+    appendHyroxAllocation(opposite.booking, currentSessionId, "switch_match", now);
+    opposite.entry.status = "matched";
+    opposite.entry.resolvedAt = now;
+    const entry = {
+      id: uid("hq"), cycleId: cycle.id, userId: booking.userId, kind: "venue_switch",
+      targetSessionId: sessionId, venuePreference: null, fallbackAcknowledgedAt: null,
+      status: "matched", joinedAt: now, resolvedAt: now,
+    };
+    entries.push(entry);
+    for (const item of [booking, opposite.booking]) {
+      const receipt = receiptForBooking(item.id);
+      if (receipt) receipt.sessionId = item.sessionId;
+      notify(item.userId, "hyrox-venue-switch-matched", "Your HYROX venue switch is confirmed.", `#/booking/${item.id}`);
+    }
+    save();
+    return entry;
+  }
+  const entry = {
+    id: uid("hq"), cycleId: cycle.id, userId: booking.userId, kind: "venue_switch",
+    targetSessionId: sessionId, venuePreference: null, fallbackAcknowledgedAt: null,
+    status: "active", joinedAt: now, resolvedAt: null,
+  };
+  entries.push(entry);
+  notify(booking.userId, "hyrox-switch-waitlisted", "Your current HYROX venue remains confirmed while you wait.", `#/booking/${booking.id}`);
+  save();
+  return entry;
+}
+
+export function leaveHyroxVenueSwitchQueue(entryId) {
+  if (isLive()) return liveOps.liveLeaveHyroxVenueSwitchQueue(entryId);
+  const entry = Object.values(state.hyroxCycleQueues || {}).flat().find((item) => item.id === entryId);
+  if (!entry || entry.kind !== "venue_switch" || entry.status !== "active") return null;
+  requireAuthorizedPaymentOwner(entry.userId);
+  entry.status = "left";
+  entry.resolvedAt = Date.now();
+  save();
+  return entry;
+}
+
+export function closeHyroxVenueAllocation(cycleId, now = Date.now()) {
+  if (isLive()) return liveOps.liveCloseHyroxVenueAllocation(cycleId);
+  requirePaymentAdminActor();
+  const cycle = hyroxCycleById(cycleId);
+  if (!cycle) throw new Error("HYROX cycle not found.");
+  if (cycle.allocationClosedAt) return cycle;
+  if (cycle.venuePlan === "pending" || cycle.registrationState !== "closed") throw new Error("HYROX venue plan is not ready.");
+  if (now < cycle.venueChoiceDeadlineAt) throw new Error("Venue changes close Friday at 9 PM HKT.");
+  state.bookings.filter((booking) => booking.cycleId === cycleId && booking.status === "confirmed"
+    && booking.allocationState === "provisional").forEach((booking) => { booking.allocationState = "final"; booking.allocatedAt = now; });
+  hyroxQueueEntries(cycleId).filter((entry) => entry.kind === "venue_switch" && entry.status === "active")
+    .forEach((entry) => { entry.status = "dissolved"; entry.resolvedAt = now; });
+  cycle.allocationClosedAt = now;
+  save();
+  return cycle;
+}
+
+export function cancelHyroxCycle(cycleId, reason, now = Date.now()) {
+  if (isLive()) return liveOps.liveCancelHyroxCycle(cycleId, reason);
+  const actor = requirePaymentAdminActor();
+  const cycle = hyroxCycleById(cycleId);
+  const cleanReason = String(reason || "").trim();
+  if (!cleanReason) throw new Error("Cancellation reason is required.");
+  if (!cycle) throw new Error("HYROX cycle not found.");
+  if (cycle.registrationState === "cancelled") throw new Error("HYROX cycle is already cancelled.");
+  cycle.registrationState = "cancelled";
+  cycle.cancelledAt = now;
+  cycle.cancelReason = cleanReason;
+  for (const sessionId of [cycle.bftSessionId, cycle.midtownSessionId]) {
+    (state.sessionOverrides[sessionId] ||= {}).cancelled = cleanReason;
+  }
+  for (const booking of state.bookings.filter((item) => item.cycleId === cycleId)) {
+    if (booking.status === "reserved") booking.status = "cancelled";
+  }
+  for (const entry of hyroxQueueEntries(cycleId).filter((item) => item.status === "active")) {
+    entry.status = "dissolved";
+    entry.resolvedAt = now;
+  }
+  const target = Object.values(state.hyroxCycles || {})
+    .filter((item) => item.dateISO > cycle.dateISO && item.registrationState === "open"
+      && now < item.paymentDeadlineAt && hyroxActiveBookings(item.id).length < item.capacity)
+    .sort((a, b) => a.dateISO.localeCompare(b.dateISO))[0];
+  for (const booking of state.bookings.filter((item) => item.cycleId === cycleId && item.status === "confirmed")) {
+    if (!target) {
+      notify(booking.userId, "hyrox-cycle-cancelled-no-deferral", "ITC cancelled this HYROX session. If you have paid and would like to apply it to a future ITC HYROX session, contact the collector.", "#/schedule");
+      continue;
+    }
+    const moved = {
+      ...structuredClone(booking), id: uid("b"), cycleId: target.id, sessionId: null,
+      status: "confirmed", createdAt: now, reservedAt: now, deferredFrom: booking.id,
+      deferredTo: null, snapshot: hyroxCycleSnapshot(target), allocationState: null,
+      allocationSource: null, allocatedAt: null, allocationSnapshot: null,
+    };
+    booking.status = "deferred";
+    booking.deferredTo = moved.id;
+    state.bookings.push(moved);
+    const receipt = receiptForBooking(booking.id);
+    if (receipt) { receipt.bookingId = moved.id; receipt.cycleId = target.id; receipt.sessionId = null; }
+    notify(booking.userId, "hyrox-cycle-deferred", `Your paid HYROX place was moved to ${target.dateISO}.`, `#/booking/${moved.id}`);
+  }
+  state.users.filter((user) => ["member", "admin", "super_admin"].includes(user.role)
+    && user.status === "approved").forEach((user) => notify(user.id, "hyrox-cycle-cancelled",
+      `The HYROX cycle on ${cycle.dateISO} was cancelled: ${cleanReason}.`, "#/schedule"));
+  cycle.planConfirmedBy ||= actor.id;
+  save();
+  return cycle;
+}
 
 function paymentQueueFor(sessionId) {
   if (isLive()) {
@@ -1256,14 +2688,14 @@ export function interestPosition(userId, sessionId) {
 export function getSession(sessionId) {
   if (isLive()) {
     const live = liveOps.getLiveSession(sessionId);
-    if (live) return live;
-    // Free events live only in local state; the live cache has no row.
-    const local = findSession(state.activities, sessionId);
-    if (local) return decorateFreeSession(local);
-    return null;
+    return live ? applyWntLeaderNote({ ...live }) : null;
   }
   const s = findSession(state.activities, sessionId);
-  if (!s) return null;
+  if (!s) {
+    const event = state.oneOffEvents.find((e) => `${e.id}-${e.dateISO}` === sessionId);
+    if (!event) return null;
+    return decorateSession(oneOffSessionFor(event));
+  }
   return decorateSession(s);
 }
 
@@ -1274,10 +2706,30 @@ function hasConfirmedVenue(location, mapsQuery) {
     && query && query.toUpperCase() !== "TBC");
 }
 
+const WNT_TBC_NOTE = "Meeting point to be confirmed — check back before Wednesday. Bring water and a friend.";
+const WNT_CONFIRMED_NOTE = "Bring water and a friend.";
+const WNT_CANONICAL_NOTES = new Set([
+  "Meeting point to be confirmed — check back before Wednesday. Bring water.",
+  WNT_TBC_NOTE,
+  WNT_CONFIRMED_NOTE,
+]);
+
+function applyWntLeaderNote(session) {
+  if (session?.activityId !== "wnt" || !WNT_CANONICAL_NOTES.has(String(session.memberNote || ""))) {
+    return session;
+  }
+  return {
+    ...session,
+    memberNote: hasConfirmedVenue(session.location, session.mapsQuery)
+      ? WNT_CONFIRMED_NOTE
+      : WNT_TBC_NOTE,
+  };
+}
+
 function decorateSession(s) {
   const o = state.sessionOverrides[s.id];
-  if (!o) return s;
   const out = { ...s };
+  if (!o) return applyWntLeaderNote(out);
   if (o.time) out.time = o.time;
   if (o.cancelled) { out.cancelled = true; out.cancelReason = o.cancelled; }
   if (o.venueTBC) { out.venueTBC = true; out.location = "TBC"; }
@@ -1290,19 +2742,7 @@ function decorateSession(s) {
   const point = normalizeMeetingPoint(o.meetingLat, o.meetingLng);
   if (point) Object.assign(out, { meetingLat: point.lat, meetingLng: point.lng });
   if (hasConfirmedVenue(out.location, out.mapsQuery)) out.venueTBC = false;
-  return out;
-}
-
-function decorateFreeSession(s) {
-  const o = liveOps.getLiveVenueOverride(s.id);
-  if (!o) return s;
-  const out = { ...s };
-  if (o.location) out.location = o.location;
-  if (o.mapsQuery) out.mapsQuery = o.mapsQuery;
-  const point = normalizeMeetingPoint(o.meetingLat, o.meetingLng);
-  if (point) Object.assign(out, { meetingLat: point.lat, meetingLng: point.lng });
-  if (hasConfirmedVenue(out.location, out.mapsQuery)) out.venueTBC = false;
-  return out;
+  return applyWntLeaderNote(out);
 }
 
 export function weekVenueOverride(sessionId) {
@@ -1326,44 +2766,59 @@ export function weekVenueOverride(sessionId) {
 // --- Next relevant activity (home) ---------------------------------------------------
 
 export function upcomingSessions(days = 14) {
+  const todayISO = todayHktISO();
+  const today = parseISO(todayISO);
   if (isLive()) {
-    const today = todayLocal().getTime();
-    const livePaid = liveOps.listLiveSessions()
-      .filter((s) => parseISO(s.dateISO).getTime() >= today)
-      .sort((a, b) => a.dateISO.localeCompare(b.dateISO))
-      .slice(0, days * 2)
-      .map((s) => ({
-        ...s,
-        spots: spotsLeft(s),
-        past: false,
-      }));
-    const freeSessions = sessionsInRange(
-      state.activities.filter((a) => a.kind === "free"),
-      todayLocal(),
-      days
-    ).map((s) => {
-      const decorated = decorateFreeSession(s);
-      return {
-        ...decorated,
-        spots: spotsLeft(decorated),
-        past: false,
-      };
-    });
-    return [...freeSessions, ...livePaid];
+    const end = new Date(today);
+    end.setDate(end.getDate() + days - 1);
+    const endISO = isoDate(end);
+    return liveOps.listLiveSessions()
+      .filter((s) => s.dateISO >= todayISO && s.dateISO <= endISO)
+      .map((s) => {
+        const decorated = applyWntLeaderNote(s);
+        return {
+          ...decorated,
+          spots: spotsLeft(decorated),
+          past: false,
+        };
+      })
+      .sort((a, b) =>
+        a.dateISO.localeCompare(b.dateISO) || String(a.time).localeCompare(String(b.time))
+      );
   }
-  const today = todayLocal();
-  return sessionsInRange(state.activities, today, days).map((s) => {
+  const todayStart = today.getTime();
+  const horizon = todayStart + days * 24 * 60 * 60 * 1000;
+  const oneOffs = state.oneOffEvents
+    .map(oneOffSessionFor)
+    .filter((s) => s.date.getTime() >= todayStart && s.date.getTime() < horizon)
+    .map((s) => {
+      const decorated = decorateSession(s);
+      return { ...decorated, spots: spotsLeft(decorated), past: false };
+    });
+  return [...sessionsInRange(state.activities, today, days).map((s) => {
     const decorated = decorateSession(s);
     return {
       ...decorated,
       spots: spotsLeft(decorated),
       past: false,
     };
-  });
+  }), ...oneOffs].sort((a, b) =>
+    a.dateISO.localeCompare(b.dateISO) || String(a.time).localeCompare(String(b.time))
+  );
 }
 
 export function nextSession() {
   return upcomingSessions(14)[0] ?? null;
+}
+
+export function nextSocialSession() {
+  const now = Date.now();
+  const latest = now + 7 * 24 * 60 * 60 * 1000;
+  return upcomingSessions(8).find((session) => {
+    if (session.category !== "Socials" || session.cancelled) return false;
+    const startMs = hktEventStartMs(session.dateISO, session.time);
+    return startMs >= now && startMs <= latest;
+  }) ?? null;
 }
 
 // --- Community: prayer requests ------------------------------------------------
@@ -1391,7 +2846,9 @@ export function recordPrayer({ userId, name, request }) {
 export function collectorFor(sessionId) {
   // Resolve identity from Supabase's in-memory directory in live mode and
   // compose only UUID-keyed payout operations from local persistence.
-  const withPayouts = (user) => user ? { ...user, ...(state.paymentPayouts[user.id] || {}) } : null;
+  const withPayouts = (user) => user
+    ? { ...user, ...payoutDetailsForRead(state.paymentPayouts[user.id]) }
+    : null;
   if (isLive()) {
     const dateISO = sessionDateOf(sessionId);
     if (dateISO) {
@@ -1400,7 +2857,7 @@ export function collectorFor(sessionId) {
         const payouts = liveOps.livePayoutFor(slot.userId);
         const directory = livePaymentDirectory.get(slot.userId);
         const assigned = directory || (payouts ? { id: slot.userId, fullName: "On-duty collector", preferredName: null } : null);
-        if (assigned) return payouts ? { ...assigned, ...payouts } : assigned;
+        if (assigned) return payouts ? { ...assigned, ...payoutDetailsForRead(payouts) } : assigned;
       }
     }
     const candidates = [...livePaymentDirectory.values()];
@@ -1418,7 +2875,12 @@ export function collectorFor(sessionId) {
       }
       const payouts = state.paymentPayouts[slot.userId];
       if (payouts) {
-        return { id: slot.userId, fullName: "On-duty collector", preferredName: null, ...payouts };
+        return {
+          id: slot.userId,
+          fullName: "On-duty collector",
+          preferredName: null,
+          ...payoutDetailsForRead(payouts),
+        };
       }
     }
   }
@@ -1449,31 +2911,108 @@ export function setDuty(userId, saturdayISO) {
   return state.duty[saturdayISO];
 }
 
+export function normalizePayMeLink(raw) {
+  let value = String(raw ?? "").trim();
+  if (!value) return "";
+  if (!/^[a-z][a-z\d+.-]*:\/\//i.test(value)) value = `https://${value}`;
+  let url;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new Error("Enter your personal PayMe link.");
+  }
+  const authority = value.slice(value.indexOf("//") + 2).split(/[\/?#]/, 1)[0];
+  const hasExplicitPort = authority.split("@").pop().includes(":");
+  const pathname = url.pathname.replace(/\/+$/, "");
+  const personalPath = pathname.split("/");
+  let routePrefix = "";
+  let collectorToken = "";
+  try {
+    routePrefix = decodeURIComponent(personalPath[1] || "");
+    collectorToken = decodeURIComponent(personalPath[2] || "");
+  } catch {
+    throw new Error("Enter your personal PayMe link from PayMe.");
+  }
+  const hostname = url.hostname.toLowerCase();
+  const validToken = (token) => !!token
+    && token.trim() === token
+    && !/[\\/]/.test(token);
+  const isCurrentPayMeLink = hostname === "payme.hsbc"
+    && personalPath.length === 2
+    && personalPath[0] === ""
+    && validToken(routePrefix);
+  const isLegacyPayMeLink = hostname === "payme.hsbc.com.hk"
+    && personalPath.length === 3
+    && personalPath[0] === ""
+    && /^[12]$/.test(routePrefix)
+    && validToken(collectorToken);
+  if (url.protocol !== "https:"
+      || url.username
+      || url.password
+      || url.port
+      || hasExplicitPort
+      || (!isCurrentPayMeLink && !isLegacyPayMeLink)) {
+    throw new Error("Enter your personal PayMe link from PayMe.");
+  }
+  url.pathname = pathname;
+  return url.toString();
+}
+
+function payoutDetailsForRead(payouts) {
+  const details = payouts || {};
+  let paymeLink = "";
+  try {
+    paymeLink = normalizePayMeLink(details.paymeLink);
+  } catch {
+    // Persisted or live legacy values must not break payout views.
+  }
+  return { ...details, paymeLink };
+}
+
 export function collectorPayoutsFor(userId) {
+  const profile = paymentUserById(userId);
+  const profilePhone = String(profile?.phone || "").trim();
   if (isLive()) {
     const live = liveOps.livePayoutFor(userId);
-    if (live) return { paymeLink: live.paymeLink || "", fpsPhone: live.fpsPhone || "" };
-    return { paymeLink: "", fpsPhone: "" };
+    if (live) {
+      const normalized = payoutDetailsForRead(live);
+      return { paymeLink: normalized.paymeLink, fpsPhone: live.fpsPhone || profilePhone };
+    }
+    return { paymeLink: "", fpsPhone: profilePhone };
   }
-  return { paymeLink: "", fpsPhone: "", ...(state.paymentPayouts[userId] || {}) };
+  const saved = payoutDetailsForRead(state.paymentPayouts[userId]);
+  return {
+    paymeLink: "",
+    fpsPhone: profilePhone || saved.fpsPhone || "",
+    ...saved,
+    // Membership Details is the source of truth whenever the local profile
+    // has a phone number.
+    ...(profilePhone ? { fpsPhone: profilePhone } : {}),
+  };
 }
 
 export function updateCollectorPayouts(userId, { paymeLink, fpsPhone }) {
+  const profile = paymentUserById(userId);
+  const profilePhone = String(profile?.phone || "").trim();
+  const resolvedFpsPhone = profilePhone || String(fpsPhone ?? "").trim();
   if (isLive()) {
-    const live = liveOps.liveUpdatePayout(userId, paymeLink, fpsPhone);
-    state.paymentPayouts[userId] = {
-      paymeLink: String(paymeLink ?? "").trim(),
-      fpsPhone: String(fpsPhone ?? "").trim(),
-    };
-    save();
-    return live;
+    const normalizedPayMeLink = normalizePayMeLink(paymeLink);
+    return liveOps.liveUpdatePayout(userId, normalizedPayMeLink, resolvedFpsPhone)
+      .then((result) => {
+        state.paymentPayouts[userId] = {
+          paymeLink: normalizedPayMeLink,
+          fpsPhone: resolvedFpsPhone,
+        };
+        save();
+        return result;
+      });
   }
   requirePaymentAdminActor();
   const target = paymentUserById(userId);
   if (!target || target.status !== "approved" || !PAYMENT_ADMIN_ROLES.has(target.role)) return null;
   state.paymentPayouts[target.id] = {
-    paymeLink: String(paymeLink ?? "").trim(),
-    fpsPhone: String(fpsPhone ?? "").trim(),
+    paymeLink: normalizePayMeLink(paymeLink),
+    fpsPhone: profilePhone || String(fpsPhone ?? "").trim(),
   };
   save();
   return collectorPayoutsFor(target.id);
@@ -1482,10 +3021,14 @@ export function updateCollectorPayouts(userId, { paymeLink, fpsPhone }) {
 // --- Deferral (defer-only policy; no member refunds) ------------------------
 
 export function deferTargetsFor(booking) {
+  if (booking?.cycleId) return [];
   const from = parseISO(booking.snapshot.dateISO);
+  const sourceActivityId = getSession(booking.sessionId)?.activityId;
+  if (!sourceActivityId) return [];
   if (isLive()) {
     const sources = liveOps.listLiveSessions();
     return sources
+      .filter((s) => s.activityId === sourceActivityId)
       .filter((s) => s.dateISO > booking.snapshot.dateISO && !s.cancelled)
       .filter((s) => !sessionStarted(s))
       .filter((s) => !(isMidtown(s) && !midtownOpenFor(s)))
@@ -1496,7 +3039,7 @@ export function deferTargetsFor(booking) {
     .map((s) => getSession(s.id))
     .filter(
       (s) =>
-        s && s.kind === "paid" && s.id !== booking.sessionId &&
+        s && s.activityId === sourceActivityId && s.kind === "paid" && s.id !== booking.sessionId &&
         !s.cancelled && !sessionStarted(s) &&
         (!isMidtown(s) || midtownOpenFor(s)) &&
         spotsLeft(s) > 0
@@ -1510,12 +3053,15 @@ export function deferBooking(bookingId, targetSessionId, now = Date.now()) {
   const b = getBooking(bookingId);
   if (!b || (b.status !== "reserved" && b.status !== "confirmed"))
     throw new Error("Booking cannot be deferred");
+  if (b.cycleId) throw new Error("Paid pooled HYROX bookings cannot be deferred.");
   requireAuthorizedPaymentOwner(b.userId);
   const src = getSession(b.sessionId);
   if (src && sessionStarted(src)) throw new Error("Session has already started");
   const target = getSession(targetSessionId);
   if (!target || target.kind !== "paid" || target.cancelled || sessionStarted(target))
     throw new Error("That session is not available");
+  if (!src || target.activityId !== src.activityId)
+    throw new Error("Target must be a session of the same activity");
   if (isMidtown(target) && !midtownOpenFor(target)) throw new Error("Session is not open");
   if (spotsLeft(target) <= 0) throw new Error("Session is full");
 
@@ -1558,40 +3104,273 @@ export function deferBooking(bookingId, targetSessionId, now = Date.now()) {
 
 // --- Per-week session admin --------------------------------------------------
 
+// --- One-off events -----------------------------------------------------------
+// Admin-created single-date events. Live mode stores them in Supabase (an
+// inactive template + one session row via RPC); local mode keeps them in
+// state.oneOffEvents as activity-shaped entries with a fixed dateISO.
+
+function oneOffSessionFor(event) {
+  const date = parseISO(event.dateISO);
+  return {
+    ...event,
+    id: `${event.id}-${event.dateISO}`,
+    activityId: event.id,
+    date,
+  };
+}
+
+// --- RSVP events ------------------------------------------------------------
+// Price-0 sessions that still need a headcount (e.g. the post-training
+// lunch): joining confirms instantly — no reserve/pay/confirm pipeline.
+
+export async function rsvpSession(userId, sessionOrId, now = Date.now()) {
+  const sessionId = typeof sessionOrId === "string" ? sessionOrId : sessionOrId?.id;
+  if (isLive()) {
+    // The reserve RPC branches on price_hkd = 0 and confirms immediately.
+    return liveOps.liveReserveSession(sessionId);
+  }
+  requireAuthorizedPaymentOwner(userId);
+  const session = getSession(sessionId);
+  if (!session) throw new Error("Unknown session");
+  if (!sessionRequiresRsvp(session) || Number(session.price ?? 0) > 0) {
+    throw new Error("Session is not an RSVP event");
+  }
+  if (session.cancelled) throw new Error("Session is cancelled");
+  if (sessionStarted(session)) throw new Error("Session has already started");
+  const spots = spotsLeft(session);
+  if (spots !== null && spots <= 0) throw new Error("Session is full");
+  if (userBookingFor(userId, session.id)) throw new Error("Already booked");
+  const booking = {
+    id: uid("b"),
+    userId,
+    sessionId: session.id,
+    status: "confirmed",
+    createdAt: now,
+    reservedAt: now,
+    payDeadlineAt: now,
+    paymentMarkedAt: null,
+    paidAt: now,
+    paidMethod: null,
+    paymentRef: null,
+    confirmedBy: null,
+    deferredTo: null,
+    deferredFrom: null,
+    reminderSentAt: null,
+    attendedAt: null,
+    attendedBy: null,
+    cancelledAt: null,
+    cancelledSource: null,
+    snapshot: snapshotFor(session),
+  };
+  state.bookings.push(booking);
+  save();
+  return booking;
+}
+
+// Withdrawing an RSVP is member self-service: no money ever moved, so no
+// admin involvement is needed (unlike paid confirmed bookings).
+export async function withdrawRsvp(bookingId, now = Date.now()) {
+  if (isLive()) {
+    return liveOps.liveWithdrawRsvp(bookingId);
+  }
+  const booking = getBooking(bookingId);
+  if (!booking || booking.status !== "confirmed") return null;
+  const session = getSession(booking.sessionId);
+  if (!session) throw new Error("Session not found.");
+  if (!sessionRequiresRsvp(session) || Number(booking.snapshot?.price) > 0) return null;
+  requireAuthorizedPaymentOwner(booking.userId);
+  const startsAt = hktEventStartMs(session.dateISO, session.time);
+  if (!Number.isFinite(startsAt) || startsAt <= now) {
+    throw new Error("Session has already started");
+  }
+  booking.status = "cancelled";
+  booking.cancelledAt = now;
+  booking.cancelledSource = "member";
+  save();
+  return booking;
+}
+
+export async function createOneOffEvent(fields) {
+  const name = String(fields.name ?? "").trim();
+  const dateISO = String(fields.dateISO ?? "").trim();
+  const time = String(fields.time ?? "").trim();
+  const durationMin = Number(fields.durationMin);
+  const location = String(fields.location ?? "").trim();
+  const mapsQuery = String(fields.mapsQuery ?? "").trim();
+  const category = String(fields.category ?? "").trim() || "Other";
+  const price = Math.max(0, Number(fields.price) || 0);
+  const capacity = price > 0 ? Math.max(1, Number(fields.capacity) || 20) : null;
+  if (!name) throw new Error("Enter the event name.");
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(dateISO)) throw new Error("Pick the event date.");
+  if (!time) throw new Error("Pick the start time.");
+  if (!Number.isFinite(durationMin) || durationMin <= 0) throw new Error("Enter a positive duration.");
+  if (!location) throw new Error("Enter the venue.");
+  const payload = {
+    name, dateISO, time, durationMin, location, mapsQuery, category, price, capacity,
+    requiresRsvp: price === 0,
+  };
+  if (isLive()) {
+    return liveOps.liveCreateEvent(payload);
+  }
+  requirePaymentAdminActor();
+  const event = {
+    id: uid("event"),
+    oneOff: true,
+    dateISO,
+    name,
+    kind: price > 0 ? "paid" : "free",
+    requiresRsvp: price === 0,
+    category,
+    weekday: parseISO(dateISO).getDay(),
+    time,
+    durationMin,
+    location,
+    mapsQuery: mapsQuery || location,
+    photo: "../assets/itc/main.webp",
+    price,
+    capacity: price > 0 ? capacity : null,
+    blurb: "",
+    memberNote: "",
+    published: true,
+  };
+  state.oneOffEvents.push(event);
+  save();
+  return oneOffSessionFor(event);
+}
+
+export async function repostRsvpEvent(sessionId) {
+  requirePaymentAdminActor();
+  const source = getSession(sessionId);
+  if (!source || !sessionRequiresRsvp(source) || Number(source.price ?? 0) > 0 || !source.cancelled) {
+    throw new Error("Only a cancelled RSVP event can be reposted.");
+  }
+  if (sessionStarted(source)) throw new Error("The RSVP event has already started.");
+  if (isLive()) {
+    return liveOps.liveReopenRsvp(sessionId);
+  }
+  const override = state.sessionOverrides[sessionId];
+  const cancelledAt = override.cancelledAt;
+  const recipients = new Set(state.bookings
+    .filter((booking) => booking.sessionId === sessionId
+      && booking.status === "cancelled"
+      && booking.cancelledSource === "session"
+      && booking.cancelledAt === cancelledAt)
+    .map((booking) => booking.userId)
+    .filter(canReceiveRsvpNotification));
+  for (const userId of recipients) {
+    notify(userId, "session-reopened",
+      `${source.name} · ${fmtDate(source.date)} has reopened. RSVP again if you're coming.`,
+      `#/activity/${sessionId}`);
+  }
+  delete override.cancelled;
+  delete override.cancelledAt;
+  if (!Object.keys(override).length) delete state.sessionOverrides[sessionId];
+  save();
+  return getSession(sessionId);
+}
+
+export async function deleteOneOffEvent(sessionId) {
+  if (isLive()) {
+    return liveOps.liveDeleteEvent(sessionId);
+  }
+  requirePaymentAdminActor();
+  const event = state.oneOffEvents.find((e) => `${e.id}-${e.dateISO}` === sessionId);
+  if (!event) throw new Error("Event not found.");
+  const active = state.bookings.filter(
+    (b) => b.sessionId === sessionId && (b.status === "reserved" || b.status === "confirmed")
+  );
+  if (active.length) {
+    throw new Error("Event has active bookings — cancel the session instead.");
+  }
+  state.oneOffEvents = state.oneOffEvents.filter((e) => e.id !== event.id);
+  save();
+}
+
 export function cancelSessionWeek(sessionId, reason, now = Date.now()) {
   if (isLive()) {
     return liveOps.liveCancelSession(sessionId, reason);
   }
   requirePaymentAdminActor();
+  const cancellationReason = String(reason || "").trim();
+  if (!cancellationReason) throw new Error("Cancellation reason is required.");
+  const session = getSession(sessionId);
+  if (!session) throw new Error("Session not found.");
+  const requiresRsvp = sessionRequiresRsvp(session);
+  const hasExplicitZeroPrice = typeof session.price === "number"
+    && Number.isFinite(session.price)
+    && session.price === 0;
+  if (requiresRsvp && !hasExplicitZeroPrice) {
+    throw new Error("RSVP session price must be an explicit numeric zero.");
+  }
+  const rsvpOccurrence = requiresRsvp && hasExplicitZeroPrice;
+  if (rsvpOccurrence) {
+    if (session.cancelled) throw new Error("Session is already cancelled.");
+    const startsAt = hktEventStartMs(session.dateISO, session.time);
+    if (!Number.isFinite(startsAt) || startsAt <= now) {
+      throw new Error("Session has already started.");
+    }
+  }
+  const cancellationSnapshots = new Map();
+  if (rsvpOccurrence) {
+    for (const booking of state.bookings) {
+      if (booking.sessionId !== sessionId || booking.status !== "confirmed"
+          || !canReceiveRsvpNotification(booking.userId)
+          || cancellationSnapshots.has(booking.userId)) continue;
+      cancellationSnapshots.set(booking.userId, booking.snapshot || session);
+    }
+  }
   const o = (state.sessionOverrides[sessionId] ||= {});
-  o.cancelled = String(reason || "").trim() || "No session this week";
+  o.cancelled = cancellationReason;
+  if (rsvpOccurrence) o.cancelledAt = now;
+  const cancellationCopy = `Session cancelled by ITC — ${o.cancelled}`;
+  const cancellationLink = `#/activity/${sessionId}`;
   const venueActivityId = sessionId.replace(/-\d{4}-\d{2}-\d{2}$/, "");
   for (const b of state.bookings.filter((x) => x.sessionId === sessionId)) {
     if (b.status === "confirmed") {
+      if (rsvpOccurrence) {
+        b.status = "cancelled";
+        b.cancelledAt = now;
+        b.cancelledSource = "session";
+        continue;
+      }
       const target = deferTargetsFor(b).find((s) => s.activityId === venueActivityId);
       if (target) {
         deferBooking(b.id, target.id, now);
       } else {
         b.status = "cancelled";
-        notify(b.userId, "session-cancelled",
-          `${b.snapshot.name} · ${fmtDate(b.snapshot.dateISO)} was cancelled (${o.cancelled}) and no future slot was free — a leader will sort your credit.`,
-          "#/schedule");
+        if (session.category === "HYROX") {
+          notify(b.userId, "session-cancelled",
+            `ITC cancelled this HYROX session. If you have paid and would like to apply it to a future ITC HYROX session, contact the collector.`,
+            cancellationLink);
+        } else {
+          notify(b.userId, "session-cancelled",
+            `${cancellationCopy}. ${b.snapshot.name} · ${fmtDate(b.snapshot.dateISO)} had no future slot available — a leader will sort your credit.`,
+            cancellationLink);
+        }
       }
     } else if (b.status === "reserved") {
       b.status = "cancelled";
       notify(b.userId, "session-cancelled",
-        `${b.snapshot.name} · ${fmtDate(b.snapshot.dateISO)} was cancelled (${o.cancelled}) — your unpaid reservation was released.`,
-        "#/schedule");
+        `${cancellationCopy}. ${b.snapshot.name} · ${fmtDate(b.snapshot.dateISO)} — your unpaid reservation was released.`,
+        cancellationLink);
     }
   }
-  const q = paymentQueueFor(sessionId);
-  for (const entry of [...q.waitlist, ...q.interest]) {
-    notify(entry.userId, "session-cancelled",
-      `ITC HYROX · ${fmtDate(sessionDateOf(sessionId))} was cancelled (${o.cancelled}) — the waitlist was dissolved.`,
-      "#/schedule");
+  if (rsvpOccurrence) {
+    for (const [userId, snapshot] of cancellationSnapshots) {
+      notify(userId, "session-cancelled",
+        `${cancellationCopy}. ${snapshot.name} · ${fmtDate(snapshot.dateISO)}.`,
+        cancellationLink);
+    }
+  } else {
+    const q = paymentQueueFor(sessionId);
+    for (const entry of [...q.waitlist, ...q.interest]) {
+      notify(entry.userId, "session-cancelled",
+        `${cancellationCopy}. ITC HYROX · ${fmtDate(sessionDateOf(sessionId))} — the waitlist was dissolved.`,
+        cancellationLink);
+    }
+    q.waitlist = [];
+    q.interest = [];
   }
-  q.waitlist = [];
-  q.interest = [];
   save();
 }
 
@@ -1600,8 +3379,21 @@ export function setSessionTime(sessionId, time) {
     return liveOps.liveSetSessionTime(sessionId, time);
   }
   requirePaymentAdminActor();
-  (state.sessionOverrides[sessionId] ||= {}).time = time;
+  const session = getSession(sessionId);
+  const nextTime = String(time || "").trim();
+  if (!session) throw new Error("Session not found.");
+  if (!nextTime) throw new Error("Pick the start time.");
+  if (session.time === nextTime) return session;
+  (state.sessionOverrides[sessionId] ||= {}).time = nextTime;
+  if (sessionRequiresRsvp(session) && Number(session.price ?? 0) === 0) {
+    for (const userId of activeRsvpNotificationRecipients(sessionId)) {
+      notify(userId, "operational_session_time_updated",
+        `${session.name} · ${fmtDate(session.date)} now starts at ${fmtTime(nextTime)}.`,
+        `#/activity/${sessionId}`);
+    }
+  }
   save();
+  return getSession(sessionId);
 }
 
 export function setVenueTBC(sessionId, on) {
@@ -1627,6 +3419,10 @@ export function confirmGymBooking(sessionId, note, now = Date.now()) {
     return liveOps.liveFinalizeGym(sessionId, note);
   }
   requirePaymentAdminActor();
+  const cycle = hyroxCycleForSession(sessionId);
+  if (cycle && !cycle.allocationClosedAt) {
+    throw new Error("Pooled HYROX child sessions cannot be finalized before venue allocation closes.");
+  }
   const override = (state.sessionOverrides[sessionId] ||= {});
   override.gymConfirmedAt = now;
   override.gymNote = String(note || "").trim() || undefined;
@@ -1640,12 +3436,14 @@ export function confirmGymBooking(sessionId, note, now = Date.now()) {
 export function setWeekVenue(sessionId, {
   location, mapsQuery, meetingLat = null, meetingLng = null,
 } = {}) {
-  const cleanLocation = String(location || "").trim();
-  const cleanMapsQuery = String(mapsQuery || "").trim();
-  const overrideActivityId = String(sessionId).replace(/-\d{4}-\d{2}-\d{2}$/, "");
-  if (!new Set(["wnt", "run", "water"]).has(overrideActivityId)) {
+  const before = getSession(sessionId);
+  const fallbackActivityId = String(sessionId).replace(/-\d{4}-\d{2}-\d{2}$/, "");
+  const overrideActivityId = before?.activityId || fallbackActivityId;
+  if (!new Set(["wnt", "run", "water", "lunch"]).has(overrideActivityId)) {
     throw new Error("Activity venue is fixed.");
   }
+  const cleanLocation = String(location || "").trim();
+  const cleanMapsQuery = String(mapsQuery || "").trim();
   const rawPointProvided = ![meetingLat, meetingLng].every(
     (value) => value === null || value === undefined || value === ""
   );
@@ -1656,7 +3454,6 @@ export function setWeekVenue(sessionId, {
     throw new Error("Choose a valid meeting point.");
   }
   const meetingPoint = acceptsPoint ? normalizedPoint : null;
-  const before = getSession(sessionId);
   if (isLive()) {
     const wasTBC = before?.location === "TBC"
       || !hasConfirmedVenue(before?.location, before?.mapsQuery);
@@ -1668,7 +3465,7 @@ export function setWeekVenue(sessionId, {
       wasTBC,
     });
   }
-  if (!before || before.kind !== "free") throw new Error("Session not found.");
+  if (!before || (before.kind !== "free" && before.kind !== "rsvp")) throw new Error("Session not found.");
   const wasTBC = before.location === "TBC"
     || !hasConfirmedVenue(before.location, before.mapsQuery);
   requirePaymentAdminActor();
@@ -1687,6 +3484,10 @@ export function setWeekVenue(sessionId, {
   const effectiveLocation = cleanLocation || recurring?.location || "";
   const effectiveMapsQuery = cleanMapsQuery || recurring?.mapsQuery || "";
   const confirmed = hasConfirmedVenue(effectiveLocation, effectiveMapsQuery);
+  const effectiveVenueChanged = before.location !== effectiveLocation
+    || before.mapsQuery !== effectiveMapsQuery
+    || (before.meetingLat ?? null) !== (meetingPoint?.lat ?? null)
+    || (before.meetingLng ?? null) !== (meetingPoint?.lng ?? null);
   const nextVenueTBC = cleared || confirmed ? false : Boolean(override.venueTBC);
   const pointChanged = (previousPoint?.lat ?? null) !== (meetingPoint?.lat ?? null)
     || (previousPoint?.lng ?? null) !== (meetingPoint?.lng ?? null);
@@ -1712,18 +3513,21 @@ export function setWeekVenue(sessionId, {
   override.venueMemberNotifiedAt = previousNotified;
   const destination = `#/activity/${sessionId}`;
   const sessionLabel = `${before.name || recurring?.name || overrideActivityId} on ${before.dateISO}`;
-  if (wasTBC && !cleared && confirmed && !override.venueMemberNotifiedAt) {
+  if (effectiveVenueChanged) {
     override.venueMemberNotifiedAt = Date.now();
-    for (const user of state.users) {
-      if (user?.status !== "approved" || user.role !== "member") continue;
+    const body = confirmed
+      ? `${sessionLabel} is at ${effectiveLocation}. Check the activity page for details.`
+      : `${sessionLabel} has a venue update. Check the activity page for details.`;
+    for (const userId of activeRsvpNotificationRecipients(sessionId)) {
+      const recipient = state.users.find((user) => user.id === userId);
+      if (PAYMENT_ADMIN_ROLES.has(recipient?.role) && userId !== actor?.id) continue;
       state.notifications.push({
         id: uid("n"),
-        userId: user.id,
+        userId,
         kind: "operational_session_venue_updated",
-        title: "Venue confirmed",
-        body: `${sessionLabel} is at ${effectiveLocation}. Check the activity page for details.`,
+        title: confirmed ? "Venue confirmed" : "Venue updated",
+        body,
         link: destination,
-        destination,
         read: false,
         createdAt: Date.now(),
       });
@@ -1744,7 +3548,6 @@ export function setWeekVenue(sessionId, {
       title: "Session venue updated",
       body,
       link: destination,
-      destination,
       read: false,
       createdAt: Date.now(),
     });
@@ -2014,14 +3817,348 @@ export { isoDate, todayLocal };
 // --- Live (Supabase) auth helpers (from canonical Auth baseline) ----
 // --- Live (Supabase) auth helpers --------------------------------------------
 
+const initialsAvatar = (profileId = null, state = "active") => ({
+  profileId,
+  url: null,
+  source: "initials",
+  state,
+  expiresAt: null,
+});
+
+const approvedAvatarUser = () => {
+  const user = currentUser();
+  return user?.status === "approved" && AVATAR_APPROVED_ROLES.has(user.role) ? user : null;
+};
+
+const avatarCacheIsFresh = (entry, profileId) => {
+  if (!entry || entry.profileId !== profileId) return false;
+  const expiry = entry.presentation.expiresAt;
+  if (entry.presentation.url && !expiry) return false;
+  return !expiry || Date.parse(expiry) > Date.now() + AVATAR_CACHE_EXPIRY_SKEW_MS;
+};
+
+const serviceAvatarPresentation = (input, profileId) => {
+  if (!input || typeof input !== "object") throw new Error("Invalid profile photo response");
+  return { profileId, ...normalizeAvatarPresentation(input) };
+};
+
+const cacheOwnAvatar = (presentation, profileId) => {
+  const normalized = serviceAvatarPresentation(presentation, profileId);
+  ownAvatarCache = { profileId, presentation: normalized };
+  avatarRequestGeneration += 1;
+  ownAvatarRequest = null;
+  return normalized;
+};
+
+const avatarFailure = (operation, error) => {
+  const status = Number(error?.context?.status || error?.status || 0);
+  if (status === 401) {
+    clearAvatarCache();
+    return new Error("Profile photo access expired. Please sign in again.");
+  }
+  const messages = {
+    load: "Profile photo could not be loaded. Please try again.",
+    upload: "Profile photo could not be saved. Please try again.",
+    remove: "Profile photo could not be removed. Please try again.",
+    google: "Google profile photo could not be refreshed. Please try again.",
+    attendees: "Attendee photos could not be loaded. Please try again.",
+    admin: "Member photo status could not be loaded. Please try again.",
+    moderate: "Profile photo moderation could not be completed. Please try again.",
+  };
+  return new Error(messages[operation] || messages.load);
+};
+
+async function avatarAccessToken() {
+  const { data, error } = await supabase.auth.getSession();
+  const token = data?.session?.access_token;
+  if (error || !token) throw avatarFailure("load", { status: 401 });
+  return token;
+}
+
+async function resolveAvatarsFromFunction(params, operation = "load") {
+  const token = await avatarAccessToken();
+  let response;
+  try {
+    const url = new URL("/functions/v1/resolve-profile-avatars", config.url);
+    for (const [key, value] of Object.entries(params)) url.searchParams.set(key, value);
+    response = await fetch(url, {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        apikey: config.anonKey,
+      },
+      cache: "no-store",
+    });
+  } catch (error) {
+    throw avatarFailure(operation, error);
+  }
+  if (response.status === 401) throw avatarFailure(operation, { status: 401 });
+  if (!response.ok) throw avatarFailure(operation, { status: response.status });
+  try {
+    return await response.json();
+  } catch {
+    throw avatarFailure(operation);
+  }
+}
+
+async function resolveOwnAvatarFromFunction() {
+  const payload = await resolveAvatarsFromFunction({ scope: "self" });
+  if (!Array.isArray(payload?.avatars) || payload.avatars.length !== 1) {
+    throw avatarFailure("load");
+  }
+  return payload.avatars[0];
+}
+
+async function invokeAvatarMutation(operation, options, profileId) {
+  const { data, error } = await supabase.functions.invoke("process-profile-avatar", options);
+  if (error) throw avatarFailure(operation, error);
+  if (!data?.presentation) throw avatarFailure(operation);
+  return cacheOwnAvatar(data.presentation, profileId);
+}
+
+export function clearAvatarCache() {
+  avatarRequestGeneration += 1;
+  ownAvatarCache = null;
+  ownAvatarRequest = null;
+  sessionAvatarCache.clear();
+  adminAvatarCache = null;
+}
+
+export async function getOwnAvatar({ force = false } = {}) {
+  const user = approvedAvatarUser();
+  if (!isLive() || !supabase) return initialsAvatar(user?.id ?? null);
+  if (!user) {
+    clearAvatarCache();
+    return initialsAvatar();
+  }
+  if (!force && avatarCacheIsFresh(ownAvatarCache, user.id)) return ownAvatarCache.presentation;
+  if (!force && ownAvatarRequest) return ownAvatarRequest;
+
+  const generation = ++avatarRequestGeneration;
+  const request = resolveOwnAvatarFromFunction()
+    .then((presentation) => {
+      const normalized = serviceAvatarPresentation(presentation, user.id);
+      if (generation === avatarRequestGeneration && approvedAvatarUser()?.id === user.id) {
+        ownAvatarCache = { profileId: user.id, presentation: normalized };
+        return normalized;
+      }
+      return ownAvatarCache?.profileId === approvedAvatarUser()?.id
+        ? ownAvatarCache.presentation
+        : initialsAvatar();
+    })
+    .catch((error) => {
+      if (/^Profile photo /.test(error?.message || "")) throw error;
+      throw avatarFailure("load", error);
+    })
+    .finally(() => {
+      if (ownAvatarRequest === request) ownAvatarRequest = null;
+    });
+  ownAvatarRequest = request;
+  return request;
+}
+
+export async function uploadMyAvatar(jpegBlob) {
+  const user = approvedAvatarUser();
+  if (!isLive() || !supabase) return initialsAvatar(user?.id ?? null);
+  if (!user) throw new Error("Approved membership is required to manage a profile photo.");
+  if (!jpegBlob || jpegBlob.type !== "image/jpeg" || jpegBlob.size > 2 * 1024 * 1024) {
+    throw new Error("Choose a valid cropped JPEG under 2 MB.");
+  }
+  const body = new FormData();
+  body.append("action", "upload");
+  body.append("file", jpegBlob, "profile-avatar.jpg");
+  try {
+    return await invokeAvatarMutation("upload", { method: "POST", body }, user.id);
+  } catch (error) {
+    if (/^Profile photo /.test(error?.message || "")) throw error;
+    throw avatarFailure("upload", error);
+  }
+}
+
+export async function removeMyAvatar() {
+  const user = approvedAvatarUser();
+  if (!isLive() || !supabase) return initialsAvatar(user?.id ?? null);
+  if (!user) throw new Error("Approved membership is required to manage a profile photo.");
+  try {
+    return await invokeAvatarMutation("remove", { method: "DELETE" }, user.id);
+  } catch (error) {
+    if (/^Profile photo /.test(error?.message || "")) throw error;
+    throw avatarFailure("remove", error);
+  }
+}
+
+export async function syncGoogleAvatar() {
+  const user = approvedAvatarUser();
+  if (!isLive() || !supabase || !user) return initialsAvatar(user?.id ?? null);
+  try {
+    return await invokeAvatarMutation(
+      "google",
+      { method: "POST", body: { action: "sync_google" } },
+      user.id,
+    );
+  } catch (error) {
+    if (/sign in again|^Google profile photo /i.test(error?.message || "")) throw error;
+    throw avatarFailure("google", error);
+  }
+}
+
+const avatarRowsExpiry = (rows) => {
+  const defaultExpiry = Date.now() + 9 * 60_000;
+  return rows.reduce((earliest, row) => {
+    if (!row.url) return earliest;
+    const expiry = Date.parse(row.expiresAt || "");
+    return Math.min(earliest, Number.isFinite(expiry) ? expiry : Date.now());
+  }, defaultExpiry);
+};
+
+const avatarRowsCacheIsFresh = (entry, profileId) =>
+  entry?.profileId === profileId
+  && entry.expiresAt > Date.now() + AVATAR_CACHE_EXPIRY_SKEW_MS;
+
+const serviceAvatarRow = (input, { admin = false } = {}) => {
+  if (!input || typeof input !== "object" || typeof input.profileId !== "string") return null;
+  const presentation = serviceAvatarPresentation(input, input.profileId);
+  const row = {
+    ...presentation,
+    displayName: typeof input.displayName === "string" && input.displayName.trim()
+      ? input.displayName.trim()
+      : "Member",
+  };
+  if (!admin) return row;
+  return {
+    ...row,
+    pendingPreviewUrl: typeof input.pendingPreviewUrl === "string" ? input.pendingPreviewUrl : null,
+    moderationReason: typeof input.moderationReason === "string" ? input.moderationReason : null,
+    moderatedAt: typeof input.moderatedAt === "string" ? input.moderatedAt : null,
+  };
+};
+
+export async function getSessionAvatars(sessionId, { force = false } = {}) {
+  const id = String(sessionId || "").trim();
+  if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(id) || id.length > 100) {
+    throw new Error("Invalid session for attendee photos.");
+  }
+  const user = approvedAvatarUser();
+  if (!user) return [];
+  if (!isLive() || !supabase) {
+    const session = getSession(id);
+    return session
+      ? attendeesFor(session).map((displayName) => ({
+        ...initialsAvatar(),
+        displayName,
+      }))
+      : [];
+  }
+  const cached = sessionAvatarCache.get(id);
+  if (!force && avatarRowsCacheIsFresh(cached, user.id)) return cached.rows;
+  let payload;
+  try {
+    payload = await resolveAvatarsFromFunction({ scope: "session", sessionId: id }, "attendees");
+  } catch (error) {
+    if (/sign in again|^Attendee photos /i.test(error?.message || "")) throw error;
+    throw avatarFailure("attendees", error);
+  }
+  if (!Array.isArray(payload?.avatars)) throw avatarFailure("attendees");
+  let rows;
+  try {
+    rows = payload.avatars.map((row) => serviceAvatarRow(row)).filter(Boolean);
+  } catch (error) {
+    throw avatarFailure("attendees", error);
+  }
+  sessionAvatarCache.set(id, {
+    profileId: user.id,
+    rows,
+    expiresAt: avatarRowsExpiry(rows),
+  });
+  return rows;
+}
+
+export async function getAdminAvatarRows({ force = false } = {}) {
+  const user = currentUser();
+  const isAdmin = user?.status === "approved" && ["admin", "superadmin", "super_admin"].includes(user.role);
+  if (!isLive() || !supabase) {
+    if (!isAdmin) return [];
+    return allUsers().map((member) => ({
+      ...initialsAvatar(member.id),
+      displayName: member.fullName || member.email || "Member",
+      pendingPreviewUrl: null,
+      moderationReason: null,
+      moderatedAt: null,
+    }));
+  }
+  if (!isAdmin) return [];
+  if (!force && avatarRowsCacheIsFresh(adminAvatarCache, user.id)) return adminAvatarCache.rows;
+  let payload;
+  try {
+    payload = await resolveAvatarsFromFunction({ scope: "admin_members" }, "admin");
+  } catch (error) {
+    if (/sign in again|^Member photo status /i.test(error?.message || "")) throw error;
+    throw avatarFailure("admin", error);
+  }
+  if (!Array.isArray(payload?.rows)) throw avatarFailure("admin");
+  let rows;
+  try {
+    rows = payload.rows.map((row) => serviceAvatarRow(row, { admin: true })).filter(Boolean);
+  } catch (error) {
+    throw avatarFailure("admin", error);
+  }
+  adminAvatarCache = {
+    profileId: user.id,
+    rows,
+    expiresAt: avatarRowsExpiry(rows),
+  };
+  return rows;
+}
+
+export async function moderateAvatar(profileId, action, reason = "") {
+  const user = currentUser();
+  const isAdmin = user?.status === "approved" && ["admin", "superadmin", "super_admin"].includes(user.role);
+  if (!isAdmin) throw new Error("Administrator access is required to moderate profile photos.");
+  const targetId = String(profileId || "").trim();
+  if (!targetId || targetId.length > 100) throw new Error("Choose a valid member photo.");
+  if (!["hide", "approve", "reject"].includes(action)) throw new Error("Choose a valid moderation action.");
+  const trimmedReason = String(reason || "").trim();
+  if (["hide", "reject"].includes(action) && !trimmedReason) {
+    throw new Error("A moderation reason is required.");
+  }
+  if (trimmedReason.length > 300) throw new Error("Moderation reason must be 300 characters or fewer.");
+  if (!isLive() || !supabase) return initialsAvatar(targetId, action === "approve" ? "active" : "hidden");
+  const body = action === "approve"
+    ? { profileId: targetId, action }
+    : { profileId: targetId, action, reason: trimmedReason };
+  let result;
+  try {
+    result = await supabase.functions.invoke("moderate-profile-avatar", {
+      method: "POST",
+      body,
+    });
+  } catch (error) {
+    throw avatarFailure("moderate", error);
+  }
+  if (result.error || !result.data?.presentation) throw avatarFailure("moderate", result.error);
+  try {
+    const presentation = serviceAvatarPresentation(result.data.presentation, targetId);
+    clearAvatarCache();
+    return presentation;
+  } catch (error) {
+    throw avatarFailure("moderate", error);
+  }
+}
+
 export async function getCurrentUser() {
   if (!isLive() || !supabase) return currentUser();
   const { data: sessData, error: sessErr } = await supabase.auth.getSession();
   if (sessErr || !sessData.session) {
+    clearAvatarCache();
     liveUser = null;
     return null;
   }
   const authUser = sessData.session.user;
+  if (liveUser?.id && liveUser.id !== authUser.id) {
+    clearAvatarCache();
+    liveProfile = null;
+    liveProfileFetchedAt = 0;
+  }
   if (!liveProfile || Date.now() - liveProfileFetchedAt > LIVE_PROFILE_TTL_MS) {
     const { data: prof, error: profErr } = await supabase
       .from("profiles")
@@ -2061,11 +4198,12 @@ export async function getCurrentUser() {
     profile: liveProfile,
   };
   livePaymentDirectory.set(liveUser.id, normalizePaymentUser(liveUser));
+  if (liveUser.status !== "approved") clearAvatarCache();
   return liveUser;
 }
 
 export async function signInWithGoogle() {
-  if (!isLive || !supabase) {
+  if (!isLive() || !supabase) {
     throw new Error("signInWithGoogle requires SUPABASE_URL and SUPABASE_ANON_KEY");
   }
   const { error } = await supabase.auth.signInWithOAuth({
@@ -2075,8 +4213,26 @@ export async function signInWithGoogle() {
   if (error) throw error;
 }
 
+export async function signInWithMagicLink(email) {
+  if (!isLive() || !supabase) {
+    throw new Error("signInWithMagicLink requires SUPABASE_URL and SUPABASE_ANON_KEY");
+  }
+  const normalizedEmail = String(email || "").trim().toLowerCase();
+  if (!normalizedEmail) throw new Error("Enter your email address");
+  const { error } = await supabase.auth.signInWithOtp({
+    email: normalizedEmail,
+    options: {
+      shouldCreateUser: true,
+      emailRedirectTo: `${window.location.origin}${window.location.pathname}`,
+    },
+  });
+  if (error) throw error;
+  return { ok: true };
+}
+
 export async function signOutLive() {
   if (!isLive() || !supabase) return signOut();
+  clearAvatarCache();
   liveProfile = null;
   liveUser = null;
   liveProfileFetchedAt = 0;
@@ -2095,6 +4251,66 @@ export async function listProfiles() {
     .order("created_at", { ascending: true });
   if (error) throw error;
   return data || [];
+}
+
+function indemnityExportRecord({ profile, application = null, local = false }) {
+  const role = profile.role === "super_admin" ? "superadmin" : profile.role;
+  const acceptedAt = local ? profile.indemnityAcceptedAt || null : application?.waiver_accepted_at || null;
+  const signature = local ? profile.indemnitySignature || "" : application?.waiver_signature_text || "";
+  const signedAt = local ? profile.indemnitySignedAt || "" : application?.waiver_signed_at || "";
+  const formVersion = local ? profile.indemnityFormVersion || "" : application?.waiver_form_version || "";
+  const emergencyName = local ? profile.emergencyName || "" : application?.emergency_name || "";
+  const emergencyRelationship = local
+    ? profile.emergencyRelationship || ""
+    : application?.emergency_relationship || "";
+  const emergencyPhone = local ? profile.emergencyPhone || "" : application?.emergency_phone || "";
+  const normalized = {
+    indemnityAcceptedAt: acceptedAt,
+    indemnitySignature: signature,
+    indemnitySignedAt: signedAt,
+    indemnityFormVersion: formVersion,
+    emergencyName,
+    emergencyRelationship,
+    emergencyPhone,
+  };
+  return {
+    id: profile.id,
+    fullName: local ? profile.fullName || "" : profile.full_name || profile.email || "ITC Member",
+    email: profile.email || "",
+    status: profile.status || (role === "pending" || role === "declined" ? role : "approved"),
+    role,
+    phone: local ? profile.phone || "" : application?.mobile || "",
+    emergencyName,
+    emergencyRelationship,
+    emergencyPhone,
+    indemnityStatus: !acceptedAt
+      ? "Not accepted"
+      : isIndemnityCurrent(normalized)
+        ? "Accepted"
+        : "Review required",
+    indemnitySignature: signature,
+    indemnitySignedAt: signedAt,
+    indemnityFormVersion: formVersion,
+    indemnityAcceptedAt: acceptedAt,
+  };
+}
+
+export async function listIndemnityRecords() {
+  requirePaymentAdminActor();
+  if (!isLive() || !supabase) {
+    return state.users.map((user) => indemnityExportRecord({ profile: user, local: true }));
+  }
+  const [{ data: profiles, error: profileError }, { data: applications, error: applicationError }] = await Promise.all([
+    supabase.from("profiles").select("*").order("created_at", { ascending: true }),
+    supabase.from("applications").select("*").order("submitted_at", { ascending: true }),
+  ]);
+  if (profileError) throw profileError;
+  if (applicationError) throw applicationError;
+  const applicationByProfile = new Map((applications || []).map((application) => [application.profile_id, application]));
+  return (profiles || []).map((profile) => indemnityExportRecord({
+    profile,
+    application: applicationByProfile.get(profile.id) || null,
+  }));
 }
 
 export async function listRoleChanges() {
@@ -2151,6 +4367,7 @@ function localApplication(user) {
     whatsapp_reminders: !!user.whatsappReminders,
     email_receipts: !!user.emailReceipts,
     community_news: !!user.communityNews,
+    hyrox_payment_reminders: user.hyroxPaymentReminders !== false,
   };
 }
 
@@ -2175,6 +4392,11 @@ function membershipPatch(form) {
     heard_detail: String(form.heard_detail || "").trim() || null,
     preferred_name: String(form.preferred_name || "").trim() || null,
   };
+  if (Object.prototype.hasOwnProperty.call(form, "donorId")) {
+    const rawDonorId = String(form.donorId || "").trim();
+    if (donorIdProblem(rawDonorId)) throw new Error("Enter a valid Donor ID");
+    patch.donor_id = rawDonorId ? normalizeDonorId(rawDonorId) : null;
+  }
   if (!patch.mobile) throw new Error("Enter mobile number");
   if (!patch.heard_source) throw new Error("Choose how you heard about ITC");
   return patch;
@@ -2186,6 +4408,7 @@ function privacyPatch(form) {
     whatsapp_reminders: !!form.whatsapp_reminders,
     email_receipts: !!form.email_receipts,
     community_news: !!form.community_news,
+    hyrox_payment_reminders: !!form.hyrox_payment_reminders,
   };
 }
 
@@ -2222,6 +4445,9 @@ export async function saveMyApplication(form) {
   }
   const cu = await getCurrentUser();
   if (!cu) throw new Error("Not signed in");
+  const fullName = String(form.full_name || "").trim();
+  if (!fullName) throw new Error("Enter your full name");
+  if (fullName.length > 120) throw new Error("Full name must be 120 characters or fewer");
   const isMinor = parseAgeOver18(form.age_over_18);
   const guardian = guardianFields(isMinor, form.guardian_name, form.guardian_phone);
   if (!form.waiver) throw new Error("Read and accept the Indemnity");
@@ -2254,6 +4480,18 @@ export async function saveMyApplication(form) {
     privacy_accepted_at: acceptedAt,
     guidelines_accepted_at: acceptedAt,
   };
+  const { data: savedProfile, error: profileError } = await supabase
+    .from("profiles")
+    .update({ full_name: fullName })
+    .eq("id", cu.id)
+    .select("*")
+    .single();
+  if (profileError) throw profileError;
+  if (!savedProfile) throw new Error("Unable to save your full name");
+  liveProfile = savedProfile;
+  liveProfileFetchedAt = Date.now();
+  await getCurrentUser();
+
   const { error } = await supabase.from("applications").upsert(row);
   if (error) throw error;
   clearApplyDraft();
@@ -2274,6 +4512,7 @@ export async function updateMyMembershipDetails(form) {
     user.heard = patch.heard_source;
     user.heardDetail = patch.heard_detail;
     user.preferredName = patch.preferred_name;
+    if (Object.prototype.hasOwnProperty.call(patch, "donor_id")) user.donorId = patch.donor_id;
     save();
     return localApplication(user);
   }
@@ -2298,6 +4537,7 @@ export async function updateMyPrivacyPreferences(form) {
     user.whatsappReminders = patch.whatsapp_reminders;
     user.emailReceipts = patch.email_receipts;
     user.communityNews = patch.community_news;
+    user.hyroxPaymentReminders = patch.hyrox_payment_reminders;
     save();
     return localApplication(user);
   }
@@ -2450,8 +4690,23 @@ export async function decideApplication(profileId, decision) {
 
 
 
+function normalizeLocalNotification(notification) {
+  const created = new Date(notification?.createdAt);
+  const createdAt = Number.isNaN(created.getTime()) ? null : created.toISOString();
+  return {
+    ...notification,
+    body: notification?.body ?? notification?.message ?? "",
+    read_at: notification?.read ? (createdAt || new Date(0).toISOString()) : null,
+    destination: notification?.link ?? notification?.destination ?? null,
+    created_at: createdAt,
+  };
+}
+
 export async function listMyNotifications() {
-  if (!isLive() || !supabase) return [];
+  if (!isLive() || !supabase) {
+    const user = currentUser();
+    return user ? notificationsFor(user.id).map(normalizeLocalNotification) : [];
+  }
   const { data, error } = await supabase
     .from("notifications")
     .select("*")
@@ -2461,7 +4716,17 @@ export async function listMyNotifications() {
 }
 
 export async function markNotificationRead(id) {
-  if (!isLive() || !supabase) return;
+  if (!isLive() || !supabase) {
+    const user = currentUser();
+    const notification = state.notifications.find(
+      (row) => row.id === id && row.userId === user?.id && !row.read
+    );
+    if (!notification) throw new Error("Notification update conflict.");
+    notification.read = true;
+    save();
+    const normalized = normalizeLocalNotification(notification);
+    return { id: normalized.id, read_at: normalized.read_at };
+  }
   const { data, error } = await supabase
     .from("notifications")
     .update({ read_at: new Date().toISOString() })

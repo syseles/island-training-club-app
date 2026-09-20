@@ -28,24 +28,25 @@ app/
     store.js         state + migrations (the backend seam)
     data.js          seed data + pure helpers
   smoke.mjs          regression checks
-assets/itc/          photos, logo, product shots
+assets/itc/          activity photos and core brand assets
 docs/                product brief, handoff, brainstorming notes
 README.md            what the project is
 ```
 
 ## Branching model
 
-Three long-lived branches. Agents must not collapse them.
+Four long-lived branches. Agents must preserve the dedicated Shop split.
 
-- `main` — **non-Shop work only.** Home, Schedule, Profile, Community, Admin, identity, core flows.
-- `feature/shop-page` — **Shop work only.** Giving, merchandise, product imagery, anything tied to the Shop tab.
-- `development` — integration branch (rarely used).
+- `main` — core app work, including Home, Schedule, Profile, Community, Admin, identity, bookings, and **Giving**.
+- `testing` — pre-`main` integration and acceptance for core app and Giving changes.
+- `feature/shop-page` — **dedicated Shop work only.** Merchandise, product imagery, product catalog/cart, and anything tied to a future Shop tab. Giving is not Shop work.
+- `development` — legacy integration branch (rarely used).
 
-The Shop split is a hard rule. If a non-Shop change accidentally touches Shop files (or vice versa), the change is wrong. Active Shop code lives only on `feature/shop-page`. If you find Shop code on `main`, remove it.
+The dedicated Shop split is a hard rule. Merchandise or Shop-tab changes must not land on `main` or `testing`; core app and Giving changes must not use `feature/shop-page`.
 
 When creating a new branch:
-- Forgiving Product / Shop / Giving / merchandise → `feature/shop-page`
-- Anything else → base on `main`
+- Merchandise / product catalog / cart / dedicated Shop tab / product imagery → `feature/shop-page`
+- Giving and anything else → base on `main`
 
 ## Local dev
 
@@ -89,11 +90,11 @@ When in doubt: is this a real product feature, or a prototype affordance? If the
 
 ## Common pitfalls
 
-- **Don't add Shop code to `main`.** The branch split is the source of truth — feature work belongs on the right branch.
+- **Don't add merchandise or dedicated Shop-tab code to `main`.** Giving is a core `main` feature; catalog, cart, products, and merchandise remain isolated on `feature/shop-page`.
 - **Don't break localStorage migrations.** Bump `STATE_VERSION` and add a migration step. Snapshots in `state.bookings` reference seed activity fields by name; renaming them silently breaks old persisted data.
 - **Title-cased headings on Profile sub-pages.** "Membership Details", "Donor Profile", "Payments & Receipts", "Privacy & Notifications" — "History" stays single-word.
 - **"My Week" on Home is signed-in-only and shows booked sessions.** Visitors see the upcoming preview, not "My Week".
-- **The Wednesday Night Training session is free.** No booking, no checkout, no capacity. Actions are Add to Calendar and Get Directions.
+- **The Wednesday Night Training session is free and open to walk-ins.** Approved members may optionally RSVP for the attendee list; there is no checkout, payment, or capacity.
 - **The smoke test is the contract.** When you change product behaviour, update the test in the same commit. Don't leave the test failing.
 
 ## Style

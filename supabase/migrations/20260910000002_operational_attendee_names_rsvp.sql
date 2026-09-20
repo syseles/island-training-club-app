@@ -1,0 +1,73 @@
+-- Island Training Club — approved-member RSVP attendee display names
+--
+-- Extend the names-only roster RPC to RSVP events. The dynamic owner
+-- expression keeps this migration safe on the RSVP branch before the later
+-- replacement migration adds replacement_profile_id; on testing it also
+-- preserves the confirmed effective-attendee resolver.
+
+create or replace function public.get_operational_attendee_names(
+  p_session_id text
+)
+returns table(display_name text)
+language plpgsql
+stable
+security definer
+set search_path = public
+as $$
+declare
+  v_role text := public.current_user_role();
+  v_is_roster_event boolean;
+  v_profile_expr text;
+begin
+  if not coalesce(v_role in ('member', 'admin', 'super_admin'), false) then
+    raise exception 'Approved membership required.' using errcode = '42501';
+  end if;
+
+  select coalesce(t.price_hkd, 0) > 0 or coalesce(t.requires_rsvp, false)
+    into v_is_roster_event
+    from public.operational_sessions s
+    join public.operational_activity_templates t
+      on t.activity_id = s.activity_id
+   where s.id = p_session_id;
+
+  if not coalesce(v_is_roster_event, false) then
+    return;
+  end if;
+
+  if exists (
+    select 1
+      from information_schema.columns
+     where table_schema = 'public'
+       and table_name = 'operational_bookings'
+       and column_name = 'replacement_profile_id'
+  ) then
+    v_profile_expr := 'coalesce(b.replacement_profile_id, b.profile_id)';
+  else
+    v_profile_expr := 'b.profile_id';
+  end if;
+
+  return query execute format($query$
+    select coalesce(
+             nullif(trim(a.preferred_name), '') || case
+               when position(' ' in trim(coalesce(p.full_name, ''))) > 0
+                 then ' ' || upper(right(trim(p.full_name), 1)) || '.'
+               else ''
+             end,
+             nullif(trim(p.full_name), ''),
+             'Member'
+           )::text
+      from public.operational_bookings b
+      join public.profiles p on p.id = %s
+      left join public.applications a on a.profile_id = p.id
+     where b.session_id = $1
+       and b.status = 'confirmed'
+     order by b.created_at, b.id
+  $query$, v_profile_expr)
+  using p_session_id;
+end;
+$$;
+
+revoke all on function public.get_operational_attendee_names(text)
+  from public, anon, authenticated;
+grant execute on function public.get_operational_attendee_names(text)
+  to authenticated;

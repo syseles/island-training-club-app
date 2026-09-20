@@ -2,7 +2,7 @@
   "name": "Island Training Club",
   "short_name": "ITC",
   "description": "Island Training Club community app — activities, bookings and community.",
-  "start_url": "./index.html#/home",
+  "start_url": "./index.html",
   "scope": "./",
   "display": "standalone",
   "orientation": "portrait",
@@ -10,9 +10,9 @@
   "theme_color": "#030504",
   "icons": [
     {
-      "src": "../assets/itc/logo.webp",
-      "sizes": "512x512",
-      "type": "image/webp",
+      "src": "../assets/itc/logo-favicon.png",
+      "sizes": "1929x1929",
+      "type": "image/png",
       "purpose": "any"
     }
   ]

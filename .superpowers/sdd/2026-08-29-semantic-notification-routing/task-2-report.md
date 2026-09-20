@@ -1,0 +1,242 @@
+# Task 2 Report — Semantic notification destinations
+
+## Status
+
+Implemented Task 2 on `feature/notification-routing` with one forward-only migration:
+
+- `20260829000007_notification_destinations.sql` adds the centralized `STABLE`, `SECURITY DEFINER`, fixed-search-path resolver.
+- One `BEFORE INSERT` trigger preserves explicit internal routes and resolves missing or malformed destinations.
+- Entity matching is timestamp-bounded, exact-one only, and booking matching is scoped by `profile_id`.
+- Stable kinds use the approved section routes.
+- The backfill updates only resolvable null/malformed destinations and does not assign any other notification column.
+- Resolver and trigger-function execution is revoked from `public`, `anon`, and `authenticated`.
+- No notification producer, RLS policy/state, table-write grant, client code, or localStorage shape was changed.
+
+## RED evidence
+
+After adding the migration source contract to `app/smoke.mjs` and before creating migration `00007`:
+
+```sh
+node app/smoke.mjs
+```
+
+Exited 1 with the expected missing-feature error:
+
+```text
+Error: ENOENT: no such file or directory, open '.../supabase/migrations/20260829000007_notification_destinations.sql'
+```
+
+The negative access contract also passed a mutation check. Temporarily appending:
+
+```sql
+grant select, update on table public.notifications to authenticated;
+```
+
+made `node app/smoke.mjs` exit 1 with:
+
+```text
+Error: notification routing migration must not grant notification-table writes
+```
+
+The migration was restored before final verification.
+
+## GREEN evidence
+
+After implementing migration `00007`:
+
+```sh
+node app/smoke.mjs
+```
+
+Exited 0, including:
+
+```text
+ok  notification migration centralizes exact routes without weakening notification access
+All smoke tests passed.
+```
+
+The source contract requires the approved resolver/trigger/security markers, rejects notification RLS alteration and notification-table write grants, and permits only the two centralized function declarations in this migration.
+
+## SQL integration evidence
+
+`supabase/tests/operational_backend_integration.sql` now contains rollback-scoped assertions for:
+
+- paid reservation → exact `#/pay/<booking-id>`;
+- RSVP → exact `#/booking/<booking-id>`;
+- payment approval → exact resulting Booking Details route;
+- cancellation deferral → exact new booking route;
+- payment-marked and gym-finalized Admin notifications → `#/admin/payments`;
+- explicit `#/giving` preservation;
+- all approved stable section routes;
+- both session-cancellation kinds → unique `#/activity/<session-id>` routes;
+- unique same-profile historical reservation backfill;
+- same-time ambiguity remaining unresolved;
+- another profile's booking never being selected;
+- existing `read_at` preservation;
+- resolver/trigger existence and lack of browser-role execution privilege.
+
+The historical fixtures insert notifications before their candidate bookings, then execute the same guarded backfill statement as the migration. This exercises post-insert historical resolution without disabling the insert trigger.
+
+Database execution evidence is **not available** in this environment: there is no disposable database URL/reset acknowledgement, `psql` and Supabase CLI are unavailable, and the Docker daemon is not running. The SQL integration source was therefore added and reviewed but not executed or deployed.
+
+## Available checks
+
+Fresh final verification:
+
+```text
+node app/smoke.mjs                                      exit 0
+node app/live-auth-smoke.mjs                            exit 0
+bash supabase/tests/verify_operational_backend_safety.sh exit 0
+git diff --check                                        exit 0
+```
+
+The safety verifier confirmed all destructive-database gates reject missing credentials/reset acknowledgement with exit 2 and then reported:
+
+```text
+Safety verifier passed: gate rejects unsafe conditions.
+```
+
+## Self-review
+
+- Migration inventory: only `20260829000007_notification_destinations.sql` was added.
+- Explicit destinations beginning `#/` return unchanged before resolver invocation.
+- Booking candidates use the required timestamp (`reserved_at` or `paid_at`), a ±5-second window, `profile_id`, and `count(*) = 1`.
+- Deferral candidates additionally require non-null `deferred_from_booking_id`.
+- Session routes require one timestamp-matched session; member no-defer matching also requires a profile-owned booking relation.
+- Zero/multiple candidates return null; notification body text is never read.
+- Backfill assigns only `destination`, excludes valid explicit routes, and resolves only non-null results.
+- Migration declares no producer replacement and no notification RLS or table-grant change.
+
+## Unavailable / concerns
+
+- `bash supabase/tests/verify_operational_backend.sh`: not run; disposable Supabase-compatible credentials and `psql` are unavailable.
+- SQL syntax/runtime and deployment remain unverified against PostgreSQL/Supabase.
+- Migration `00007` has not been applied to any remote database.
+
+## Fix Round 1 evidence
+
+The bounded review fixes change only the source contract and executable SQL
+integration scenarios. Production migration
+`20260829000007_notification_destinations.sql` remains unchanged: both the
+committed and worktree blobs are
+`fd579b07c0d5eda33c3f203dc1465784a837321a`.
+
+### Source RED → GREEN
+
+Before changing the SQL integration source, `node app/smoke.mjs` exited 1 at
+the new Fix Round 1 contract with:
+
+```text
+Error: notification integration evidence missing v_payment_marked_before
+```
+
+After implementing the required executable evidence, the contract reports:
+
+```text
+ok  notification SQL evidence exercises scoped producers and migration reapplication
+```
+
+Static review then exposed an invalid 19-week fixture call against the
+existing 16-week RPC bound. A focused source contract was added first and
+`node app/smoke.mjs` exited 1 with:
+
+```text
+Error: notification integration exceeds the 16-week session generation bound: 19
+```
+
+The fixture now uses the established 16-week call plus a separate one-week
+December generation call; the complete smoke suite returns to exit 0.
+
+### Producer and migration evidence
+
+- Payment-marked and gym-finalized checks record action-specific before/after
+  counts, require exactly two produced Admin rows each, and scope bad-route
+  checks to the exact producer body.
+- Cancellation confirms the final generated HYROX booking, moves older
+  cancellation timestamps outside the resolver window, and calls the real
+  `cancel_operational_session(v_unique_cancel_session, ...)` producer. It
+  requires exactly one member no-defer row and two Admin rows, all routed to
+  the exact Activity Details destination.
+- Historical coverage has six literal classes: `unique-null`,
+  `unique-malformed`, `ambiguous-same-profile`, `foreign-only`,
+  `valid-explicit`, and `read-state`.
+- The integration script executes
+  `\ir ../migrations/20260829000007_notification_destinations.sql` exactly
+  twice. First-pass assertions cover all six classes and `read_at`; a snapshot
+  of every notification column then proves the second reapplication is data
+  idempotent.
+- The copied manual resolver update was removed. Static inventory reports zero
+  copied backfill statements in the integration script, so the actual
+  migration reapplication is the evidence.
+
+### Available verification
+
+```text
+node app/smoke.mjs                                      exit 0
+node app/live-auth-smoke.mjs                            exit 0
+bash supabase/tests/verify_operational_backend_safety.sh exit 0
+git diff --check                                        exit 0
+node --check app/smoke.mjs                              exit 0
+```
+
+Disposable PostgreSQL execution is still unavailable: no test database URL or
+reset acknowledgement is configured, `psql` and Supabase CLI are absent, and
+the Docker daemon is unavailable. SQL runtime, remote application, and live
+routing therefore remain explicitly unverified.
+
+## Fix Round 2 evidence
+
+This bounded round changes only the smoke source contract and executable SQL
+integration assertions. Production migration
+`20260829000007_notification_destinations.sql` remains byte-identical:
+
+```text
+git blob  fd579b07c0d5eda33c3f203dc1465784a837321a
+SHA-256  572f1e2695eb4579be5e080ddcc96f5d42c838c5aadfe60ea148e40ca4cc341d
+```
+
+### Exact-recipient RED → GREEN
+
+A source contract requiring the literal Admin/Super Admin recipient fixture and
+two ordered exact-recipient comparisons was added first. Before changing the
+SQL integration evidence, `node app/smoke.mjs` exited 1 with:
+
+```text
+Error: notification integration missing exact Admin recipient fixture
+```
+
+The payment-marked and gym-finalized scenarios now compare the ordered
+`profile_id` array to exactly the Admin and Super Admin fixture UUIDs. This
+rejects missing, duplicate, or unexpected recipients in addition to retaining
+the action-scoped count and destination checks.
+
+### Row-exists-once-with-null RED → GREEN
+
+A source contract requiring exactly one joined null-destination row for each
+unresolved fixture was added before changing the SQL assertions.
+`node app/smoke.mjs` exited 1 with:
+
+```text
+Error: notification integration must prove ambiguous-same-profile exists once with null destination
+```
+
+The `ambiguous-same-profile` and `foreign-only` assertions now require
+`count(*) = 1` with `n.destination is null`. Deleting a fixture notification,
+returning multiple rows, or assigning any destination can no longer satisfy the
+assertion through scalar-subquery null semantics.
+
+### Available verification
+
+```text
+node app/smoke.mjs                                      exit 0
+node app/live-auth-smoke.mjs                            exit 0
+bash supabase/tests/verify_operational_backend_safety.sh exit 0
+git diff --check                                        exit 0
+node --check app/smoke.mjs                              exit 0
+git diff --exit-code HEAD -- migration 00007            exit 0
+```
+
+Disposable PostgreSQL execution remains unavailable: the database URL and reset
+acknowledgement are unset, `psql` and Supabase CLI are absent, and the installed
+Docker client cannot reach a daemon. SQL runtime, remote application, and live
+routing remain unverified.
