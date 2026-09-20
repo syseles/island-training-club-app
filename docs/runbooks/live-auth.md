@@ -218,46 +218,96 @@ deployment. Keep the exact Testing frontend origin in the existing
 `ITC_APP_ORIGINS` allowlist where profile-photo functions are exercised; do not
 replace it with a wildcard.
 
-### Pre-deployment migration review
+### Required disposable integration gate
 
-The production project has known migration-history drift. Do not blindly replay
-all local migrations, use `--include-all`, or mark unverified historical
-versions as applied. Confirm the target project and backup/PITR status, then
-inspect local and remote history and the dry-run plan before any write:
+Before any production change, the reset-safe disposable SQL integration is a
+**required release gate**. Run it only when both
+`ITC_FREE_EVENT_TEST_DATABASE_URL` is an explicitly disposable, empty,
+reset-safe URL and `ITC_ALLOW_DATABASE_RESET=1` is present. The operational
+wrapper checks the target before applying the ordered migration chain; the
+focused integration then runs transactional RSVP, withdrawal, cancel, reopen,
+venue/time notification, role, grant, and no-deferral assertions and rolls its
+fixtures back:
+
+```bash
+ITC_OPERATIONS_TEST_DATABASE_URL="$ITC_FREE_EVENT_TEST_DATABASE_URL" \
+ITC_ALLOW_DATABASE_RESET="$ITC_ALLOW_DATABASE_RESET" \
+  bash supabase/tests/verify_operational_backend.sh
+
+psql "$ITC_FREE_EVENT_TEST_DATABASE_URL" -X -P pager=off \
+  -v ON_ERROR_STOP=1 \
+  -f supabase/tests/free_event_rsvp_cancellation_integration.sql
+```
+
+Never connect either command to production, staging, a shared database, or a
+database containing user/application data. If either required variable is
+absent, do not connect: record this gate as **unexecuted** and block the release.
+It is not optional and must never be reported as passing without its output.
+
+Before live acceptance, also run the static and headless regression suites from
+the repository root:
+
+```bash
+node app/avatar-smoke.mjs
+node app/smoke.mjs
+node app/live-auth-smoke.mjs
+node app/replacement-operations-smoke.mjs
+node app/rsvp-whos-coming-smoke.mjs
+bash supabase/tests/free_event_rsvp_cancellation_safety.sh
+```
+
+### Production migration review and application
+
+The production project has known migration-history drift. Do not use `db push`,
+`--include-all`, or any command that could replay the local migration chain. Do
+not mark unverified historical versions as applied. Confirm the target project,
+backup/PITR status, reviewed commit, and disposable-gate evidence first.
+
+The following command forms were checked against Supabase CLI 2.117.0 help.
+Establish the project link once, verify the project shown by the link operation,
+and use only the supported `--linked` form after that; do not combine
+`--linked` with `--project-ref`:
 
 ```bash
 export SUPABASE_PROJECT_REF="<confirmed-project-ref>"
-supabase projects list
-supabase migration list --project-ref "$SUPABASE_PROJECT_REF"
-supabase db push --dry-run --project-ref "$SUPABASE_PROJECT_REF"
+supabase link --project-ref "$SUPABASE_PROJECT_REF"
+supabase migration list --linked
 ```
 
-Stop if the project reference is wrong, if the dry run proposes older
-migrations, or if the remote schema does not contain the operational backend
-expected by this migration. Reconcile drift with a separate schema audit. If
-history has been fully reconciled, apply the reviewed pending migration through
-the normal ordered `supabase db push`. For the already-verified production
-history-gap condition only, apply this exact migration explicitly instead of
-replaying the chain:
+Stop if the project is wrong, the migration list is unexpected, or the remote
+schema does not contain the operational backend required by this migration.
+Apply **only** the reviewed contents of
+`supabase/migrations/20260920000001_free_event_rsvp_cancellation.sql`, preferably
+through the trusted Supabase SQL Editor. The explicitly approved alternative is
+a trusted workstation with a production URL loaded ephemerally from the secret
+manager:
 
 ```bash
-supabase db query --linked --project-ref "$SUPABASE_PROJECT_REF" \
-  --file supabase/migrations/20260920000001_free_event_rsvp_cancellation.sql
+psql "$ITC_PRODUCTION_DATABASE_URL" -v ON_ERROR_STOP=1 -f supabase/migrations/20260920000001_free_event_rsvp_cancellation.sql
 ```
 
-Do not record it from command success alone. Run the checks below first; only
-when they pass, record this exact version and re-list history:
+Never print, log, paste into shell history, or store the production database
+URL; disable shell tracing and unset the variable when finished. Command success
+alone is insufficient. Run every read-only production verification below. Only
+when all rows and invariants pass, record this one migration version and re-list
+history:
 
 ```bash
-supabase migration repair 20260920000001 --status applied --linked \
-  --project-ref "$SUPABASE_PROJECT_REF" --yes
-supabase migration list --project-ref "$SUPABASE_PROJECT_REF"
+supabase migration repair --status applied 20260920000001 --linked
+supabase migration list --linked
 ```
 
-### Database verification before frontend deployment
+Do not repair any older version as part of this release. Reconcile historical
+drift separately through a reviewed schema audit.
 
-In trusted SQL, verify the recurring template contract and generated occurrence
-window. The first query must return exactly `wnt`, `run`, and `water`, each with
+### Read-only production verification before any frontend
+
+Run these statements in trusted SQL after applying the backend migration and
+before deploying this frontend revision anywhere. They are read-only and must
+not be replaced with browser-table mutations.
+
+First verify the recurring template contract and generated occurrence window.
+The first query must return exactly `wnt`, `run`, and `water`, each with
 `price_hkd = 0`, `capacity is null`, `requires_rsvp = true`, and weekday
 `3`, `1`, and `2` respectively:
 
@@ -285,65 +335,105 @@ select s.activity_id, count(*) as invalid_occurrences
         or s.price_hkd <> 0 or s.capacity is not null
         or not t.requires_rsvp)
  group by s.activity_id;
-```
 
-The occurrence query should show one dated row per template weekday throughout
-the generated window; the invalid-occurrences query must return no rows. Also
-verify existing zero-price `event-%` templates are RSVP-enabled and uncapped:
-
-```sql
 select activity_id, price_hkd, capacity, requires_rsvp
   from public.operational_activity_templates
  where activity_id like 'event-%' and price_hkd = 0
  order by activity_id;
 ```
 
-Before live acceptance, run the static and headless regression suites from the
-repository root:
+The occurrence query must show one dated row per template weekday throughout
+the generated window; the invalid-occurrences query must return no rows. Every
+zero-price `event-%` result must be RSVP-enabled and uncapped.
 
-```bash
-node app/avatar-smoke.mjs
-node app/smoke.mjs
-node app/live-auth-smoke.mjs
-node app/replacement-operations-smoke.mjs
-node app/rsvp-whos-coming-smoke.mjs
-bash supabase/tests/free_event_rsvp_cancellation_safety.sh
+Next verify the exact deployed RPC signatures, security-definer setting, fixed
+`search_path`, and execute privileges. Every returned `ok` value must be `true`;
+`anon` may execute only the session-window generator, while `authenticated` may
+execute every listed RPC:
+
+```sql
+with expected(signature, anon_execute, authenticated_execute) as (
+  values
+    ('public.ensure_operational_sessions(date,integer)', true, true),
+    ('public.create_operational_event(text,date,time without time zone,integer,text,text,text,integer,integer,boolean)', false, true),
+    ('public.reserve_operational_session(text)', false, true),
+    ('public.get_operational_attendee_names(text)', false, true),
+    ('public.join_operational_queue(text,text)', false, true),
+    ('public.leave_operational_queue(uuid)', false, true),
+    ('public.withdraw_operational_rsvp(uuid)', false, true),
+    ('public.cancel_operational_session(text,text)', false, true),
+    ('public.reopen_operational_rsvp(text)', false, true),
+    ('public.set_session_venue(text,text,text,boolean)', false, true),
+    ('public.set_session_venue(text,text,text,boolean,double precision,double precision)', false, true),
+    ('public.set_operational_session_time(text,time without time zone)', false, true)
+), checks as (
+  select e.signature,
+         p.oid is not null as function_exists,
+         coalesce(p.prosecdef, false) as security_definer,
+         coalesce('search_path=public' = any(p.proconfig), false) as fixed_search_path,
+         coalesce(has_function_privilege('anon', p.oid, 'EXECUTE'), false)
+           as anon_execute,
+         coalesce(has_function_privilege('authenticated', p.oid, 'EXECUTE'), false)
+           as authenticated_execute,
+         coalesce(
+           p.oid is not null
+             and p.prosecdef
+             and 'search_path=public' = any(p.proconfig)
+             and has_function_privilege('anon', p.oid, 'EXECUTE') = e.anon_execute
+             and has_function_privilege('authenticated', p.oid, 'EXECUTE') = e.authenticated_execute,
+           false
+         ) as ok
+    from expected e
+    left join pg_proc p on p.oid = to_regprocedure(e.signature)
+)
+select * from checks order by signature;
 ```
 
-Disposable SQL integration is destructive and optional. Run it only when both
-`ITC_FREE_EVENT_TEST_DATABASE_URL` is an explicitly disposable reset-safe URL
-and `ITC_ALLOW_DATABASE_RESET=1` is present. The operational wrapper applies the
-ordered migration chain and checks that the target is empty; the second command
-then executes this feature's transactional integration file:
+Finally confirm browser roles have no direct mutation privilege on the feature's
+authoritative tables. This query must return no rows:
 
-```bash
-ITC_OPERATIONS_TEST_DATABASE_URL="$ITC_FREE_EVENT_TEST_DATABASE_URL" \
-ITC_ALLOW_DATABASE_RESET="$ITC_ALLOW_DATABASE_RESET" \
-  bash supabase/tests/verify_operational_backend.sh
-
-psql "$ITC_FREE_EVENT_TEST_DATABASE_URL" -X -P pager=off \
-  -v ON_ERROR_STOP=1 \
-  -f supabase/tests/free_event_rsvp_cancellation_integration.sql
+```sql
+with checked(role_name, table_name) as (
+  select role_name, table_name
+    from (values ('anon'), ('authenticated')) roles(role_name)
+   cross join (values
+     ('operational_activity_templates'),
+     ('operational_sessions'),
+     ('operational_bookings'),
+     ('operational_queue_entries'),
+     ('operational_rsvp_counts'),
+     ('operational_session_venue_overrides'),
+     ('notifications')
+   ) tables(table_name)
+)
+select role_name, table_name
+  from checked
+ where has_table_privilege(
+   role_name,
+   format('public.%I', table_name),
+   'INSERT,UPDATE,DELETE'
+ );
 ```
 
-Never connect either command to production, staging, a shared database, or a
-database containing user/application data. If either required variable is
-absent, do not connect and record database integration as **unexecuted**, not
-passing.
+### Staged rollout and production promotion
 
-### Deployment order
-
-1. Apply migration `20260920000001_free_event_rsvp_cancellation.sql` using the
-   drift-safe procedure above.
-2. Verify templates, generated sessions, RPC behavior, grants, and notification
-   records against the intended database.
-3. Deploy the frontend only after the database migration and verification have
-   succeeded. A frontend-first rollout exposes controls whose RPC/schema
-   contract is not yet available.
-4. Confirm the deployed frontend points at that same project. Verify the exact
-   Testing origin remains configured where `ITC_APP_ORIGINS` is used; no new
-   Edge Function deployment is required.
-5. Complete the authenticated browser acceptance below before promotion.
+1. **Apply the backend migration** only after the required disposable gate, using
+   the reviewed SQL-only path above. No frontend deployment may precede it.
+2. **Run read-only production verification** for templates, generated sessions,
+   exact RPC signatures, security-definer settings, execute grants, and direct
+   table privileges. Repair only migration history version `20260920000001`
+   after these checks pass.
+3. **Deploy the controlled Testing/preview frontend** only after steps 1–2. Point
+   it at the same migrated project, restrict access to the named acceptance
+   testers, and do not promote that revision to the production frontend URL.
+   Verify the exact Testing origin remains configured where `ITC_APP_ORIGINS`
+   is used; no new Edge Function deployment is required.
+4. **Complete authenticated RSVP/cancel/reopen/venue/time/notification acceptance**
+   with the checklist and read-only notification query below. This controlled
+   acceptance must pass before production frontend promotion.
+5. **Promote the production frontend** only after the disposable gate, backend
+   verification, preview acceptance, and notification recipient/non-recipient
+   evidence all pass. A failed or unexecuted gate blocks promotion.
 
 ### Authenticated browser and mobile acceptance
 
@@ -360,21 +450,26 @@ landscape viewport.
    then open **Who’s coming** and verify the member's name and private avatar
    (or initials fallback). Confirm signed-out and pending/declined sessions see
    neither the action nor roster identities.
-3. Tap **Can’t make it** before the Hong Kong start. Confirm the member leaves
-   the count/roster and can RSVP again. Confirm RSVP and withdrawal controls
-   close at start time and duplicate taps do not create duplicate rows.
-4. As Admin, verify each dated card's expected-attendee count and avatar roster.
-   Cancel one occurrence with a trimmed required reason. Confirm Schedule and
+3. In the distinct withdrawn-member session, tap **I’m coming** and then
+   **Can’t make it** before the Hong Kong start. Confirm that member leaves the
+   count/roster and receives no later change notification. Confirm RSVP and
+   withdrawal controls close at start time and duplicate taps do not create
+   duplicate rows.
+4. Have the acting Admin RSVP too, then verify each dated card's
+   expected-attendee count and avatar roster. As that Admin, cancel one
+   occurrence with a trimmed required reason. Confirm Schedule and
    Activity Details show **Cancelled** plus that reason, its active RSVP is
    cancelled without a deferral/future booking, and the recurring template and
    adjacent future occurrence remain active.
-5. Before start, choose **Reopen event**. Confirm the previous booking remains
-   cancelled, the count remains zero, and the member must RSVP afresh. Confirm
+5. Before start, choose **Reopen event**. Confirm the previous bookings remain
+   cancelled and the count remains zero. Have the approved member and acting
+   Admin each RSVP afresh and confirm each gets one new active booking. Confirm
    blank cancellation reasons and post-start reopening fail without losing the
    current route or form state.
-6. With an active RSVP, change venue and then start time. Confirm the effective
-   values update on Schedule and Activity Details. Repeat each unchanged save
-   and confirm no duplicate notification is created.
+6. With those active RSVPs, have the same acting Admin change venue and then
+   start time. Confirm the effective values update on Schedule and Activity
+   Details. Repeat each unchanged save and confirm no duplicate notification is
+   created.
 7. For each cancellation, reopening, venue change, and time change, inspect the
    notification bell and trusted notification rows. The applicable active or
    occurrence-cancelled RSVP member must receive exactly one linked in-app
@@ -390,6 +485,94 @@ landscape viewport.
    reopen control, notifications, loading/disabled states, error copy, focus
    order, back navigation, narrow-layout wrapping, and portrait/landscape
    scrolling without clipping or horizontal overflow.
+
+### Read-only notification acceptance evidence
+
+After the controlled acceptance, replace the six UUIDs, session ID, and
+acceptance start timestamp below with the recorded fixture values. Run both
+queries through trusted read-only production SQL before promotion. The UUID
+placeholders are valid but deliberately cannot pass the positive checks; do not
+edit expected counts. Every `ok` value and every boolean in the state query must
+be `true`.
+
+The first query proves exact recipient and non-recipient notification behavior,
+including no duplicate notification for the acting Admin who also RSVP'd:
+
+```sql
+with params as (
+  select 'REPLACE_WITH_SESSION_ID'::text as session_id,
+         '2099-01-01 00:00:00+00'::timestamptz as acceptance_started_at
+), cohorts(profile_id, cohort, expected_count) as (
+  values
+    ('00000000-0000-0000-0000-000000000001'::uuid, 'active member', 1),
+    ('00000000-0000-0000-0000-000000000002'::uuid, 'acting RSVP Admin', 1),
+    ('00000000-0000-0000-0000-000000000003'::uuid, 'withdrawn member', 0),
+    ('00000000-0000-0000-0000-000000000004'::uuid, 'unrelated member', 0),
+    ('00000000-0000-0000-0000-000000000005'::uuid, 'pending profile', 0),
+    ('00000000-0000-0000-0000-000000000006'::uuid, 'declined profile', 0)
+), kinds(kind) as (
+  values
+    ('operational_session_cancelled'),
+    ('operational_rsvp_reopened'),
+    ('operational_session_venue_updated'),
+    ('operational_session_time_updated')
+), expected as (
+  select c.profile_id, c.cohort, k.kind, c.expected_count
+    from cohorts c cross join kinds k
+), observed as (
+  select n.profile_id, n.kind, count(*)::integer as actual_count
+    from public.notifications n
+    cross join params p
+   where n.destination = '#/activity/' || p.session_id
+     and n.created_at >= p.acceptance_started_at
+     and n.kind in (select kind from kinds)
+   group by n.profile_id, n.kind
+)
+select e.cohort, e.kind, e.expected_count,
+       coalesce(o.actual_count, 0) as actual_count,
+       coalesce(o.actual_count, 0) = e.expected_count as ok
+  from expected e
+  left join observed o using (profile_id, kind)
+ order by e.cohort, e.kind;
+```
+
+The second query proves reopening preserved the occurrence-cancelled RSVP
+history, produced one fresh active RSVP for each positive cohort, and never
+entered paid deferral:
+
+```sql
+with params as (
+  select 'REPLACE_WITH_SESSION_ID'::text as session_id,
+         '00000000-0000-0000-0000-000000000001'::uuid as active_member_id,
+         '00000000-0000-0000-0000-000000000002'::uuid as acting_admin_id
+)
+select count(*) filter (
+         where b.profile_id = p.active_member_id
+           and b.status = 'cancelled'
+           and b.cancellation_source = 'session'
+       ) >= 1 as active_member_cancelled_history,
+       count(*) filter (
+         where b.profile_id = p.acting_admin_id
+           and b.status = 'cancelled'
+           and b.cancellation_source = 'session'
+       ) >= 1 as acting_admin_cancelled_history,
+       count(*) filter (
+         where b.profile_id = p.active_member_id and b.status = 'confirmed'
+       ) = 1 as active_member_one_fresh_rsvp,
+       count(*) filter (
+         where b.profile_id = p.acting_admin_id and b.status = 'confirmed'
+       ) = 1 as acting_admin_one_fresh_rsvp,
+       count(*) filter (where b.status = 'deferred') = 0 as no_paid_deferral,
+       bool_and(s.cancelled_at is null) as occurrence_is_reopened
+  from params p
+  join public.operational_sessions s on s.id = p.session_id
+  left join public.operational_bookings b on b.session_id = s.id
+ group by p.active_member_id, p.acting_admin_id;
+```
+
+Attach the query output and authenticated screenshots to the release record.
+Only then is notification acceptance complete and production frontend promotion
+permitted.
 
 ### Rollback
 

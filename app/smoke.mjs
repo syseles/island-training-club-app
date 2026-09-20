@@ -1267,17 +1267,47 @@ if (/eyJ[a-zA-Z0-9_-]{20,}[.][a-zA-Z0-9_-]{20,}[.][a-zA-Z0-9_-]{20,}/.test(liveA
 }
 console.log("ok  profile-photo deployment and rollback are documented without secrets");
 
+const freeEventRunbookSection = liveAuthRunbookSource.match(
+  /## Free-event RSVP cancellation: deployment and acceptance[\s\S]*?(?=\n## )/,
+)?.[0] || "";
 for (const marker of [
   "20260920000001_free_event_rsvp_cancellation.sql",
   "authoritative recurring free sessions",
   "never deferred",
   "Reopening does not restore cancelled RSVPs",
   "in-app only",
-  "Deploy the frontend only after",
+  'supabase link --project-ref "$SUPABASE_PROJECT_REF"',
+  "supabase migration list --linked",
+  "supabase migration repair --status applied 20260920000001 --linked",
+  'psql "$ITC_PRODUCTION_DATABASE_URL" -v ON_ERROR_STOP=1 -f',
+  "required release gate",
+  "security-definer",
+  "read-only production verification",
+  "controlled Testing/preview frontend",
+  "production frontend promotion",
 ]) {
-  if (!liveAuthRunbookSource.includes(marker)) {
+  if (!freeEventRunbookSection.includes(marker)) {
     throw new Error(`free-event RSVP deployment runbook missing ${marker}`);
   }
+}
+if (/^\s*supabase db query/m.test(freeEventRunbookSection)
+    || /^\s*supabase[^\n]*(?:--linked[^\n]*--project-ref|--project-ref[^\n]*--linked)/m.test(freeEventRunbookSection)) {
+  throw new Error("free-event RSVP runbook must not mix linked/project-ref flags or use db query");
+}
+const freeEventRolloutMarkers = [
+  "Apply the backend migration",
+  "Run read-only production verification",
+  "Deploy the controlled Testing/preview frontend",
+  "Complete authenticated RSVP/cancel/reopen/venue/time/notification acceptance",
+  "Promote the production frontend",
+];
+let previousRolloutMarker = -1;
+for (const marker of freeEventRolloutMarkers) {
+  const markerIndex = freeEventRunbookSection.indexOf(marker);
+  if (markerIndex <= previousRolloutMarker) {
+    throw new Error(`free-event RSVP rollout order missing or invalid at ${marker}`);
+  }
+  previousRolloutMarker = markerIndex;
 }
 console.log("ok  free-event RSVP deployment order and rollback semantics are documented");
 
