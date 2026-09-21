@@ -1,6 +1,6 @@
 # Private Prayer Requests and Profile Subpage UX Design
 
-**Date:** 20 September 2026  
+**Date:** 20 September 2026
 **Status:** Approved for implementation planning
 
 ## Context
