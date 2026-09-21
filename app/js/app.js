@@ -395,7 +395,11 @@ export async function maybeRedirectToApply() {
   const cu = await store.getCurrentUser();
   if (!cu || cu.role !== "pending") return;
   const app = await store.getMyApplication();
-  if (!app && window.location.hash !== "#/apply") {
+  if (store.shouldRedirectPendingApplicant({
+    role: cu.role,
+    hasApplication: Boolean(app),
+    route: window.location.hash,
+  })) {
     window.location.hash = "#/apply";
   }
 }
