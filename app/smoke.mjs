@@ -1464,7 +1464,37 @@ for (const contract of [
   assert.match(prayerRunbookSection, contract,
     `prayer function owner/security gate missing ${contract}`);
 }
-console.log("ok  private prayer deployment order, linked repair, trusted function ownership, and rollback semantics are documented");
+const declinedDecisionRolloutMarkers = [
+  "Confirm the prayer backend baseline",
+  "Apply the forward profile-decision repair",
+  "Verify the repaired decision boundary",
+  "Record only the forward repair version",
+  "Create the declined acceptance fixture",
+];
+let previousDeclinedDecisionMarker = -1;
+for (const marker of declinedDecisionRolloutMarkers) {
+  const markerIndex = prayerRunbookSection.indexOf(marker);
+  if (markerIndex <= previousDeclinedDecisionMarker) {
+    throw new Error(`declined profile decision prerequisite order missing or invalid at ${marker}`);
+  }
+  previousDeclinedDecisionMarker = markerIndex;
+}
+assert.match(
+  prayerRunbookSection,
+  /never replay, edit, repair, or mark[\s\S]*?20260805000007_admin_application_decisions\.sql/i,
+  "prayer rollout must forbid historical profile-decision migration repair",
+);
+assert.doesNotMatch(
+  normalizedPrayerRunbook,
+  /supabase migration repair 20260805000007/,
+  "prayer rollout must never repair the historical profile-decision migration",
+);
+assert.match(
+  normalizedPrayerRunbook,
+  /20260921000001_prayer_requests\.sql[\s\S]*20260921000002_declined_profile_decisions\.sql/,
+  "clean prayer chain must apply the forward profile-decision repair after prayer requests",
+);
+console.log("ok  private prayer deployment order, forward decision repair, trusted function ownership, and rollback semantics are documented");
 
 if (!/values\s*\([\s\S]*?'pending'\s*\)/i.test(profilesMigrationSource)
     || /existing_count|count\s*\(\s*\*\s*\)[\s\S]*super_admin/i.test(profilesMigrationSource)) {
