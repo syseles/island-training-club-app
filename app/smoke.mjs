@@ -93,6 +93,33 @@ assert.equal(localStorage.getItem(LAST_ROUTE_KEY), null, "malformed route record
 store.clearLastRoute();
 console.log("ok  route handoff storage validates, isolates and round-trips app routes");
 
+assert.equal(store.shouldRedirectPendingApplicant({
+  role: "pending",
+  hasApplication: false,
+  route: "#/community/prayers",
+}), false, "pending applicants must be able to reach the read-only Prayer gate");
+assert.equal(store.shouldRedirectPendingApplicant({
+  role: "pending",
+  hasApplication: false,
+  route: "#/home",
+}), true, "pending applicants without applications should still be routed into onboarding elsewhere");
+assert.equal(store.shouldRedirectPendingApplicant({
+  role: "pending",
+  hasApplication: false,
+  route: "#/apply",
+}), false, "the application route must not redirect to itself");
+assert.equal(store.shouldRedirectPendingApplicant({
+  role: "pending",
+  hasApplication: true,
+  route: "#/home",
+}), false, "submitted pending applicants must not be forced back into the application form");
+assert.equal(store.shouldRedirectPendingApplicant({
+  role: "member",
+  hasApplication: false,
+  route: "#/home",
+}), false, "approved roles must never use pending-applicant routing");
+console.log("ok  pending onboarding preserves the read-only Prayer gate");
+
 const hktRolloverInstant = Date.parse("2026-08-05T16:30:00.000Z");
 assert.equal(data.todayHktISO(hktRolloverInstant), "2026-08-06",
   "current HKT date must not depend on the browser timezone");

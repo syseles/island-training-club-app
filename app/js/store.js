@@ -131,6 +131,12 @@ export function startupRoute(currentHash, userId = null) {
   return explicitRoute || lastRouteFor(userId) || "#/home";
 }
 
+export function shouldRedirectPendingApplicant({ role, hasApplication, route } = {}) {
+  return role === "pending"
+    && !hasApplication
+    && !["#/apply", "#/community/prayers"].includes(route);
+}
+
 function freshState() {
   return {
     version: STATE_VERSION,
