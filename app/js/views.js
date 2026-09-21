@@ -1219,11 +1219,19 @@ function prayerHistory(rows, loadFailed) {
     <div class="prayer-request-list">
       ${rows.map((row) => {
         const status = PRAYER_STATUS_LABELS[row.status] || PRAYER_STATUS_LABELS.new;
+        if (row.status === "withdrawn") {
+          const withdrawnAt = row.withdrawnAt ?? "";
+          return `
+            <article class="card prayer-request">
+              <div class="card-body">
+                <div class="prayer-request-meta">
+                  <time datetime="${esc(String(withdrawnAt))}">${esc(prayerDate(withdrawnAt))}</time>
+                  <span class="badge neutral">${esc(status)}</span>
+                </div>
+              </div>
+            </article>`;
+        }
         const canClose = ["new", "prayed_for"].includes(row.status);
-        const canWithdraw = row.status !== "withdrawn";
-        const request = row.status === "withdrawn"
-          ? '<p class="prayer-request-text muted">Request text permanently removed.</p>'
-          : `<p class="prayer-request-text">${esc(String(row.request || ""))}</p>`;
         return `
           <article class="card prayer-request">
             <div class="card-body">
@@ -1231,15 +1239,14 @@ function prayerHistory(rows, loadFailed) {
                 <time datetime="${esc(String(row.createdAt || ""))}">${esc(prayerDate(row.createdAt))}</time>
                 <span class="badge neutral">${esc(status)}</span>
               </div>
-              ${request}
+              <p class="prayer-request-text">${esc(String(row.request || ""))}</p>
               <p class="muted small prayer-request-privacy">${row.anonymousToLeaders
                 ? "Identity hidden from ITC leaders"
                 : "Shared with my identity"}</p>
-              ${canClose || canWithdraw ? `
-                <div class="prayer-request-actions">
-                  ${canClose ? `<button class="btn ghost sm" type="button" data-action="close-prayer-request" data-prayer="${esc(String(row.id || ""))}">Close request</button>` : ""}
-                  ${canWithdraw ? `<button class="btn danger sm" type="button" data-action="withdraw-prayer-request" data-prayer="${esc(String(row.id || ""))}">Withdraw</button>` : ""}
-                </div>` : ""}
+              <div class="prayer-request-actions">
+                ${canClose ? `<button class="btn ghost sm" type="button" data-action="close-prayer-request" data-prayer="${esc(String(row.id || ""))}">Close request</button>` : ""}
+                <button class="btn danger sm" type="button" data-action="withdraw-prayer-request" data-prayer="${esc(String(row.id || ""))}">Withdraw</button>
+              </div>
             </div>
           </article>`;
       }).join("")}
@@ -1256,10 +1263,15 @@ async function communityPrayers() {
     <h1 class="display sm">Prayers.</h1>
     <p class="subcopy mt8">We pray for each other — injuries, exams, work, family, anything. Send a request and the leaders will pray with you this week; you’re also welcome to pray along.</p>`;
   if (!approved) {
+    const gateCopy = user
+      ? "Prayer requests are private and available after your ITC membership is approved. View your membership status in Profile."
+      : "Prayer requests are private. Sign in or apply through Profile to continue.";
+    const gateAction = user ? "View Profile" : "Sign in or view Profile";
     return `${intro}
       <div class="card mt16"><div class="card-body">
         <h3>Approved members only</h3>
-        <p class="muted small mt8">Prayer requests are private and available after your ITC membership is approved.</p>
+        <p class="muted small mt8">${gateCopy}</p>
+        <a class="btn ghost mt16" href="#/account">${gateAction}</a>
       </div></div>`;
   }
 
@@ -3427,8 +3439,7 @@ function adminPrayerRequests(rows) {
       ${activeGroup("prayed_for", "Prayed for")}
       <details class="admin-prayer-group admin-prayer-closed">
         <summary>
-          <h2>Closed</h2>
-          <span class="badge neutral">${closedRows.length}</span>
+          <h2>Closed <span class="badge neutral" aria-label="${closedRows.length} prayer request${closedRows.length === 1 ? "" : "s"}">${closedRows.length}</span></h2>
         </summary>
         ${closedRows.length
           ? `<div class="admin-prayer-list">${closedRows.map(adminPrayerCard).join("")}</div>`

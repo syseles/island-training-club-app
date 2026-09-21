@@ -4902,33 +4902,58 @@ const makePrayerAction = (action, textContent) => {
 };
 
 toastStack.children.length = 0;
+const memberStateCalls = () => prayerRpcCalls.filter(
+  (call) => call.name === "set_my_prayer_request_state"
+);
 const closePrayerControl = makePrayerAction("close-prayer-request", "Close request");
+const withdrawPrayerControl = makePrayerAction("withdraw-prayer-request", "Withdraw");
+const memberPrayerCard = makeElement();
+memberPrayerCard.querySelectorAll = () => [closePrayerControl, withdrawPrayerControl];
+closePrayerControl.closest = (selector) => selector === ".prayer-request"
+  ? memberPrayerCard
+  : closePrayerControl;
+withdrawPrayerControl.closest = (selector) => selector === ".prayer-request"
+  ? memberPrayerCard
+  : withdrawPrayerControl;
+window.confirm = () => true;
+globalThis.confirm = window.confirm;
 const closePrayerGate = deferred();
 prayerRpcGate = { name: "set_my_prayer_request_state", promise: closePrayerGate.promise };
+const closePrayerCallCount = memberStateCalls().length;
 const closePrayerCall = domListeners.get("click")({ target: closePrayerControl, preventDefault() {} });
 await new Promise(setImmediate);
+const siblingWithdrawCall = domListeners.get("click")({
+  target: withdrawPrayerControl,
+  preventDefault() {},
+});
+await new Promise(setImmediate);
+assert.equal(memberStateCalls().length, closePrayerCallCount + 1,
+  "busy member Prayer requests must suppress sibling Close/Withdraw mutations");
 assert.equal(closePrayerControl.disabled, true);
+assert.equal(withdrawPrayerControl.disabled, true);
 assert.equal(toastStack.children.length, 0,
   "Prayer close success must wait for the authoritative write");
+assert.deepEqual(memberStateCalls().at(-1), {
+  name: "set_my_prayer_request_state",
+  args: { p_request_id: PRAYER_ID, p_action: "close" },
+});
 closePrayerGate.resolve({ data: [{
   ...structuredClone(prayerMemberRow),
   status: "closed",
   closed_at: "2026-08-05T02:05:00.000Z",
 }], error: null });
-await closePrayerCall;
+await Promise.all([closePrayerCall, siblingWithdrawCall]);
 prayerRpcGate = null;
-assert.deepEqual(prayerRpcCalls.at(-2), {
-  name: "set_my_prayer_request_state",
-  args: { p_request_id: PRAYER_ID, p_action: "close" },
-});
 assert.deepEqual(toastStack.children.map((item) => item.textContent), [
   "Prayer request closed",
 ]);
+assert.equal(closePrayerControl.disabled, false);
+assert.equal(withdrawPrayerControl.disabled, false);
+assert.equal(closePrayerControl.hasAttribute("aria-busy"), false);
 
 let prayerWithdrawConfirm = "";
 window.confirm = (message) => { prayerWithdrawConfirm = message; return false; };
 globalThis.confirm = window.confirm;
-const withdrawPrayerControl = makePrayerAction("withdraw-prayer-request", "Withdraw");
 const prayerCallsBeforeCancelledWithdraw = prayerRpcCalls.length;
 await domListeners.get("click")({ target: withdrawPrayerControl, preventDefault() {} });
 assert.equal(

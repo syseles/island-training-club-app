@@ -316,8 +316,7 @@ redaction checks below pass. Then record only the reviewed version and re-list
 history:
 
 ```bash
-supabase migration repair 20260921000001 --status applied \
-  --project-ref krxbvgyolxvmzgysfjkj --yes
+supabase migration repair 20260921000001 --status applied --linked --yes
 supabase migration list --linked
 ```
 
@@ -377,52 +376,110 @@ select role_name,
  order by role_name;
 ```
 
-The five public RPCs must exist with exactly these signatures, be
-security-definer functions pinned to `search_path=public`, deny `anon`, and
-allow the authenticated transport role. Every `ok` value must be `true`:
+The five public RPCs and both private role helpers must exist with exactly the
+seven signatures below, be security-definer functions pinned to
+`search_path=public`, and be owned by the explicitly approved trusted role.
+For an unchanged SQL Editor application that role is `postgres`; the literal is
+deliberate. Public RPCs must deny `anon` and allow only the authenticated
+transport role, while the two private helpers must deny both browser roles.
+Retain the seven result rows, require every `ok` value to be `true`, and run the
+following read-only catalog gate in the same trusted SQL session:
 
 ```sql
-with expected(signature) as (
+with expected(signature, function_class, approved_owner) as (
   values
-    ('public.submit_prayer_request(text,boolean)'),
-    ('public.list_my_prayer_requests()'),
-    ('public.set_my_prayer_request_state(uuid,text)'),
-    ('public.list_admin_prayer_requests()'),
-    ('public.set_admin_prayer_request_status(uuid,text)')
+    ('public.submit_prayer_request(text,boolean)', 'public_rpc', 'postgres'),
+    ('public.list_my_prayer_requests()', 'public_rpc', 'postgres'),
+    ('public.set_my_prayer_request_state(uuid,text)', 'public_rpc', 'postgres'),
+    ('public.list_admin_prayer_requests()', 'public_rpc', 'postgres'),
+    ('public.set_admin_prayer_request_status(uuid,text)', 'public_rpc', 'postgres'),
+    ('public.prayer_assert_approved()', 'private_helper', 'postgres'),
+    ('public.prayer_assert_admin()', 'private_helper', 'postgres')
 ), checks as (
   select e.signature,
+         e.function_class,
+         e.approved_owner,
          p.oid is not null as function_exists,
          coalesce(p.prosecdef, false) as security_definer,
          coalesce('search_path=public' = any(p.proconfig), false) as fixed_search_path,
+         pg_get_userbyid(p.proowner) as actual_owner,
+         coalesce(pg_get_userbyid(p.proowner) = e.approved_owner, false) as trusted_owner,
          coalesce(has_function_privilege('anon', p.oid, 'EXECUTE'), false) as anon_execute,
          coalesce(has_function_privilege('authenticated', p.oid, 'EXECUTE'), false)
-           as authenticated_execute,
-         coalesce(
-           p.oid is not null
-             and p.prosecdef
-             and 'search_path=public' = any(p.proconfig)
-             and not has_function_privilege('anon', p.oid, 'EXECUTE')
-             and has_function_privilege('authenticated', p.oid, 'EXECUTE'),
-           false
-         ) as ok
+           as authenticated_execute
     from expected e
     left join pg_proc p on p.oid = to_regprocedure(e.signature)
 )
-select * from checks order by signature;
+select *,
+       function_exists
+         and security_definer
+         and fixed_search_path
+         and trusted_owner
+         and not anon_execute
+         and case
+               when function_class = 'public_rpc' then authenticated_execute
+               else not authenticated_execute
+             end as ok
+  from checks
+ order by signature;
+
+-- Fail the SQL Editor run unless the same seven-signature contract is true.
+do $verification$
+declare
+  verified_count integer;
+  failed_signatures text;
+begin
+  with expected(signature, function_class, approved_owner) as (
+    values
+      ('public.submit_prayer_request(text,boolean)', 'public_rpc', 'postgres'),
+      ('public.list_my_prayer_requests()', 'public_rpc', 'postgres'),
+      ('public.set_my_prayer_request_state(uuid,text)', 'public_rpc', 'postgres'),
+      ('public.list_admin_prayer_requests()', 'public_rpc', 'postgres'),
+      ('public.set_admin_prayer_request_status(uuid,text)', 'public_rpc', 'postgres'),
+      ('public.prayer_assert_approved()', 'private_helper', 'postgres'),
+      ('public.prayer_assert_admin()', 'private_helper', 'postgres')
+  ), checks as (
+    select e.signature,
+           coalesce(
+             p.oid is not null
+               and p.prosecdef
+               and 'search_path=public' = any(p.proconfig)
+               and pg_get_userbyid(p.proowner) = e.approved_owner
+               and not has_function_privilege('anon', p.oid, 'EXECUTE')
+               and case
+                     when e.function_class = 'public_rpc'
+                       then has_function_privilege('authenticated', p.oid, 'EXECUTE')
+                     else not has_function_privilege('authenticated', p.oid, 'EXECUTE')
+                   end,
+             false
+           ) as ok
+      from expected e
+      left join pg_proc p on p.oid = to_regprocedure(e.signature)
+  )
+  select count(*) filter (where ok),
+         coalesce(string_agg(signature, ', ' order by signature) filter (where not ok), '')
+    into verified_count, failed_signatures
+    from checks;
+
+  if verified_count <> 7 then
+    raise exception 'Prayer function trust check failed (%/7 verified): %',
+      verified_count, failed_signatures;
+  end if;
+
+  raise notice 'Prayer function trust check passed (7/7; approved owner postgres).';
+end
+$verification$;
 ```
 
-The private role helpers must deny both browser roles:
-
-```sql
-select helper,
-       has_function_privilege('anon', helper, 'EXECUTE') as anon_execute,
-       has_function_privilege('authenticated', helper, 'EXECUTE')
-         as authenticated_execute
-  from (values
-    ('public.prayer_assert_approved()'),
-    ('public.prayer_assert_admin()')
-  ) helpers(helper);
-```
+If `actual_owner` differs from `postgres`, an `ok` value is false, or the block
+raises, stop the rollout before migration repair or frontend deployment. Do not
+change or replace `postgres` merely to make the check pass, and do not accept
+the role reported by the catalog as trusted by default. Identify how that role
+acquired ownership and have the authorized database owner either transfer each
+exact function signature back to `postgres`, or obtain and record explicit
+security approval for a different trusted owner before changing the literal.
+Then rerun the seven-row query and failing gate; all seven functions must name
+the same explicitly approved owner.
 
 Both Admin RPC result contracts must expose only the documented display label
 and request fields—never `owner_id`, email, or another stable owner field. The

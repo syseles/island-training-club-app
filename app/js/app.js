@@ -1194,29 +1194,30 @@ document.addEventListener("click", async (e) => {
     }
 
     case "close-prayer-request":
+    case "withdraw-prayer-request": {
+      const withdrawing = action === "withdraw-prayer-request";
+      const prayerRequest = el.closest(".prayer-request");
+      const busyKey = prayerRequest || el;
+      if (controlBusy.has(busyKey)) break;
+      if (withdrawing
+          && !confirm("Withdraw this request? Its text will be permanently removed.")) return;
+      const controls = prayerRequest?.querySelectorAll?.(
+        '[data-action="close-prayer-request"], [data-action="withdraw-prayer-request"]'
+      ) || [el];
       try {
-        await withBusyControl(el, "Closing…", async () => {
-          await store.setMyPrayerRequestState(el.dataset.prayer, "close");
-          toast("Prayer request closed");
+        await withBusyControl(el, withdrawing ? "Withdrawing…" : "Closing…", async () => {
+          await store.setMyPrayerRequestState(
+            el.dataset.prayer,
+            withdrawing ? "withdraw" : "close"
+          );
+          toast(withdrawing ? "Prayer request withdrawn" : "Prayer request closed");
           await renderWithFeedback();
-        });
+        }, { busyKey, controls });
       } catch {
         toast("Prayer request could not be updated. Please try again.", true);
       }
       break;
-
-    case "withdraw-prayer-request":
-      if (!confirm("Withdraw this request? Its text will be permanently removed.")) return;
-      try {
-        await withBusyControl(el, "Withdrawing…", async () => {
-          await store.setMyPrayerRequestState(el.dataset.prayer, "withdraw");
-          toast("Prayer request withdrawn");
-          await renderWithFeedback();
-        });
-      } catch {
-        toast("Prayer request could not be updated. Please try again.", true);
-      }
-      break;
+    }
 
     case "connect-interest":
       // Stub for fellowship/meal sign-ups — the real flow will notify leaders.

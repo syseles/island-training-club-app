@@ -1403,7 +1403,41 @@ for (const marker of prayerRolloutMarkers) {
   }
   previousPrayerRolloutMarker = markerIndex;
 }
-console.log("ok  private prayer deployment order and rollback semantics are documented");
+const normalizedPrayerRunbook = prayerRunbookSection.replace(/\\\s*\n\s*/g, " ").replace(/\s+/g, " ");
+assert.match(
+  normalizedPrayerRunbook,
+  /supabase migration repair 20260921000001 --status applied --linked --yes supabase migration list --linked/,
+  "prayer migration history repair must use linked-project mode and immediately re-list linked history",
+);
+assert.doesNotMatch(
+  normalizedPrayerRunbook,
+  /supabase migration repair 20260921000001(?:(?!supabase migration list).)*--project-ref/,
+  "prayer migration repair must not mix the incompatible project-ref and linked forms",
+);
+for (const signature of [
+  "public.submit_prayer_request(text,boolean)",
+  "public.list_my_prayer_requests()",
+  "public.set_my_prayer_request_state(uuid,text)",
+  "public.list_admin_prayer_requests()",
+  "public.set_admin_prayer_request_status(uuid,text)",
+  "public.prayer_assert_approved()",
+  "public.prayer_assert_admin()",
+]) {
+  assert.ok(prayerRunbookSection.includes(`('${signature}'`),
+    `prayer trust-boundary verification missing ${signature}`);
+}
+for (const contract of [
+  /approved_owner[\s\S]*?'postgres'/i,
+  /pg_get_userbyid\(p\.proowner\)/i,
+  /security_definer[\s\S]*fixed_search_path[\s\S]*trusted_owner/i,
+  /raise exception 'Prayer function trust check failed/i,
+  /verified_count\s*<>\s*7/i,
+  /do not\s+(?:change|replace)[\s\S]*postgres[\s\S]*make the check pass/i,
+]) {
+  assert.match(prayerRunbookSection, contract,
+    `prayer function owner/security gate missing ${contract}`);
+}
+console.log("ok  private prayer deployment order, linked repair, trusted function ownership, and rollback semantics are documented");
 
 if (!/values\s*\([\s\S]*?'pending'\s*\)/i.test(profilesMigrationSource)
     || /existing_count|count\s*\(\s*\*\s*\)[\s\S]*super_admin/i.test(profilesMigrationSource)) {
@@ -2000,6 +2034,14 @@ if (!/approved member/i.test(visitorPrayerHtml) || visitorPrayerHtml.includes('i
   failures++;
   console.error("FAIL visitor Prayer must show the approved-member gate without a form");
 } else console.log("ok  visitor Prayer is gated without hiding the public description");
+assert.match(visitorPrayerHtml,
+  /We pray for each other — injuries, exams, work, family, anything\./,
+  "visitor Prayer gate must retain the public prayer description");
+assert.match(visitorPrayerHtml,
+  /<a class="btn ghost mt16" href="#\/account">Sign in or view Profile<\/a>/,
+  "visitor Prayer gate must offer the signed-out account CTA");
+assert.doesNotMatch(visitorPrayerHtml, /My Prayer Requests|prayer-request-list/,
+  "visitor Prayer gate must not expose member history");
 await check("community > fellowship", () => views.viewCommunity("fellowship"));
 await check("community > meals -> redirect", () => views.viewCommunity("meals"));
 const mealsRoute = await views.viewCommunity("meals");
@@ -3504,13 +3546,22 @@ await assert.rejects(() => store.listMyPrayerRequests(), /approved member/i);
   mem.set("itc.prototype.v1", JSON.stringify(raw));
   store.load();
 }
-for (const email of ["prayer-pending@example.test", "prayer-declined@example.test"]) {
+for (const [email, state] of [
+  ["prayer-pending@example.test", "pending"],
+  ["prayer-declined@example.test", "declined"],
+]) {
   store.signIn(email);
   const gatedPrayerHtml = await views.viewCommunity("prayers");
   assert.match(gatedPrayerHtml, /approved member/i,
-    `${email} must see the approved-member Prayer gate`);
-  assert.doesNotMatch(gatedPrayerHtml, /id="form-prayer"/,
-    `${email} must not see the Prayer form`);
+    `${state} user must see the approved-member Prayer gate`);
+  assert.match(gatedPrayerHtml,
+    /We pray for each other — injuries, exams, work, family, anything\./,
+    `${state} Prayer gate must retain the public prayer description`);
+  assert.match(gatedPrayerHtml,
+    /<a class="btn ghost mt16" href="#\/account">View Profile<\/a>/,
+    `${state} Prayer gate must offer the signed-in Profile CTA`);
+  assert.doesNotMatch(gatedPrayerHtml, /id="form-prayer"|My Prayer Requests|prayer-request-list/,
+    `${state} user must not see the Prayer form or history`);
   await assert.rejects(
     () => store.submitPrayerRequest({ request: "Blocked prayer" }),
     /approved member/i,
@@ -3585,7 +3636,7 @@ assert.ok(prayerTabOrder.every((index) => index >= 0)
   && prayerTabOrder[0] < prayerTabOrder[1]
   && prayerTabOrder[1] < prayerTabOrder[2],
 "Admin Prayer Requests tab must appear between Activities and Giving");
-for (const heading of ["New", "Prayed for", "Closed"]) {
+for (const heading of ["New", "Prayed for"]) {
   assert.match(adminPrayerHtml, new RegExp(`<h2[^>]*>${heading}<\\/h2>`),
     `Admin Prayer queue must render the ${heading} group`);
 }
@@ -3608,8 +3659,16 @@ assert.doesNotMatch(adminPrayerHtml, /ERASED WITHDRAWN SECRET|prayer-view-withdr
   "withdrawn requests must never render in the Admin queue");
 assert.doesNotMatch(adminPrayerHtml, /<(?:textarea|input)\b/i,
   "Admin prayer cards must not expose request-edit controls");
-assert.match(adminPrayerHtml, /<details[^>]*admin-prayer-closed[\s\S]*<h2[^>]*>Closed<\/h2>/,
+assert.match(adminPrayerHtml, /<details[^>]*admin-prayer-closed[\s\S]*<h2[^>]*>Closed/,
   "Closed Admin prayers must render in a secondary disclosure");
+const closedPrayerSummary = adminPrayerHtml.match(
+  /<details[^>]*admin-prayer-closed[^>]*>\s*<summary>([\s\S]*?)<\/summary>/
+)?.[1] || "";
+assert.match(
+  closedPrayerSummary,
+  /^\s*<h2>Closed\s*<span class="badge neutral" aria-label="\d+ prayer requests?">\d+<\/span>\s*<\/h2>\s*$/,
+  "Closed Prayer summary must use one heading-compatible child with an accessible count",
+);
 assert.match(adminPrayerCardFor("Oldest new request"), /Mark as prayed for[\s\S]*>Close</,
   "new Admin requests must expose both legal next states");
 assert.doesNotMatch(adminPrayerCardFor("Prayed request"), /Mark as prayed for/);
@@ -3629,6 +3688,19 @@ for (const marker of [
   assert.match(memberPrayerHtml, new RegExp(marker), `approved Prayer missing ${marker}`);
 }
 assert.doesNotMatch(memberPrayerHtml, /name="name"|Prototype:|ERASED WITHDRAWN SECRET/);
+const memberPrayerCards = memberPrayerHtml.match(/<article\b[\s\S]*?<\/article>/g) || [];
+const withdrawnMemberPrayerCard = memberPrayerCards.find((card) => card.includes(">Withdrawn</span>")) || "";
+assert.ok(withdrawnMemberPrayerCard.includes(
+  `<time datetime="${Date.parse("2026-08-05T02:00:00.000Z")}">5 Aug 2026</time>`
+), "withdrawn member history must prefer the withdrawal timestamp");
+assert.equal(
+  withdrawnMemberPrayerCard.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim(),
+  "5 Aug 2026 Withdrawn",
+  "withdrawn history must render only its withdrawal timestamp and status",
+);
+assert.doesNotMatch(withdrawnMemberPrayerCard,
+  /ERASED WITHDRAWN SECRET|Request text|identity|data-action/i,
+  "malformed withdrawn text, former privacy state, prose, and actions must not render");
 assert.doesNotMatch(memberPrayerHtml, /name="anonymousToLeaders"[^>]*checked/,
   "anonymity checkbox must default unchecked");
 assert.equal((memberPrayerHtml.match(/data-action="close-prayer-request"/g) || []).length, 2,
