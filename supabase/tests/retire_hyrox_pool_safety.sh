@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+set -euo pipefail
+ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+MIGRATION="$ROOT/supabase/migrations/20260922000001_retire_bft_midtown_hyrox_pool.sql"
+test -f "$MIGRATION"
+grep -Fq "hyrox-bft" "$MIGRATION"
+grep -Fq "hyrox-midtown" "$MIGRATION"
+grep -Fq "hyrox-quarry-bay" "$MIGRATION"
+grep -Fq "operational_is_retired_hyrox_activity" "$MIGRATION"
+grep -Fq "operational_is_retired_hyrox_session" "$MIGRATION"
+grep -Fq "operational_is_retired_hyrox_booking" "$MIGRATION"
+grep -Fq "revoke execute" "$MIGRATION"
+! grep -Eiq '\b(delete from|truncate)\b.*(operational_hyrox|operational_bookings|operational_receipts|notifications)' "$MIGRATION"
+! grep -Eiq 'insert into public\.notifications|cancel_hyrox_cycle\s*\(' "$MIGRATION"
+echo "retired HYROX pool migration safety passed"

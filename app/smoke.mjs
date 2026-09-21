@@ -331,6 +331,7 @@ assert.ok(migratedReplacement.bookings.every((booking) =>
 ));
 store.resetLocalData();
 const { existsSync, readFileSync, readdirSync } = await import("node:fs");
+const { createHash } = await import("node:crypto");
 const { resolve, dirname } = await import("node:path");
 const { fileURLToPath } = await import("node:url");
 const __dirnameSmoke = dirname(fileURLToPath(import.meta.url));
@@ -344,6 +345,32 @@ for (const name of migrationNames) {
     `Supabase migration version ${version} is duplicated by ${duplicate} and ${name}`);
   migrationVersions.set(version, name);
 }
+assert.ok(
+  migrationNames.filter((name) => name.startsWith("20260922000001_")).length <= 1,
+  "HYROX retirement migration version 20260922000001 must be unique",
+);
+const protectedPoolMigrationHashes = new Map([
+  ["20260903000001_hyrox_cycle_schema.sql", "0e9129a1b078217ec8459ff42e65b2b9529dcaf1d43a88825041f8260a364bd7"],
+  ["20260903000002_hyrox_cycle_member_rpcs.sql", "38d500cbc859bf92c06854b88ae37769f1ea8b61a941330514a71a253d89cc78"],
+  ["20260903000003_hyrox_cycle_reconciliation.sql", "4789b3d0ce3ed5ff1dc0128ad1cc9bbf927a936746c1c8ce4fba3d850c35bebd"],
+  ["20260903000004_hyrox_cycle_allocation.sql", "c4a4674db1beca969b1493e2eff24c35ce5ce32cc25053f138830b1d7e45b5b7"],
+  ["20260904000001_hyrox_cycle_auto_provision.sql", "dc9a2d8b2cdfd71aa2a4b23f0adac08c51131d59b555ee7e36bfe140b924c9ab"],
+  ["20260908000001_collector_payment_reminders.sql", "58d444a280f599a6edd55ec58d89f3dc341770cc5aa2e8467e62789b4bf5708c"],
+  ["20260908000002_hyrox_venue_reminders.sql", "09379ca96d7a19e502adce33f479796774b17c15d01525f7a4b71ab962056397"],
+  ["20260909000001_operational_attendance.sql", "aaa35f3e376c5561071f775fb812901353584d98bf588b4c0c38ee8e65070d36"],
+  ["20260910000001_operational_replacement_requests.sql", "fda15c18d250e3c36e0169472c0850bc03baf629571200c9c46551c4a5616d32"],
+  ["20260910000004_replacement_hyrox_conflict_scope.sql", "9c0558f00d4e7e351c7407e258a11cae61f309e56838fdbf1cbfda91aa6bc11a"],
+  ["20260910000006_replacement_admin_hyrox_conflict_scope.sql", "d234b82f6e38dcc93cfe26658653dc4d8eba71aae9d8a658821c88cb0002afd3"],
+]);
+for (const [name, expectedHash] of protectedPoolMigrationHashes) {
+  const source = readFileSync(resolve(__dirnameSmoke, "../supabase/migrations", name));
+  assert.equal(
+    createHash("sha256").update(source).digest("hex"),
+    expectedHash,
+    `historical pool migration ${name} must remain byte-for-byte unchanged`,
+  );
+}
+console.log("ok  HYROX retirement migration version and historical pool migrations are protected");
 const storeSource = readFileSync(resolve(__dirnameSmoke, "js/store.js"), "utf8");
 const weekVenueSource = storeSource.match(
   /export function setWeekVenue[\s\S]*?\/\/ --- Giving/
