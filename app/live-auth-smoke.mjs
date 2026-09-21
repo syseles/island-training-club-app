@@ -4099,16 +4099,19 @@ const missingPrivacy = await views.viewAccount("privacy");
 if (missingPrivacy?.redirect || !missingPrivacy.includes("Application details unavailable")) {
   throw new Error("Live privacy should show an unavailable card when no application exists");
 }
-for (const [label, html, title] of [
-  ["Profile", missingAccount, "Profile"],
-  ["Membership Details", missingDetails, "Membership Details"],
-  ["Indemnity", missingIndemnity, "Indemnity"],
-  ["Privacy & Notifications", missingPrivacy, "Privacy &amp; Notifications"],
+for (const [label, html, title, backHref, backLabel] of [
+  ["Profile", missingAccount, "Profile", "#/home", "Home"],
+  ["Membership Details", missingDetails, "Membership Details", "#/account", "Profile"],
+  ["Indemnity", missingIndemnity, "Indemnity", "#/account", "Profile"],
+  ["Privacy & Notifications", missingPrivacy, "Privacy &amp; Notifications", "#/account", "Profile"],
 ]) {
   assert.equal((html.match(/<h1\b/g) || []).length, 1,
     `Missing-application ${label} must render exactly one h1`);
-  assert.match(html, /<a class="back-link" href="#\/home">← Home<\/a>/,
-    `Missing-application ${label} must preserve the Home return path`);
+  assert.match(
+    html,
+    new RegExp(`<a class="back-link" href="${backHref}">← ${backLabel}</a>\\s*<h1\\b[^>]*>${title}</h1>`),
+    `Missing-application ${label} must link to ${backLabel} immediately before its h1`
+  );
   assert.equal(html.match(/<h1\b[^>]*>([^<]+)<\/h1>/)?.[1], title,
     `Missing-application ${label} must use its exact semantic h1`);
   assert.doesNotMatch(html, /<div class="kicker mt16">Profile ·/,

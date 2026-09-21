@@ -1387,7 +1387,11 @@ export async function viewAccount(section, sub) {
             history: "Bookings",
           }[section] || "Profile";
           return `
-            ${profileSubpageHeader({ backHref: "#/home", backLabel: "Home", title: sectionTitle })}
+            ${profileSubpageHeader({
+              backHref: section ? "#/account" : "#/home",
+              backLabel: section ? "Profile" : "Home",
+              title: sectionTitle,
+            })}
             <div class="card mt16"><div class="card-body">
               <h3>Application details unavailable</h3>
               <p class="muted small">Your membership application isn't linked to this profile yet. ITC leaders will sync the records and the data will appear here within a working day.</p>
