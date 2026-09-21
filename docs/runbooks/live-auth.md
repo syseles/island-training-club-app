@@ -227,21 +227,35 @@ Admins use five narrow security-definer RPCs. Existing local-mode prayer rows
 remain preserved on that device for prototype compatibility and are never
 uploaded, merged, or used as a fallback automatically.
 
-The reviewed backend artifact is exactly
+The reviewed prayer backend artifact is exactly
 `supabase/migrations/20260921000001_prayer_requests.sql`. At this revision its
 SHA-256 is
 `131fcc13dad14af187b0f5bef458556ea2ac6520605207be47bfaf2df2b9a950`.
-Before any deployment, recompute the digest from the reviewed checkout and
-stop if it differs:
+A declined-profile acceptance account additionally requires the forward-only
+source-tip repair
+`supabase/migrations/20260921000002_declined_profile_decisions.sql`, whose
+SHA-256 is
+`78cd8651b91e6fe6fd01a13d3d472daefed7dbdd344bd4a85f0441a84ed726f1`.
+Before any deployment, recompute both digests from the reviewed checkout and
+stop if either differs:
 
 ```bash
-MIGRATION=supabase/migrations/20260921000001_prayer_requests.sql
-shasum -a 256 "$MIGRATION"
+PRAYER_MIGRATION=supabase/migrations/20260921000001_prayer_requests.sql
+DECISION_MIGRATION=supabase/migrations/20260921000002_declined_profile_decisions.sql
+shasum -a 256 "$PRAYER_MIGRATION" "$DECISION_MIGRATION"
 bash supabase/tests/prayer_requests_safety.sh
+bash supabase/tests/declined_profile_decisions_safety.sh
 ```
 
-The release record must contain the reviewed Git commit, that local SHA-256,
-the target project reference, the Supabase SQL Editor's UTC completion
+The decision repair exists because production history can report historical
+migration `20260805000007_admin_application_decisions.sql` as applied while its
+constraint and policy end state is absent. **Never replay, edit, repair, or mark
+`20260805000007_admin_application_decisions.sql` as part of this rollout.** Do
+not change its source file. Apply only the new forward migration after the
+prayer backend baseline is verified.
+
+The release record must contain the reviewed Git commit, both local SHA-256
+digests, the target project reference, the Supabase SQL Editor's UTC completion
 timestamp, and the pass/fail result of each read-only check below. Record only
 request UUIDs and timestamps during acceptance. Never put credentials, session
 tokens, database URLs, request text, or screenshots containing request text in
@@ -258,7 +272,7 @@ test -z "$(find supabase/migrations -maxdepth 1 -type f -name '*.sql' \
   -exec basename {} \; | cut -d_ -f1 | sort | uniq -d)"
 test "$(find supabase/migrations -maxdepth 1 -type f -name '*.sql' \
   -exec basename {} \; | sort | tail -1)" = \
-  "20260921000001_prayer_requests.sql"
+  "20260921000002_declined_profile_decisions.sql"
 ```
 
 Start from a clean disposable local Supabase database and replay the unmodified
@@ -270,11 +284,17 @@ supabase start --yes \
   -x gotrue,realtime,storage-api,imgproxy,kong,mailpit,postgrest,postgres-meta,studio,edge-runtime,logflare,vector,supavisor
 ```
 
-The startup output must list each migration version once and apply
-`20260921000001_prayer_requests.sql` last. Then run the integration file inside
-the disposable database container with stop-on-error enabled:
+The startup output must list each migration version once, apply
+`20260921000001_prayer_requests.sql`, and then apply
+`20260921000002_declined_profile_decisions.sql` last. Run both integration files
+inside the disposable database container with stop-on-error enabled:
 
 ```bash
+docker cp supabase/tests/declined_profile_decisions_integration.sql \
+  supabase_db_island-training-club-app:/tmp/declined_profile_decisions_integration.sql
+docker exec supabase_db_island-training-club-app \
+  psql -U postgres -d postgres -X -P pager=off -v ON_ERROR_STOP=1 \
+  -f /tmp/declined_profile_decisions_integration.sql
 docker cp supabase/tests/prayer_requests_integration.sql \
   supabase_db_island-training-club-app:/tmp/prayer_requests_integration.sql
 docker exec supabase_db_island-training-club-app \
@@ -283,18 +303,20 @@ docker exec supabase_db_island-training-club-app \
 supabase stop --no-backup
 ```
 
-The integration must emit its private-boundary success notice, end with
-`ROLLBACK`, and exit zero. It is intentionally transaction-scoped; never point
-it at production, Testing, staging, a shared database, or a database containing
-real users. Stopping with `--no-backup` is part of the gate so the next run
-cannot inherit disposable state.
+Each integration must emit its boundary success notice, end with `ROLLBACK`,
+and exit zero. They are intentionally transaction-scoped; never point them at
+production, Testing, staging, a shared database, or a database containing real
+users. Stopping with `--no-backup` is part of the gate so the next run cannot
+inherit disposable state.
 
 ### Production drift boundary and migration evidence
 
 The production project has known historical migration drift. **Never run
 `supabase db push --include-all` for this rollout**, and do not use an
 unqualified `db push`, replay the local chain, repair an older version, or mark
-unverified history as applied. First compare local filenames with remote
+unverified history as applied. In particular, never replay, edit, repair, or
+mark `20260805000007_admin_application_decisions.sql`; its applied-history row
+is not proof of its schema end state. First compare local filenames with remote
 history and confirm the linked project in the browser and CLI:
 
 ```bash
@@ -303,33 +325,87 @@ supabase link --project-ref "$SUPABASE_PROJECT_REF"
 supabase migration list --linked
 ```
 
-Stop if the displayed project or history is unexpected. In Supabase Dashboard
-→ project `krxbvgyolxvmzgysfjkj` → SQL Editor, verify the project reference in
-the browser, open the reviewed local
-`supabase/migrations/20260921000001_prayer_requests.sql`, confirm its SHA-256,
-paste the file unchanged, and execute it once. Save the SQL Editor UTC
-completion timestamp without copying SQL contents or data into the deployment
-record.
+Stop if the displayed project or history is unexpected. Use this exact order;
+each production write requires explicit authorization:
 
-Do not record migration history until all schema, grant, signature, and
-redaction checks below pass. Then record only the reviewed version and re-list
-history:
+1. **Confirm the prayer backend baseline.** Verify that reviewed migration
+   `20260921000001_prayer_requests.sql` has already been applied and passes all
+   prayer table, grant, signature, owner, and redaction checks below. If it is
+   absent, apply it unchanged in the verified project's SQL Editor, complete
+   those checks, and only then record that exact version. Do not re-execute an
+   already verified migration.
+2. **Apply the forward profile-decision repair.** In Supabase Dashboard →
+   project `krxbvgyolxvmzgysfjkj` → SQL Editor, reconfirm the project reference,
+   open reviewed local migration
+   `supabase/migrations/20260921000002_declined_profile_decisions.sql`, confirm
+   its SHA-256, paste the file unchanged, and execute it once. Save only the SQL
+   Editor UTC completion timestamp in the deployment record.
+3. **Verify the repaired decision boundary.** Run the constraint/policy catalog
+   gate below before creating or changing any acceptance profile. Any mismatch
+   blocks migration-history repair and declined-profile acceptance.
+4. **Record only the forward repair version.** After the decision gate passes,
+   mark `20260921000002` applied and immediately re-list linked history. Do not
+   repair any historical version as a workaround.
+5. **Create the declined acceptance fixture.** Only after both backend gates and
+   linked history pass may an Admin decline a fresh submitted pending
+   application for the controlled prayer acceptance matrix.
+
+If the prayer backend itself is being applied for the first time, record it only
+after its checks pass, then continue with the forward repair:
 
 ```bash
 supabase migration repair 20260921000001 --status applied --linked --yes
 supabase migration list --linked
 ```
 
-This is a production write procedure and requires explicit authorization. A
-failed check leaves the dependent frontend undeployed and the migration repair
-unperformed.
+For the production drift repair, record only the new source-tip version:
+
+```bash
+supabase migration repair 20260921000002 --status applied --linked --yes
+supabase migration list --linked
+```
+
+A failed check leaves the dependent acceptance blocked and the corresponding
+migration-history repair unperformed.
 
 ### Read-only schema, constraint, grant, and signature checks
 
-Run the following in trusted SQL after applying the exact migration and before
-any dependent frontend deployment. The table query must return one row with
-`rls_enabled = true`; the constraint query must return seven rows, each with the
-expected definition:
+After applying the forward decision repair, run this trusted read-only gate.
+The first query must return one constraint row whose definition permits exactly
+`pending`, `member`, `admin`, `super_admin`, and `declined`. The second must
+return `admin decide pending` as
+the only one of the two candidate policy names, with `cmd = UPDATE`; its
+`qual` must require the authoritative Admin role and existing `pending` row.
+Its `with_check` must independently repeat that authoritative Admin predicate,
+reject self-target decisions, allow only `member`/`declined`, and require a
+matching application whose `submitted_at` is not null:
+
+```sql
+select conname, pg_get_constraintdef(oid) as definition
+  from pg_constraint
+ where conrelid = 'public.profiles'::regclass
+   and conname = 'profiles_role_check';
+
+select policyname, cmd, roles, qual, with_check
+  from pg_policies
+ where schemaname = 'public'
+   and tablename = 'profiles'
+   and policyname in ('admin approve pending', 'admin decide pending')
+ order by policyname;
+```
+
+Also confirm that `self update non-role` and `super_admin update all` are still
+present and unchanged, profile columns and rows remain present, and no broad
+authenticated profile UPDATE policy or direct grant was added. Stop before
+history repair or fixture creation if any condition differs. The rollback SQL
+integration is the required runtime proof of ordinary-member denial, draft
+application denial, terminal-row immutability, pending/member/declined/Admin
+self-transition denial, Super Admin preservation, and non-role self-update.
+
+Then run the prayer checks below in trusted SQL after applying the exact prayer
+migration and before any dependent frontend deployment. The table query must
+return one row with `rls_enabled = true`; the constraint query must return seven
+rows, each with the expected definition:
 
 ```sql
 select n.nspname as schema_name,
