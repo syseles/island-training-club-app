@@ -22,7 +22,12 @@ create policy "admin decide pending"
     and role = 'pending'
   )
   with check (
-    role in ('member', 'declined')
+    coalesce(
+      auth.jwt() -> 'app_metadata' ->> 'role',
+      public.current_user_role()
+    ) = 'admin'
+    and id <> auth.uid()
+    and role in ('member', 'declined')
     and exists (
       select 1
       from public.applications as submitted_application

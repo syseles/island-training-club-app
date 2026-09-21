@@ -59,20 +59,45 @@ policy_sql="$(awk '
 ' "$migration")"
 [[ -n "$policy_sql" ]] || fail "unable to extract admin decide pending policy"
 normalized_policy="$(tr '\n' ' ' <<<"$policy_sql" | tr -s '[:space:]' ' ')"
+using_sql="$(awk '
+  tolower($0) ~ /^[[:space:]]*using[[:space:]]*\(/ { capture = 1 }
+  tolower($0) ~ /^[[:space:]]*with check[[:space:]]*\(/ { capture = 0 }
+  capture { print }
+' <<<"$policy_sql")"
+with_check_sql="$(awk '
+  tolower($0) ~ /^[[:space:]]*with check[[:space:]]*\(/ { capture = 1 }
+  capture { print }
+' <<<"$policy_sql")"
+[[ -n "$using_sql" ]] || fail "unable to extract admin decide pending USING clause"
+[[ -n "$with_check_sql" ]] || fail "unable to extract admin decide pending WITH CHECK clause"
+normalized_using="$(tr '\n' ' ' <<<"$using_sql" | tr -s '[:space:]' ' ')"
+normalized_with_check="$(tr '\n' ' ' <<<"$with_check_sql" | tr -s '[:space:]' ' ')"
+admin_predicate="coalesce\\( auth\\.jwt\\(\\) -> 'app_metadata' ->> 'role', public\\.current_user_role\\(\\) \\) = 'admin'"
 
 for pattern in \
-  'on public\.profiles for update' \
-  "coalesce\\( auth\\.jwt\\(\\) -> 'app_metadata' ->> 'role', public\\.current_user_role\\(\\) \\) = 'admin'" \
-  "and role = 'pending'" \
+  "$admin_predicate" \
+  "and role = 'pending'"; do
+  if ! grep -Eqi "$pattern" <<<"$normalized_using"; then
+    fail "admin decision USING clause missing required boundary: $pattern"
+  fi
+done
+
+for pattern in \
+  "$admin_predicate" \
+  'and id <> auth\.uid\(\)' \
   "role in \\('member', 'declined'\\)" \
   'exists \(' \
   'from public\.applications as submitted_application' \
   'submitted_application\.profile_id = public\.profiles\.id' \
   'submitted_application\.submitted_at is not null'; do
-  if ! grep -Eqi "$pattern" <<<"$normalized_policy"; then
-    fail "admin decision policy missing required boundary: $pattern"
+  if ! grep -Eqi "$pattern" <<<"$normalized_with_check"; then
+    fail "admin decision WITH CHECK clause missing required boundary: $pattern"
   fi
 done
+
+if ! grep -Eqi 'on public\.profiles for update' <<<"$normalized_policy"; then
+  fail "admin decision policy must be an UPDATE policy on public.profiles"
+fi
 
 if grep -Eqi \
     'grant[[:space:]]+[^;]*update[^;]*on[[:space:]]+(table[[:space:]]+)?public\.profiles[^;]*to[^;]*authenticated' \

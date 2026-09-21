@@ -235,7 +235,7 @@ A declined-profile acceptance account additionally requires the forward-only
 source-tip repair
 `supabase/migrations/20260921000002_declined_profile_decisions.sql`, whose
 SHA-256 is
-`9ae567a54660581cdd5cc5b0db561bc0aa9b10b0414d0d447dade19da751a2fc`.
+`78cd8651b91e6fe6fd01a13d3d472daefed7dbdd344bd4a85f0441a84ed726f1`.
 Before any deployment, recompute both digests from the reviewed checkout and
 stop if either differs:
 
@@ -375,9 +375,10 @@ The first query must return one constraint row whose definition permits exactly
 `pending`, `member`, `admin`, `super_admin`, and `declined`. The second must
 return `admin decide pending` as
 the only one of the two candidate policy names, with `cmd = UPDATE`; its
-`qual` must require the authoritative Admin role and existing `pending` row,
-and `with_check` must allow only `member`/`declined` while requiring a matching
-application whose `submitted_at` is not null:
+`qual` must require the authoritative Admin role and existing `pending` row.
+Its `with_check` must independently repeat that authoritative Admin predicate,
+reject self-target decisions, allow only `member`/`declined`, and require a
+matching application whose `submitted_at` is not null:
 
 ```sql
 select conname, pg_get_constraintdef(oid) as definition
@@ -397,9 +398,9 @@ Also confirm that `self update non-role` and `super_admin update all` are still
 present and unchanged, profile columns and rows remain present, and no broad
 authenticated profile UPDATE policy or direct grant was added. Stop before
 history repair or fixture creation if any condition differs. The rollback SQL
-integration is the required runtime proof of ordinary-member denial,
-missing-application denial, terminal-row immutability, Super Admin preservation,
-and self-update role protection.
+integration is the required runtime proof of ordinary-member denial, draft
+application denial, terminal-row immutability, pending/member/declined/Admin
+self-transition denial, Super Admin preservation, and non-role self-update.
 
 Then run the prayer checks below in trusted SQL after applying the exact prayer
 migration and before any dependent frontend deployment. The table query must
