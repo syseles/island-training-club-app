@@ -4276,9 +4276,69 @@ assert.deepEqual(
   "expected boot/hash application failures must be explicitly observed without noisy stderr"
 );
 
+// Route-level coverage must exercise the app wiring, not only the pure route
+// policy helper. Preserve every mutable fixture because later tests reuse them.
+applicationReadError = null;
+const redirectFixture = {
+  session: liveSession,
+  role: profile.role,
+  application: structuredClone(applicationRows.get(authUser.id)),
+  hadApplication: applicationRows.has(authUser.id),
+  hash: location.hash,
+};
+try {
+  profile.role = "pending";
+  applicationRows.delete(authUser.id);
+
+  location.hash = "#/community/prayers";
+  await app.maybeRedirectToApply();
+  assert.equal(location.hash, "#/community/prayers",
+    "unfinished pending applicants must remain on the read-only Prayer gate");
+
+  location.hash = "#/home";
+  await app.maybeRedirectToApply();
+  assert.equal(location.hash, "#/apply",
+    "unfinished pending applicants must redirect from ordinary routes");
+
+  location.hash = "#/apply";
+  await app.maybeRedirectToApply();
+  assert.equal(location.hash, "#/apply",
+    "the application route must not redirect to itself");
+
+  applicationRows.set(authUser.id, structuredClone(redirectFixture.application));
+  location.hash = "#/home";
+  await app.maybeRedirectToApply();
+  assert.equal(location.hash, "#/home",
+    "submitted pending applicants must remain on their route");
+
+  profile.role = "declined";
+  applicationRows.delete(authUser.id);
+  location.hash = "#/home";
+  await app.maybeRedirectToApply();
+  assert.equal(location.hash, "#/home",
+    "declined applicants must remain on their route");
+
+  liveSession = null;
+  profile.role = "pending";
+  location.hash = "#/home";
+  await app.maybeRedirectToApply();
+  assert.equal(location.hash, "#/home",
+    "visitors must remain on their route");
+} finally {
+  liveSession = redirectFixture.session;
+  profile.role = redirectFixture.role;
+  if (redirectFixture.hadApplication) {
+    applicationRows.set(authUser.id, redirectFixture.application);
+  } else {
+    applicationRows.delete(authUser.id);
+  }
+  location.hash = redirectFixture.hash;
+  await store.getCurrentUser();
+}
+console.log("ok  pending onboarding redirect wiring preserves route policy");
+
 // Route feedback announces work immediately, only exposes visible copy after
 // the delay, and always clears once the awaited view is complete.
-applicationReadError = null;
 let releaseApplicationRead;
 applicationReadGate = new Promise((resolve) => { releaseApplicationRead = resolve; });
 const slowRender = windowListeners.get("hashchange")();
