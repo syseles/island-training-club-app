@@ -176,6 +176,61 @@ let operationalRsvpCountError = null;
 let operationalRsvpCountRowsOverride = null;
 let operationalAttendanceError = null;
 const operationalRpcCalls = [];
+const prayerRpcCalls = [];
+const prayerRpcErrors = new Map();
+let prayerRpcGate = null;
+const PRAYER_ID = "11111111-1111-4111-8111-111111111111";
+const SECOND_PRAYER_ID = "22222222-2222-4222-8222-222222222222";
+const prayerMemberRow = {
+  id: PRAYER_ID,
+  request_text: "Prayer",
+  anonymous_to_leaders: true,
+  status: "new",
+  created_at: "2026-08-05T02:00:00.000Z",
+  updated_at: "2026-08-05T02:00:00.000Z",
+  closed_at: null,
+  withdrawn_at: null,
+};
+const prayerAdminRow = {
+  id: SECOND_PRAYER_ID,
+  display_name: "Anonymous member",
+  request_text: "A private live concern",
+  anonymous_to_leaders: true,
+  status: "prayed_for",
+  created_at: "2026-08-05T01:00:00.000Z",
+  updated_at: "2026-08-05T02:00:00.000Z",
+  closed_at: null,
+};
+const prayerRpcNames = new Set([
+  "submit_prayer_request",
+  "list_my_prayer_requests",
+  "set_my_prayer_request_state",
+  "list_admin_prayer_requests",
+  "set_admin_prayer_request_status",
+]);
+const prayerRpcResult = (name) => {
+  if (name === "submit_prayer_request") return [structuredClone(prayerMemberRow)];
+  if (name === "list_my_prayer_requests") return [structuredClone(prayerMemberRow)];
+  if (name === "set_my_prayer_request_state") {
+    return [{
+      ...structuredClone(prayerMemberRow),
+      request_text: null,
+      status: "withdrawn",
+      updated_at: "2026-08-05T02:05:00.000Z",
+      withdrawn_at: "2026-08-05T02:05:00.000Z",
+    }];
+  }
+  if (name === "list_admin_prayer_requests") return [structuredClone(prayerAdminRow)];
+  if (name === "set_admin_prayer_request_status") {
+    return [{
+      ...structuredClone(prayerAdminRow),
+      status: "closed",
+      updated_at: "2026-08-05T02:10:00.000Z",
+      closed_at: "2026-08-05T02:10:00.000Z",
+    }];
+  }
+  return null;
+};
 const operationalPayoutDirectReads = [];
 const operationalSessionQueries = [];
 const operationalSubscriptions = [];
@@ -732,6 +787,14 @@ const fakeSupabase = {
     throw new Error(`Unexpected table: ${table}`);
   },
   rpc(name, args) {
+    if (prayerRpcNames.has(name)) {
+      prayerRpcCalls.push({ name, args: args === undefined ? undefined : structuredClone(args) });
+      if (prayerRpcGate?.name === name) return prayerRpcGate.promise;
+      return Promise.resolve({
+        data: prayerRpcErrors.has(name) ? null : prayerRpcResult(name),
+        error: prayerRpcErrors.get(name) || null,
+      });
+    }
     if (operationalRpcHandler) return operationalRpcHandler(name, args);
     return Promise.resolve({ data: null, error: null });
   },
@@ -1345,6 +1408,112 @@ assert.equal(
   "live event wall time must resolve as an HKT instant in every host timezone",
 );
 store.load();
+
+// Prayer store actions must use only the five authoritative RPCs in live mode,
+// normalize snake_case rows, reject unsafe inputs before RPC, and never fall
+// back to device-local prayer data when Supabase fails.
+const submittedPrayer = await store.submitPrayerRequest({
+  request: "  Prayer  ",
+  anonymousToLeaders: true,
+});
+assert.deepEqual(submittedPrayer, {
+  id: PRAYER_ID,
+  request: "Prayer",
+  anonymousToLeaders: true,
+  status: "new",
+  createdAt: "2026-08-05T02:00:00.000Z",
+  updatedAt: "2026-08-05T02:00:00.000Z",
+  closedAt: null,
+  withdrawnAt: null,
+});
+const liveMemberPrayers = await store.listMyPrayerRequests();
+assert.deepEqual(liveMemberPrayers, [submittedPrayer]);
+const withdrawnPrayer = await store.setMyPrayerRequestState(PRAYER_ID, "withdraw");
+assert.equal(withdrawnPrayer.status, "withdrawn");
+assert.equal(withdrawnPrayer.request, null);
+const liveAdminPrayers = await store.listAdminPrayerRequests();
+assert.deepEqual(liveAdminPrayers, [{
+  id: SECOND_PRAYER_ID,
+  request: "A private live concern",
+  anonymousToLeaders: true,
+  status: "prayed_for",
+  createdAt: "2026-08-05T01:00:00.000Z",
+  updatedAt: "2026-08-05T02:00:00.000Z",
+  closedAt: null,
+  withdrawnAt: null,
+  displayName: "Anonymous member",
+}]);
+assert.equal("ownerId" in liveAdminPrayers[0], false);
+assert.equal("owner_id" in liveAdminPrayers[0], false);
+assert.equal("email" in liveAdminPrayers[0], false);
+const adminClosedPrayer = await store.setAdminPrayerRequestStatus(SECOND_PRAYER_ID, "closed");
+assert.equal(adminClosedPrayer.status, "closed");
+assert.equal(adminClosedPrayer.displayName, "Anonymous member");
+assert.deepEqual(prayerRpcCalls.slice(0, 5), [
+  {
+    name: "submit_prayer_request",
+    args: { p_request_text: "Prayer", p_anonymous_to_leaders: true },
+  },
+  { name: "list_my_prayer_requests", args: undefined },
+  {
+    name: "set_my_prayer_request_state",
+    args: { p_request_id: PRAYER_ID, p_action: "withdraw" },
+  },
+  { name: "list_admin_prayer_requests", args: undefined },
+  {
+    name: "set_admin_prayer_request_status",
+    args: { p_request_id: SECOND_PRAYER_ID, p_status: "closed" },
+  },
+]);
+
+const prayerCallCountBeforeValidation = prayerRpcCalls.length;
+await assert.rejects(
+  () => store.submitPrayerRequest({ request: " " }),
+  /between 1 and 2,000 characters/i,
+);
+await assert.rejects(
+  () => store.submitPrayerRequest({ request: "x".repeat(2001) }),
+  /between 1 and 2,000 characters/i,
+);
+await assert.rejects(
+  () => store.setMyPrayerRequestState("not-a-uuid", "withdraw"),
+  /valid prayer request/i,
+);
+await assert.rejects(
+  () => store.setMyPrayerRequestState(PRAYER_ID, "reopen"),
+  /close or withdraw/i,
+);
+await assert.rejects(
+  () => store.setAdminPrayerRequestStatus(PRAYER_ID, "new"),
+  /prayed_for or closed/i,
+);
+assert.equal(prayerRpcCalls.length, prayerCallCountBeforeValidation,
+  "invalid live prayer inputs must not reach Supabase");
+
+const localPrayerState = JSON.parse(mem.get("itc.prototype.v1"));
+localPrayerState.prayers = [{
+  id: "device-only-prayer",
+  request: "Never expose this as a live fallback",
+  status: "new",
+}];
+mem.set("itc.prototype.v1", JSON.stringify(localPrayerState));
+store.load();
+const persistedLocalPrayers = JSON.parse(mem.get("itc.prototype.v1")).prayers;
+for (const [name, invoke, message] of [
+  ["submit_prayer_request", () => store.submitPrayerRequest({ request: "Failure check" }), /could not be sent/i],
+  ["list_my_prayer_requests", () => store.listMyPrayerRequests(), /could not be loaded/i],
+  ["set_my_prayer_request_state", () => store.setMyPrayerRequestState(PRAYER_ID, "close"), /could not be updated/i],
+  ["list_admin_prayer_requests", () => store.listAdminPrayerRequests(), /could not be loaded for Admin/i],
+  ["set_admin_prayer_request_status", () => store.setAdminPrayerRequestStatus(PRAYER_ID, "closed"), /status could not be updated/i],
+]) {
+  prayerRpcErrors.set(name, { message: `sensitive ${name} failure` });
+  await assert.rejects(invoke, message);
+  prayerRpcErrors.delete(name);
+}
+assert.deepEqual(JSON.parse(mem.get("itc.prototype.v1")).prayers, persistedLocalPrayers,
+  "failed live prayer RPCs must neither save nor replace device-local prayer rows");
+console.log("ok  live prayer actions use authoritative RPCs, safe normalization, and no local fallback");
+
 await operations.ensureLiveSessionWindow();
 assert.deepEqual(
   operationalRpcCalls.find((call) => call.name === "ensure_hyrox_cycles")?.args,
@@ -2109,6 +2278,25 @@ assert.ok(
 store.clearApplyDraft();
 
 await store.getCurrentUser();
+prayerRpcErrors.set("list_my_prayer_requests", { message: "sensitive stale row failure" });
+const failedPrayerListHtml = await views.viewCommunity("prayers");
+prayerRpcErrors.delete("list_my_prayer_requests");
+assert.match(failedPrayerListHtml, /could not be loaded[\s\S]*try again/i,
+  "a failed authoritative Prayer list must render safe retryable feedback");
+assert.match(failedPrayerListHtml, /data-action="retry-prayer-requests"/,
+  "a failed Prayer list must expose a retry control");
+assert.doesNotMatch(failedPrayerListHtml, /Never expose this as a live fallback/,
+  "a failed live Prayer list must never render device-local rows");
+prayerRpcErrors.set("list_admin_prayer_requests", { message: "sensitive Admin prayer list failure" });
+const failedAdminPrayerListHtml = await views.viewAdmin("prayers");
+prayerRpcErrors.delete("list_admin_prayer_requests");
+assert.match(failedAdminPrayerListHtml, /could not be loaded[\s\S]*try again/i,
+  "a failed authoritative Admin Prayer list must render safe retryable feedback");
+assert.match(failedAdminPrayerListHtml, /data-action="retry-admin-prayer-requests"/,
+  "a failed Admin Prayer list must expose a retry control");
+assert.doesNotMatch(failedAdminPrayerListHtml,
+  /Never expose this as a live fallback|sensitive Admin prayer list failure/,
+  "a failed live Admin Prayer list must expose neither stale rows nor backend errors");
 for (const failure of assignedPayoutFailures) {
   operationalRpcHandler = (name, args) => {
     if (name === "get_assigned_collector_payout_profiles") {
@@ -3911,6 +4099,24 @@ const missingPrivacy = await views.viewAccount("privacy");
 if (missingPrivacy?.redirect || !missingPrivacy.includes("Application details unavailable")) {
   throw new Error("Live privacy should show an unavailable card when no application exists");
 }
+for (const [label, html, title, backHref, backLabel] of [
+  ["Profile", missingAccount, "Profile", "#/home", "Home"],
+  ["Membership Details", missingDetails, "Membership Details", "#/account", "Profile"],
+  ["Indemnity", missingIndemnity, "Indemnity", "#/account", "Profile"],
+  ["Privacy & Notifications", missingPrivacy, "Privacy &amp; Notifications", "#/account", "Profile"],
+]) {
+  assert.equal((html.match(/<h1\b/g) || []).length, 1,
+    `Missing-application ${label} must render exactly one h1`);
+  assert.match(
+    html,
+    new RegExp(`<a class="back-link" href="${backHref}">← ${backLabel}</a>\\s*<h1\\b[^>]*>${title}</h1>`),
+    `Missing-application ${label} must link to ${backLabel} immediately before its h1`
+  );
+  assert.equal(html.match(/<h1\b[^>]*>([^<]+)<\/h1>/)?.[1], title,
+    `Missing-application ${label} must use its exact semantic h1`);
+  assert.doesNotMatch(html, /<div class="kicker mt16">Profile ·/,
+    `Missing-application ${label} must not repeat Profile in a kicker`);
+}
 applicationRows.set("live-user-1", structuredClone(originalApplicationForApply));
 
 const domListeners = new Map();
@@ -4073,9 +4279,69 @@ assert.deepEqual(
   "expected boot/hash application failures must be explicitly observed without noisy stderr"
 );
 
+// Route-level coverage must exercise the app wiring, not only the pure route
+// policy helper. Preserve every mutable fixture because later tests reuse them.
+applicationReadError = null;
+const redirectFixture = {
+  session: liveSession,
+  role: profile.role,
+  application: structuredClone(applicationRows.get(authUser.id)),
+  hadApplication: applicationRows.has(authUser.id),
+  hash: location.hash,
+};
+try {
+  profile.role = "pending";
+  applicationRows.delete(authUser.id);
+
+  location.hash = "#/community/prayers";
+  await app.maybeRedirectToApply();
+  assert.equal(location.hash, "#/community/prayers",
+    "unfinished pending applicants must remain on the read-only Prayer gate");
+
+  location.hash = "#/home";
+  await app.maybeRedirectToApply();
+  assert.equal(location.hash, "#/apply",
+    "unfinished pending applicants must redirect from ordinary routes");
+
+  location.hash = "#/apply";
+  await app.maybeRedirectToApply();
+  assert.equal(location.hash, "#/apply",
+    "the application route must not redirect to itself");
+
+  applicationRows.set(authUser.id, structuredClone(redirectFixture.application));
+  location.hash = "#/home";
+  await app.maybeRedirectToApply();
+  assert.equal(location.hash, "#/home",
+    "submitted pending applicants must remain on their route");
+
+  profile.role = "declined";
+  applicationRows.delete(authUser.id);
+  location.hash = "#/home";
+  await app.maybeRedirectToApply();
+  assert.equal(location.hash, "#/home",
+    "declined applicants must remain on their route");
+
+  liveSession = null;
+  profile.role = "pending";
+  location.hash = "#/home";
+  await app.maybeRedirectToApply();
+  assert.equal(location.hash, "#/home",
+    "visitors must remain on their route");
+} finally {
+  liveSession = redirectFixture.session;
+  profile.role = redirectFixture.role;
+  if (redirectFixture.hadApplication) {
+    applicationRows.set(authUser.id, redirectFixture.application);
+  } else {
+    applicationRows.delete(authUser.id);
+  }
+  location.hash = redirectFixture.hash;
+  await store.getCurrentUser();
+}
+console.log("ok  pending onboarding redirect wiring preserves route policy");
+
 // Route feedback announces work immediately, only exposes visible copy after
 // the delay, and always clears once the awaited view is complete.
-applicationReadError = null;
 let releaseApplicationRead;
 applicationReadGate = new Promise((resolve) => { releaseApplicationRead = resolve; });
 const slowRender = windowListeners.get("hashchange")();
@@ -4609,6 +4875,296 @@ assert.doesNotMatch(magicFeedback.textContent, /User not found/);
 assert.equal(magicEmail.disabled, false);
 assert.equal(magicSubmit.disabled, false);
 console.log("ok  delegated magic-link requests dedupe and recover with generic feedback");
+
+// Prayer submission must retain private content on failure and must not report
+// success until the authoritative write settles.
+const makePrayerForm = (request, anonymousToLeaders = false) => {
+  const form = new HTMLFormElement();
+  form.id = "form-prayer";
+  form.dataset = {};
+  form.fields = {
+    request,
+    ...(anonymousToLeaders ? { anonymousToLeaders: "on" } : {}),
+  };
+  form.reportValidity = () => true;
+  const submit = makeElement();
+  submit.tagName = "BUTTON";
+  submit.textContent = "Send prayer request";
+  submit.disabled = false;
+  const error = makeElement();
+  form.nativeControls = [submit];
+  form.querySelector = (selector) => ({
+    '[type="submit"]': submit,
+    "#prayer-error": error,
+  }[selector] || null);
+  return { form, submit, error };
+};
+
+location.hash = "#/community/prayers";
+toastStack.children.length = 0;
+const rejectedPrayer = makePrayerForm("Keep this private prayer", true);
+const prayerCallsBeforeRejectedSubmit = prayerRpcCalls.length;
+prayerRpcErrors.set("submit_prayer_request", { message: "sensitive prayer write failure" });
+await domListeners.get("submit")({ target: rejectedPrayer.form, preventDefault() {} });
+prayerRpcErrors.delete("submit_prayer_request");
+assert.equal(prayerRpcCalls.length, prayerCallsBeforeRejectedSubmit + 1);
+assert.deepEqual(prayerRpcCalls.at(-1), {
+  name: "submit_prayer_request",
+  args: {
+    p_request_text: "Keep this private prayer",
+    p_anonymous_to_leaders: true,
+  },
+});
+assert.equal(rejectedPrayer.form.fields.request, "Keep this private prayer");
+assert.equal(rejectedPrayer.form.fields.anonymousToLeaders, "on");
+assert.equal(location.hash, "#/community/prayers");
+assert.equal(toastStack.children.length, 0,
+  "a rejected Prayer submit must not show a success toast");
+assert.equal(rejectedPrayer.error.children.length, 1);
+assert.equal(
+  rejectedPrayer.error.children[0].textContent,
+  "Prayer request could not be sent. Please try again.",
+);
+assert.equal(rejectedPrayer.error.children[0].getAttribute("role"), "alert");
+assert.equal(rejectedPrayer.submit.disabled, false);
+assert.equal(rejectedPrayer.submit.hasAttribute("aria-busy"), false);
+
+const successfulPrayer = makePrayerForm("Wait for this prayer write");
+const submitPrayerGate = deferred();
+prayerRpcGate = { name: "submit_prayer_request", promise: submitPrayerGate.promise };
+let successfulPrayerSettled = false;
+const successfulPrayerSubmit = domListeners.get("submit")({
+  target: successfulPrayer.form,
+  preventDefault() {},
+}).then(() => { successfulPrayerSettled = true; });
+await new Promise(setImmediate);
+assert.equal(successfulPrayerSettled, false);
+assert.equal(successfulPrayer.submit.disabled, true);
+assert.equal(location.hash, "#/community/prayers");
+assert.equal(toastStack.children.length, 0,
+  "Prayer success must wait for the authoritative write");
+submitPrayerGate.resolve({ data: [structuredClone(prayerMemberRow)], error: null });
+await successfulPrayerSubmit;
+prayerRpcGate = null;
+assert.equal(location.hash, "#/community/prayers",
+  "successful Prayer submit must rerender the same route");
+assert.deepEqual(toastStack.children.map((item) => item.textContent), [
+  "Prayer request sent privately",
+]);
+assert.equal(successfulPrayer.submit.disabled, false);
+assert.equal(successfulPrayer.submit.hasAttribute("aria-busy"), false);
+
+const makePrayerAction = (action, textContent) => {
+  const control = makeElement();
+  control.tagName = "BUTTON";
+  control.textContent = textContent;
+  control.disabled = false;
+  control.dataset = { action, prayer: PRAYER_ID };
+  control.closest = () => control;
+  return control;
+};
+
+toastStack.children.length = 0;
+const memberStateCalls = () => prayerRpcCalls.filter(
+  (call) => call.name === "set_my_prayer_request_state"
+);
+const closePrayerControl = makePrayerAction("close-prayer-request", "Close request");
+const withdrawPrayerControl = makePrayerAction("withdraw-prayer-request", "Withdraw");
+const memberPrayerCard = makeElement();
+memberPrayerCard.querySelectorAll = () => [closePrayerControl, withdrawPrayerControl];
+closePrayerControl.closest = (selector) => selector === ".prayer-request"
+  ? memberPrayerCard
+  : closePrayerControl;
+withdrawPrayerControl.closest = (selector) => selector === ".prayer-request"
+  ? memberPrayerCard
+  : withdrawPrayerControl;
+window.confirm = () => true;
+globalThis.confirm = window.confirm;
+const closePrayerGate = deferred();
+prayerRpcGate = { name: "set_my_prayer_request_state", promise: closePrayerGate.promise };
+const closePrayerCallCount = memberStateCalls().length;
+const closePrayerCall = domListeners.get("click")({ target: closePrayerControl, preventDefault() {} });
+await new Promise(setImmediate);
+const siblingWithdrawCall = domListeners.get("click")({
+  target: withdrawPrayerControl,
+  preventDefault() {},
+});
+await new Promise(setImmediate);
+assert.equal(memberStateCalls().length, closePrayerCallCount + 1,
+  "busy member Prayer requests must suppress sibling Close/Withdraw mutations");
+assert.equal(closePrayerControl.disabled, true);
+assert.equal(withdrawPrayerControl.disabled, true);
+assert.equal(toastStack.children.length, 0,
+  "Prayer close success must wait for the authoritative write");
+assert.deepEqual(memberStateCalls().at(-1), {
+  name: "set_my_prayer_request_state",
+  args: { p_request_id: PRAYER_ID, p_action: "close" },
+});
+closePrayerGate.resolve({ data: [{
+  ...structuredClone(prayerMemberRow),
+  status: "closed",
+  closed_at: "2026-08-05T02:05:00.000Z",
+}], error: null });
+await Promise.all([closePrayerCall, siblingWithdrawCall]);
+prayerRpcGate = null;
+assert.deepEqual(toastStack.children.map((item) => item.textContent), [
+  "Prayer request closed",
+]);
+assert.equal(closePrayerControl.disabled, false);
+assert.equal(withdrawPrayerControl.disabled, false);
+assert.equal(closePrayerControl.hasAttribute("aria-busy"), false);
+
+let prayerWithdrawConfirm = "";
+window.confirm = (message) => { prayerWithdrawConfirm = message; return false; };
+globalThis.confirm = window.confirm;
+const prayerCallsBeforeCancelledWithdraw = prayerRpcCalls.length;
+await domListeners.get("click")({ target: withdrawPrayerControl, preventDefault() {} });
+assert.equal(
+  prayerWithdrawConfirm,
+  "Withdraw this request? Its text will be permanently removed.",
+);
+assert.equal(prayerRpcCalls.length, prayerCallsBeforeCancelledWithdraw,
+  "cancelled Prayer withdrawal must not call the RPC");
+
+window.confirm = () => true;
+globalThis.confirm = window.confirm;
+toastStack.children.length = 0;
+await domListeners.get("click")({ target: withdrawPrayerControl, preventDefault() {} });
+assert.deepEqual(prayerRpcCalls.at(-2), {
+  name: "set_my_prayer_request_state",
+  args: { p_request_id: PRAYER_ID, p_action: "withdraw" },
+});
+assert.deepEqual(toastStack.children.map((item) => item.textContent), [
+  "Prayer request withdrawn",
+]);
+
+const rejectedCloseControl = makePrayerAction("close-prayer-request", "Close request");
+toastStack.children.length = 0;
+prayerRpcErrors.set("set_my_prayer_request_state", { message: "sensitive prayer update failure" });
+await domListeners.get("click")({ target: rejectedCloseControl, preventDefault() {} });
+prayerRpcErrors.delete("set_my_prayer_request_state");
+assert.deepEqual(toastStack.children.map((item) => [item.textContent, item.getAttribute("role")]), [[
+  "Prayer request could not be updated. Please try again.",
+  "alert",
+]]);
+assert.equal(rejectedCloseControl.disabled, false);
+assert.equal(rejectedCloseControl.hasAttribute("aria-busy"), false);
+
+// Admin Prayer status controls must suppress repeated clicks, await the live
+// mutation, and pass only the legal next status through the store seam.
+Object.assign(authUser, {
+  id: "live-user-1",
+  email: "runner@example.com",
+  user_metadata: { full_name: "Riley Runner", avatar_url: "https://example.com/avatar.jpg" },
+});
+Object.assign(profile, {
+  id: authUser.id,
+  email: authUser.email,
+  full_name: "Riley Runner",
+  role: "super_admin",
+});
+await store.getCurrentUser();
+location.hash = "#/admin/prayers";
+const adminStatusCalls = () => prayerRpcCalls.filter(
+  (call) => call.name === "set_admin_prayer_request_status"
+);
+
+toastStack.children.length = 0;
+const markPrayedControl = makePrayerAction("mark-prayer-prayed", "Mark as prayed for");
+const siblingCloseControl = makePrayerAction("close-admin-prayer", "Close");
+markPrayedControl.dataset.prayer = SECOND_PRAYER_ID;
+siblingCloseControl.dataset.prayer = SECOND_PRAYER_ID;
+const adminPrayerCard = makeElement();
+adminPrayerCard.querySelectorAll = () => [markPrayedControl, siblingCloseControl];
+markPrayedControl.closest = (selector) => selector === ".admin-prayer-request"
+  ? adminPrayerCard
+  : markPrayedControl;
+siblingCloseControl.closest = (selector) => selector === ".admin-prayer-request"
+  ? adminPrayerCard
+  : siblingCloseControl;
+const markPrayedGate = deferred();
+prayerRpcGate = { name: "set_admin_prayer_request_status", promise: markPrayedGate.promise };
+const markCallCount = adminStatusCalls().length;
+const markPrayedCall = domListeners.get("click")({
+  target: markPrayedControl,
+  preventDefault() {},
+});
+await new Promise(setImmediate);
+const siblingCloseCall = domListeners.get("click")({
+  target: siblingCloseControl,
+  preventDefault() {},
+});
+await new Promise(setImmediate);
+assert.equal(adminStatusCalls().length, markCallCount + 1,
+  "busy Admin Prayer requests must suppress sibling status mutations");
+assert.equal(markPrayedControl.disabled, true);
+assert.equal(siblingCloseControl.disabled, true);
+assert.equal(toastStack.children.length, 0,
+  "Admin Prayer success must wait for the authoritative status mutation");
+assert.deepEqual(adminStatusCalls().at(-1), {
+  name: "set_admin_prayer_request_status",
+  args: { p_request_id: SECOND_PRAYER_ID, p_status: "prayed_for" },
+});
+markPrayedGate.resolve({ data: [{
+  ...structuredClone(prayerAdminRow),
+  status: "prayed_for",
+}], error: null });
+await Promise.all([markPrayedCall, siblingCloseCall]);
+prayerRpcGate = null;
+assert.deepEqual(toastStack.children.map((item) => item.textContent), [
+  "Prayer request marked as prayed for",
+]);
+assert.equal(markPrayedControl.disabled, false);
+assert.equal(siblingCloseControl.disabled, false);
+assert.equal(markPrayedControl.hasAttribute("aria-busy"), false);
+
+toastStack.children.length = 0;
+const closeAdminPrayerControl = makePrayerAction("close-admin-prayer", "Close");
+closeAdminPrayerControl.dataset.prayer = SECOND_PRAYER_ID;
+const closeAdminPrayerGate = deferred();
+prayerRpcGate = { name: "set_admin_prayer_request_status", promise: closeAdminPrayerGate.promise };
+const closeAdminCallCount = adminStatusCalls().length;
+const closeAdminPrayerCall = domListeners.get("click")({
+  target: closeAdminPrayerControl,
+  preventDefault() {},
+});
+await new Promise(setImmediate);
+const duplicateCloseAdminPrayerCall = domListeners.get("click")({
+  target: closeAdminPrayerControl,
+  preventDefault() {},
+});
+await new Promise(setImmediate);
+assert.equal(adminStatusCalls().length, closeAdminCallCount + 1,
+  "busy close controls must suppress duplicate Admin Prayer mutations");
+assert.deepEqual(adminStatusCalls().at(-1), {
+  name: "set_admin_prayer_request_status",
+  args: { p_request_id: SECOND_PRAYER_ID, p_status: "closed" },
+});
+assert.equal(toastStack.children.length, 0);
+closeAdminPrayerGate.resolve({ data: [{
+  ...structuredClone(prayerAdminRow),
+  status: "closed",
+  closed_at: "2026-08-05T02:10:00.000Z",
+}], error: null });
+await Promise.all([closeAdminPrayerCall, duplicateCloseAdminPrayerCall]);
+prayerRpcGate = null;
+assert.deepEqual(toastStack.children.map((item) => item.textContent), [
+  "Prayer request closed",
+]);
+
+const rejectedAdminPrayerControl = makePrayerAction("close-admin-prayer", "Close");
+rejectedAdminPrayerControl.dataset.prayer = SECOND_PRAYER_ID;
+toastStack.children.length = 0;
+prayerRpcErrors.set("set_admin_prayer_request_status", { message: "sensitive Admin status failure" });
+await domListeners.get("click")({ target: rejectedAdminPrayerControl, preventDefault() {} });
+prayerRpcErrors.delete("set_admin_prayer_request_status");
+assert.deepEqual(toastStack.children.map((item) => [item.textContent, item.getAttribute("role")]), [[
+  "Prayer request status could not be updated. Please try again.",
+  "alert",
+]]);
+assert.equal(rejectedAdminPrayerControl.disabled, false);
+assert.equal(rejectedAdminPrayerControl.hasAttribute("aria-busy"), false);
+console.log("ok  delegated Prayer submit and Admin/member actions await writes and fail safely");
 
 // Assigned payout rows for another collector are RLS-suppressed from an
 // ordinary member's Realtime stream. Entering/restoring Payment must therefore

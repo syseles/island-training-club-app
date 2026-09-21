@@ -395,7 +395,11 @@ export async function maybeRedirectToApply() {
   const cu = await store.getCurrentUser();
   if (!cu || cu.role !== "pending") return;
   const app = await store.getMyApplication();
-  if (!app && window.location.hash !== "#/apply") {
+  if (store.shouldRedirectPendingApplicant({
+    role: cu.role,
+    hasApplication: Boolean(app),
+    route: window.location.hash,
+  })) {
     window.location.hash = "#/apply";
   }
 }
@@ -527,7 +531,7 @@ async function render(generation = renderGeneration) {
       out = arg2 === "register" ? views.viewHyroxRegistration(arg) : views.viewHyroxCycle(arg);
       break;
     case "community":
-      out = views.viewCommunity(arg);
+      out = await views.viewCommunity(arg);
       break;
     case "giving":
       out = await views.viewGiving({ ownsGeneration: () => generation === renderGeneration });
@@ -1155,6 +1159,70 @@ document.addEventListener("click", async (e) => {
       }
       break;
 
+    case "retry-prayer-requests":
+      try {
+        await withBusyControl(el, "Retrying…", () => renderWithFeedback());
+      } catch {
+        toast("Prayer requests could not be loaded. Please try again.", true);
+      }
+      break;
+
+    case "retry-admin-prayer-requests":
+      try {
+        await withBusyControl(el, "Retrying…", () => renderWithFeedback());
+      } catch {
+        toast("Prayer requests could not be loaded for Admin. Please try again.", true);
+      }
+      break;
+
+    case "mark-prayer-prayed":
+    case "close-admin-prayer": {
+      const prayedFor = action === "mark-prayer-prayed";
+      const prayerRequest = el.closest(".admin-prayer-request");
+      const controls = prayerRequest?.querySelectorAll?.(
+        '[data-action="mark-prayer-prayed"], [data-action="close-admin-prayer"]'
+      ) || [el];
+      try {
+        await withBusyControl(el, prayedFor ? "Updating…" : "Closing…", async () => {
+          await store.setAdminPrayerRequestStatus(
+            el.dataset.prayer,
+            prayedFor ? "prayed_for" : "closed"
+          );
+          toast(prayedFor ? "Prayer request marked as prayed for" : "Prayer request closed");
+          await renderWithFeedback();
+        }, { busyKey: prayerRequest || el, controls });
+      } catch {
+        toast("Prayer request status could not be updated. Please try again.", true);
+      }
+      break;
+    }
+
+    case "close-prayer-request":
+    case "withdraw-prayer-request": {
+      const withdrawing = action === "withdraw-prayer-request";
+      const prayerRequest = el.closest(".prayer-request");
+      const busyKey = prayerRequest || el;
+      if (controlBusy.has(busyKey)) break;
+      if (withdrawing
+          && !confirm("Withdraw this request? Its text will be permanently removed.")) return;
+      const controls = prayerRequest?.querySelectorAll?.(
+        '[data-action="close-prayer-request"], [data-action="withdraw-prayer-request"]'
+      ) || [el];
+      try {
+        await withBusyControl(el, withdrawing ? "Withdrawing…" : "Closing…", async () => {
+          await store.setMyPrayerRequestState(
+            el.dataset.prayer,
+            withdrawing ? "withdraw" : "close"
+          );
+          toast(withdrawing ? "Prayer request withdrawn" : "Prayer request closed");
+          await renderWithFeedback();
+        }, { busyKey, controls });
+      } catch {
+        toast("Prayer request could not be updated. Please try again.", true);
+      }
+      break;
+    }
+
     case "connect-interest":
       // Stub for fellowship/meal sign-ups — the real flow will notify leaders.
       toast(`Noted — a leader will reach out about ${el.dataset.topic}`);
@@ -1716,16 +1784,25 @@ document.addEventListener("submit", async (e) => {
       if (!form.reportValidity()) return;
       const fd = new FormData(form);
       const request = String(fd.get("request") || "").trim();
+      const errorEl = form.querySelector("#prayer-error");
       if (!request) {
-        form.querySelector("#prayer-error").innerHTML =
-          `<div class="form-error">Write your prayer request first.</div>`;
+        showInlineFormError(errorEl, "Write your prayer request first.");
         return;
       }
-      const user = store.currentUser();
-      store.recordPrayer({ userId: user ? user.id : null, name: fd.get("name"), request });
-      toast("Prayer request sent — leaders will pray with you");
-      location.hash = "#/community";
-      render();
+      errorEl.innerHTML = "";
+      const control = form.querySelector('[type="submit"]');
+      try {
+        await withBusyControl(control, "Sending…", async () => {
+          await store.submitPrayerRequest({
+            request,
+            anonymousToLeaders: fd.get("anonymousToLeaders") === "on",
+          });
+          toast("Prayer request sent privately");
+          await renderWithFeedback();
+        });
+      } catch {
+        showInlineFormError(errorEl, "Prayer request could not be sent. Please try again.");
+      }
       break;
     }
 

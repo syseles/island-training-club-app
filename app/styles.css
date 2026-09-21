@@ -1288,6 +1288,83 @@ a.profile-row:hover .pr-text strong { color: var(--accent); }
 
 .admin-tabs a.active { background: var(--accent); color: var(--accent-ink); }
 
+.admin-prayer-groups {
+  display: grid;
+  gap: 28px;
+  margin-top: 24px;
+}
+.admin-prayer-group { min-width: 0; }
+.admin-prayer-group-head {
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 0;
+}
+.admin-prayer-list { display: grid; gap: 12px; }
+.admin-prayer-request .card-body { min-width: 0; }
+.admin-prayer-request-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+.admin-prayer-request-header > div { min-width: 0; }
+.admin-prayer-request-header h3 { overflow-wrap: anywhere; }
+.admin-prayer-request-header time {
+  display: block;
+  margin-top: 5px;
+  color: var(--muted);
+  font-size: 11px;
+}
+.admin-prayer-request-copy {
+  margin: 14px 0 0;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.admin-prayer-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 16px;
+}
+.admin-prayer-actions .btn { min-height: 44px; }
+.admin-prayer-closed {
+  border-top: 1px solid var(--line-soft);
+  padding-top: 4px;
+}
+.admin-prayer-closed > summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 44px;
+  color: var(--muted);
+  cursor: pointer;
+  list-style: none;
+}
+.admin-prayer-closed > summary::-webkit-details-marker { display: none; }
+.admin-prayer-closed > summary h2 {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex: 1;
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: 20px;
+  font-weight: 900;
+  letter-spacing: -.02em;
+}
+.admin-prayer-closed > summary::after { content: "›"; font-size: 20px; }
+.admin-prayer-closed[open] > summary::after { transform: rotate(90deg); }
+.admin-prayer-closed > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.admin-prayer-closed > .admin-prayer-list,
+.admin-prayer-closed > .empty { margin-top: 12px; }
+@media (max-width: 380px) {
+  .admin-prayer-actions { display: grid; grid-template-columns: 1fr; }
+  .admin-prayer-actions .btn { width: 100%; }
+}
+
 .applicant dl {
   display: grid;
   grid-template-columns: auto 1fr;
@@ -1655,9 +1732,33 @@ a.profile-row:hover .pr-text strong { color: var(--accent); }
 }
 .community-pulse a:focus-visible,
 .community-pulse button:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.prayer-anonymous-check { min-height: 44px; align-items: center; }
+.prayer-request-list { display: grid; gap: 12px; }
+.prayer-request .card-body { min-width: 0; }
+.prayer-request-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.prayer-request-meta time { color: var(--muted); font-size: 11px; }
+.prayer-request-text {
+  margin: 14px 0 0;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.prayer-request-privacy { margin-top: 10px; }
+.prayer-request-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 16px; }
+.prayer-request-actions .btn,
+.prayer-load-error .btn { min-height: 44px; }
+.prayer-history-head { margin-top: 28px; }
 @media (max-width: 380px) {
   .community-action-grid { grid-template-columns: 1fr; }
   .community-feature-actions { align-items: stretch; flex-direction: column; }
+  .prayer-request-actions { display: grid; grid-template-columns: 1fr; }
+  .prayer-request-actions .btn,
+  .prayer-load-error .btn { width: 100%; }
 }
 
 .leader-card { display: grid; grid-template-columns: 86px 1fr; }
