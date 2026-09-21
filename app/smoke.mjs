@@ -2514,7 +2514,7 @@ try {
   failures++;
   console.error(`FAIL Admin hierarchy: ${err.message}`);
 }
-for (const tab of ["members", "activities", "giving", "payments"]) {
+for (const tab of ["members", "activities", "prayers", "giving", "payments"]) {
   const adminHtml = await check(`admin ${tab}`, () => views.viewAdmin(tab));
   const activeTabs = adminHtml.match(/<a[^>]*aria-current="page"[^>]*>/g) || [];
   if (activeTabs.length !== 1 || !activeTabs[0].includes(`href="#/admin/${tab}"`)) {
@@ -3520,6 +3520,25 @@ prayerViewState.prayers = [
     closedAt: Date.parse("2026-08-05T02:00:00.000Z"), withdrawnAt: null,
   },
   {
+    id: "prayer-view-new-oldest", ownerId: "prayer-other",
+    request: "Oldest new request", anonymousToLeaders: false,
+    status: "new", createdAt: Date.parse("2026-08-01T02:00:00.000Z"),
+    updatedAt: Date.parse("2026-08-01T02:00:00.000Z"), closedAt: null, withdrawnAt: null,
+  },
+  {
+    id: "prayer-view-prayed-newer", ownerId: "prayer-other",
+    request: "Newer prayed request", anonymousToLeaders: false,
+    status: "prayed_for", createdAt: Date.parse("2026-08-06T02:00:00.000Z"),
+    updatedAt: Date.parse("2026-08-06T03:00:00.000Z"), closedAt: null, withdrawnAt: null,
+  },
+  {
+    id: "prayer-view-closed-newest", ownerId: "prayer-other",
+    request: "Newest closed request", anonymousToLeaders: false,
+    status: "closed", createdAt: Date.parse("2026-08-06T02:00:00.000Z"),
+    updatedAt: Date.parse("2026-08-06T03:00:00.000Z"),
+    closedAt: Date.parse("2026-08-06T03:00:00.000Z"), withdrawnAt: null,
+  },
+  {
     id: "prayer-view-withdrawn", ownerId: "fixture-member",
     request: "ERASED WITHDRAWN SECRET", anonymousToLeaders: true,
     status: "withdrawn", createdAt: Date.parse("2026-08-02T02:00:00.000Z"),
@@ -3529,6 +3548,51 @@ prayerViewState.prayers = [
 ];
 mem.set("itc.prototype.v1", JSON.stringify(prayerViewState));
 store.load();
+store.signIn("member@example.test");
+assert.deepEqual(await views.viewAdmin("prayers"), { redirect: "#/account" },
+  "non-Admins must not render the Admin prayer queue");
+store.signIn("admin@example.test");
+const adminPrayerHtml = await views.viewAdmin("prayers");
+const prayerTabOrder = [
+  'href="#/admin/activities"',
+  'href="#/admin/prayers"',
+  'href="#/admin/giving"',
+].map((marker) => adminPrayerHtml.indexOf(marker));
+assert.ok(prayerTabOrder.every((index) => index >= 0)
+  && prayerTabOrder[0] < prayerTabOrder[1]
+  && prayerTabOrder[1] < prayerTabOrder[2],
+"Admin Prayer Requests tab must appear between Activities and Giving");
+for (const heading of ["New", "Prayed for", "Closed"]) {
+  assert.match(adminPrayerHtml, new RegExp(`<h2[^>]*>${heading}<\\/h2>`),
+    `Admin Prayer queue must render the ${heading} group`);
+}
+assert.ok(adminPrayerHtml.indexOf("Oldest new request") < adminPrayerHtml.indexOf("&lt;script&gt;Unsafe"),
+  "New Admin prayer requests must render oldest first");
+assert.ok(adminPrayerHtml.indexOf("Prayed request") < adminPrayerHtml.indexOf("Newer prayed request"),
+  "Prayed-for Admin requests must render oldest first");
+assert.ok(adminPrayerHtml.indexOf("Newest closed request") < adminPrayerHtml.indexOf("Closed request"),
+  "Closed Admin prayer requests must render newest first");
+assert.match(adminPrayerHtml, /Other Member/,
+  "identified Admin prayer requests must show the member display name");
+const adminPrayerCards = adminPrayerHtml.match(/<article\b[\s\S]*?<\/article>/g) || [];
+const adminPrayerCardFor = (request) => adminPrayerCards.find((card) => card.includes(request)) || "";
+const anonymousAdminPrayerCard = adminPrayerCardFor("Prayed request");
+assert.match(anonymousAdminPrayerCard, /Anonymous member/);
+assert.doesNotMatch(anonymousAdminPrayerCard,
+  /fixture-member|member@example\.test|data-(?:owner|user)/i,
+  "anonymous Admin prayer markup must contain no owner UUID, email, or identity data attribute");
+assert.doesNotMatch(adminPrayerHtml, /ERASED WITHDRAWN SECRET|prayer-view-withdrawn/,
+  "withdrawn requests must never render in the Admin queue");
+assert.doesNotMatch(adminPrayerHtml, /<(?:textarea|input)\b/i,
+  "Admin prayer cards must not expose request-edit controls");
+assert.match(adminPrayerHtml, /<details[^>]*admin-prayer-closed[\s\S]*<h2[^>]*>Closed<\/h2>/,
+  "Closed Admin prayers must render in a secondary disclosure");
+assert.match(adminPrayerCardFor("Oldest new request"), /Mark as prayed for[\s\S]*>Close</,
+  "new Admin requests must expose both legal next states");
+assert.doesNotMatch(adminPrayerCardFor("Prayed request"), /Mark as prayed for/);
+assert.match(adminPrayerCardFor("Prayed request"), />Close<\/button>/);
+assert.doesNotMatch(adminPrayerCardFor("Newest closed request"), /data-action=/,
+  "closed Admin requests must expose no status controls");
 store.signIn("member@example.test");
 const memberPrayerHtml = await views.viewCommunity("prayers");
 for (const marker of [

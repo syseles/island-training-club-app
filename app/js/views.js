@@ -2640,13 +2640,23 @@ function adminGivingSetupRequired() {
     </div></div>`;
 }
 
+function adminPrayerLoadError() {
+  return `
+    <div class="section-head"><h2>Prayer Requests</h2></div>
+    <div class="card prayer-load-error" role="alert"><div class="card-body">
+      <h3>Prayer requests could not be loaded</h3>
+      <p class="muted small mt8">Please try again. No requests are shown until the private Admin queue is available.</p>
+      <button class="btn ghost sm mt16" type="button" data-action="retry-admin-prayer-requests">Try again</button>
+    </div></div>`;
+}
+
 export async function viewAdmin(tab = "members") {
   const user = store.currentUser();
   if (!user || !isAdminRole(user.role)) {
     return { redirect: "#/account" };
   }
   const requestedTab = tab === "ops" ? "payments" : tab;
-  const canonicalTab = ["members", "activities", "giving", "payments"].includes(requestedTab)
+  const canonicalTab = ["members", "activities", "prayers", "giving", "payments"].includes(requestedTab)
     ? requestedTab
     : "members";
   const tabs = `
@@ -2654,6 +2664,7 @@ export async function viewAdmin(tab = "members") {
       ${[
         ["members", "Members"],
         ["activities", "Activities"],
+        ["prayers", "Prayer Requests"],
         ["giving", "Giving"],
         ["payments", "Payments"],
       ]
@@ -2679,6 +2690,15 @@ export async function viewAdmin(tab = "members") {
       avatarLoadFailed = true;
     }
   }
+  let prayerRows = [];
+  let prayerLoadFailed = false;
+  if (canonicalTab === "prayers") {
+    try {
+      prayerRows = await store.listAdminPrayerRequests();
+    } catch {
+      prayerLoadFailed = true;
+    }
+  }
   let body;
   if (canonicalTab === "activities") body = adminActivities();
   else if (canonicalTab === "members") {
@@ -2689,6 +2709,8 @@ export async function viewAdmin(tab = "members") {
       adminAvatarRows,
       { avatarLoadFailed },
     );
+  } else if (canonicalTab === "prayers") {
+    body = prayerLoadFailed ? adminPrayerLoadError() : adminPrayerRequests(prayerRows);
   } else if (canonicalTab === "giving") {
     try {
       body = adminGiving(await store.listGivingCampaigns());
@@ -3335,6 +3357,84 @@ function adminApprovals(pending) {
     section("Ready for review", ready, "No applications ready for review.", readyCard),
     section("Awaiting application", awaiting, "No members awaiting an application.", awaitingCard),
   ].join("");
+}
+
+function adminPrayerTimestamp(value) {
+  const timestamp = new Date(value).getTime();
+  return Number.isFinite(timestamp) ? timestamp : 0;
+}
+
+function adminPrayerSubmittedAt(value) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "Time unavailable";
+  return date.toLocaleString("en-HK", {
+    dateStyle: "medium",
+    timeStyle: "short",
+    timeZone: "Asia/Hong_Kong",
+  });
+}
+
+function adminPrayerCard(row) {
+  const status = PRAYER_STATUS_LABELS[row.status];
+  const canMarkPrayed = row.status === "new";
+  const canClose = ["new", "prayed_for"].includes(row.status);
+  return `
+    <article class="card admin-prayer-request">
+      <div class="card-body">
+        <div class="admin-prayer-request-header">
+          <div>
+            <h3>${esc(String(row.displayName || "Anonymous member"))}</h3>
+            <time datetime="${esc(String(row.createdAt || ""))}">Submitted ${esc(adminPrayerSubmittedAt(row.createdAt))}</time>
+          </div>
+          <span class="badge neutral">${esc(status)}</span>
+        </div>
+        <p class="admin-prayer-request-copy">${esc(String(row.request || ""))}</p>
+        ${canMarkPrayed || canClose ? `
+          <div class="admin-prayer-actions">
+            ${canMarkPrayed ? `<button class="btn sm" type="button" data-action="mark-prayer-prayed" data-prayer="${esc(String(row.id || ""))}">Mark as prayed for</button>` : ""}
+            ${canClose ? `<button class="btn ghost sm" type="button" data-action="close-admin-prayer" data-prayer="${esc(String(row.id || ""))}">Close</button>` : ""}
+          </div>` : ""}
+      </div>
+    </article>`;
+}
+
+function adminPrayerRequests(rows) {
+  const byStatus = (status) => rows
+    .filter((row) => row.status === status)
+    .slice()
+    .sort((a, b) => {
+      const direction = status === "closed" ? -1 : 1;
+      return direction * (adminPrayerTimestamp(a.createdAt) - adminPrayerTimestamp(b.createdAt))
+        || String(a.id || "").localeCompare(String(b.id || ""));
+    });
+  const activeGroup = (status, title) => {
+    const groupRows = byStatus(status);
+    return `
+      <section class="admin-prayer-group" aria-labelledby="admin-prayers-${status}">
+        <div class="section-head admin-prayer-group-head">
+          <h2 id="admin-prayers-${status}">${title}</h2>
+          <span class="badge neutral">${groupRows.length}</span>
+        </div>
+        ${groupRows.length
+          ? `<div class="admin-prayer-list">${groupRows.map(adminPrayerCard).join("")}</div>`
+          : `<div class="empty">No ${title.toLowerCase()} prayer requests.</div>`}
+      </section>`;
+  };
+  const closedRows = byStatus("closed");
+  return `
+    <div class="admin-prayer-groups">
+      ${activeGroup("new", "New")}
+      ${activeGroup("prayed_for", "Prayed for")}
+      <details class="admin-prayer-group admin-prayer-closed">
+        <summary>
+          <h2>Closed</h2>
+          <span class="badge neutral">${closedRows.length}</span>
+        </summary>
+        ${closedRows.length
+          ? `<div class="admin-prayer-list">${closedRows.map(adminPrayerCard).join("")}</div>`
+          : '<div class="empty">No closed prayer requests.</div>'}
+      </details>
+    </div>`;
 }
 
 function campaignStatusBadge(status) {

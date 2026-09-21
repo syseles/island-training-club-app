@@ -2287,6 +2287,16 @@ assert.match(failedPrayerListHtml, /data-action="retry-prayer-requests"/,
   "a failed Prayer list must expose a retry control");
 assert.doesNotMatch(failedPrayerListHtml, /Never expose this as a live fallback/,
   "a failed live Prayer list must never render device-local rows");
+prayerRpcErrors.set("list_admin_prayer_requests", { message: "sensitive Admin prayer list failure" });
+const failedAdminPrayerListHtml = await views.viewAdmin("prayers");
+prayerRpcErrors.delete("list_admin_prayer_requests");
+assert.match(failedAdminPrayerListHtml, /could not be loaded[\s\S]*try again/i,
+  "a failed authoritative Admin Prayer list must render safe retryable feedback");
+assert.match(failedAdminPrayerListHtml, /data-action="retry-admin-prayer-requests"/,
+  "a failed Admin Prayer list must expose a retry control");
+assert.doesNotMatch(failedAdminPrayerListHtml,
+  /Never expose this as a live fallback|sensitive Admin prayer list failure/,
+  "a failed live Admin Prayer list must expose neither stale rows nor backend errors");
 for (const failure of assignedPayoutFailures) {
   operationalRpcHandler = (name, args) => {
     if (name === "get_assigned_collector_payout_profiles") {
@@ -4951,7 +4961,110 @@ assert.deepEqual(toastStack.children.map((item) => [item.textContent, item.getAt
 ]]);
 assert.equal(rejectedCloseControl.disabled, false);
 assert.equal(rejectedCloseControl.hasAttribute("aria-busy"), false);
-console.log("ok  delegated Prayer submit and actions await writes and preserve safe failure state");
+
+// Admin Prayer status controls must suppress repeated clicks, await the live
+// mutation, and pass only the legal next status through the store seam.
+Object.assign(authUser, {
+  id: "live-user-1",
+  email: "runner@example.com",
+  user_metadata: { full_name: "Riley Runner", avatar_url: "https://example.com/avatar.jpg" },
+});
+Object.assign(profile, {
+  id: authUser.id,
+  email: authUser.email,
+  full_name: "Riley Runner",
+  role: "super_admin",
+});
+await store.getCurrentUser();
+location.hash = "#/admin/prayers";
+const adminStatusCalls = () => prayerRpcCalls.filter(
+  (call) => call.name === "set_admin_prayer_request_status"
+);
+
+toastStack.children.length = 0;
+const markPrayedControl = makePrayerAction("mark-prayer-prayed", "Mark as prayed for");
+markPrayedControl.dataset.prayer = SECOND_PRAYER_ID;
+const markPrayedGate = deferred();
+prayerRpcGate = { name: "set_admin_prayer_request_status", promise: markPrayedGate.promise };
+const markCallCount = adminStatusCalls().length;
+const markPrayedCall = domListeners.get("click")({
+  target: markPrayedControl,
+  preventDefault() {},
+});
+await new Promise(setImmediate);
+const duplicateMarkPrayedCall = domListeners.get("click")({
+  target: markPrayedControl,
+  preventDefault() {},
+});
+await new Promise(setImmediate);
+assert.equal(adminStatusCalls().length, markCallCount + 1,
+  "busy Admin Prayer controls must suppress duplicate status mutations");
+assert.equal(markPrayedControl.disabled, true);
+assert.equal(toastStack.children.length, 0,
+  "Admin Prayer success must wait for the authoritative status mutation");
+assert.deepEqual(adminStatusCalls().at(-1), {
+  name: "set_admin_prayer_request_status",
+  args: { p_request_id: SECOND_PRAYER_ID, p_status: "prayed_for" },
+});
+markPrayedGate.resolve({ data: [{
+  ...structuredClone(prayerAdminRow),
+  status: "prayed_for",
+}], error: null });
+await Promise.all([markPrayedCall, duplicateMarkPrayedCall]);
+prayerRpcGate = null;
+assert.deepEqual(toastStack.children.map((item) => item.textContent), [
+  "Prayer request marked as prayed for",
+]);
+assert.equal(markPrayedControl.disabled, false);
+assert.equal(markPrayedControl.hasAttribute("aria-busy"), false);
+
+toastStack.children.length = 0;
+const closeAdminPrayerControl = makePrayerAction("close-admin-prayer", "Close");
+closeAdminPrayerControl.dataset.prayer = SECOND_PRAYER_ID;
+const closeAdminPrayerGate = deferred();
+prayerRpcGate = { name: "set_admin_prayer_request_status", promise: closeAdminPrayerGate.promise };
+const closeAdminCallCount = adminStatusCalls().length;
+const closeAdminPrayerCall = domListeners.get("click")({
+  target: closeAdminPrayerControl,
+  preventDefault() {},
+});
+await new Promise(setImmediate);
+const duplicateCloseAdminPrayerCall = domListeners.get("click")({
+  target: closeAdminPrayerControl,
+  preventDefault() {},
+});
+await new Promise(setImmediate);
+assert.equal(adminStatusCalls().length, closeAdminCallCount + 1,
+  "busy close controls must suppress duplicate Admin Prayer mutations");
+assert.deepEqual(adminStatusCalls().at(-1), {
+  name: "set_admin_prayer_request_status",
+  args: { p_request_id: SECOND_PRAYER_ID, p_status: "closed" },
+});
+assert.equal(toastStack.children.length, 0);
+closeAdminPrayerGate.resolve({ data: [{
+  ...structuredClone(prayerAdminRow),
+  status: "closed",
+  closed_at: "2026-08-05T02:10:00.000Z",
+}], error: null });
+await Promise.all([closeAdminPrayerCall, duplicateCloseAdminPrayerCall]);
+prayerRpcGate = null;
+assert.deepEqual(toastStack.children.map((item) => item.textContent), [
+  "Prayer request closed",
+]);
+
+const rejectedAdminPrayerControl = makePrayerAction("close-admin-prayer", "Close");
+rejectedAdminPrayerControl.dataset.prayer = SECOND_PRAYER_ID;
+toastStack.children.length = 0;
+prayerRpcErrors.set("set_admin_prayer_request_status", { message: "sensitive Admin status failure" });
+await domListeners.get("click")({ target: rejectedAdminPrayerControl, preventDefault() {} });
+prayerRpcErrors.delete("set_admin_prayer_request_status");
+assert.deepEqual(toastStack.children.map((item) => [item.textContent, item.getAttribute("role")]), [[
+  "Prayer request status could not be updated. Please try again.",
+  "alert",
+]]);
+assert.equal(rejectedAdminPrayerControl.disabled, false);
+assert.equal(rejectedAdminPrayerControl.hasAttribute("aria-busy"), false);
+console.log("ok  delegated Prayer submit and Admin/member actions await writes and fail safely");
 
 // Assigned payout rows for another collector are RLS-suppressed from an
 // ordinary member's Realtime stream. Entering/restoring Payment must therefore

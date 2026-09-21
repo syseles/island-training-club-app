@@ -1163,6 +1163,32 @@ document.addEventListener("click", async (e) => {
       }
       break;
 
+    case "retry-admin-prayer-requests":
+      try {
+        await withBusyControl(el, "Retrying…", () => renderWithFeedback());
+      } catch {
+        toast("Prayer requests could not be loaded for Admin. Please try again.", true);
+      }
+      break;
+
+    case "mark-prayer-prayed":
+    case "close-admin-prayer": {
+      const prayedFor = action === "mark-prayer-prayed";
+      try {
+        await withBusyControl(el, prayedFor ? "Updating…" : "Closing…", async () => {
+          await store.setAdminPrayerRequestStatus(
+            el.dataset.prayer,
+            prayedFor ? "prayed_for" : "closed"
+          );
+          toast(prayedFor ? "Prayer request marked as prayed for" : "Prayer request closed");
+          await renderWithFeedback();
+        });
+      } catch {
+        toast("Prayer request status could not be updated. Please try again.", true);
+      }
+      break;
+    }
+
     case "close-prayer-request":
       try {
         await withBusyControl(el, "Closing…", async () => {
