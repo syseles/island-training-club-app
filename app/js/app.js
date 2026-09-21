@@ -1174,6 +1174,10 @@ document.addEventListener("click", async (e) => {
     case "mark-prayer-prayed":
     case "close-admin-prayer": {
       const prayedFor = action === "mark-prayer-prayed";
+      const prayerRequest = el.closest(".admin-prayer-request");
+      const controls = prayerRequest?.querySelectorAll?.(
+        '[data-action="mark-prayer-prayed"], [data-action="close-admin-prayer"]'
+      ) || [el];
       try {
         await withBusyControl(el, prayedFor ? "Updating…" : "Closing…", async () => {
           await store.setAdminPrayerRequestStatus(
@@ -1182,7 +1186,7 @@ document.addEventListener("click", async (e) => {
           );
           toast(prayedFor ? "Prayer request marked as prayed for" : "Prayer request closed");
           await renderWithFeedback();
-        });
+        }, { busyKey: prayerRequest || el, controls });
       } catch {
         toast("Prayer request status could not be updated. Please try again.", true);
       }

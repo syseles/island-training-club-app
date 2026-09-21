@@ -4983,7 +4983,17 @@ const adminStatusCalls = () => prayerRpcCalls.filter(
 
 toastStack.children.length = 0;
 const markPrayedControl = makePrayerAction("mark-prayer-prayed", "Mark as prayed for");
+const siblingCloseControl = makePrayerAction("close-admin-prayer", "Close");
 markPrayedControl.dataset.prayer = SECOND_PRAYER_ID;
+siblingCloseControl.dataset.prayer = SECOND_PRAYER_ID;
+const adminPrayerCard = makeElement();
+adminPrayerCard.querySelectorAll = () => [markPrayedControl, siblingCloseControl];
+markPrayedControl.closest = (selector) => selector === ".admin-prayer-request"
+  ? adminPrayerCard
+  : markPrayedControl;
+siblingCloseControl.closest = (selector) => selector === ".admin-prayer-request"
+  ? adminPrayerCard
+  : siblingCloseControl;
 const markPrayedGate = deferred();
 prayerRpcGate = { name: "set_admin_prayer_request_status", promise: markPrayedGate.promise };
 const markCallCount = adminStatusCalls().length;
@@ -4992,14 +5002,15 @@ const markPrayedCall = domListeners.get("click")({
   preventDefault() {},
 });
 await new Promise(setImmediate);
-const duplicateMarkPrayedCall = domListeners.get("click")({
-  target: markPrayedControl,
+const siblingCloseCall = domListeners.get("click")({
+  target: siblingCloseControl,
   preventDefault() {},
 });
 await new Promise(setImmediate);
 assert.equal(adminStatusCalls().length, markCallCount + 1,
-  "busy Admin Prayer controls must suppress duplicate status mutations");
+  "busy Admin Prayer requests must suppress sibling status mutations");
 assert.equal(markPrayedControl.disabled, true);
+assert.equal(siblingCloseControl.disabled, true);
 assert.equal(toastStack.children.length, 0,
   "Admin Prayer success must wait for the authoritative status mutation");
 assert.deepEqual(adminStatusCalls().at(-1), {
@@ -5010,12 +5021,13 @@ markPrayedGate.resolve({ data: [{
   ...structuredClone(prayerAdminRow),
   status: "prayed_for",
 }], error: null });
-await Promise.all([markPrayedCall, duplicateMarkPrayedCall]);
+await Promise.all([markPrayedCall, siblingCloseCall]);
 prayerRpcGate = null;
 assert.deepEqual(toastStack.children.map((item) => item.textContent), [
   "Prayer request marked as prayed for",
 ]);
 assert.equal(markPrayedControl.disabled, false);
+assert.equal(siblingCloseControl.disabled, false);
 assert.equal(markPrayedControl.hasAttribute("aria-busy"), false);
 
 toastStack.children.length = 0;
