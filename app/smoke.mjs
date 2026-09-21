@@ -150,6 +150,18 @@ async function check(label, fn) {
   }
 }
 
+function assertProfileSubpageHierarchy(html, expectedTitle) {
+  assert.equal((html.match(/<h1\b/g) || []).length, 1,
+    `${expectedTitle} must render exactly one h1`);
+  assert.match(html, /class="back-link"/,
+    `${expectedTitle} must render a back link before its heading`);
+  const heading = html.match(/<h1\b[^>]*>([^<]+)<\/h1>/);
+  assert.equal(heading?.[1], expectedTitle,
+    `${expectedTitle} must be the exact h1 text`);
+  assert.doesNotMatch(html, /<div class="kicker mt16">Profile ·/,
+    `${expectedTitle} must not repeat Profile in a neon kicker`);
+}
+
 const primaryNavLabels = (html) =>
   [...html.matchAll(/<span>([^<]+)<\/span>/g)].map((match) => match[1]);
 
@@ -1522,7 +1534,7 @@ console.log("ok  final cross-domain runtime markers coexist");
 for (const marker of [
   "Continue with Google",
   "Membership Details",
-  "Privacy &amp; Notifications",
+  "Privacy & Notifications",
   "Members",
   "HYROX",
   "Duty",
@@ -1796,7 +1808,14 @@ if (localVisitorHome.includes('data-action="sign-in-google"')) {
 }
 console.log("ok  signed-out Home uses the correct live/local sign-in action");
 await check("home (visitor)", () => views.viewHome());
-await check("schedule", () => views.viewSchedule());
+const scheduleHtml = await check("schedule", () => views.viewSchedule());
+try {
+  assert.doesNotMatch(scheduleHtml, /Free sessions are open to everyone/,
+    "Schedule must not repeat global free/paid guidance after the session list");
+} catch (err) {
+  failures++;
+  console.error(`FAIL Schedule hierarchy: ${err.message}`);
+}
 
 // Member Schedule weeks run Sunday–Saturday. Boundary and selection values
 // are hand-checked literals so a Monday fallback or off-by-seven navigation
@@ -2482,6 +2501,19 @@ if (!defaultAdminHtml.includes('href="#/admin/members" class="active"')
     || !defaultAdminHtml.includes("Test Person")) {
   throw new Error("Admin must default to Members and show pending applicants there without an Approvals tab");
 }
+try {
+  assert.match(defaultAdminHtml, /<a class="back-link" href="#\/account">← Profile<\/a>/,
+    "Admin must link back to Profile");
+  assert.equal((defaultAdminHtml.match(/<h1\b/g) || []).length, 1,
+    "Admin must render exactly one h1");
+  assert.match(defaultAdminHtml, /<h1 class="display mt16">Admin Tools<\/h1>\s*<nav class="admin-tabs/,
+    "Admin Tools must be the h1 immediately before the tabs");
+  assert.doesNotMatch(defaultAdminHtml, /<div class="kicker">Admin<\/div>|Club Operations/,
+    "Admin must not retain the redundant kicker or Club Operations title");
+} catch (err) {
+  failures++;
+  console.error(`FAIL Admin hierarchy: ${err.message}`);
+}
 for (const tab of ["members", "activities", "giving", "payments"]) {
   const adminHtml = await check(`admin ${tab}`, () => views.viewAdmin(tab));
   const activeTabs = adminHtml.match(/<a[^>]*aria-current="page"[^>]*>/g) || [];
@@ -2728,7 +2760,8 @@ for (const field of ['name="emergency_relationship"', 'name="donorId"']) {
     console.error(`FAIL Membership Details edit form missing ${field}`);
   }
 }
-if (!(await views.viewAccount("donor")).includes("Membership Details.")) {
+const donorDetailsHtml = await views.viewAccount("donor");
+if (!donorDetailsHtml.includes("Membership Details")) {
   failures++;
   console.error("FAIL legacy Donor Profile route should render Membership Details");
 }
@@ -2737,19 +2770,24 @@ if (!integratedViewSource.includes('donor: "Membership Details"')) {
   console.error("FAIL unavailable live legacy donor route should retain Membership Details context");
 } else console.log("ok  Membership Details owns emergency and donor information");
 
-// sub-page headings are title-cased to match the row titles
-for (const [section, title] of [
-  ["details", "Membership Details."],
-  ["indemnity", "Indemnity."],
-  ["payments", "Payments &amp; Receipts."],
-  ["privacy", "Privacy &amp; Notifications."],
+// Profile sub-pages expose one predictable semantic title after one back link.
+for (const [label, html, title] of [
+  ["details", membershipDetailsHtml, "Membership Details"],
+  ["details edit", membershipDetailsEditHtml, "Edit Membership Details"],
+  ["legacy donor", donorDetailsHtml, "Membership Details"],
+  ["indemnity", await views.viewAccount("indemnity"), "Indemnity"],
+  ["payments", await views.viewAccount("payments"), "Payments &amp; Receipts"],
+  ["privacy", await views.viewAccount("privacy"), "Privacy &amp; Notifications"],
+  ["privacy edit", privacyEditHtml, "Edit Privacy &amp; Notifications"],
 ]) {
-  if (!(await views.viewAccount(section)).includes(title)) {
+  try {
+    assertProfileSubpageHierarchy(html, title);
+  } catch (err) {
     failures++;
-    console.error(`FAIL profile > ${section} heading should read "${title}"`);
+    console.error(`FAIL profile > ${label} hierarchy: ${err.message}`);
   }
 }
-console.log("ok  sub-page headings title-cased");
+console.log("ok  Profile detail routes use title-cased semantic headings");
 if (!(await views.viewAccount("nope")).includes("Page not found")) {
   failures++;
   console.error("FAIL unknown Profile section should 404");
@@ -3293,6 +3331,19 @@ const statCount = (html, href) => {
 const bookingProfileHtml = await views.viewAccount();
 const allBookingsHtml = await views.viewAccount("bookings");
 const attendedBookingsHtml = await views.viewAccount("bookings", "attended");
+const legacyHistoryHtml = await views.viewAccount("history");
+for (const [label, html] of [
+  ["bookings", allBookingsHtml],
+  ["attended bookings", attendedBookingsHtml],
+  ["legacy history", legacyHistoryHtml],
+]) {
+  try {
+    assertProfileSubpageHierarchy(html, "Bookings");
+  } catch (err) {
+    failures++;
+    console.error(`FAIL profile > ${label} hierarchy: ${err.message}`);
+  }
+}
 if (!allBookingsHtml.includes("All bookings") || !allBookingsHtml.includes("Upcoming")) {
   failures++;
   console.error("FAIL Bookings link should render the grouped all-bookings view");
@@ -3330,7 +3381,7 @@ try {
 } finally {
   booking.status = "confirmed";
 }
-if (!(await views.viewAccount("history")).includes("All bookings")) {
+if (!legacyHistoryHtml.includes("All bookings")) {
   failures++;
   console.error("FAIL legacy History route should render the canonical Bookings view");
 } else console.log("ok  Profile stats and linked booking views share matching counts");
@@ -7586,8 +7637,8 @@ if (!(activitiesHtml.indexOf("Recurring Activity Defaults") < weeklyControlsStar
     || !/aria-labelledby="paid-sessions-title">[\s\S]*<\/section>\s*<\/details>\s*<details class="admin-section mt24">\s*<summary><h2>One-off Events<\/h2>/.test(activitiesHtml)) {
   throw new Error("One-off Events must remain a separate section after Weekly Event Controls");
 }
-if (!activitiesHtml.includes("Club Operations") || activitiesHtml.includes("Club ops.")) {
-  throw new Error("Admin heading must read Club Operations");
+if (!activitiesHtml.includes("Admin Tools") || activitiesHtml.includes("Club Operations")) {
+  throw new Error("Admin heading must read Admin Tools");
 }
 if (!activitiesHtml.includes('<details class="admin-section') || !activitiesHtml.includes("<summary>")) {
   throw new Error("Activities sections must collapse behind their headers");

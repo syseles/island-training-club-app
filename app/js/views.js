@@ -519,8 +519,7 @@ export function viewSchedule() {
           data-action="sched-filter" data-filter="${key}">${label}</button>`
       ).join("")}
     </div>
-    <div class="session-list">${listHTML}</div>
-    <p class="muted small mt16">Free sessions are open to everyone — no booking, no capacity. Paid sessions (HYROX) are booked and paid in the app by approved members.</p>`;
+    <div class="session-list">${listHTML}</div>`;
 }
 
 // --- Activity detail ------------------------------------------------------------------
@@ -1343,6 +1342,12 @@ function communityAnnouncements() {
     </article>`;
 }
 
+function profileSubpageHeader({ backHref = "#/account", backLabel = "Profile", title }) {
+  return `
+    <a class="back-link" href="${esc(backHref)}">← ${esc(backLabel)}</a>
+    <h1 class="display sm mt16">${esc(title)}</h1>`;
+}
+
 export async function viewAccount(section, sub) {
   if (!sub && typeof section === "string" && section.includes("/")) {
     [section, sub] = section.split("/");
@@ -1364,12 +1369,13 @@ export async function viewAccount(section, sub) {
             details: "Membership Details",
             donor: "Membership Details",
             indemnity: "Indemnity",
-            privacy: "Privacy &amp; Notifications",
+            payments: "Payments & Receipts",
+            privacy: "Privacy & Notifications",
+            bookings: "Bookings",
+            history: "Bookings",
           }[section] || "Profile";
           return `
-            <a class="back-link" href="#/home">← Home</a>
-            <div class="kicker mt16">Profile · ${sectionTitle}</div>
-            <h1 class="display sm">${sectionTitle}.</h1>
+            ${profileSubpageHeader({ backHref: "#/home", backLabel: "Home", title: sectionTitle })}
             <div class="card mt16"><div class="card-body">
               <h3>Application details unavailable</h3>
               <p class="muted small">Your membership application isn't linked to this profile yet. ITC leaders will sync the records and the data will appear here within a working day.</p>
@@ -1644,9 +1650,11 @@ function profileRow(href, icon, title, status, { cls = "" } = {}) {
 async function accountDetailsEdit(user) {
   const hydrated = await hydrateLiveUser(user);
   return `
-    <a class="back-link" href="#/account/details">← Membership Details</a>
-    <div class="kicker mt16">Profile · Membership Details · Edit</div>
-    <h1 class="display sm">Membership Details.</h1>
+    ${profileSubpageHeader({
+      backHref: "#/account/details",
+      backLabel: "Membership Details",
+      title: "Edit Membership Details",
+    })}
     <form id="form-membership-details" data-form="membership-details" class="card mt16"><div class="card-body">
       <div class="line"><span>Full name</span><strong>${esc(user.fullName)}</strong></div>
       <div class="line"><span>Email</span><strong>${esc(user.email)}</strong></div>
@@ -1700,9 +1708,7 @@ async function accountDetails(user) {
   const hydrated = await hydrateLiveUser(user);
   const ageStatus = hydrated.isMinor ? "Under 18" : "18 or over";
   return `
-    <a class="back-link" href="#/account">← Profile</a>
-    <div class="kicker mt16">Profile · Membership Details</div>
-    <h1 class="display sm">Membership Details.</h1>
+    ${profileSubpageHeader({ title: "Membership Details" })}
     <div class="card mt16"><div class="card-body">
       <div class="receipt-lines" style="margin-top:0;border-top:0">
         <div class="line"><span>Full name</span><strong>${esc(user.fullName)}</strong></div>
@@ -1745,9 +1751,7 @@ async function accountIndemnity(user) {
   const hadAcceptance = !!hydrated.indemnityAcceptedAt;
   const defaultDate = todayISO();
   return `
-    <a class="back-link" href="#/account">← Profile</a>
-    <div class="kicker mt16">Profile · Indemnity</div>
-    <h1 class="display sm">Indemnity.</h1>
+    ${profileSubpageHeader({ title: "Indemnity" })}
     ${current ? `
       <div class="banner mt16">
         <span class="kicker">Indemnity confirmed on ${fmtDay(hydrated.indemnityAcceptedAt)}</span>
@@ -1793,9 +1797,7 @@ function accountPayments(user) {
   const pooledBookings = store.bookingsForUser(user.id)
     .filter((booking) => booking.cycleId && ["reserved", "confirmed"].includes(booking.status));
   return `
-    <a class="back-link" href="#/account">← Profile</a>
-    <div class="kicker mt16">Profile · Payments &amp; Receipts</div>
-    <h1 class="display sm">Payments &amp; Receipts.</h1>
+    ${profileSubpageHeader({ title: "Payments & Receipts" })}
     ${pooledBookings.length ? `<div class="session-list">${pooledBookings.map((booking) => pooledBookingRow(booking)).join("")}</div>` : ""}
     ${
       receipts.length
@@ -1818,9 +1820,11 @@ function accountPayments(user) {
 async function accountPrivacyEdit(user) {
   const hydrated = await hydrateLiveUser(user);
   return `
-    <a class="back-link" href="#/account/privacy">← Privacy &amp; Notifications</a>
-    <div class="kicker mt16">Profile · Privacy &amp; Notifications · Edit</div>
-    <h1 class="display sm">Privacy &amp; Notifications.</h1>
+    ${profileSubpageHeader({
+      backHref: "#/account/privacy",
+      backLabel: "Privacy & Notifications",
+      title: "Edit Privacy & Notifications",
+    })}
     <form id="form-privacy" data-form="privacy-preferences" class="card mt16"><div class="card-body">
       <div class="line"><span>Privacy policy accepted</span><strong>${hydrated.privacyAcceptedAt ? fmtDay(hydrated.privacyAcceptedAt) : "To be accepted"}</strong></div>
       <label class="check"><input type="checkbox" name="photo_consent" ${hydrated.mediaConsent ? "checked" : ""}> Photos and video at sessions</label>
@@ -1840,9 +1844,7 @@ async function accountPrivacy(user) {
   const hydrated = await hydrateLiveUser(user);
   const onOff = (v) => (v ? "On" : "Off");
   return `
-    <a class="back-link" href="#/account">← Profile</a>
-    <div class="kicker mt16">Profile · Privacy &amp; Notifications</div>
-    <h1 class="display sm">Privacy &amp; Notifications.</h1>
+    ${profileSubpageHeader({ title: "Privacy & Notifications" })}
     <div class="card mt16"><div class="card-body">
       <div class="receipt-lines" style="margin-top:0;border-top:0">
         <div class="line"><span>Photo/video consent</span><strong>${hydrated.mediaConsent ? "Allowed" : "Not allowed"}</strong></div>
@@ -1999,9 +2001,7 @@ function accountBookings(user, filter = "all") {
   );
   const hasRecords = upcoming.length || past.length || cancelled.length;
   return `
-    <a class="back-link" href="#/account">← Profile</a>
-    <div class="kicker mt16">Profile · Bookings</div>
-    <h1 class="display sm">Bookings.</h1>
+    ${profileSubpageHeader({ title: "Bookings" })}
     <div class="chip-row mt16" aria-label="Booking filter">
       <a class="chip ${filter === "all" ? "active" : ""}" href="#/account/bookings">All bookings</a>
       <a class="chip ${filter === "attended" ? "active" : ""}" href="#/account/bookings/attended">Attended</a>
@@ -2708,8 +2708,8 @@ export async function viewAdmin(tab = "members") {
   }
 
   return `
-    <div class="kicker">Admin</div>
-    <h1 class="display">Club Operations</h1>
+    <a class="back-link" href="#/account">← Profile</a>
+    <h1 class="display mt16">Admin Tools</h1>
     ${tabs}
     ${body}`;
 }
