@@ -1382,6 +1382,28 @@ for (const marker of freeEventRolloutMarkers) {
 }
 console.log("ok  free-event RSVP deployment order and rollback semantics are documented");
 
+const prayerRunbookSection = liveAuthRunbookSource.match(
+  /## Private prayer requests[\s\S]*?(?=\n## )/,
+)?.[0] || "";
+const prayerRolloutMarkers = [
+  "Private prayer requests",
+  "Apply and verify the backend migration",
+  "Verify RPC grants and anonymous redaction",
+  "Deploy the Testing frontend",
+  "Complete authenticated member/Admin acceptance",
+  "Promote the production frontend",
+  "Withdrawal clears request text",
+];
+let previousPrayerRolloutMarker = -1;
+for (const marker of prayerRolloutMarkers) {
+  const markerIndex = prayerRunbookSection.indexOf(marker);
+  if (markerIndex <= previousPrayerRolloutMarker) {
+    throw new Error(`private prayer rollout order missing or invalid at ${marker}`);
+  }
+  previousPrayerRolloutMarker = markerIndex;
+}
+console.log("ok  private prayer deployment order and rollback semantics are documented");
+
 if (!/values\s*\([\s\S]*?'pending'\s*\)/i.test(profilesMigrationSource)
     || /existing_count|count\s*\(\s*\*\s*\)[\s\S]*super_admin/i.test(profilesMigrationSource)) {
   throw new Error("fresh OAuth profiles must always bootstrap as pending");
