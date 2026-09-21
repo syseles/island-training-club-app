@@ -519,8 +519,7 @@ export function viewSchedule() {
           data-action="sched-filter" data-filter="${key}">${label}</button>`
       ).join("")}
     </div>
-    <div class="session-list">${listHTML}</div>
-    <p class="muted small mt16">Free sessions are open to everyone — no booking, no capacity. Paid sessions (HYROX) are booked and paid in the app by approved members.</p>`;
+    <div class="session-list">${listHTML}</div>`;
 }
 
 // --- Activity detail ------------------------------------------------------------------
@@ -1073,12 +1072,12 @@ function givingHistory(list) {
 // The Community tab is about connecting: prayer, fellowship, meals and news.
 // Leaders and culture copy lives under Profile > About Island Training Club.
 
-export function viewCommunity(section) {
+export async function viewCommunity(section) {
   switch (section) {
     case undefined:
       return communityHome();
     case "prayers":
-      return communityPrayers();
+      return await communityPrayers();
     case "fellowship":
       return communityFellowship();
     case "meals":
@@ -1188,29 +1187,121 @@ function communityAbout() {
     <p class="muted small mt16">Community copy is draft placeholder text for review with ITC leadership.</p>`;
 }
 
-function communityPrayers() {
-  const user = store.currentUser();
+const PRAYER_STATUS_LABELS = {
+  new: "New",
+  prayed_for: "Prayed for",
+  closed: "Closed",
+  withdrawn: "Withdrawn",
+};
+
+function prayerDate(value) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "Date unavailable";
+  return date.toLocaleDateString("en-HK", {
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+    timeZone: "Asia/Hong_Kong",
+  });
+}
+
+function prayerHistory(rows, loadFailed) {
+  if (loadFailed) {
+    return `
+      <div class="card prayer-load-error" role="alert"><div class="card-body">
+        <h3>Prayer requests could not be loaded</h3>
+        <p class="muted small mt8">Please try again. No saved requests are shown until the private list is available.</p>
+        <button class="btn ghost sm mt16" type="button" data-action="retry-prayer-requests">Try again</button>
+      </div></div>`;
+  }
+  if (!rows.length) return '<div class="empty">You haven’t sent any prayer requests yet.</div>';
   return `
+    <div class="prayer-request-list">
+      ${rows.map((row) => {
+        const status = PRAYER_STATUS_LABELS[row.status] || PRAYER_STATUS_LABELS.new;
+        if (row.status === "withdrawn") {
+          const withdrawnAt = row.withdrawnAt ?? "";
+          return `
+            <article class="card prayer-request">
+              <div class="card-body">
+                <div class="prayer-request-meta">
+                  <time datetime="${esc(String(withdrawnAt))}">${esc(prayerDate(withdrawnAt))}</time>
+                  <span class="badge neutral">${esc(status)}</span>
+                </div>
+              </div>
+            </article>`;
+        }
+        const canClose = ["new", "prayed_for"].includes(row.status);
+        return `
+          <article class="card prayer-request">
+            <div class="card-body">
+              <div class="prayer-request-meta">
+                <time datetime="${esc(String(row.createdAt || ""))}">${esc(prayerDate(row.createdAt))}</time>
+                <span class="badge neutral">${esc(status)}</span>
+              </div>
+              <p class="prayer-request-text">${esc(String(row.request || ""))}</p>
+              <p class="muted small prayer-request-privacy">${row.anonymousToLeaders
+                ? "Identity hidden from ITC leaders"
+                : "Shared with my identity"}</p>
+              <div class="prayer-request-actions">
+                ${canClose ? `<button class="btn ghost sm" type="button" data-action="close-prayer-request" data-prayer="${esc(String(row.id || ""))}">Close request</button>` : ""}
+                <button class="btn danger sm" type="button" data-action="withdraw-prayer-request" data-prayer="${esc(String(row.id || ""))}">Withdraw</button>
+              </div>
+            </div>
+          </article>`;
+      }).join("")}
+    </div>`;
+}
+
+async function communityPrayers() {
+  const user = store.currentUser();
+  const approved = user?.status === "approved"
+    && ["member", "admin", "superadmin", "super_admin"].includes(user.role);
+  const intro = `
     <a class="back-link" href="#/community">← Community</a>
     <div class="kicker mt16">Community · Prayers</div>
     <h1 class="display sm">Prayers.</h1>
-    <p class="subcopy mt8">We pray for each other — injuries, exams, work, family, anything. Send a request and the leaders will pray with you this week; you’re also welcome to pray along.</p>
-    <div class="card mt16"><div class="card-body">
+    <p class="subcopy mt8">We pray for each other — injuries, exams, work, family, anything. Send a request and the leaders will pray with you this week; you’re also welcome to pray along.</p>`;
+  if (!approved) {
+    const gateCopy = user
+      ? "Prayer requests are private and available after your ITC membership is approved. View your membership status in Profile."
+      : "Prayer requests are private. Sign in or apply through Profile to continue.";
+    const gateAction = user ? "View Profile" : "Sign in or view Profile";
+    return `${intro}
+      <div class="card mt16"><div class="card-body">
+        <h3>Approved members only</h3>
+        <p class="muted small mt8">${gateCopy}</p>
+        <a class="btn ghost mt16" href="#/account">${gateAction}</a>
+      </div></div>`;
+  }
+
+  let rows = [];
+  let loadFailed = false;
+  try {
+    rows = await store.listMyPrayerRequests();
+  } catch {
+    loadFailed = true;
+  }
+
+  return `${intro}
+    <div class="card mt16 prayer-form-card"><div class="card-body">
       <h3>Ask for prayer</h3>
       <form id="form-prayer" novalidate>
         <div class="field">
-          <label for="pr-name">Your name (optional)</label>
-          <input id="pr-name" name="name" autocomplete="name" value="${esc(user?.fullName || "")}">
-        </div>
-        <div class="field">
           <label for="pr-text">Prayer request *</label>
-          <textarea id="pr-text" name="request" rows="4" required placeholder="What can we pray about?"></textarea>
+          <textarea id="pr-text" name="request" rows="4" required maxlength="2000" placeholder="What can we pray about?"></textarea>
         </div>
+        <label class="check prayer-anonymous-check" for="pr-anonymous">
+          <input id="pr-anonymous" name="anonymousToLeaders" type="checkbox">
+          <span>Hide my identity from ITC leaders</span>
+        </label>
         <div id="prayer-error"></div>
         <button class="btn mt16" type="submit">Send prayer request</button>
-        <p class="muted small mt8">Requests go privately to ITC leaders — nothing is posted publicly. Prototype: stored on this device only.</p>
+        <p class="muted small mt8">Requests are shared privately with ITC Admins and are never posted publicly.</p>
       </form>
-    </div></div>`;
+    </div></div>
+    <div class="section-head prayer-history-head"><h2>My Prayer Requests</h2></div>
+    ${prayerHistory(rows, loadFailed)}`;
 }
 
 function communityFellowship() {
@@ -1263,6 +1354,12 @@ function communityAnnouncements() {
     </article>`;
 }
 
+function profileSubpageHeader({ backHref = "#/account", backLabel = "Profile", title }) {
+  return `
+    <a class="back-link" href="${esc(backHref)}">← ${esc(backLabel)}</a>
+    <h1 class="display sm mt16">${esc(title)}</h1>`;
+}
+
 export async function viewAccount(section, sub) {
   if (!sub && typeof section === "string" && section.includes("/")) {
     [section, sub] = section.split("/");
@@ -1284,12 +1381,13 @@ export async function viewAccount(section, sub) {
             details: "Membership Details",
             donor: "Membership Details",
             indemnity: "Indemnity",
-            privacy: "Privacy &amp; Notifications",
+            payments: "Payments & Receipts",
+            privacy: "Privacy & Notifications",
+            bookings: "Bookings",
+            history: "Bookings",
           }[section] || "Profile";
           return `
-            <a class="back-link" href="#/home">← Home</a>
-            <div class="kicker mt16">Profile · ${sectionTitle}</div>
-            <h1 class="display sm">${sectionTitle}.</h1>
+            ${profileSubpageHeader({ backHref: "#/home", backLabel: "Home", title: sectionTitle })}
             <div class="card mt16"><div class="card-body">
               <h3>Application details unavailable</h3>
               <p class="muted small">Your membership application isn't linked to this profile yet. ITC leaders will sync the records and the data will appear here within a working day.</p>
@@ -1564,9 +1662,11 @@ function profileRow(href, icon, title, status, { cls = "" } = {}) {
 async function accountDetailsEdit(user) {
   const hydrated = await hydrateLiveUser(user);
   return `
-    <a class="back-link" href="#/account/details">← Membership Details</a>
-    <div class="kicker mt16">Profile · Membership Details · Edit</div>
-    <h1 class="display sm">Membership Details.</h1>
+    ${profileSubpageHeader({
+      backHref: "#/account/details",
+      backLabel: "Membership Details",
+      title: "Edit Membership Details",
+    })}
     <form id="form-membership-details" data-form="membership-details" class="card mt16"><div class="card-body">
       <div class="line"><span>Full name</span><strong>${esc(user.fullName)}</strong></div>
       <div class="line"><span>Email</span><strong>${esc(user.email)}</strong></div>
@@ -1620,9 +1720,7 @@ async function accountDetails(user) {
   const hydrated = await hydrateLiveUser(user);
   const ageStatus = hydrated.isMinor ? "Under 18" : "18 or over";
   return `
-    <a class="back-link" href="#/account">← Profile</a>
-    <div class="kicker mt16">Profile · Membership Details</div>
-    <h1 class="display sm">Membership Details.</h1>
+    ${profileSubpageHeader({ title: "Membership Details" })}
     <div class="card mt16"><div class="card-body">
       <div class="receipt-lines" style="margin-top:0;border-top:0">
         <div class="line"><span>Full name</span><strong>${esc(user.fullName)}</strong></div>
@@ -1665,9 +1763,7 @@ async function accountIndemnity(user) {
   const hadAcceptance = !!hydrated.indemnityAcceptedAt;
   const defaultDate = todayISO();
   return `
-    <a class="back-link" href="#/account">← Profile</a>
-    <div class="kicker mt16">Profile · Indemnity</div>
-    <h1 class="display sm">Indemnity.</h1>
+    ${profileSubpageHeader({ title: "Indemnity" })}
     ${current ? `
       <div class="banner mt16">
         <span class="kicker">Indemnity confirmed on ${fmtDay(hydrated.indemnityAcceptedAt)}</span>
@@ -1713,9 +1809,7 @@ function accountPayments(user) {
   const pooledBookings = store.bookingsForUser(user.id)
     .filter((booking) => booking.cycleId && ["reserved", "confirmed"].includes(booking.status));
   return `
-    <a class="back-link" href="#/account">← Profile</a>
-    <div class="kicker mt16">Profile · Payments &amp; Receipts</div>
-    <h1 class="display sm">Payments &amp; Receipts.</h1>
+    ${profileSubpageHeader({ title: "Payments & Receipts" })}
     ${pooledBookings.length ? `<div class="session-list">${pooledBookings.map((booking) => pooledBookingRow(booking)).join("")}</div>` : ""}
     ${
       receipts.length
@@ -1738,9 +1832,11 @@ function accountPayments(user) {
 async function accountPrivacyEdit(user) {
   const hydrated = await hydrateLiveUser(user);
   return `
-    <a class="back-link" href="#/account/privacy">← Privacy &amp; Notifications</a>
-    <div class="kicker mt16">Profile · Privacy &amp; Notifications · Edit</div>
-    <h1 class="display sm">Privacy &amp; Notifications.</h1>
+    ${profileSubpageHeader({
+      backHref: "#/account/privacy",
+      backLabel: "Privacy & Notifications",
+      title: "Edit Privacy & Notifications",
+    })}
     <form id="form-privacy" data-form="privacy-preferences" class="card mt16"><div class="card-body">
       <div class="line"><span>Privacy policy accepted</span><strong>${hydrated.privacyAcceptedAt ? fmtDay(hydrated.privacyAcceptedAt) : "To be accepted"}</strong></div>
       <label class="check"><input type="checkbox" name="photo_consent" ${hydrated.mediaConsent ? "checked" : ""}> Photos and video at sessions</label>
@@ -1760,9 +1856,7 @@ async function accountPrivacy(user) {
   const hydrated = await hydrateLiveUser(user);
   const onOff = (v) => (v ? "On" : "Off");
   return `
-    <a class="back-link" href="#/account">← Profile</a>
-    <div class="kicker mt16">Profile · Privacy &amp; Notifications</div>
-    <h1 class="display sm">Privacy &amp; Notifications.</h1>
+    ${profileSubpageHeader({ title: "Privacy & Notifications" })}
     <div class="card mt16"><div class="card-body">
       <div class="receipt-lines" style="margin-top:0;border-top:0">
         <div class="line"><span>Photo/video consent</span><strong>${hydrated.mediaConsent ? "Allowed" : "Not allowed"}</strong></div>
@@ -1919,9 +2013,7 @@ function accountBookings(user, filter = "all") {
   );
   const hasRecords = upcoming.length || past.length || cancelled.length;
   return `
-    <a class="back-link" href="#/account">← Profile</a>
-    <div class="kicker mt16">Profile · Bookings</div>
-    <h1 class="display sm">Bookings.</h1>
+    ${profileSubpageHeader({ title: "Bookings" })}
     <div class="chip-row mt16" aria-label="Booking filter">
       <a class="chip ${filter === "all" ? "active" : ""}" href="#/account/bookings">All bookings</a>
       <a class="chip ${filter === "attended" ? "active" : ""}" href="#/account/bookings/attended">Attended</a>
@@ -2560,13 +2652,23 @@ function adminGivingSetupRequired() {
     </div></div>`;
 }
 
+function adminPrayerLoadError() {
+  return `
+    <div class="section-head"><h2>Prayer Requests</h2></div>
+    <div class="card prayer-load-error" role="alert"><div class="card-body">
+      <h3>Prayer requests could not be loaded</h3>
+      <p class="muted small mt8">Please try again. No requests are shown until the private Admin queue is available.</p>
+      <button class="btn ghost sm mt16" type="button" data-action="retry-admin-prayer-requests">Try again</button>
+    </div></div>`;
+}
+
 export async function viewAdmin(tab = "members") {
   const user = store.currentUser();
   if (!user || !isAdminRole(user.role)) {
     return { redirect: "#/account" };
   }
   const requestedTab = tab === "ops" ? "payments" : tab;
-  const canonicalTab = ["members", "activities", "giving", "payments"].includes(requestedTab)
+  const canonicalTab = ["members", "activities", "prayers", "giving", "payments"].includes(requestedTab)
     ? requestedTab
     : "members";
   const tabs = `
@@ -2574,6 +2676,7 @@ export async function viewAdmin(tab = "members") {
       ${[
         ["members", "Members"],
         ["activities", "Activities"],
+        ["prayers", "Prayer Requests"],
         ["giving", "Giving"],
         ["payments", "Payments"],
       ]
@@ -2599,6 +2702,15 @@ export async function viewAdmin(tab = "members") {
       avatarLoadFailed = true;
     }
   }
+  let prayerRows = [];
+  let prayerLoadFailed = false;
+  if (canonicalTab === "prayers") {
+    try {
+      prayerRows = await store.listAdminPrayerRequests();
+    } catch {
+      prayerLoadFailed = true;
+    }
+  }
   let body;
   if (canonicalTab === "activities") body = adminActivities();
   else if (canonicalTab === "members") {
@@ -2609,6 +2721,8 @@ export async function viewAdmin(tab = "members") {
       adminAvatarRows,
       { avatarLoadFailed },
     );
+  } else if (canonicalTab === "prayers") {
+    body = prayerLoadFailed ? adminPrayerLoadError() : adminPrayerRequests(prayerRows);
   } else if (canonicalTab === "giving") {
     try {
       body = adminGiving(await store.listGivingCampaigns());
@@ -2628,8 +2742,8 @@ export async function viewAdmin(tab = "members") {
   }
 
   return `
-    <div class="kicker">Admin</div>
-    <h1 class="display">Club Operations</h1>
+    <a class="back-link" href="#/account">← Profile</a>
+    <h1 class="display mt16">Admin Tools</h1>
     ${tabs}
     ${body}`;
 }
@@ -3255,6 +3369,83 @@ function adminApprovals(pending) {
     section("Ready for review", ready, "No applications ready for review.", readyCard),
     section("Awaiting application", awaiting, "No members awaiting an application.", awaitingCard),
   ].join("");
+}
+
+function adminPrayerTimestamp(value) {
+  const timestamp = new Date(value).getTime();
+  return Number.isFinite(timestamp) ? timestamp : 0;
+}
+
+function adminPrayerSubmittedAt(value) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "Time unavailable";
+  return date.toLocaleString("en-HK", {
+    dateStyle: "medium",
+    timeStyle: "short",
+    timeZone: "Asia/Hong_Kong",
+  });
+}
+
+function adminPrayerCard(row) {
+  const status = PRAYER_STATUS_LABELS[row.status];
+  const canMarkPrayed = row.status === "new";
+  const canClose = ["new", "prayed_for"].includes(row.status);
+  return `
+    <article class="card admin-prayer-request">
+      <div class="card-body">
+        <div class="admin-prayer-request-header">
+          <div>
+            <h3>${esc(String(row.displayName || "Anonymous member"))}</h3>
+            <time datetime="${esc(String(row.createdAt || ""))}">Submitted ${esc(adminPrayerSubmittedAt(row.createdAt))}</time>
+          </div>
+          <span class="badge neutral">${esc(status)}</span>
+        </div>
+        <p class="admin-prayer-request-copy">${esc(String(row.request || ""))}</p>
+        ${canMarkPrayed || canClose ? `
+          <div class="admin-prayer-actions">
+            ${canMarkPrayed ? `<button class="btn sm" type="button" data-action="mark-prayer-prayed" data-prayer="${esc(String(row.id || ""))}">Mark as prayed for</button>` : ""}
+            ${canClose ? `<button class="btn ghost sm" type="button" data-action="close-admin-prayer" data-prayer="${esc(String(row.id || ""))}">Close</button>` : ""}
+          </div>` : ""}
+      </div>
+    </article>`;
+}
+
+function adminPrayerRequests(rows) {
+  const byStatus = (status) => rows
+    .filter((row) => row.status === status)
+    .slice()
+    .sort((a, b) => {
+      const direction = status === "closed" ? -1 : 1;
+      return direction * (adminPrayerTimestamp(a.createdAt) - adminPrayerTimestamp(b.createdAt))
+        || String(a.id || "").localeCompare(String(b.id || ""));
+    });
+  const activeGroup = (status, title) => {
+    const groupRows = byStatus(status);
+    return `
+      <section class="admin-prayer-group" aria-labelledby="admin-prayers-${status}">
+        <div class="section-head admin-prayer-group-head">
+          <h2 id="admin-prayers-${status}">${title}</h2>
+          <span class="badge neutral">${groupRows.length}</span>
+        </div>
+        ${groupRows.length
+          ? `<div class="admin-prayer-list">${groupRows.map(adminPrayerCard).join("")}</div>`
+          : `<div class="empty">No ${title.toLowerCase()} prayer requests.</div>`}
+      </section>`;
+  };
+  const closedRows = byStatus("closed");
+  return `
+    <div class="admin-prayer-groups">
+      ${activeGroup("new", "New")}
+      ${activeGroup("prayed_for", "Prayed for")}
+      <details class="admin-prayer-group admin-prayer-closed">
+        <summary>
+          <h2>Closed <span class="badge neutral" aria-label="${closedRows.length} prayer request${closedRows.length === 1 ? "" : "s"}">${closedRows.length}</span></h2>
+        </summary>
+        ${closedRows.length
+          ? `<div class="admin-prayer-list">${closedRows.map(adminPrayerCard).join("")}</div>`
+          : '<div class="empty">No closed prayer requests.</div>'}
+      </details>
+    </div>`;
 }
 
 function campaignStatusBadge(status) {

@@ -6,24 +6,29 @@ identity, notifications, Giving, Admin, and approval workflows.
 ## Candidate ownership and surfaces
 
 - **Supabase owns in configured live mode:** identity, roles, applications,
-  notifications, Giving campaigns, donor profiles, and the full operational
-  workflow: activity templates, dated sessions, paid/RSVP bookings, queue
-  entries, receipts, collector duty, payout profiles, and gym finalization.
-  Browser mutations route through scoped SECURITY DEFINER RPCs. Realtime
+  notifications, private prayer requests, Giving campaigns, donor profiles,
+  and the full operational workflow: activity templates, dated sessions,
+  paid/RSVP bookings, queue entries, receipts, collector duty, payout profiles,
+  and gym finalization. Live prayer submission, member history, Admin review,
+  status changes, and withdrawal are authoritative RPC operations and never
+  fall back to device rows after a live failure. Browser mutations route
+  through scoped SECURITY DEFINER RPCs. Realtime
   invalidates authorized rows and identity-free RSVP totals; an assigned
   collector's foreign payout row is refreshed through its narrow RPC on
   Payment route entry and tab restore because payout-table RLS can suppress
   that Realtime event.
 - **`localStorage` owns:** local-mode prototype state plus device-local
-  Community interactions and application drafts. Live payout saves may cache
+  Community interactions and application drafts. Historical and newly created
+  local-mode prayer rows remain device-only compatibility data; enabling live
+  mode never uploads or merges them automatically. Live payout saves may cache
   the UUID-keyed handoff details on that device only after Supabase settles;
   forced operational hydration remains authoritative.
 - **Navigation:** Notification bell plus a signed-in-only Giving tab.
-- **Admin tabs:** Approvals, Members, Activities, Giving, and Payments.
+- **Admin tabs:** Members, Activities, Prayer Requests, Giving, and Payments.
   Dated controls appear under **Activities → Weekly Event Controls**, split
   into Free & RSVP Events and Paid Sessions. Each Admin route exposes exactly
   one active tab.
-- **State compatibility:** the current local state is v16; v9 through v15
+- **State compatibility:** the current local state is v23; v9 through v22
   persisted snapshots are accepted and migrated while preserving genuine
   records.
 
@@ -70,20 +75,40 @@ Use this safe deployment process:
 For localStorage-only operation, set both assignments to empty strings in a
 local, uncommitted copy.
 
-## Authentication redirect URLs
+## Canonical production URL
 
-Google OAuth and email magic links request the callback with the exact deployed
-origin and pathname:
+The canonical member-facing URL is:
 
-```js
-`${location.origin}${location.pathname}`
+```text
+https://island-training-club.vercel.app/
 ```
 
-In Supabase Dashboard → Authentication → URL Configuration → Redirect URLs,
-add the exact deployed Testing candidate URL ending in `/app/`. Preview and
-production domains are different origins, so add every deployed URL that will
-be tested. A missing or mismatched trailing `/app/` path causes an OAuth or
-magic-link callback to return to an unapproved URL.
+Attach that alias to the production Vercel project before promoting this
+routing configuration. Vercel internally rewrites `/` to `app/index.html`,
+while the document uses explicit `/app/` and `/assets/` URLs for static files.
+It deliberately has no `<base>` element, so hash-only navigation remains on the
+canonical root without reloading. The previous Vercel hostnames and exact
+`/app/` document path redirect to the canonical root. Query strings must be
+retained so authentication callbacks are not discarded; hash routes remain
+browser-side.
+
+## Authentication redirect URLs
+
+Google OAuth and email magic links deliberately request the allowlisted
+`/app/` callback trampoline on the current origin:
+
+```js
+new URL("/app/", window.location.origin).toString()
+```
+
+In Supabase Dashboard → Authentication → URL Configuration, set the Site URL
+to `https://island-training-club.vercel.app/` and add the exact production
+callback `https://island-training-club.vercel.app/app/` to Redirect URLs.
+Vercel then redirects that callback to the canonical root while preserving its
+query string. Preview and production domains are different origins, so add
+every deployed preview URL that will be tested. A missing or mismatched
+trailing `/app/` path causes an OAuth or magic-link callback to return to an
+unapproved URL.
 
 For local authentication testing, also add `http://127.0.0.1:4173/app/` (and
 the exact `localhost` form separately if you use it).
@@ -116,8 +141,9 @@ Interim launch configuration:
 5. Keep the App Password only in Supabase project settings. Never add it to
    `app/index.html`, Git, browser storage, client JavaScript, screenshots, or
    this runbook. Preserve Google recovery methods and backup codes separately.
-6. Add the exact local, preview, and production `/app/` URLs to Supabase's
-   redirect allowlist. Magic links use the same exact callback path as Google.
+6. Add the exact local, preview, and canonical production `/app/` callback
+   URLs to Supabase's redirect allowlist. Magic links use the same exact
+   callback path as Google.
 7. Set the Email OTP expiry to exactly `900` seconds so the configured lifetime
    matches the 15-minute security statement in the branded templates. Configure
    Supabase request throttling as well. The browser already suppresses duplicate
@@ -192,6 +218,385 @@ To use live mode locally, edit `app/index.html`'s inline `<script>` block to set
 `window.SUPABASE_URL` and `window.SUPABASE_ANON_KEY` to your dev Supabase
 project's values. Refresh the page after changes. Manage live identities in
 Supabase Admin; this cleanup does not change the schema or delete live users.
+
+## Private prayer requests: deployment, acceptance, and rollback
+
+Private prayer requests are Supabase-authoritative whenever live mode is
+configured. The browser has no direct table access: approved members and
+Admins use five narrow security-definer RPCs. Existing local-mode prayer rows
+remain preserved on that device for prototype compatibility and are never
+uploaded, merged, or used as a fallback automatically.
+
+The reviewed backend artifact is exactly
+`supabase/migrations/20260921000001_prayer_requests.sql`. At this revision its
+SHA-256 is
+`131fcc13dad14af187b0f5bef458556ea2ac6520605207be47bfaf2df2b9a950`.
+Before any deployment, recompute the digest from the reviewed checkout and
+stop if it differs:
+
+```bash
+MIGRATION=supabase/migrations/20260921000001_prayer_requests.sql
+shasum -a 256 "$MIGRATION"
+bash supabase/tests/prayer_requests_safety.sh
+```
+
+The release record must contain the reviewed Git commit, that local SHA-256,
+the target project reference, the Supabase SQL Editor's UTC completion
+timestamp, and the pass/fail result of each read-only check below. Record only
+request UUIDs and timestamps during acceptance. Never put credentials, session
+tokens, database URLs, request text, or screenshots containing request text in
+shell output, CI logs, deployment notes, or tickets.
+
+### Clean local migration and rollback-scoped integration gate
+
+From the repository root, first prove that migration versions are unique and
+that the reviewed migration is the source tip. A non-empty duplicate-version
+result or any other final filename blocks rollout:
+
+```bash
+test -z "$(find supabase/migrations -maxdepth 1 -type f -name '*.sql' \
+  -exec basename {} \; | cut -d_ -f1 | sort | uniq -d)"
+test "$(find supabase/migrations -maxdepth 1 -type f -name '*.sql' \
+  -exec basename {} \; | sort | tail -1)" = \
+  "20260921000001_prayer_requests.sql"
+```
+
+Start from a clean disposable local Supabase database and replay the unmodified
+source migration chain. Do not temporarily rename or renumber migrations:
+
+```bash
+supabase stop --no-backup || true
+supabase start --yes \
+  -x gotrue,realtime,storage-api,imgproxy,kong,mailpit,postgrest,postgres-meta,studio,edge-runtime,logflare,vector,supavisor
+```
+
+The startup output must list each migration version once and apply
+`20260921000001_prayer_requests.sql` last. Then run the integration file inside
+the disposable database container with stop-on-error enabled:
+
+```bash
+docker cp supabase/tests/prayer_requests_integration.sql \
+  supabase_db_island-training-club-app:/tmp/prayer_requests_integration.sql
+docker exec supabase_db_island-training-club-app \
+  psql -U postgres -d postgres -X -P pager=off -v ON_ERROR_STOP=1 \
+  -f /tmp/prayer_requests_integration.sql
+supabase stop --no-backup
+```
+
+The integration must emit its private-boundary success notice, end with
+`ROLLBACK`, and exit zero. It is intentionally transaction-scoped; never point
+it at production, Testing, staging, a shared database, or a database containing
+real users. Stopping with `--no-backup` is part of the gate so the next run
+cannot inherit disposable state.
+
+### Production drift boundary and migration evidence
+
+The production project has known historical migration drift. **Never run
+`supabase db push --include-all` for this rollout**, and do not use an
+unqualified `db push`, replay the local chain, repair an older version, or mark
+unverified history as applied. First compare local filenames with remote
+history and confirm the linked project in the browser and CLI:
+
+```bash
+export SUPABASE_PROJECT_REF="krxbvgyolxvmzgysfjkj"
+supabase link --project-ref "$SUPABASE_PROJECT_REF"
+supabase migration list --linked
+```
+
+Stop if the displayed project or history is unexpected. In Supabase Dashboard
+→ project `krxbvgyolxvmzgysfjkj` → SQL Editor, verify the project reference in
+the browser, open the reviewed local
+`supabase/migrations/20260921000001_prayer_requests.sql`, confirm its SHA-256,
+paste the file unchanged, and execute it once. Save the SQL Editor UTC
+completion timestamp without copying SQL contents or data into the deployment
+record.
+
+Do not record migration history until all schema, grant, signature, and
+redaction checks below pass. Then record only the reviewed version and re-list
+history:
+
+```bash
+supabase migration repair 20260921000001 --status applied --linked --yes
+supabase migration list --linked
+```
+
+This is a production write procedure and requires explicit authorization. A
+failed check leaves the dependent frontend undeployed and the migration repair
+unperformed.
+
+### Read-only schema, constraint, grant, and signature checks
+
+Run the following in trusted SQL after applying the exact migration and before
+any dependent frontend deployment. The table query must return one row with
+`rls_enabled = true`; the constraint query must return seven rows, each with the
+expected definition:
+
+```sql
+select n.nspname as schema_name,
+       c.relname as table_name,
+       c.relrowsecurity as rls_enabled
+  from pg_class c
+  join pg_namespace n on n.oid = c.relnamespace
+ where n.nspname = 'public'
+   and c.relname = 'prayer_requests'
+   and c.relkind = 'r';
+
+with expected(constraint_name) as (
+  values
+    ('prayer_requests_pkey'),
+    ('prayer_requests_owner_id_fkey'),
+    ('prayer_requests_status_changed_by_fkey'),
+    ('prayer_requests_status_check'),
+    ('prayer_request_text_state'),
+    ('prayer_request_closed_state'),
+    ('prayer_request_withdrawn_state')
+)
+select e.constraint_name,
+       c.contype,
+       pg_get_constraintdef(c.oid) as definition,
+       c.oid is not null as present
+  from expected e
+  left join pg_constraint c
+    on c.conrelid = 'public.prayer_requests'::regclass
+   and c.conname = e.constraint_name
+ order by e.constraint_name;
+```
+
+The expected list contains seven constraints; every `present` value must be
+`true`. Browser roles must have no direct table privilege; every value below
+must be `false`:
+
+```sql
+select role_name,
+       has_table_privilege(role_name, 'public.prayer_requests', 'SELECT') as can_select,
+       has_table_privilege(role_name, 'public.prayer_requests', 'INSERT') as can_insert,
+       has_table_privilege(role_name, 'public.prayer_requests', 'UPDATE') as can_update,
+       has_table_privilege(role_name, 'public.prayer_requests', 'DELETE') as can_delete
+  from (values ('anon'), ('authenticated')) roles(role_name)
+ order by role_name;
+```
+
+The five public RPCs and both private role helpers must exist with exactly the
+seven signatures below, be security-definer functions pinned to
+`search_path=public`, and be owned by the explicitly approved trusted role.
+For an unchanged SQL Editor application that role is `postgres`; the literal is
+deliberate. Public RPCs must deny `anon` and allow only the authenticated
+transport role, while the two private helpers must deny both browser roles.
+Retain the seven result rows, require every `ok` value to be `true`, and run the
+following read-only catalog gate in the same trusted SQL session:
+
+```sql
+with expected(signature, function_class, approved_owner) as (
+  values
+    ('public.submit_prayer_request(text,boolean)', 'public_rpc', 'postgres'),
+    ('public.list_my_prayer_requests()', 'public_rpc', 'postgres'),
+    ('public.set_my_prayer_request_state(uuid,text)', 'public_rpc', 'postgres'),
+    ('public.list_admin_prayer_requests()', 'public_rpc', 'postgres'),
+    ('public.set_admin_prayer_request_status(uuid,text)', 'public_rpc', 'postgres'),
+    ('public.prayer_assert_approved()', 'private_helper', 'postgres'),
+    ('public.prayer_assert_admin()', 'private_helper', 'postgres')
+), checks as (
+  select e.signature,
+         e.function_class,
+         e.approved_owner,
+         p.oid is not null as function_exists,
+         coalesce(p.prosecdef, false) as security_definer,
+         coalesce('search_path=public' = any(p.proconfig), false) as fixed_search_path,
+         pg_get_userbyid(p.proowner) as actual_owner,
+         coalesce(pg_get_userbyid(p.proowner) = e.approved_owner, false) as trusted_owner,
+         coalesce(has_function_privilege('anon', p.oid, 'EXECUTE'), false) as anon_execute,
+         coalesce(has_function_privilege('authenticated', p.oid, 'EXECUTE'), false)
+           as authenticated_execute
+    from expected e
+    left join pg_proc p on p.oid = to_regprocedure(e.signature)
+)
+select *,
+       function_exists
+         and security_definer
+         and fixed_search_path
+         and trusted_owner
+         and not anon_execute
+         and case
+               when function_class = 'public_rpc' then authenticated_execute
+               else not authenticated_execute
+             end as ok
+  from checks
+ order by signature;
+
+-- Fail the SQL Editor run unless the same seven-signature contract is true.
+do $verification$
+declare
+  verified_count integer;
+  failed_signatures text;
+begin
+  with expected(signature, function_class, approved_owner) as (
+    values
+      ('public.submit_prayer_request(text,boolean)', 'public_rpc', 'postgres'),
+      ('public.list_my_prayer_requests()', 'public_rpc', 'postgres'),
+      ('public.set_my_prayer_request_state(uuid,text)', 'public_rpc', 'postgres'),
+      ('public.list_admin_prayer_requests()', 'public_rpc', 'postgres'),
+      ('public.set_admin_prayer_request_status(uuid,text)', 'public_rpc', 'postgres'),
+      ('public.prayer_assert_approved()', 'private_helper', 'postgres'),
+      ('public.prayer_assert_admin()', 'private_helper', 'postgres')
+  ), checks as (
+    select e.signature,
+           coalesce(
+             p.oid is not null
+               and p.prosecdef
+               and 'search_path=public' = any(p.proconfig)
+               and pg_get_userbyid(p.proowner) = e.approved_owner
+               and not has_function_privilege('anon', p.oid, 'EXECUTE')
+               and case
+                     when e.function_class = 'public_rpc'
+                       then has_function_privilege('authenticated', p.oid, 'EXECUTE')
+                     else not has_function_privilege('authenticated', p.oid, 'EXECUTE')
+                   end,
+             false
+           ) as ok
+      from expected e
+      left join pg_proc p on p.oid = to_regprocedure(e.signature)
+  )
+  select count(*) filter (where ok),
+         coalesce(string_agg(signature, ', ' order by signature) filter (where not ok), '')
+    into verified_count, failed_signatures
+    from checks;
+
+  if verified_count <> 7 then
+    raise exception 'Prayer function trust check failed (%/7 verified): %',
+      verified_count, failed_signatures;
+  end if;
+
+  raise notice 'Prayer function trust check passed (7/7; approved owner postgres).';
+end
+$verification$;
+```
+
+If `actual_owner` differs from `postgres`, an `ok` value is false, or the block
+raises, stop the rollout before migration repair or frontend deployment. Do not
+change or replace `postgres` merely to make the check pass, and do not accept
+the role reported by the catalog as trusted by default. Identify how that role
+acquired ownership and have the authorized database owner either transfer each
+exact function signature back to `postgres`, or obtain and record explicit
+security approval for a different trusted owner before changing the literal.
+Then rerun the seven-row query and failing gate; all seven functions must name
+the same explicitly approved owner.
+
+Both Admin RPC result contracts must expose only the documented display label
+and request fields—never `owner_id`, email, or another stable owner field. The
+query must return two rows with `identity_columns_absent = true`:
+
+```sql
+with admin_functions(function_name) as (
+  values
+    ('list_admin_prayer_requests'),
+    ('set_admin_prayer_request_status')
+), outputs as (
+  select p.proname,
+         array_agg(p.proargnames[s.i] order by s.i) as output_columns
+    from pg_proc p
+    join pg_namespace n on n.oid = p.pronamespace
+    join admin_functions a on a.function_name = p.proname
+    cross join lateral generate_subscripts(p.proargnames, 1) s(i)
+   where n.nspname = 'public'
+     and p.proargmodes[s.i] in ('o', 't')
+   group by p.proname
+)
+select proname,
+       output_columns,
+       not (output_columns && array['owner_id', 'email']::text[])
+         and output_columns = array[
+           'id', 'display_name', 'request_text', 'anonymous_to_leaders',
+           'status', 'created_at', 'updated_at', 'closed_at'
+         ]::text[] as identity_columns_absent
+  from outputs
+ order by proname;
+```
+
+Catalog inspection proves the return shape, not runtime role checks or the
+anonymous display value. The rollback-scoped SQL integration and controlled
+authenticated acceptance are both mandatory evidence for those behaviors.
+
+### Backend-first rollout order
+
+1. **Apply and verify the backend migration.** Complete the safety test, clean
+   local chain, rollback-scoped integration, reviewed SQL Editor application,
+   read-only checks, and exact-version history repair. Any failure blocks the
+   frontend.
+2. **Verify RPC grants and anonymous redaction.** Retain the read-only outputs,
+   then use controlled authenticated fixtures to prove pending/declined denial,
+   member ownership isolation, Admin authorization, and the anonymous display
+   contract. Record only request IDs, roles, and timestamps.
+3. **Deploy the Testing frontend.** Push/open a PR only after separate
+   authorization, wait for the Testing Vercel deployment to succeed, verify it
+   targets the migrated project, and keep the production frontend unchanged.
+4. **Complete authenticated member/Admin acceptance.** Use separate approved
+   member A, member B, Admin, Super Admin, pending, and declined accounts on
+   current mobile Safari and Chrome. Every matrix row below must pass before
+   promotion.
+5. **Promote the production frontend.** Only after reviewed Testing evidence,
+   open the separately authorized `main` PR, wait for production Vercel
+   success, and repeat a minimal disposable request lifecycle at the canonical
+   root. This heading describes the gate; it is not evidence that promotion has
+   happened.
+
+### Testing acceptance matrix
+
+| Actor / surface | Acceptance evidence |
+| --- | --- |
+| Signed out, pending, declined | Public explanation only; no submission, history, Admin queue, or prayer mutation controls. |
+| Approved member A | Submit identified and anonymous cases; history appears only after the RPC settles; refresh preserves authoritative rows. |
+| Approved member B | Cannot list, close, or withdraw member A's request IDs; member A cannot access member B's rows. |
+| Admin | Queue groups New, Prayed for, and Closed; identified cases show the member display name; anonymous cards and markup contain no owner UUID, email, or stable identifying value. |
+| Admin / Super Admin | Legal status transitions succeed once; stale, repeated, unauthorized, and illegal transitions fail without a success toast or misleading state. |
+| Owner lifecycle | Close an active case, withdraw active and closed cases, reload, and confirm withdrawn history has no request body and the Admin queue excludes it. |
+| Failure handling | Force list, submit, member mutation, and Admin mutation failures; entered text/form state remains where applicable, no success feedback appears, and live mode never shows local prayer rows. |
+| Navigation / responsive | Profile and Admin back behavior is consistent; each page has one unclipped heading at 375 px; the obsolete Schedule footer is absent; browser Back restores the expected route. |
+| Browser coverage | Repeat member/Admin critical paths on current mobile Safari and Chrome, including disabled/loading states, focus order, wrapping, and no horizontal overflow. |
+
+Use disposable acceptance copy and withdraw it when the check ends. Deployment
+notes and screenshots must exclude request text, credentials, tokens, and
+personal data. A request UUID and bounded UTC timestamps are sufficient to
+correlate trusted read-only evidence.
+
+### Rollback
+
+Frontend rollback is safe before database cleanup: redeploy the last known-good
+frontend (or a reviewed revision that removes Prayer member/Admin entry points)
+and verify browsers no longer invoke any prayer RPC. The private table can
+remain behind RLS while the incident is assessed.
+
+For a database access rollback, **revoke the five public RPCs first** in trusted
+SQL before considering any schema or data change:
+
+```sql
+begin;
+revoke all on function public.submit_prayer_request(text, boolean)
+  from public, anon, authenticated;
+revoke all on function public.list_my_prayer_requests()
+  from public, anon, authenticated;
+revoke all on function public.set_my_prayer_request_state(uuid, text)
+  from public, anon, authenticated;
+revoke all on function public.list_admin_prayer_requests()
+  from public, anon, authenticated;
+revoke all on function public.set_admin_prayer_request_status(uuid, text)
+  from public, anon, authenticated;
+commit;
+```
+
+Confirm both browser roles can no longer execute any of the five signatures.
+Preserve the table and all remaining content pending an explicitly approved
+retention/export decision; do not drop it, truncate it, edit the applied
+migration, or copy request content into rollback notes. Any later export or
+deletion requires a separately reviewed forward migration and approved privacy
+handling.
+
+**Withdrawal clears request text** atomically, clears `closed_at`, records
+`withdrawn_at`, remains visible only as redacted member history, and disappears
+from Admin output. A frontend rollback must not imply that older unwithdrawn
+content was erased; preserve it under revoked access until retention is decided.
+After rollback, rerun the smoke, prayer safety, and clean disposable integration
+suites and record only command results, revision IDs, request UUIDs, and
+timestamps.
 
 ## Free-event RSVP cancellation: deployment and acceptance
 
@@ -675,10 +1080,12 @@ and declined viewers cannot resolve other members' photos.
    into the browser, Vercel, logs, screenshots, this runbook, or any repository
    file.
 3. Configure `ITC_APP_ORIGINS` as a comma-separated list of exact allowed
-   origins, with no paths and no wildcard. Include each deployed preview/test
-   origin that is intentionally supported and, only when needed, the exact
-   local origin such as `http://127.0.0.1:4173`. Use the Dashboard secret editor
-   or a placeholder command locally; never commit the real list:
+   origins, with no paths and no wildcard. It must include the canonical
+   production origin `https://island-training-club.vercel.app` plus each
+   deployed preview/test origin that is intentionally supported and, only when
+   needed, the exact local origin such as `http://127.0.0.1:4173`. Use the
+   Dashboard secret editor or a placeholder command locally; never commit the
+   deployed list:
 
    ```bash
    supabase secrets set ITC_APP_ORIGINS="<exact-origin-1>,<exact-origin-2>"

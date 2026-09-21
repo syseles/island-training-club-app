@@ -59,6 +59,7 @@ for (const route of [
   "#/booking/booking-123",
   "#/receipt/receipt-123",
   "#/admin/payments",
+  "#/admin/prayers",
   "#/admin/activity/hyrox-bft",
   "#/admin/campaign/campaign-123",
 ]) {
@@ -150,6 +151,18 @@ async function check(label, fn) {
   }
 }
 
+function assertProfileSubpageHierarchy(html, expectedTitle) {
+  assert.equal((html.match(/<h1\b/g) || []).length, 1,
+    `${expectedTitle} must render exactly one h1`);
+  assert.match(html, /class="back-link"/,
+    `${expectedTitle} must render a back link before its heading`);
+  const heading = html.match(/<h1\b[^>]*>([^<]+)<\/h1>/);
+  assert.equal(heading?.[1], expectedTitle,
+    `${expectedTitle} must be the exact h1 text`);
+  assert.doesNotMatch(html, /<div class="kicker mt16">Profile ·/,
+    `${expectedTitle} must not repeat Profile in a neon kicker`);
+}
+
 const primaryNavLabels = (html) =>
   [...html.matchAll(/<span>([^<]+)<\/span>/g)].map((match) => match[1]);
 
@@ -235,7 +248,7 @@ localStorage.setItem("itc.prototype.v1", JSON.stringify({
   duty: {},
 }));
 const renamedState = store.load();
-assert.equal(renamedState.version, 22, "legacy state must advance through the HYROX identifier, venue, reminder and attendance migrations");
+assert.equal(renamedState.version, 23, "legacy state must advance through the HYROX, attendance, and prayer migrations");
 assert.equal(renamedState.users.find((user) => user.id === "legacy-member").hyroxPaymentReminders, true);
 assert.equal(renamedState.hyroxCycles["legacy-cycle"]?.collectorPaymentReminderSentAt ?? null, null);
 assert.ok(renamedState.activities.some((activity) => activity.id === "hyrox-bft"));
@@ -281,7 +294,7 @@ for (const booking of v19ReplacementFixture.bookings) {
 delete v19ReplacementFixture.replacementRequests;
 localStorage.setItem("itc.prototype.v1", JSON.stringify(v19ReplacementFixture));
 const migratedReplacement = store.load();
-assert.equal(migratedReplacement.version, 22, "replacement migration must preserve the current v22 state version");
+assert.equal(migratedReplacement.version, 23, "replacement migration must preserve data through the current v23 state version");
 assert.ok(Array.isArray(migratedReplacement.replacementRequests));
 assert.ok(Array.isArray(migratedReplacement.replacementAudit));
 assert.ok(migratedReplacement.bookings.every((booking) =>
@@ -290,10 +303,20 @@ assert.ok(migratedReplacement.bookings.every((booking) =>
   && booking.replacementConfirmedBy === null
 ));
 store.resetLocalData();
-const { existsSync, readFileSync } = await import("node:fs");
+const { existsSync, readFileSync, readdirSync } = await import("node:fs");
 const { resolve, dirname } = await import("node:path");
 const { fileURLToPath } = await import("node:url");
 const __dirnameSmoke = dirname(fileURLToPath(import.meta.url));
+const migrationNames = readdirSync(resolve(__dirnameSmoke, "../supabase/migrations"))
+  .filter((name) => /^\d+_.+\.sql$/.test(name));
+const migrationVersions = new Map();
+for (const name of migrationNames) {
+  const version = name.split("_", 1)[0];
+  const duplicate = migrationVersions.get(version);
+  assert.equal(duplicate, undefined,
+    `Supabase migration version ${version} is duplicated by ${duplicate} and ${name}`);
+  migrationVersions.set(version, name);
+}
 const storeSource = readFileSync(resolve(__dirnameSmoke, "js/store.js"), "utf8");
 const weekVenueSource = storeSource.match(
   /export function setWeekVenue[\s\S]*?\/\/ --- Giving/
@@ -696,7 +719,7 @@ for (const marker of [
 }
 console.log("ok  authoritative free-event RSVP migration preserves transactional routing and privacy");
 const attendeeNamesMigrationPath = resolve(
-  __dirnameSmoke, "../supabase/migrations/20260905000001_operational_attendee_names.sql"
+  __dirnameSmoke, "../supabase/migrations/20260905000000_operational_attendee_names.sql"
 );
 if (!existsSync(attendeeNamesMigrationPath)) {
   throw new Error("approved attendee names migration must exist");
@@ -1360,6 +1383,62 @@ for (const marker of freeEventRolloutMarkers) {
 }
 console.log("ok  free-event RSVP deployment order and rollback semantics are documented");
 
+const prayerRunbookSection = liveAuthRunbookSource.match(
+  /## Private prayer requests[\s\S]*?(?=\n## )/,
+)?.[0] || "";
+const prayerRolloutMarkers = [
+  "Private prayer requests",
+  "Apply and verify the backend migration",
+  "Verify RPC grants and anonymous redaction",
+  "Deploy the Testing frontend",
+  "Complete authenticated member/Admin acceptance",
+  "Promote the production frontend",
+  "Withdrawal clears request text",
+];
+let previousPrayerRolloutMarker = -1;
+for (const marker of prayerRolloutMarkers) {
+  const markerIndex = prayerRunbookSection.indexOf(marker);
+  if (markerIndex <= previousPrayerRolloutMarker) {
+    throw new Error(`private prayer rollout order missing or invalid at ${marker}`);
+  }
+  previousPrayerRolloutMarker = markerIndex;
+}
+const normalizedPrayerRunbook = prayerRunbookSection.replace(/\\\s*\n\s*/g, " ").replace(/\s+/g, " ");
+assert.match(
+  normalizedPrayerRunbook,
+  /supabase migration repair 20260921000001 --status applied --linked --yes supabase migration list --linked/,
+  "prayer migration history repair must use linked-project mode and immediately re-list linked history",
+);
+assert.doesNotMatch(
+  normalizedPrayerRunbook,
+  /supabase migration repair 20260921000001(?:(?!supabase migration list).)*--project-ref/,
+  "prayer migration repair must not mix the incompatible project-ref and linked forms",
+);
+for (const signature of [
+  "public.submit_prayer_request(text,boolean)",
+  "public.list_my_prayer_requests()",
+  "public.set_my_prayer_request_state(uuid,text)",
+  "public.list_admin_prayer_requests()",
+  "public.set_admin_prayer_request_status(uuid,text)",
+  "public.prayer_assert_approved()",
+  "public.prayer_assert_admin()",
+]) {
+  assert.ok(prayerRunbookSection.includes(`('${signature}'`),
+    `prayer trust-boundary verification missing ${signature}`);
+}
+for (const contract of [
+  /approved_owner[\s\S]*?'postgres'/i,
+  /pg_get_userbyid\(p\.proowner\)/i,
+  /security_definer[\s\S]*fixed_search_path[\s\S]*trusted_owner/i,
+  /raise exception 'Prayer function trust check failed/i,
+  /verified_count\s*<>\s*7/i,
+  /do not\s+(?:change|replace)[\s\S]*postgres[\s\S]*make the check pass/i,
+]) {
+  assert.match(prayerRunbookSection, contract,
+    `prayer function owner/security gate missing ${contract}`);
+}
+console.log("ok  private prayer deployment order, linked repair, trusted function ownership, and rollback semantics are documented");
+
 if (!/values\s*\([\s\S]*?'pending'\s*\)/i.test(profilesMigrationSource)
     || /existing_count|count\s*\(\s*\*\s*\)[\s\S]*super_admin/i.test(profilesMigrationSource)) {
   throw new Error("fresh OAuth profiles must always bootstrap as pending");
@@ -1375,6 +1454,47 @@ const appIndexSource = readFileSync(resolve(__dirnameSmoke, "index.html"), "utf8
 if (!appIndexSource.includes("window.SUPABASE_URL") || !appIndexSource.includes("window.SUPABASE_ANON_KEY")) {
   throw new Error("static Supabase configuration seam must remain explicit in app/index.html");
 }
+const canonicalProductionOrigin = "https://island-training-club.vercel.app";
+const vercelConfig = JSON.parse(readFileSync(resolve(__dirnameSmoke, "../vercel.json"), "utf8"));
+assert.doesNotMatch(appIndexSource, /<base\b/i,
+  "hash-only app routes must remain on the canonical root without a document base URL");
+for (const assetReference of [
+  'href="/app/manifest.webmanifest"',
+  'href="/app/styles.css"',
+  'src="/app/js/config.js"',
+  'src="/app/js/app.js"',
+  'href="/assets/itc/favicon-48.png"',
+  'href="/assets/fonts/archivo-latin-variable.woff2"',
+  'src="/assets/itc/logo-header.png"',
+]) {
+  assert.ok(appIndexSource.includes(assetReference),
+    `canonical-root document must use explicit static asset URL ${assetReference}`);
+}
+assert.deepEqual(vercelConfig.rewrites, [{ source: "/", destination: "/app/index.html" }],
+  "the canonical production root must serve the app without exposing /app/");
+const legacyProductionHosts = [
+  "island-training-club-app-island-training-club.vercel.app",
+  "island-training-club-app.vercel.app",
+  "island-training-club-island-training-club.vercel.app",
+];
+const hostRedirect = (host, source, destination) => ({
+  source,
+  has: [{ type: "host", value: host }],
+  destination,
+  permanent: true,
+});
+assert.deepEqual(vercelConfig.redirects, [
+  ...legacyProductionHosts.flatMap((host) => [
+    hostRedirect(host, "/", `${canonicalProductionOrigin}/`),
+    hostRedirect(host, "/app", `${canonicalProductionOrigin}/`),
+    hostRedirect(host, "/app/", `${canonicalProductionOrigin}/`),
+    hostRedirect(host, "/:path*", `${canonicalProductionOrigin}/:path*`),
+  ]),
+  { source: "/app", destination: "/", permanent: true },
+  { source: "/app/", destination: "/", permanent: true },
+], "legacy exact document routes must canonicalize before generic app-document redirects");
+assert.ok(liveAuthRunbookSource.includes(`${canonicalProductionOrigin}/`),
+  "the live-auth runbook must name the canonical production root");
 if (/## Vercel env vars|Vercel project settings[^\n]*Environment Variables/i.test(liveAuthRunbookSource)) {
   throw new Error("runbook must not claim Vercel env vars inject into static HTML");
 }
@@ -1400,8 +1520,9 @@ const integratedViewSource = readFileSync(resolve(__dirnameSmoke, "js/views.js")
 const integratedAppSource = readFileSync(resolve(__dirnameSmoke, "js/app.js"), "utf8");
 const integratedStyleSource = readFileSync(resolve(__dirnameSmoke, "styles.css"), "utf8");
 const manifest = JSON.parse(readFileSync(resolve(__dirnameSmoke, "manifest.webmanifest"), "utf8"));
-assert.equal(manifest.start_url, "./index.html",
-  "installed app launches must leave the hash empty so the last committed route can restore");
+assert.equal(manifest.start_url, "/",
+  "installed app launches must use the canonical root with an empty hash so the last route can restore");
+assert.equal(manifest.scope, "/", "the installed app must stay within the canonical root scope");
 assert.match(integratedAppSource,
   /store\.startupRoute\(location\.hash, store\.currentUser\(\)\?\.id\)/,
   "boot must resolve an empty launch against the current user's last route");
@@ -1470,7 +1591,7 @@ console.log("ok  final cross-domain runtime markers coexist");
 for (const marker of [
   "Continue with Google",
   "Membership Details",
-  "Privacy &amp; Notifications",
+  "Privacy & Notifications",
   "Members",
   "HYROX",
   "Duty",
@@ -1744,7 +1865,14 @@ if (localVisitorHome.includes('data-action="sign-in-google"')) {
 }
 console.log("ok  signed-out Home uses the correct live/local sign-in action");
 await check("home (visitor)", () => views.viewHome());
-await check("schedule", () => views.viewSchedule());
+const scheduleHtml = await check("schedule", () => views.viewSchedule());
+try {
+  assert.doesNotMatch(scheduleHtml, /Free sessions are open to everyone/,
+    "Schedule must not repeat global free/paid guidance after the session list");
+} catch (err) {
+  failures++;
+  console.error(`FAIL Schedule hierarchy: ${err.message}`);
+}
 
 // Member Schedule weeks run Sunday–Saturday. Boundary and selection values
 // are hand-checked literals so a Monday fallback or off-by-seven navigation
@@ -1836,7 +1964,7 @@ const hyroxSid = store.nextSession().kind === "paid" ? store.nextSession().id : 
 await check("activity paid (visitor)", () => views.viewActivity(paid.id));
 await check("activity free (visitor)", () => views.viewActivity(free.id));
 await check("community", () => views.viewCommunity());
-const commHtml = views.viewCommunity();
+const commHtml = await views.viewCommunity();
 if (!commHtml.includes("Find your place in the crew.")) {
   failures++;
   console.error("FAIL visitor Community heading is not personalized");
@@ -1901,15 +2029,28 @@ if (commHtml.includes("Arnold Wong") || commHtml.includes("Our foundation")) {
   console.error("FAIL leaders/culture should live behind the About card");
 } else console.log("ok  leaders & culture live behind the About card");
 await check("community > prayers", () => views.viewCommunity("prayers"));
+const visitorPrayerHtml = await views.viewCommunity("prayers");
+if (!/approved member/i.test(visitorPrayerHtml) || visitorPrayerHtml.includes('id="form-prayer"')) {
+  failures++;
+  console.error("FAIL visitor Prayer must show the approved-member gate without a form");
+} else console.log("ok  visitor Prayer is gated without hiding the public description");
+assert.match(visitorPrayerHtml,
+  /We pray for each other — injuries, exams, work, family, anything\./,
+  "visitor Prayer gate must retain the public prayer description");
+assert.match(visitorPrayerHtml,
+  /<a class="btn ghost mt16" href="#\/account">Sign in or view Profile<\/a>/,
+  "visitor Prayer gate must offer the signed-out account CTA");
+assert.doesNotMatch(visitorPrayerHtml, /My Prayer Requests|prayer-request-list/,
+  "visitor Prayer gate must not expose member history");
 await check("community > fellowship", () => views.viewCommunity("fellowship"));
 await check("community > meals -> redirect", () => views.viewCommunity("meals"));
-const mealsRoute = views.viewCommunity("meals");
+const mealsRoute = await views.viewCommunity("meals");
 if (mealsRoute?.redirect !== "#/schedule") {
   failures++;
   console.error("FAIL community meals should redirect to the Schedule tab");
 } else console.log("ok  community meals redirects to Schedule");
 await check("community > announcements", () => views.viewCommunity("announcements"));
-const announcementHtml = views.viewCommunity("announcements");
+const announcementHtml = await views.viewCommunity("announcements");
 for (const required of [
   "Island Training Club turns 2",
   "620",
@@ -1932,8 +2073,8 @@ data.ANNOUNCEMENTS.splice(0);
 let emptyCommunity = "";
 let emptyAnnouncements = "";
 try {
-  emptyCommunity = views.viewCommunity();
-  emptyAnnouncements = views.viewCommunity("announcements");
+  emptyCommunity = await views.viewCommunity();
+  emptyAnnouncements = await views.viewCommunity("announcements");
 } finally {
   data.ANNOUNCEMENTS.splice(0, data.ANNOUNCEMENTS.length, ...savedAnnouncements);
 }
@@ -1942,28 +2083,24 @@ if (!emptyCommunity.includes("No announcements yet") || !emptyAnnouncements.incl
   console.error("FAIL Community announcement empty states should render safely");
 } else console.log("ok  Community announcement empty states render safely");
 await check("community > about", () => views.viewCommunity("about"));
-const commAbout = views.viewCommunity("about");
+const commAbout = await views.viewCommunity("about");
 if (!commAbout.includes("Arnold Wong") || !commAbout.includes("Our foundation")) {
   failures++;
   console.error("FAIL Community About page missing leaders or culture content");
 } else console.log("ok  Community About page carries leaders & culture");
-if (!views.viewCommunity("prayers").includes('id="form-prayer"')) {
-  failures++;
-  console.error("FAIL prayers page missing the request form");
-} else console.log("ok  prayers page has the request form");
 for (const [section, title] of [
   ["prayers", "Prayers."],
   ["fellowship", "Fellowship."],
   ["announcements", "Island Training Club turns 2."],
   ["about", "More than a workout."],
 ]) {
-  if (!views.viewCommunity(section).includes(title)) {
+  if (!(await views.viewCommunity(section)).includes(title)) {
     failures++;
     console.error(`FAIL community > ${section} heading should read "${title}"`);
   }
 }
 console.log("ok  community sub-page headings title-cased");
-if (!views.viewCommunity("nope").includes("Page not found")) {
+if (!(await views.viewCommunity("nope")).includes("Page not found")) {
   failures++;
   console.error("FAIL unknown Community section should 404");
 } else console.log("ok  unknown Community section 404s");
@@ -2402,11 +2539,15 @@ const pendingHome = views.viewHome();
   }
 }
 assertRenderedActivityLinksAreFree(pendingHome, "pending Home");
-const pendingCommunity = views.viewCommunity();
+const pendingCommunity = await views.viewCommunity();
 if (!pendingCommunity.includes("You’re welcome here.")) {
   failures++;
   console.error("FAIL pending Community heading is not personalized");
 } else console.log("ok  pending Community heading is personalized");
+const pendingPrayerHtml = await views.viewCommunity("prayers");
+if (!/approved member/i.test(pendingPrayerHtml) || pendingPrayerHtml.includes('id="form-prayer"')) {
+  throw new Error("pending Prayer must show the approved-member gate without a form");
+}
 // Use BFT (not Midtown) for the pending-user check — closed Midtown shows the
 // generic "Members only" gate, while a bookable BFT shows the "Booking locked"
 // message specifically for pending applicants.
@@ -2425,7 +2566,20 @@ if (!defaultAdminHtml.includes('href="#/admin/members" class="active"')
     || !defaultAdminHtml.includes("Test Person")) {
   throw new Error("Admin must default to Members and show pending applicants there without an Approvals tab");
 }
-for (const tab of ["members", "activities", "giving", "payments"]) {
+try {
+  assert.match(defaultAdminHtml, /<a class="back-link" href="#\/account">← Profile<\/a>/,
+    "Admin must link back to Profile");
+  assert.equal((defaultAdminHtml.match(/<h1\b/g) || []).length, 1,
+    "Admin must render exactly one h1");
+  assert.match(defaultAdminHtml, /<h1 class="display mt16">Admin Tools<\/h1>\s*<nav class="admin-tabs/,
+    "Admin Tools must be the h1 immediately before the tabs");
+  assert.doesNotMatch(defaultAdminHtml, /<div class="kicker">Admin<\/div>|Club Operations/,
+    "Admin must not retain the redundant kicker or Club Operations title");
+} catch (err) {
+  failures++;
+  console.error(`FAIL Admin hierarchy: ${err.message}`);
+}
+for (const tab of ["members", "activities", "prayers", "giving", "payments"]) {
   const adminHtml = await check(`admin ${tab}`, () => views.viewAdmin(tab));
   const activeTabs = adminHtml.match(/<a[^>]*aria-current="page"[^>]*>/g) || [];
   if (activeTabs.length !== 1 || !activeTabs[0].includes(`href="#/admin/${tab}"`)) {
@@ -2588,7 +2742,7 @@ const topAvatarWithPhoto = views.avatarHTML(signIn.user, {
 if (!topAvatarWithPhoto.includes('class="avatar__image"') || topAvatarWithPhoto.includes('loading="lazy"')) {
   throw new Error("top navigation must use eager resolved avatar presentation markup");
 }
-const approvedCommunity = views.viewCommunity();
+const approvedCommunity = await views.viewCommunity();
 if (!approvedCommunity.includes("Connect and grow with us.")) {
   failures++;
   console.error("FAIL approved Community heading is not personalized");
@@ -2671,7 +2825,8 @@ for (const field of ['name="emergency_relationship"', 'name="donorId"']) {
     console.error(`FAIL Membership Details edit form missing ${field}`);
   }
 }
-if (!(await views.viewAccount("donor")).includes("Membership Details.")) {
+const donorDetailsHtml = await views.viewAccount("donor");
+if (!donorDetailsHtml.includes("Membership Details")) {
   failures++;
   console.error("FAIL legacy Donor Profile route should render Membership Details");
 }
@@ -2680,19 +2835,24 @@ if (!integratedViewSource.includes('donor: "Membership Details"')) {
   console.error("FAIL unavailable live legacy donor route should retain Membership Details context");
 } else console.log("ok  Membership Details owns emergency and donor information");
 
-// sub-page headings are title-cased to match the row titles
-for (const [section, title] of [
-  ["details", "Membership Details."],
-  ["indemnity", "Indemnity."],
-  ["payments", "Payments &amp; Receipts."],
-  ["privacy", "Privacy &amp; Notifications."],
+// Profile sub-pages expose one predictable semantic title after one back link.
+for (const [label, html, title] of [
+  ["details", membershipDetailsHtml, "Membership Details"],
+  ["details edit", membershipDetailsEditHtml, "Edit Membership Details"],
+  ["legacy donor", donorDetailsHtml, "Membership Details"],
+  ["indemnity", await views.viewAccount("indemnity"), "Indemnity"],
+  ["payments", await views.viewAccount("payments"), "Payments &amp; Receipts"],
+  ["privacy", await views.viewAccount("privacy"), "Privacy &amp; Notifications"],
+  ["privacy edit", privacyEditHtml, "Edit Privacy &amp; Notifications"],
 ]) {
-  if (!(await views.viewAccount(section)).includes(title)) {
+  try {
+    assertProfileSubpageHierarchy(html, title);
+  } catch (err) {
     failures++;
-    console.error(`FAIL profile > ${section} heading should read "${title}"`);
+    console.error(`FAIL profile > ${label} hierarchy: ${err.message}`);
   }
 }
-console.log("ok  sub-page headings title-cased");
+console.log("ok  Profile detail routes use title-cased semantic headings");
 if (!(await views.viewAccount("nope")).includes("Page not found")) {
   failures++;
   console.error("FAIL unknown Profile section should 404");
@@ -3236,6 +3396,19 @@ const statCount = (html, href) => {
 const bookingProfileHtml = await views.viewAccount();
 const allBookingsHtml = await views.viewAccount("bookings");
 const attendedBookingsHtml = await views.viewAccount("bookings", "attended");
+const legacyHistoryHtml = await views.viewAccount("history");
+for (const [label, html] of [
+  ["bookings", allBookingsHtml],
+  ["attended bookings", attendedBookingsHtml],
+  ["legacy history", legacyHistoryHtml],
+]) {
+  try {
+    assertProfileSubpageHierarchy(html, "Bookings");
+  } catch (err) {
+    failures++;
+    console.error(`FAIL profile > ${label} hierarchy: ${err.message}`);
+  }
+}
 if (!allBookingsHtml.includes("All bookings") || !allBookingsHtml.includes("Upcoming")) {
   failures++;
   console.error("FAIL Bookings link should render the grouped all-bookings view");
@@ -3273,7 +3446,7 @@ try {
 } finally {
   booking.status = "confirmed";
 }
-if (!(await views.viewAccount("history")).includes("All bookings")) {
+if (!legacyHistoryHtml.includes("All bookings")) {
   failures++;
   console.error("FAIL legacy History route should render the canonical Bookings view");
 } else console.log("ok  Profile stats and linked booking views share matching counts");
@@ -3325,11 +3498,324 @@ if (!memberHome.includes(bookedMarker) || memberHome.includes(otherMarker)) {
   failures++;
   console.error(`FAIL "My week" should show only the member's booked HYROX (${bookedMarker})`);
 } else console.log(`ok  "My week" shows only the member's booked session (${bookedMarker})`);
-// community: prayer request records locally (no public reader by design)
-const member = store.currentUser();
-const prayer = store.recordPrayer({ userId: member.id, name: member.fullName, request: "Smoke test request" });
-if (!prayer.id || prayer.request !== "Smoke test request") throw new Error("prayer not recorded");
-console.log("ok  prayer request records locally");
+// Community prayer requests: v23 migration and local role/ownership parity.
+const v22PrayerSnapshot = JSON.parse(mem.get("itc.prototype.v1"));
+v22PrayerSnapshot.version = 22;
+v22PrayerSnapshot.sessionUserId = null;
+v22PrayerSnapshot.prayers = [
+  { id: "legacy-prayer-a", request: "Historical prayer A" },
+  { id: "legacy-prayer-b", request: "Historical prayer B", createdAt: 1234 },
+];
+mem.set("itc.prototype.v1", JSON.stringify(v22PrayerSnapshot));
+const migratedPrayerState = store.load();
+assert.equal(migratedPrayerState.version, 23);
+assert.deepEqual(migratedPrayerState.prayers.map((row) => row.id), [
+  "legacy-prayer-a",
+  "legacy-prayer-b",
+]);
+assert.deepEqual(migratedPrayerState.prayers.map((row) => row.request), [
+  "Historical prayer A",
+  "Historical prayer B",
+]);
+for (const row of migratedPrayerState.prayers) {
+  assert.equal(row.status, "new");
+  assert.equal(row.anonymousToLeaders, false);
+  assert.equal(Number.isFinite(row.createdAt), true);
+  assert.equal(Number.isFinite(row.updatedAt), true);
+  assert.equal(row.closedAt, null);
+  assert.equal(row.withdrawnAt, null);
+}
+
+installLocalFixtures();
+store.signOut();
+await assert.rejects(
+  () => store.submitPrayerRequest({ request: "Please pray" }),
+  /approved member/i,
+);
+await assert.rejects(() => store.listMyPrayerRequests(), /approved member/i);
+
+{
+  const raw = JSON.parse(mem.get("itc.prototype.v1"));
+  raw.users.push(
+    { id: "prayer-other", role: "member", status: "approved", fullName: "Other Member", email: "prayer-other@example.test" },
+    { id: "prayer-pending", role: "pending", status: "pending", fullName: "Pending Member", email: "prayer-pending@example.test" },
+    { id: "prayer-declined", role: "declined", status: "declined", fullName: "Declined Member", email: "prayer-declined@example.test" },
+    { id: "prayer-super-alias", role: "superadmin", status: "approved", fullName: "Alias Super Admin", email: "prayer-super-alias@example.test" },
+    { id: "prayer-super", role: "super_admin", status: "approved", fullName: "Super Admin", email: "prayer-super@example.test" },
+  );
+  mem.set("itc.prototype.v1", JSON.stringify(raw));
+  store.load();
+}
+for (const [email, state] of [
+  ["prayer-pending@example.test", "pending"],
+  ["prayer-declined@example.test", "declined"],
+]) {
+  store.signIn(email);
+  const gatedPrayerHtml = await views.viewCommunity("prayers");
+  assert.match(gatedPrayerHtml, /approved member/i,
+    `${state} user must see the approved-member Prayer gate`);
+  assert.match(gatedPrayerHtml,
+    /We pray for each other — injuries, exams, work, family, anything\./,
+    `${state} Prayer gate must retain the public prayer description`);
+  assert.match(gatedPrayerHtml,
+    /<a class="btn ghost mt16" href="#\/account">View Profile<\/a>/,
+    `${state} Prayer gate must offer the signed-in Profile CTA`);
+  assert.doesNotMatch(gatedPrayerHtml, /id="form-prayer"|My Prayer Requests|prayer-request-list/,
+    `${state} user must not see the Prayer form or history`);
+  await assert.rejects(
+    () => store.submitPrayerRequest({ request: "Blocked prayer" }),
+    /approved member/i,
+  );
+  await assert.rejects(() => store.listMyPrayerRequests(), /approved member/i);
+}
+
+// The approved-member view must map every status and action without exposing
+// stale withdrawn text or trusting request content as HTML.
+const prayerViewBaseline = mem.get("itc.prototype.v1");
+const prayerViewState = JSON.parse(prayerViewBaseline);
+prayerViewState.prayers = [
+  {
+    id: "prayer-view-new", ownerId: "fixture-member",
+    request: "<script>Unsafe & history</script>", anonymousToLeaders: false,
+    status: "new", createdAt: Date.parse("2026-08-05T02:00:00.000Z"),
+    updatedAt: Date.parse("2026-08-05T02:00:00.000Z"), closedAt: null, withdrawnAt: null,
+  },
+  {
+    id: "prayer-view-prayed", ownerId: "fixture-member",
+    request: "Prayed request", anonymousToLeaders: true,
+    status: "prayed_for", createdAt: Date.parse("2026-08-04T02:00:00.000Z"),
+    updatedAt: Date.parse("2026-08-05T02:00:00.000Z"), closedAt: null, withdrawnAt: null,
+  },
+  {
+    id: "prayer-view-closed", ownerId: "fixture-member",
+    request: "Closed request", anonymousToLeaders: false,
+    status: "closed", createdAt: Date.parse("2026-08-03T02:00:00.000Z"),
+    updatedAt: Date.parse("2026-08-05T02:00:00.000Z"),
+    closedAt: Date.parse("2026-08-05T02:00:00.000Z"), withdrawnAt: null,
+  },
+  {
+    id: "prayer-view-new-oldest", ownerId: "prayer-other",
+    request: "Oldest new request", anonymousToLeaders: false,
+    status: "new", createdAt: Date.parse("2026-08-01T02:00:00.000Z"),
+    updatedAt: Date.parse("2026-08-01T02:00:00.000Z"), closedAt: null, withdrawnAt: null,
+  },
+  {
+    id: "prayer-view-prayed-newer", ownerId: "prayer-other",
+    request: "Newer prayed request", anonymousToLeaders: false,
+    status: "prayed_for", createdAt: Date.parse("2026-08-06T02:00:00.000Z"),
+    updatedAt: Date.parse("2026-08-06T03:00:00.000Z"), closedAt: null, withdrawnAt: null,
+  },
+  {
+    id: "prayer-view-closed-newest", ownerId: "prayer-other",
+    request: "Newest closed request", anonymousToLeaders: false,
+    status: "closed", createdAt: Date.parse("2026-08-06T02:00:00.000Z"),
+    updatedAt: Date.parse("2026-08-06T03:00:00.000Z"),
+    closedAt: Date.parse("2026-08-06T03:00:00.000Z"), withdrawnAt: null,
+  },
+  {
+    id: "prayer-view-withdrawn", ownerId: "fixture-member",
+    request: "ERASED WITHDRAWN SECRET", anonymousToLeaders: true,
+    status: "withdrawn", createdAt: Date.parse("2026-08-02T02:00:00.000Z"),
+    updatedAt: Date.parse("2026-08-05T02:00:00.000Z"), closedAt: null,
+    withdrawnAt: Date.parse("2026-08-05T02:00:00.000Z"),
+  },
+];
+mem.set("itc.prototype.v1", JSON.stringify(prayerViewState));
+store.load();
+store.signIn("member@example.test");
+assert.deepEqual(await views.viewAdmin("prayers"), { redirect: "#/account" },
+  "non-Admins must not render the Admin prayer queue");
+store.signIn("admin@example.test");
+const adminPrayerHtml = await views.viewAdmin("prayers");
+const prayerTabOrder = [
+  'href="#/admin/activities"',
+  'href="#/admin/prayers"',
+  'href="#/admin/giving"',
+].map((marker) => adminPrayerHtml.indexOf(marker));
+assert.ok(prayerTabOrder.every((index) => index >= 0)
+  && prayerTabOrder[0] < prayerTabOrder[1]
+  && prayerTabOrder[1] < prayerTabOrder[2],
+"Admin Prayer Requests tab must appear between Activities and Giving");
+for (const heading of ["New", "Prayed for"]) {
+  assert.match(adminPrayerHtml, new RegExp(`<h2[^>]*>${heading}<\\/h2>`),
+    `Admin Prayer queue must render the ${heading} group`);
+}
+assert.ok(adminPrayerHtml.indexOf("Oldest new request") < adminPrayerHtml.indexOf("&lt;script&gt;Unsafe"),
+  "New Admin prayer requests must render oldest first");
+assert.ok(adminPrayerHtml.indexOf("Prayed request") < adminPrayerHtml.indexOf("Newer prayed request"),
+  "Prayed-for Admin requests must render oldest first");
+assert.ok(adminPrayerHtml.indexOf("Newest closed request") < adminPrayerHtml.indexOf("Closed request"),
+  "Closed Admin prayer requests must render newest first");
+assert.match(adminPrayerHtml, /Other Member/,
+  "identified Admin prayer requests must show the member display name");
+const adminPrayerCards = adminPrayerHtml.match(/<article\b[\s\S]*?<\/article>/g) || [];
+const adminPrayerCardFor = (request) => adminPrayerCards.find((card) => card.includes(request)) || "";
+const anonymousAdminPrayerCard = adminPrayerCardFor("Prayed request");
+assert.match(anonymousAdminPrayerCard, /Anonymous member/);
+assert.doesNotMatch(anonymousAdminPrayerCard,
+  /fixture-member|member@example\.test|data-(?:owner|user)/i,
+  "anonymous Admin prayer markup must contain no owner UUID, email, or identity data attribute");
+assert.doesNotMatch(adminPrayerHtml, /ERASED WITHDRAWN SECRET|prayer-view-withdrawn/,
+  "withdrawn requests must never render in the Admin queue");
+assert.doesNotMatch(adminPrayerHtml, /<(?:textarea|input)\b/i,
+  "Admin prayer cards must not expose request-edit controls");
+assert.match(adminPrayerHtml, /<details[^>]*admin-prayer-closed[\s\S]*<h2[^>]*>Closed/,
+  "Closed Admin prayers must render in a secondary disclosure");
+const closedPrayerSummary = adminPrayerHtml.match(
+  /<details[^>]*admin-prayer-closed[^>]*>\s*<summary>([\s\S]*?)<\/summary>/
+)?.[1] || "";
+assert.match(
+  closedPrayerSummary,
+  /^\s*<h2>Closed\s*<span class="badge neutral" aria-label="\d+ prayer requests?">\d+<\/span>\s*<\/h2>\s*$/,
+  "Closed Prayer summary must use one heading-compatible child with an accessible count",
+);
+assert.match(adminPrayerCardFor("Oldest new request"), /Mark as prayed for[\s\S]*>Close</,
+  "new Admin requests must expose both legal next states");
+assert.doesNotMatch(adminPrayerCardFor("Prayed request"), /Mark as prayed for/);
+assert.match(adminPrayerCardFor("Prayed request"), />Close<\/button>/);
+assert.doesNotMatch(adminPrayerCardFor("Newest closed request"), /data-action=/,
+  "closed Admin requests must expose no status controls");
+store.signIn("member@example.test");
+const memberPrayerHtml = await views.viewCommunity("prayers");
+for (const marker of [
+  'id="form-prayer"', 'maxlength="2000"', 'name="anonymousToLeaders"',
+  "Hide my identity from ITC leaders",
+  "Requests are shared privately with ITC Admins and are never posted publicly.",
+  "My Prayer Requests", "New", "Prayed for", "Closed", "Withdrawn", "5 Aug 2026",
+  "&lt;script&gt;Unsafe &amp; history&lt;/script&gt;", "Shared with my identity",
+  "Identity hidden from ITC leaders",
+]) {
+  assert.match(memberPrayerHtml, new RegExp(marker), `approved Prayer missing ${marker}`);
+}
+assert.doesNotMatch(memberPrayerHtml, /name="name"|Prototype:|ERASED WITHDRAWN SECRET/);
+const memberPrayerCards = memberPrayerHtml.match(/<article\b[\s\S]*?<\/article>/g) || [];
+const withdrawnMemberPrayerCard = memberPrayerCards.find((card) => card.includes(">Withdrawn</span>")) || "";
+assert.ok(withdrawnMemberPrayerCard.includes(
+  `<time datetime="${Date.parse("2026-08-05T02:00:00.000Z")}">5 Aug 2026</time>`
+), "withdrawn member history must prefer the withdrawal timestamp");
+assert.equal(
+  withdrawnMemberPrayerCard.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim(),
+  "5 Aug 2026 Withdrawn",
+  "withdrawn history must render only its withdrawal timestamp and status",
+);
+assert.doesNotMatch(withdrawnMemberPrayerCard,
+  /ERASED WITHDRAWN SECRET|Request text|identity|data-action/i,
+  "malformed withdrawn text, former privacy state, prose, and actions must not render");
+assert.doesNotMatch(memberPrayerHtml, /name="anonymousToLeaders"[^>]*checked/,
+  "anonymity checkbox must default unchecked");
+assert.equal((memberPrayerHtml.match(/data-action="close-prayer-request"/g) || []).length, 2,
+  "close must appear only for New and Prayed for requests");
+assert.equal((memberPrayerHtml.match(/data-action="withdraw-prayer-request"/g) || []).length, 3,
+  "withdraw must appear for every non-withdrawn request");
+for (const email of ["admin@example.test", "prayer-super-alias@example.test", "prayer-super@example.test"]) {
+  store.signIn(email);
+  assert.match(await views.viewCommunity("prayers"), /id="form-prayer"/,
+    `${email} must receive approved Prayer access`);
+}
+mem.set("itc.prototype.v1", prayerViewBaseline);
+store.load();
+
+store.signIn("member@example.test");
+await assert.rejects(
+  () => store.submitPrayerRequest({ request: "   " }),
+  /between 1 and 2,000 characters/i,
+);
+await assert.rejects(
+  () => store.submitPrayerRequest({ request: "x".repeat(2001) }),
+  /between 1 and 2,000 characters/i,
+);
+const identifiedPrayer = await store.submitPrayerRequest({
+  request: "  Please pray for recovery.  ",
+  anonymousToLeaders: false,
+});
+assert.equal(identifiedPrayer.request, "Please pray for recovery.");
+assert.equal(identifiedPrayer.status, "new");
+assert.equal("ownerId" in identifiedPrayer, false);
+assert.equal("userId" in identifiedPrayer, false);
+const anonymousPrayer = await store.submitPrayerRequest({
+  request: "A private concern",
+  anonymousToLeaders: true,
+});
+const memberPrayerRows = await store.listMyPrayerRequests();
+assert.equal(memberPrayerRows.length, 2);
+assert.deepEqual(memberPrayerRows.map((row) => row.id), [anonymousPrayer.id, identifiedPrayer.id]);
+assert.equal(memberPrayerRows.some((row) => row.id === "legacy-prayer-a"), false,
+  "ownerless legacy rows must not attach to member history");
+
+store.signIn("prayer-other@example.test");
+assert.deepEqual(await store.listMyPrayerRequests(), []);
+await assert.rejects(
+  () => store.setMyPrayerRequestState(identifiedPrayer.id, "close"),
+  /not found|own prayer request/i,
+);
+
+store.signIn("admin@example.test");
+let adminPrayerRows = await store.listAdminPrayerRequests();
+assert.equal(
+  adminPrayerRows.find((row) => row.id === anonymousPrayer.id).displayName,
+  "Anonymous member",
+);
+assert.equal(
+  adminPrayerRows.find((row) => row.id === identifiedPrayer.id).displayName,
+  "Test Member",
+);
+for (const row of adminPrayerRows) {
+  assert.equal("ownerId" in row, false);
+  assert.equal("userId" in row, false);
+}
+for (const legacyId of ["legacy-prayer-a", "legacy-prayer-b"]) {
+  assert.equal(adminPrayerRows.find((row) => row.id === legacyId)?.displayName, "Anonymous member");
+}
+assert.equal(
+  (await store.setAdminPrayerRequestStatus(identifiedPrayer.id, "prayed_for")).status,
+  "prayed_for",
+);
+assert.equal(
+  (await store.setAdminPrayerRequestStatus(identifiedPrayer.id, "closed")).status,
+  "closed",
+);
+await assert.rejects(
+  () => store.setAdminPrayerRequestStatus(identifiedPrayer.id, "closed"),
+  /current state/i,
+);
+await assert.rejects(
+  () => store.setAdminPrayerRequestStatus(anonymousPrayer.id, "withdrawn"),
+  /prayed_for or closed/i,
+);
+
+const adminOwnedPrayer = await store.submitPrayerRequest({ request: "Admin-owned prayer" });
+assert.equal((await store.listMyPrayerRequests()).some((row) => row.id === adminOwnedPrayer.id), true);
+await store.setMyPrayerRequestState(adminOwnedPrayer.id, "withdraw");
+for (const email of ["prayer-super-alias@example.test", "prayer-super@example.test"]) {
+  store.signIn(email);
+  const superOwned = await store.submitPrayerRequest({ request: `Prayer from ${email}` });
+  assert.equal((await store.listMyPrayerRequests()).some((row) => row.id === superOwned.id), true);
+  await store.setMyPrayerRequestState(superOwned.id, "withdraw");
+}
+
+store.signIn("member@example.test");
+const memberClosed = await store.setMyPrayerRequestState(anonymousPrayer.id, "close");
+assert.equal(memberClosed.status, "closed");
+assert.equal(Number.isFinite(memberClosed.closedAt), true);
+const withdrawnClosed = await store.setMyPrayerRequestState(anonymousPrayer.id, "withdraw");
+assert.equal(withdrawnClosed.status, "withdrawn");
+assert.equal(withdrawnClosed.request, null);
+assert.equal(withdrawnClosed.closedAt, null);
+assert.equal(Number.isFinite(withdrawnClosed.withdrawnAt), true);
+const withdrawnAdminClosed = await store.setMyPrayerRequestState(identifiedPrayer.id, "withdraw");
+assert.equal(withdrawnAdminClosed.request, null);
+await assert.rejects(
+  () => store.setMyPrayerRequestState(identifiedPrayer.id, "withdraw"),
+  /already withdrawn/i,
+);
+
+store.signIn("admin@example.test");
+adminPrayerRows = await store.listAdminPrayerRequests();
+assert.equal(adminPrayerRows.some((row) => row.id === anonymousPrayer.id), false);
+assert.equal(adminPrayerRows.some((row) => row.id === identifiedPrayer.id), false);
+assert.equal(adminPrayerRows.some((row) => row.id === adminOwnedPrayer.id), false);
+console.log("ok  Prayer page gates access and renders private member history safely");
+console.log("ok  prayer requests migrate and enforce local role, ownership, redaction, and transition parity");
 
 // --- ICS generation ---
 const ics = data.buildICS(free);
@@ -3503,8 +3989,8 @@ store.resetLocalData();
   localStorage.setItem("itc.prototype.v1", JSON.stringify(locationV13));
   store.load();
   const migratedV13 = JSON.parse(localStorage.getItem("itc.prototype.v1"));
-  if (migratedV13.version !== 22) {
-    throw new Error("v22 migration must persist version 22");
+  if (migratedV13.version !== 23) {
+    throw new Error("legacy migration chain must persist version 23");
   }
   const repairedWater = store.activities().find((activity) => activity.id === "water");
   if (repairedWater.location !== "TBC" || repairedWater.mapsQuery !== ""
@@ -4576,7 +5062,7 @@ installLocalFixtures();
   fallbackState.oneOffEvents = [];
   mem.set("itc.prototype.v1", JSON.stringify(fallbackState));
   store.load();
-  const fallbackCommunity = views.viewCommunity();
+  const fallbackCommunity = await views.viewCommunity();
   if (store.nextSocialSession() !== null || !fallbackCommunity.includes('href="#/schedule"')) {
     throw new Error("Community Pulse should fall back to Schedule when no Socials event starts within seven days");
   }
@@ -5490,10 +5976,10 @@ console.log("ok  reset");
     failures++;
     console.error("FAIL v10 migration must clear session tied to a removed demo user");
   } else console.log("ok  v10 migration clears removed session");
-  if (migrated.version !== 22) {
+  if (migrated.version !== 23) {
     failures++;
-    console.error(`FAIL integrated migration must advance version to 22, got ${migrated.version}`);
-  } else console.log("ok  integrated migration advances genuine v9 state to v22");
+    console.error(`FAIL integrated migration must advance version to 23, got ${migrated.version}`);
+  } else console.log("ok  integrated migration advances genuine v9 state to v23");
 }
 
 {
@@ -5512,7 +5998,7 @@ console.log("ok  reset");
   store.load();
   const v14 = JSON.parse(mem.get("itc.prototype.v1"));
   const migratedUser = v14.users.find((user) => user.id === "real-v13-member");
-  if (v14.version !== 22 || !migratedUser) throw new Error("v22 migration lost the genuine member");
+  if (v14.version !== 23 || !migratedUser) throw new Error("v23 migration lost the genuine member");
   for (const field of ["indemnitySignature", "indemnitySignedAt", "indemnityFormVersion", "emergencyRelationship"]) {
     if (!(field in migratedUser) || migratedUser[field] !== null) {
       throw new Error(`v14 migration should initialize ${field} to null`);
@@ -5542,15 +6028,15 @@ console.log("ok  reset");
   localStorage.setItem("itc.prototype.v1", JSON.stringify(v21));
   const migrated = store.load();
   const migratedBooking = migrated.bookings[0];
-  assert.equal(migrated.version, 22);
+  assert.equal(migrated.version, 23);
   assert.equal(migratedBooking.attendedAt, null);
   assert.equal(migratedBooking.attendedBy, null);
   assert.deepEqual(
     Object.fromEntries(Object.keys(preservedBooking).map((key) => [key, migratedBooking[key]])),
     preservedBooking,
-    "v22 must preserve every pre-attendance booking field",
+    "v22 attendance migration must preserve every pre-attendance booking field through v23",
   );
-  console.log("ok  v22 migration preserves booking data and initializes attendance fields");
+  console.log("ok  v22 attendance migration preserves booking data through v23");
 }
 
 // --- Admin payment/attendance state seam -----------------------------------
@@ -6778,11 +7264,11 @@ for (const fixture of sourceSnapshots) {
     && !Array.isArray(migrated.paymentPayouts);
   const suppliedPayoutsPreserved = fixture.version !== 12
     || migrated.paymentPayouts["real-admin"]?.fpsPhone === "+852 6000 0000";
-  if (migrated.version !== 22 || suppliedIds.some((id) => !serialized.includes(id))
+  if (migrated.version !== 23 || suppliedIds.some((id) => !serialized.includes(id))
       || !payoutMapValid || !suppliedPayoutsPreserved) {
     failures++;
-    console.error(`FAIL genuine v${fixture.version} fixture must reach v22 intact`);
-  } else console.log(`ok  genuine v${fixture.version} fixture reaches v22 intact`);
+    console.error(`FAIL genuine v${fixture.version} fixture must reach v23 intact`);
+  } else console.log(`ok  genuine v${fixture.version} fixture reaches v23 intact`);
 }
 
 for (const invalidCounter of [null, -1, 1.5, "broken"]) {
@@ -7310,8 +7796,8 @@ if (!(activitiesHtml.indexOf("Recurring Activity Defaults") < weeklyControlsStar
     || !/aria-labelledby="paid-sessions-title">[\s\S]*<\/section>\s*<\/details>\s*<details class="admin-section mt24">\s*<summary><h2>One-off Events<\/h2>/.test(activitiesHtml)) {
   throw new Error("One-off Events must remain a separate section after Weekly Event Controls");
 }
-if (!activitiesHtml.includes("Club Operations") || activitiesHtml.includes("Club ops.")) {
-  throw new Error("Admin heading must read Club Operations");
+if (!activitiesHtml.includes("Admin Tools") || activitiesHtml.includes("Club Operations")) {
+  throw new Error("Admin heading must read Admin Tools");
 }
 if (!activitiesHtml.includes('<details class="admin-section') || !activitiesHtml.includes("<summary>")) {
   throw new Error("Activities sections must collapse behind their headers");
