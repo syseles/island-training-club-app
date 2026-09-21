@@ -1888,7 +1888,7 @@ const hyroxSid = store.nextSession().kind === "paid" ? store.nextSession().id : 
 await check("activity paid (visitor)", () => views.viewActivity(paid.id));
 await check("activity free (visitor)", () => views.viewActivity(free.id));
 await check("community", () => views.viewCommunity());
-const commHtml = views.viewCommunity();
+const commHtml = await views.viewCommunity();
 if (!commHtml.includes("Find your place in the crew.")) {
   failures++;
   console.error("FAIL visitor Community heading is not personalized");
@@ -1953,15 +1953,20 @@ if (commHtml.includes("Arnold Wong") || commHtml.includes("Our foundation")) {
   console.error("FAIL leaders/culture should live behind the About card");
 } else console.log("ok  leaders & culture live behind the About card");
 await check("community > prayers", () => views.viewCommunity("prayers"));
+const visitorPrayerHtml = await views.viewCommunity("prayers");
+if (!/approved member/i.test(visitorPrayerHtml) || visitorPrayerHtml.includes('id="form-prayer"')) {
+  failures++;
+  console.error("FAIL visitor Prayer must show the approved-member gate without a form");
+} else console.log("ok  visitor Prayer is gated without hiding the public description");
 await check("community > fellowship", () => views.viewCommunity("fellowship"));
 await check("community > meals -> redirect", () => views.viewCommunity("meals"));
-const mealsRoute = views.viewCommunity("meals");
+const mealsRoute = await views.viewCommunity("meals");
 if (mealsRoute?.redirect !== "#/schedule") {
   failures++;
   console.error("FAIL community meals should redirect to the Schedule tab");
 } else console.log("ok  community meals redirects to Schedule");
 await check("community > announcements", () => views.viewCommunity("announcements"));
-const announcementHtml = views.viewCommunity("announcements");
+const announcementHtml = await views.viewCommunity("announcements");
 for (const required of [
   "Island Training Club turns 2",
   "620",
@@ -1984,8 +1989,8 @@ data.ANNOUNCEMENTS.splice(0);
 let emptyCommunity = "";
 let emptyAnnouncements = "";
 try {
-  emptyCommunity = views.viewCommunity();
-  emptyAnnouncements = views.viewCommunity("announcements");
+  emptyCommunity = await views.viewCommunity();
+  emptyAnnouncements = await views.viewCommunity("announcements");
 } finally {
   data.ANNOUNCEMENTS.splice(0, data.ANNOUNCEMENTS.length, ...savedAnnouncements);
 }
@@ -1994,28 +1999,24 @@ if (!emptyCommunity.includes("No announcements yet") || !emptyAnnouncements.incl
   console.error("FAIL Community announcement empty states should render safely");
 } else console.log("ok  Community announcement empty states render safely");
 await check("community > about", () => views.viewCommunity("about"));
-const commAbout = views.viewCommunity("about");
+const commAbout = await views.viewCommunity("about");
 if (!commAbout.includes("Arnold Wong") || !commAbout.includes("Our foundation")) {
   failures++;
   console.error("FAIL Community About page missing leaders or culture content");
 } else console.log("ok  Community About page carries leaders & culture");
-if (!views.viewCommunity("prayers").includes('id="form-prayer"')) {
-  failures++;
-  console.error("FAIL prayers page missing the request form");
-} else console.log("ok  prayers page has the request form");
 for (const [section, title] of [
   ["prayers", "Prayers."],
   ["fellowship", "Fellowship."],
   ["announcements", "Island Training Club turns 2."],
   ["about", "More than a workout."],
 ]) {
-  if (!views.viewCommunity(section).includes(title)) {
+  if (!(await views.viewCommunity(section)).includes(title)) {
     failures++;
     console.error(`FAIL community > ${section} heading should read "${title}"`);
   }
 }
 console.log("ok  community sub-page headings title-cased");
-if (!views.viewCommunity("nope").includes("Page not found")) {
+if (!(await views.viewCommunity("nope")).includes("Page not found")) {
   failures++;
   console.error("FAIL unknown Community section should 404");
 } else console.log("ok  unknown Community section 404s");
@@ -2454,11 +2455,15 @@ const pendingHome = views.viewHome();
   }
 }
 assertRenderedActivityLinksAreFree(pendingHome, "pending Home");
-const pendingCommunity = views.viewCommunity();
+const pendingCommunity = await views.viewCommunity();
 if (!pendingCommunity.includes("You’re welcome here.")) {
   failures++;
   console.error("FAIL pending Community heading is not personalized");
 } else console.log("ok  pending Community heading is personalized");
+const pendingPrayerHtml = await views.viewCommunity("prayers");
+if (!/approved member/i.test(pendingPrayerHtml) || pendingPrayerHtml.includes('id="form-prayer"')) {
+  throw new Error("pending Prayer must show the approved-member gate without a form");
+}
 // Use BFT (not Midtown) for the pending-user check — closed Midtown shows the
 // generic "Members only" gate, while a bookable BFT shows the "Booking locked"
 // message specifically for pending applicants.
@@ -2640,7 +2645,7 @@ const topAvatarWithPhoto = views.avatarHTML(signIn.user, {
 if (!topAvatarWithPhoto.includes('class="avatar__image"') || topAvatarWithPhoto.includes('loading="lazy"')) {
   throw new Error("top navigation must use eager resolved avatar presentation markup");
 }
-const approvedCommunity = views.viewCommunity();
+const approvedCommunity = await views.viewCommunity();
 if (!approvedCommunity.includes("Connect and grow with us.")) {
   failures++;
   console.error("FAIL approved Community heading is not personalized");
@@ -3427,12 +3432,78 @@ await assert.rejects(() => store.listMyPrayerRequests(), /approved member/i);
 }
 for (const email of ["prayer-pending@example.test", "prayer-declined@example.test"]) {
   store.signIn(email);
+  const gatedPrayerHtml = await views.viewCommunity("prayers");
+  assert.match(gatedPrayerHtml, /approved member/i,
+    `${email} must see the approved-member Prayer gate`);
+  assert.doesNotMatch(gatedPrayerHtml, /id="form-prayer"/,
+    `${email} must not see the Prayer form`);
   await assert.rejects(
     () => store.submitPrayerRequest({ request: "Blocked prayer" }),
     /approved member/i,
   );
   await assert.rejects(() => store.listMyPrayerRequests(), /approved member/i);
 }
+
+// The approved-member view must map every status and action without exposing
+// stale withdrawn text or trusting request content as HTML.
+const prayerViewBaseline = mem.get("itc.prototype.v1");
+const prayerViewState = JSON.parse(prayerViewBaseline);
+prayerViewState.prayers = [
+  {
+    id: "prayer-view-new", ownerId: "fixture-member",
+    request: "<script>Unsafe & history</script>", anonymousToLeaders: false,
+    status: "new", createdAt: Date.parse("2026-08-05T02:00:00.000Z"),
+    updatedAt: Date.parse("2026-08-05T02:00:00.000Z"), closedAt: null, withdrawnAt: null,
+  },
+  {
+    id: "prayer-view-prayed", ownerId: "fixture-member",
+    request: "Prayed request", anonymousToLeaders: true,
+    status: "prayed_for", createdAt: Date.parse("2026-08-04T02:00:00.000Z"),
+    updatedAt: Date.parse("2026-08-05T02:00:00.000Z"), closedAt: null, withdrawnAt: null,
+  },
+  {
+    id: "prayer-view-closed", ownerId: "fixture-member",
+    request: "Closed request", anonymousToLeaders: false,
+    status: "closed", createdAt: Date.parse("2026-08-03T02:00:00.000Z"),
+    updatedAt: Date.parse("2026-08-05T02:00:00.000Z"),
+    closedAt: Date.parse("2026-08-05T02:00:00.000Z"), withdrawnAt: null,
+  },
+  {
+    id: "prayer-view-withdrawn", ownerId: "fixture-member",
+    request: "ERASED WITHDRAWN SECRET", anonymousToLeaders: true,
+    status: "withdrawn", createdAt: Date.parse("2026-08-02T02:00:00.000Z"),
+    updatedAt: Date.parse("2026-08-05T02:00:00.000Z"), closedAt: null,
+    withdrawnAt: Date.parse("2026-08-05T02:00:00.000Z"),
+  },
+];
+mem.set("itc.prototype.v1", JSON.stringify(prayerViewState));
+store.load();
+store.signIn("member@example.test");
+const memberPrayerHtml = await views.viewCommunity("prayers");
+for (const marker of [
+  'id="form-prayer"', 'maxlength="2000"', 'name="anonymousToLeaders"',
+  "Hide my identity from ITC leaders",
+  "Requests are shared privately with ITC Admins and are never posted publicly.",
+  "My Prayer Requests", "New", "Prayed for", "Closed", "Withdrawn", "5 Aug 2026",
+  "&lt;script&gt;Unsafe &amp; history&lt;/script&gt;", "Shared with my identity",
+  "Identity hidden from ITC leaders",
+]) {
+  assert.match(memberPrayerHtml, new RegExp(marker), `approved Prayer missing ${marker}`);
+}
+assert.doesNotMatch(memberPrayerHtml, /name="name"|Prototype:|ERASED WITHDRAWN SECRET/);
+assert.doesNotMatch(memberPrayerHtml, /name="anonymousToLeaders"[^>]*checked/,
+  "anonymity checkbox must default unchecked");
+assert.equal((memberPrayerHtml.match(/data-action="close-prayer-request"/g) || []).length, 2,
+  "close must appear only for New and Prayed for requests");
+assert.equal((memberPrayerHtml.match(/data-action="withdraw-prayer-request"/g) || []).length, 3,
+  "withdraw must appear for every non-withdrawn request");
+for (const email of ["admin@example.test", "prayer-super-alias@example.test", "prayer-super@example.test"]) {
+  store.signIn(email);
+  assert.match(await views.viewCommunity("prayers"), /id="form-prayer"/,
+    `${email} must receive approved Prayer access`);
+}
+mem.set("itc.prototype.v1", prayerViewBaseline);
+store.load();
 
 store.signIn("member@example.test");
 await assert.rejects(
@@ -3533,6 +3604,7 @@ adminPrayerRows = await store.listAdminPrayerRequests();
 assert.equal(adminPrayerRows.some((row) => row.id === anonymousPrayer.id), false);
 assert.equal(adminPrayerRows.some((row) => row.id === identifiedPrayer.id), false);
 assert.equal(adminPrayerRows.some((row) => row.id === adminOwnedPrayer.id), false);
+console.log("ok  Prayer page gates access and renders private member history safely");
 console.log("ok  prayer requests migrate and enforce local role, ownership, redaction, and transition parity");
 
 // --- ICS generation ---
@@ -4780,7 +4852,7 @@ installLocalFixtures();
   fallbackState.oneOffEvents = [];
   mem.set("itc.prototype.v1", JSON.stringify(fallbackState));
   store.load();
-  const fallbackCommunity = views.viewCommunity();
+  const fallbackCommunity = await views.viewCommunity();
   if (store.nextSocialSession() !== null || !fallbackCommunity.includes('href="#/schedule"')) {
     throw new Error("Community Pulse should fall back to Schedule when no Socials event starts within seven days");
   }

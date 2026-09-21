@@ -178,6 +178,7 @@ let operationalAttendanceError = null;
 const operationalRpcCalls = [];
 const prayerRpcCalls = [];
 const prayerRpcErrors = new Map();
+let prayerRpcGate = null;
 const PRAYER_ID = "11111111-1111-4111-8111-111111111111";
 const SECOND_PRAYER_ID = "22222222-2222-4222-8222-222222222222";
 const prayerMemberRow = {
@@ -788,6 +789,7 @@ const fakeSupabase = {
   rpc(name, args) {
     if (prayerRpcNames.has(name)) {
       prayerRpcCalls.push({ name, args: args === undefined ? undefined : structuredClone(args) });
+      if (prayerRpcGate?.name === name) return prayerRpcGate.promise;
       return Promise.resolve({
         data: prayerRpcErrors.has(name) ? null : prayerRpcResult(name),
         error: prayerRpcErrors.get(name) || null,
@@ -2276,6 +2278,15 @@ assert.ok(
 store.clearApplyDraft();
 
 await store.getCurrentUser();
+prayerRpcErrors.set("list_my_prayer_requests", { message: "sensitive stale row failure" });
+const failedPrayerListHtml = await views.viewCommunity("prayers");
+prayerRpcErrors.delete("list_my_prayer_requests");
+assert.match(failedPrayerListHtml, /could not be loaded[\s\S]*try again/i,
+  "a failed authoritative Prayer list must render safe retryable feedback");
+assert.match(failedPrayerListHtml, /data-action="retry-prayer-requests"/,
+  "a failed Prayer list must expose a retry control");
+assert.doesNotMatch(failedPrayerListHtml, /Never expose this as a live fallback/,
+  "a failed live Prayer list must never render device-local rows");
 for (const failure of assignedPayoutFailures) {
   operationalRpcHandler = (name, args) => {
     if (name === "get_assigned_collector_payout_profiles") {
@@ -4776,6 +4787,156 @@ assert.doesNotMatch(magicFeedback.textContent, /User not found/);
 assert.equal(magicEmail.disabled, false);
 assert.equal(magicSubmit.disabled, false);
 console.log("ok  delegated magic-link requests dedupe and recover with generic feedback");
+
+// Prayer submission must retain private content on failure and must not report
+// success until the authoritative write settles.
+const makePrayerForm = (request, anonymousToLeaders = false) => {
+  const form = new HTMLFormElement();
+  form.id = "form-prayer";
+  form.dataset = {};
+  form.fields = {
+    request,
+    ...(anonymousToLeaders ? { anonymousToLeaders: "on" } : {}),
+  };
+  form.reportValidity = () => true;
+  const submit = makeElement();
+  submit.tagName = "BUTTON";
+  submit.textContent = "Send prayer request";
+  submit.disabled = false;
+  const error = makeElement();
+  form.nativeControls = [submit];
+  form.querySelector = (selector) => ({
+    '[type="submit"]': submit,
+    "#prayer-error": error,
+  }[selector] || null);
+  return { form, submit, error };
+};
+
+location.hash = "#/community/prayers";
+toastStack.children.length = 0;
+const rejectedPrayer = makePrayerForm("Keep this private prayer", true);
+const prayerCallsBeforeRejectedSubmit = prayerRpcCalls.length;
+prayerRpcErrors.set("submit_prayer_request", { message: "sensitive prayer write failure" });
+await domListeners.get("submit")({ target: rejectedPrayer.form, preventDefault() {} });
+prayerRpcErrors.delete("submit_prayer_request");
+assert.equal(prayerRpcCalls.length, prayerCallsBeforeRejectedSubmit + 1);
+assert.deepEqual(prayerRpcCalls.at(-1), {
+  name: "submit_prayer_request",
+  args: {
+    p_request_text: "Keep this private prayer",
+    p_anonymous_to_leaders: true,
+  },
+});
+assert.equal(rejectedPrayer.form.fields.request, "Keep this private prayer");
+assert.equal(rejectedPrayer.form.fields.anonymousToLeaders, "on");
+assert.equal(location.hash, "#/community/prayers");
+assert.equal(toastStack.children.length, 0,
+  "a rejected Prayer submit must not show a success toast");
+assert.equal(rejectedPrayer.error.children.length, 1);
+assert.equal(
+  rejectedPrayer.error.children[0].textContent,
+  "Prayer request could not be sent. Please try again.",
+);
+assert.equal(rejectedPrayer.error.children[0].getAttribute("role"), "alert");
+assert.equal(rejectedPrayer.submit.disabled, false);
+assert.equal(rejectedPrayer.submit.hasAttribute("aria-busy"), false);
+
+const successfulPrayer = makePrayerForm("Wait for this prayer write");
+const submitPrayerGate = deferred();
+prayerRpcGate = { name: "submit_prayer_request", promise: submitPrayerGate.promise };
+let successfulPrayerSettled = false;
+const successfulPrayerSubmit = domListeners.get("submit")({
+  target: successfulPrayer.form,
+  preventDefault() {},
+}).then(() => { successfulPrayerSettled = true; });
+await new Promise(setImmediate);
+assert.equal(successfulPrayerSettled, false);
+assert.equal(successfulPrayer.submit.disabled, true);
+assert.equal(location.hash, "#/community/prayers");
+assert.equal(toastStack.children.length, 0,
+  "Prayer success must wait for the authoritative write");
+submitPrayerGate.resolve({ data: [structuredClone(prayerMemberRow)], error: null });
+await successfulPrayerSubmit;
+prayerRpcGate = null;
+assert.equal(location.hash, "#/community/prayers",
+  "successful Prayer submit must rerender the same route");
+assert.deepEqual(toastStack.children.map((item) => item.textContent), [
+  "Prayer request sent privately",
+]);
+assert.equal(successfulPrayer.submit.disabled, false);
+assert.equal(successfulPrayer.submit.hasAttribute("aria-busy"), false);
+
+const makePrayerAction = (action, textContent) => {
+  const control = makeElement();
+  control.tagName = "BUTTON";
+  control.textContent = textContent;
+  control.disabled = false;
+  control.dataset = { action, prayer: PRAYER_ID };
+  control.closest = () => control;
+  return control;
+};
+
+toastStack.children.length = 0;
+const closePrayerControl = makePrayerAction("close-prayer-request", "Close request");
+const closePrayerGate = deferred();
+prayerRpcGate = { name: "set_my_prayer_request_state", promise: closePrayerGate.promise };
+const closePrayerCall = domListeners.get("click")({ target: closePrayerControl, preventDefault() {} });
+await new Promise(setImmediate);
+assert.equal(closePrayerControl.disabled, true);
+assert.equal(toastStack.children.length, 0,
+  "Prayer close success must wait for the authoritative write");
+closePrayerGate.resolve({ data: [{
+  ...structuredClone(prayerMemberRow),
+  status: "closed",
+  closed_at: "2026-08-05T02:05:00.000Z",
+}], error: null });
+await closePrayerCall;
+prayerRpcGate = null;
+assert.deepEqual(prayerRpcCalls.at(-2), {
+  name: "set_my_prayer_request_state",
+  args: { p_request_id: PRAYER_ID, p_action: "close" },
+});
+assert.deepEqual(toastStack.children.map((item) => item.textContent), [
+  "Prayer request closed",
+]);
+
+let prayerWithdrawConfirm = "";
+window.confirm = (message) => { prayerWithdrawConfirm = message; return false; };
+globalThis.confirm = window.confirm;
+const withdrawPrayerControl = makePrayerAction("withdraw-prayer-request", "Withdraw");
+const prayerCallsBeforeCancelledWithdraw = prayerRpcCalls.length;
+await domListeners.get("click")({ target: withdrawPrayerControl, preventDefault() {} });
+assert.equal(
+  prayerWithdrawConfirm,
+  "Withdraw this request? Its text will be permanently removed.",
+);
+assert.equal(prayerRpcCalls.length, prayerCallsBeforeCancelledWithdraw,
+  "cancelled Prayer withdrawal must not call the RPC");
+
+window.confirm = () => true;
+globalThis.confirm = window.confirm;
+toastStack.children.length = 0;
+await domListeners.get("click")({ target: withdrawPrayerControl, preventDefault() {} });
+assert.deepEqual(prayerRpcCalls.at(-2), {
+  name: "set_my_prayer_request_state",
+  args: { p_request_id: PRAYER_ID, p_action: "withdraw" },
+});
+assert.deepEqual(toastStack.children.map((item) => item.textContent), [
+  "Prayer request withdrawn",
+]);
+
+const rejectedCloseControl = makePrayerAction("close-prayer-request", "Close request");
+toastStack.children.length = 0;
+prayerRpcErrors.set("set_my_prayer_request_state", { message: "sensitive prayer update failure" });
+await domListeners.get("click")({ target: rejectedCloseControl, preventDefault() {} });
+prayerRpcErrors.delete("set_my_prayer_request_state");
+assert.deepEqual(toastStack.children.map((item) => [item.textContent, item.getAttribute("role")]), [[
+  "Prayer request could not be updated. Please try again.",
+  "alert",
+]]);
+assert.equal(rejectedCloseControl.disabled, false);
+assert.equal(rejectedCloseControl.hasAttribute("aria-busy"), false);
+console.log("ok  delegated Prayer submit and actions await writes and preserve safe failure state");
 
 // Assigned payout rows for another collector are RLS-suppressed from an
 // ordinary member's Realtime stream. Entering/restoring Payment must therefore

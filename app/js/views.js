@@ -1073,12 +1073,12 @@ function givingHistory(list) {
 // The Community tab is about connecting: prayer, fellowship, meals and news.
 // Leaders and culture copy lives under Profile > About Island Training Club.
 
-export function viewCommunity(section) {
+export async function viewCommunity(section) {
   switch (section) {
     case undefined:
       return communityHome();
     case "prayers":
-      return communityPrayers();
+      return await communityPrayers();
     case "fellowship":
       return communityFellowship();
     case "meals":
@@ -1188,29 +1188,109 @@ function communityAbout() {
     <p class="muted small mt16">Community copy is draft placeholder text for review with ITC leadership.</p>`;
 }
 
-function communityPrayers() {
-  const user = store.currentUser();
+const PRAYER_STATUS_LABELS = {
+  new: "New",
+  prayed_for: "Prayed for",
+  closed: "Closed",
+  withdrawn: "Withdrawn",
+};
+
+function prayerDate(value) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "Date unavailable";
+  return date.toLocaleDateString("en-HK", {
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+    timeZone: "Asia/Hong_Kong",
+  });
+}
+
+function prayerHistory(rows, loadFailed) {
+  if (loadFailed) {
+    return `
+      <div class="card prayer-load-error" role="alert"><div class="card-body">
+        <h3>Prayer requests could not be loaded</h3>
+        <p class="muted small mt8">Please try again. No saved requests are shown until the private list is available.</p>
+        <button class="btn ghost sm mt16" type="button" data-action="retry-prayer-requests">Try again</button>
+      </div></div>`;
+  }
+  if (!rows.length) return '<div class="empty">You haven’t sent any prayer requests yet.</div>';
   return `
+    <div class="prayer-request-list">
+      ${rows.map((row) => {
+        const status = PRAYER_STATUS_LABELS[row.status] || PRAYER_STATUS_LABELS.new;
+        const canClose = ["new", "prayed_for"].includes(row.status);
+        const canWithdraw = row.status !== "withdrawn";
+        const request = row.status === "withdrawn"
+          ? '<p class="prayer-request-text muted">Request text permanently removed.</p>'
+          : `<p class="prayer-request-text">${esc(String(row.request || ""))}</p>`;
+        return `
+          <article class="card prayer-request">
+            <div class="card-body">
+              <div class="prayer-request-meta">
+                <time datetime="${esc(String(row.createdAt || ""))}">${esc(prayerDate(row.createdAt))}</time>
+                <span class="badge neutral">${esc(status)}</span>
+              </div>
+              ${request}
+              <p class="muted small prayer-request-privacy">${row.anonymousToLeaders
+                ? "Identity hidden from ITC leaders"
+                : "Shared with my identity"}</p>
+              ${canClose || canWithdraw ? `
+                <div class="prayer-request-actions">
+                  ${canClose ? `<button class="btn ghost sm" type="button" data-action="close-prayer-request" data-prayer="${esc(String(row.id || ""))}">Close request</button>` : ""}
+                  ${canWithdraw ? `<button class="btn danger sm" type="button" data-action="withdraw-prayer-request" data-prayer="${esc(String(row.id || ""))}">Withdraw</button>` : ""}
+                </div>` : ""}
+            </div>
+          </article>`;
+      }).join("")}
+    </div>`;
+}
+
+async function communityPrayers() {
+  const user = store.currentUser();
+  const approved = user?.status === "approved"
+    && ["member", "admin", "superadmin", "super_admin"].includes(user.role);
+  const intro = `
     <a class="back-link" href="#/community">← Community</a>
     <div class="kicker mt16">Community · Prayers</div>
     <h1 class="display sm">Prayers.</h1>
-    <p class="subcopy mt8">We pray for each other — injuries, exams, work, family, anything. Send a request and the leaders will pray with you this week; you’re also welcome to pray along.</p>
-    <div class="card mt16"><div class="card-body">
+    <p class="subcopy mt8">We pray for each other — injuries, exams, work, family, anything. Send a request and the leaders will pray with you this week; you’re also welcome to pray along.</p>`;
+  if (!approved) {
+    return `${intro}
+      <div class="card mt16"><div class="card-body">
+        <h3>Approved members only</h3>
+        <p class="muted small mt8">Prayer requests are private and available after your ITC membership is approved.</p>
+      </div></div>`;
+  }
+
+  let rows = [];
+  let loadFailed = false;
+  try {
+    rows = await store.listMyPrayerRequests();
+  } catch {
+    loadFailed = true;
+  }
+
+  return `${intro}
+    <div class="card mt16 prayer-form-card"><div class="card-body">
       <h3>Ask for prayer</h3>
       <form id="form-prayer" novalidate>
         <div class="field">
-          <label for="pr-name">Your name (optional)</label>
-          <input id="pr-name" name="name" autocomplete="name" value="${esc(user?.fullName || "")}">
-        </div>
-        <div class="field">
           <label for="pr-text">Prayer request *</label>
-          <textarea id="pr-text" name="request" rows="4" required placeholder="What can we pray about?"></textarea>
+          <textarea id="pr-text" name="request" rows="4" required maxlength="2000" placeholder="What can we pray about?"></textarea>
         </div>
+        <label class="check prayer-anonymous-check" for="pr-anonymous">
+          <input id="pr-anonymous" name="anonymousToLeaders" type="checkbox">
+          <span>Hide my identity from ITC leaders</span>
+        </label>
         <div id="prayer-error"></div>
         <button class="btn mt16" type="submit">Send prayer request</button>
-        <p class="muted small mt8">Requests go privately to ITC leaders — nothing is posted publicly. Prototype: stored on this device only.</p>
+        <p class="muted small mt8">Requests are shared privately with ITC Admins and are never posted publicly.</p>
       </form>
-    </div></div>`;
+    </div></div>
+    <div class="section-head prayer-history-head"><h2>My Prayer Requests</h2></div>
+    ${prayerHistory(rows, loadFailed)}`;
 }
 
 function communityFellowship() {

@@ -3063,12 +3063,6 @@ export async function setAdminPrayerRequestStatus(requestId, status) {
   return localAdminPrayerRow(prayer);
 }
 
-// Temporary compatibility for the existing form handler; Task 3 moves that
-// caller to the authoritative async action directly.
-export async function recordPrayer({ request, anonymousToLeaders = false } = {}) {
-  return submitPrayerRequest({ request, anonymousToLeaders });
-}
-
 // --- Duty roster --------------------------------------------------------------
 // One collector per week (Saturday date) covering both venues. The member's
 // payment screen shows this collector's PayMe/FPS details; mid-week switches

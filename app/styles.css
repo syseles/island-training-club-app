@@ -1655,9 +1655,33 @@ a.profile-row:hover .pr-text strong { color: var(--accent); }
 }
 .community-pulse a:focus-visible,
 .community-pulse button:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.prayer-anonymous-check { min-height: 44px; align-items: center; }
+.prayer-request-list { display: grid; gap: 12px; }
+.prayer-request .card-body { min-width: 0; }
+.prayer-request-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.prayer-request-meta time { color: var(--muted); font-size: 11px; }
+.prayer-request-text {
+  margin: 14px 0 0;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.prayer-request-privacy { margin-top: 10px; }
+.prayer-request-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 16px; }
+.prayer-request-actions .btn,
+.prayer-load-error .btn { min-height: 44px; }
+.prayer-history-head { margin-top: 28px; }
 @media (max-width: 380px) {
   .community-action-grid { grid-template-columns: 1fr; }
   .community-feature-actions { align-items: stretch; flex-direction: column; }
+  .prayer-request-actions { display: grid; grid-template-columns: 1fr; }
+  .prayer-request-actions .btn,
+  .prayer-load-error .btn { width: 100%; }
 }
 
 .leader-card { display: grid; grid-template-columns: 86px 1fr; }
