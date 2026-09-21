@@ -59,6 +59,7 @@ for (const route of [
   "#/booking/booking-123",
   "#/receipt/receipt-123",
   "#/admin/payments",
+  "#/admin/prayers",
   "#/admin/activity/hyrox-bft",
   "#/admin/campaign/campaign-123",
 ]) {

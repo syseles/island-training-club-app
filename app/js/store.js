@@ -56,7 +56,7 @@ const RESTORABLE_ROUTE_PATTERNS = [
   new RegExp(`^#/(?:activity|checkout|pay|booking|receipt)/${ROUTE_ID}$`),
   new RegExp(`^#/hyrox/${ROUTE_ID}(?:/register)?$`),
   new RegExp(`^#/replacement/${ROUTE_ID}$`),
-  /^#\/admin(?:\/(?:members|activities|giving|payments))?$/,
+  /^#\/admin(?:\/(?:members|activities|prayers|giving|payments))?$/,
   new RegExp(`^#/admin/(?:activity|campaign)/${ROUTE_ID}$`),
 ];
 

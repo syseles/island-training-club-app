@@ -24,7 +24,7 @@ identity, notifications, Giving, Admin, and approval workflows.
   the UUID-keyed handoff details on that device only after Supabase settles;
   forced operational hydration remains authoritative.
 - **Navigation:** Notification bell plus a signed-in-only Giving tab.
-- **Admin tabs:** Approvals, Members, Activities, Giving, and Payments.
+- **Admin tabs:** Members, Activities, Prayer Requests, Giving, and Payments.
   Dated controls appear under **Activities → Weekly Event Controls**, split
   into Free & RSVP Events and Paid Sessions. Each Admin route exposes exactly
   one active tab.
