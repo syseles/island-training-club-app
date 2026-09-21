@@ -51,6 +51,11 @@ revoke all on function public.operational_is_retired_hyrox_session(text)
   from public, anon, authenticated;
 revoke all on function public.operational_is_retired_hyrox_booking(uuid)
   from public, anon, authenticated;
+-- The avatar resolver uses a service-role client and therefore bypasses RLS.
+-- Give that service only the session classifier needed to enforce the same
+-- exact authoritative boundary before reading attendee identities.
+grant execute on function public.operational_is_retired_hyrox_session(text)
+  to service_role;
 
 -- RLS evaluates policy functions as the browser role, so the three public
 -- classification helpers above cannot be used directly after their required
@@ -204,7 +209,8 @@ create policy "browser read active operational receipts"
 
 create or replace function public.operational_notification_is_retired_hyrox(
   p_kind text,
-  p_destination text
+  p_destination text,
+  p_created_at timestamptz
 )
 returns boolean
 language sql stable
@@ -226,26 +232,52 @@ as $$
         from public.operational_sessions s
        where public.operational_is_retired_hyrox_activity(s.activity_id)
          and p_destination = '#/activity/' || s.id
+    )
+    or (
+      coalesce(p_kind, '') = 'hyrox_replacement_review'
+      and (
+        -- The historical producer used now() for both accepted_at and the
+        -- generic Admin notification's created_at. A retired match wins when
+        -- a transaction produced multiple notices at the same timestamp.
+        exists (
+          select 1
+            from public.operational_booking_replacement_requests r
+           where r.accepted_at = p_created_at
+             and public.operational_is_retired_hyrox_booking(r.booking_id)
+        )
+        or not exists (
+          select 1
+            from public.operational_booking_replacement_requests r
+           where r.accepted_at = p_created_at
+        )
+      )
     );
 $$;
 
-revoke all on function public.operational_notification_is_retired_hyrox(text, text)
-  from public, anon, authenticated;
+revoke all on function public.operational_notification_is_retired_hyrox(
+  text, text, timestamptz
+) from public, anon, authenticated;
 
 create or replace function private.operational_notification_is_active(
   p_kind text,
-  p_destination text
+  p_destination text,
+  p_created_at timestamptz
 )
 returns boolean
 language sql stable
 security definer
 set search_path = public
 as $$
-  select not public.operational_notification_is_retired_hyrox(p_kind, p_destination);
+  select not public.operational_notification_is_retired_hyrox(
+    p_kind, p_destination, p_created_at
+  );
 $$;
-revoke all on function private.operational_notification_is_active(text, text) from public;
-grant execute on function private.operational_notification_is_active(text, text)
-  to authenticated;
+revoke all on function private.operational_notification_is_active(
+  text, text, timestamptz
+) from public;
+grant execute on function private.operational_notification_is_active(
+  text, text, timestamptz
+) to authenticated;
 
 drop policy if exists "self read notifications" on public.notifications;
 drop policy if exists "self mark notification read" on public.notifications;
@@ -253,17 +285,17 @@ create policy "self read active notifications"
   on public.notifications for select
   using (
     auth.uid() = profile_id
-    and private.operational_notification_is_active(kind, destination)
+    and private.operational_notification_is_active(kind, destination, created_at)
   );
 create policy "self mark active notification read"
   on public.notifications for update
   using (
     auth.uid() = profile_id
-    and private.operational_notification_is_active(kind, destination)
+    and private.operational_notification_is_active(kind, destination, created_at)
   )
   with check (
     auth.uid() = profile_id
-    and private.operational_notification_is_active(kind, destination)
+    and private.operational_notification_is_active(kind, destination, created_at)
   );
 
 -- =====================================================================
@@ -749,19 +781,125 @@ begin
   return public.get_operational_replacement_invite_pre_pool_retirement_20260922(p_token_hash);
 end; $$;
 
-create or replace function public.accept_operational_replacement_request(p_token_hash text)
-returns jsonb language plpgsql security definer set search_path = public as $$
+create or replace function public.accept_operational_replacement_request(
+  p_token_hash text
+)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_uid uuid := auth.uid();
+  v_role text := public.current_user_role();
+  v_request public.operational_booking_replacement_requests;
+  v_booking public.operational_bookings;
+  v_session_date date;
+  v_public jsonb;
 begin
-  if exists (
-    select 1
-      from public.operational_booking_replacement_requests r
-     where r.token_hash = trim(p_token_hash)
-       and public.operational_is_retired_hyrox_booking(r.booking_id)
-  ) then
+  if v_uid is null then
+    raise exception 'Authentication required.' using errcode = '28000';
+  end if;
+  if not coalesce(v_role in ('member', 'admin', 'super_admin'), false) then
+    raise exception 'Approved membership required.' using errcode = '42501';
+  end if;
+
+  select * into v_request
+    from public.operational_booking_replacement_requests
+   where token_hash = trim(p_token_hash)
+   for update;
+  if not found or public.operational_is_retired_hyrox_booking(v_request.booking_id) then
     raise exception 'Replacement invite not found.' using errcode = 'P0002';
   end if;
-  return public.accept_operational_replacement_request_pre_pool_retirement_20260922(p_token_hash);
-end; $$;
+  if v_request.status <> 'pending' then
+    raise exception 'This replacement invite is no longer available.' using errcode = '23514';
+  end if;
+  if v_request.expires_at <= now() then
+    update public.operational_booking_replacement_requests
+       set status = 'expired', decision_reason = 'Invite expired.'
+     where id = v_request.id;
+    raise exception 'This replacement invite has expired.' using errcode = '23514';
+  end if;
+  if v_uid = v_request.original_profile_id then
+    raise exception 'The original member cannot accept their own replacement invite.' using errcode = '23514';
+  end if;
+
+  select * into v_booking
+    from public.operational_bookings
+   where id = v_request.booking_id
+   for update;
+  if v_booking.status <> 'confirmed' or v_booking.replacement_profile_id is not null then
+    raise exception 'This booking is no longer available for replacement.' using errcode = '23514';
+  end if;
+  if v_booking.session_id is not null then
+    select session_date into v_session_date
+      from public.operational_sessions
+     where id = v_booking.session_id
+       and cancelled_at is null;
+  else
+    select session_date into v_session_date
+      from public.operational_hyrox_cycles
+     where id = v_booking.hyrox_cycle_id
+       and registration_state <> 'cancelled';
+  end if;
+  if v_session_date is null then
+    raise exception 'This HYROX session is unavailable.' using errcode = '23514';
+  end if;
+  if exists (
+    select 1
+      from public.operational_bookings other
+      left join public.operational_sessions other_session
+        on other_session.id = other.session_id
+      left join public.operational_hyrox_cycles other_cycle
+        on other_cycle.id = other.hyrox_cycle_id
+     where other.profile_id = v_uid
+       and other.status in ('reserved', 'confirmed')
+       and not public.operational_is_retired_hyrox_booking(other.id)
+       and (
+         other_cycle.session_date = v_session_date
+         or (
+           other_session.session_date = v_session_date
+           and other_session.activity_id ilike 'hyrox%'
+         )
+       )
+  ) then
+    raise exception 'You already have a HYROX booking for this session.' using errcode = '23505';
+  end if;
+
+  update public.operational_booking_replacement_requests
+     set status = 'accepted', replacement_profile_id = v_uid,
+         accepted_at = now(), accepted_by = v_uid
+   where id = v_request.id
+  returning * into v_request;
+
+  insert into public.operational_booking_replacement_audit (
+    request_id, booking_id, action, original_profile_id,
+    replacement_profile_id, actor_profile_id
+  ) values (
+    v_request.id, v_request.booking_id, 'accepted', v_request.original_profile_id,
+    v_uid, v_uid
+  );
+  insert into public.notifications (profile_id, kind, title, body, destination)
+  values (
+    v_request.original_profile_id,
+    'hyrox_replacement_accepted',
+    'HYROX replacement accepted',
+    'An approved member accepted your replacement invite. ITC must confirm the handover before the attendee changes.',
+    '#/booking/' || v_request.booking_id::text
+  );
+  insert into public.notifications (profile_id, kind, title, body, destination)
+  select p.id,
+         'hyrox_replacement_review',
+         'HYROX replacement needs confirmation',
+         'An approved member accepted a paid HYROX replacement invite. Review it in Admin Payments.',
+         '#/admin/ops'
+    from public.profiles p
+   where p.role in ('admin', 'super_admin');
+
+  v_public := public.operational_replacement_public(v_request.id);
+  return v_public;
+end;
+$$;
 
 create or replace function public.decline_operational_replacement_request(p_token_hash text)
 returns jsonb language plpgsql security definer set search_path = public as $$
@@ -822,22 +960,146 @@ begin
 end; $$;
 
 create or replace function public.admin_decide_operational_replacement(
-  p_request_id uuid, p_confirm boolean, p_reason text
+  p_request_id uuid,
+  p_confirm boolean,
+  p_reason text
 )
-returns jsonb language plpgsql security definer set search_path = public as $$
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_uid uuid := auth.uid();
+  v_request public.operational_booking_replacement_requests;
+  v_booking public.operational_bookings;
+  v_session_date date;
+  v_reason text := nullif(btrim(p_reason), '');
 begin
-  if exists (
-    select 1
-      from public.operational_booking_replacement_requests r
-     where r.id = p_request_id
-       and public.operational_is_retired_hyrox_booking(r.booking_id)
-  ) then
+  if not public.operational_is_admin() then
+    raise exception 'Admin access required.' using errcode = '42501';
+  end if;
+  select * into v_request
+    from public.operational_booking_replacement_requests
+   where id = p_request_id
+   for update;
+  if not found or public.operational_is_retired_hyrox_booking(v_request.booking_id) then
     raise exception 'Replacement request not found.' using errcode = 'P0002';
   end if;
-  return public.admin_decide_operational_replacement_pre_pool_retirement_20260922(
-    p_request_id, p_confirm, p_reason
-  );
-end; $$;
+  if v_request.status = 'confirmed' and p_confirm then
+    return public.operational_replacement_public(v_request.id);
+  end if;
+  if v_request.status = 'rejected' and not p_confirm then
+    return public.operational_replacement_public(v_request.id);
+  end if;
+  if p_confirm and v_request.status <> 'accepted' then
+    raise exception 'Only an accepted replacement can be confirmed.' using errcode = '23514';
+  end if;
+  if p_confirm and v_request.expires_at <= now() then
+    raise exception 'This replacement request has expired.' using errcode = '23514';
+  end if;
+
+  select * into v_booking
+    from public.operational_bookings
+   where id = v_request.booking_id
+   for update;
+  if p_confirm then
+    if v_request.replacement_profile_id is null
+        or v_booking.status <> 'confirmed'
+        or v_booking.replacement_profile_id is not null then
+      raise exception 'This booking is no longer available for replacement.' using errcode = '23514';
+    end if;
+    if v_booking.session_id is not null then
+      select session_date into v_session_date
+        from public.operational_sessions
+       where id = v_booking.session_id and cancelled_at is null;
+    else
+      select session_date into v_session_date
+        from public.operational_hyrox_cycles
+       where id = v_booking.hyrox_cycle_id and registration_state <> 'cancelled';
+    end if;
+    if v_session_date is null then
+      raise exception 'This HYROX session is unavailable.' using errcode = '23514';
+    end if;
+    if exists (
+      select 1
+        from public.operational_bookings other
+        left join public.operational_sessions other_session
+          on other_session.id = other.session_id
+        left join public.operational_hyrox_cycles other_cycle
+          on other_cycle.id = other.hyrox_cycle_id
+       where other.profile_id = v_request.replacement_profile_id
+         and other.status in ('reserved', 'confirmed')
+         and not public.operational_is_retired_hyrox_booking(other.id)
+         and other.id <> v_booking.id
+         and (
+           other_cycle.session_date = v_session_date
+           or (
+             other_session.session_date = v_session_date
+             and other_session.activity_id ilike 'hyrox%'
+           )
+         )
+    ) then
+      raise exception 'The replacement member now has a HYROX booking for this session.' using errcode = '23505';
+    end if;
+
+    update public.operational_bookings
+       set replacement_profile_id = v_request.replacement_profile_id,
+           replacement_confirmed_at = now(),
+           replacement_confirmed_by = v_uid
+     where id = v_booking.id;
+    update public.operational_booking_replacement_requests
+       set status = 'confirmed', confirmed_at = now(), confirmed_by = v_uid,
+           decision_reason = v_reason
+     where id = v_request.id
+    returning * into v_request;
+    insert into public.operational_booking_replacement_audit (
+      request_id, booking_id, action, original_profile_id,
+      replacement_profile_id, actor_profile_id, reason
+    ) values (
+      v_request.id, v_request.booking_id, 'confirmed', v_request.original_profile_id,
+      v_request.replacement_profile_id, v_uid, v_reason
+    );
+    insert into public.notifications (profile_id, kind, title, body, destination)
+    values
+      (v_request.original_profile_id, 'hyrox_replacement_confirmed', 'HYROX replacement confirmed',
+       'ITC confirmed the replacement. You remain the payer and receipt owner; the approved member is now the attendee.',
+       '#/booking/' || v_request.booking_id::text),
+      (v_request.replacement_profile_id, 'hyrox_replacement_confirmed', 'HYROX replacement confirmed',
+       'ITC confirmed your HYROX replacement. Check the session details before attending.',
+       '#/booking/' || v_request.booking_id::text);
+  else
+    if v_request.status not in ('pending', 'accepted') then
+      return public.operational_replacement_public(v_request.id);
+    end if;
+    update public.operational_booking_replacement_requests
+       set status = 'rejected', rejected_at = now(), rejected_by = v_uid,
+           decision_reason = coalesce(v_reason, 'Admin rejected the replacement request.')
+     where id = v_request.id
+    returning * into v_request;
+    insert into public.operational_booking_replacement_audit (
+      request_id, booking_id, action, original_profile_id,
+      replacement_profile_id, actor_profile_id, reason
+    ) values (
+      v_request.id, v_request.booking_id, 'rejected', v_request.original_profile_id,
+      v_request.replacement_profile_id, v_uid, v_request.decision_reason
+    );
+    insert into public.notifications (profile_id, kind, title, body, destination)
+    values
+      (v_request.original_profile_id, 'hyrox_replacement_rejected', 'HYROX replacement not confirmed',
+       'ITC did not confirm the replacement. Your original booking remains unchanged.',
+       '#/booking/' || v_request.booking_id::text);
+    if v_request.replacement_profile_id is not null then
+      insert into public.notifications (profile_id, kind, title, body, destination)
+      values (v_request.replacement_profile_id, 'hyrox_replacement_rejected', 'HYROX replacement not confirmed',
+        'ITC did not confirm this replacement request. The original booking remains unchanged.',
+        '#/booking/' || v_request.booking_id::text);
+    end if;
+  end if;
+
+  return public.operational_replacement_public(v_request.id);
+end;
+$$;
 
 -- Restore only the public shared signatures. Their preserved implementations
 -- and every helper remain owner-only.

@@ -40,6 +40,7 @@ function resolverHarness(options: {
   viewerRole?: string;
   viewer?: AuthUser | null;
   failSigningPath?: string;
+  retiredSessionIds?: ReadonlySet<string>;
 } = {}) {
   const customPath = `${MEMBER_ID}/custom-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa.jpg`;
   const hiddenPath = `${HIDDEN_ID}/custom-bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb.jpg`;
@@ -75,6 +76,7 @@ function resolverHarness(options: {
   ]);
   const viewer = options.viewer === undefined ? { id: VIEWER_ID, identities: [] } : options.viewer;
   const resolvedSessionIds: string[] = [];
+  const checkedSessionIds: string[] = [];
 
   const dependencies: ProcessAvatarDependencies = {
     auth: {
@@ -97,6 +99,10 @@ function resolverHarness(options: {
       submitReview: () => Promise.reject(new Error('unused')),
       setGoogle: () => Promise.reject(new Error('unused')),
       removeCustom: () => Promise.reject(new Error('unused')),
+      isRetiredHyroxSession(sessionId) {
+        checkedSessionIds.push(sessionId);
+        return Promise.resolve(options.retiredSessionIds?.has(sessionId) ?? false);
+      },
       listSessionAttendees(sessionId) {
         resolvedSessionIds.push(sessionId);
         return Promise.resolve([
@@ -127,6 +133,7 @@ function resolverHarness(options: {
   return {
     handler: createResolveProfileAvatarsHandler(dependencies),
     resolvedSessionIds,
+    checkedSessionIds,
     paths: { customPath, hiddenPath, pendingPath },
   };
 }
@@ -186,6 +193,44 @@ Deno.test('approved self scope returns only the authenticated profile', async ()
   const body = await response.json();
   assertEquals(body.avatars.length, 1);
   assertEquals(body.avatars[0].profileId, VIEWER_ID);
+});
+
+Deno.test('retired BFT and Midtown sessions are rejected before service-role attendee reads', async () => {
+  const retiredSessionIds = new Set([
+    'hyrox-bft-2026-09-19',
+    'hyrox-midtown-2026-09-19',
+  ]);
+  for (const sessionId of retiredSessionIds) {
+    const { handler, checkedSessionIds, resolvedSessionIds } = resolverHarness({
+      retiredSessionIds,
+    });
+    const response = await handler(get(`?scope=session&sessionId=${sessionId}`));
+    assertEquals(response.status, 404);
+    assertEquals(await response.json(), { error: 'Session not found' });
+    assertEquals(checkedSessionIds, [sessionId]);
+    assertEquals(resolvedSessionIds, []);
+  }
+});
+
+Deno.test('Island ECC and exact-ID lookalikes retain session avatar resolution', async () => {
+  const retiredSessionIds = new Set([
+    'hyrox-bft-2026-09-19',
+    'hyrox-midtown-2026-09-19',
+  ]);
+  for (
+    const sessionId of [
+      'hyrox-quarry-bay-2026-09-19',
+      'hyrox-bft-training-2026-09-19',
+    ]
+  ) {
+    const { handler, checkedSessionIds, resolvedSessionIds } = resolverHarness({
+      retiredSessionIds,
+    });
+    const response = await handler(get(`?scope=session&sessionId=${sessionId}`));
+    assertEquals(response.status, 200);
+    assertEquals(checkedSessionIds, [sessionId]);
+    assertEquals(resolvedSessionIds, [sessionId]);
+  }
 });
 
 Deno.test('session scope derives rows from the authoritative session query', async () => {

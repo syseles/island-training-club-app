@@ -15,29 +15,57 @@ begin
 end;
 $$;
 
-create function pg_temp.retire_expect_denied(statement text)
+create function pg_temp.retire_expect_denied(
+  statement text,
+  expected_message text
+)
 returns void language plpgsql as $$
-declare denied boolean := false;
-begin
-  begin
-    execute statement;
-  exception when insufficient_privilege then
-    denied := true;
-  end;
-  perform pg_temp.retire_assert(denied, 'expected browser privilege denial: ' || statement);
-end;
-$$;
-
-create function pg_temp.retire_expect_rejected(statement text)
-returns void language plpgsql as $$
-declare rejected boolean := false;
+declare
+  actual_state text;
+  actual_message text;
 begin
   begin
     execute statement;
   exception when others then
-    rejected := true;
+    get stacked diagnostics
+      actual_state = returned_sqlstate,
+      actual_message = message_text;
   end;
-  perform pg_temp.retire_assert(rejected, 'expected retired-target rejection: ' || statement);
+  perform pg_temp.retire_assert(
+    actual_state = '42501' and actual_message = expected_message,
+    format(
+      'expected SQLSTATE 42501 / %L, got %s / %L for: %s',
+      expected_message, coalesce(actual_state, '<success>'), actual_message, statement
+    )
+  );
+end;
+$$;
+
+create function pg_temp.retire_expect_rejected(
+  statement text,
+  expected_state text,
+  expected_message text
+)
+returns void language plpgsql as $$
+declare
+  actual_state text;
+  actual_message text;
+begin
+  begin
+    execute statement;
+  exception when others then
+    get stacked diagnostics
+      actual_state = returned_sqlstate,
+      actual_message = message_text;
+  end;
+  perform pg_temp.retire_assert(
+    actual_state = expected_state and actual_message = expected_message,
+    format(
+      'expected SQLSTATE %s / %L, got %s / %L for: %s',
+      expected_state, expected_message, coalesce(actual_state, '<success>'),
+      actual_message, statement
+    )
+  );
 end;
 $$;
 
@@ -68,10 +96,14 @@ declare
   v_unallocated_pool_booking_id uuid;
   v_pool_queue_id uuid;
   v_pool_replacement_id uuid;
+  v_pool_review_notification_id uuid;
+  v_pool_review_created_at timestamptz;
   v_ecc_booking_id uuid;
   v_ecc_queue_id uuid;
   v_ecc_replacement_id uuid;
+  v_ecc_review_notification_id uuid;
   v_attendance_booking_id uuid;
+  v_temp_pool_booking_id uuid;
   v_notification_count integer;
   v_cycle_count integer;
   v_pool_booking_before jsonb;
@@ -80,6 +112,7 @@ declare
   v_receipt_count integer;
   v_result jsonb;
   v_signature text;
+  v_rows integer;
 begin
   v_ecc_date := current_date + 200
     + ((6 - extract(dow from current_date + 200)::integer + 7) % 7);
@@ -205,14 +238,36 @@ begin
     v_pool_replacement_id, v_pool_booking_id, 'created', v_member, v_member
   );
 
+  -- Match the real Admin-review producer: accepted_at and notification
+  -- created_at share the transaction timestamp, while the generic Admin route
+  -- contains no booking id.
+  v_pool_review_created_at := clock_timestamp();
+  update public.operational_booking_replacement_requests
+     set status = 'accepted', replacement_profile_id = v_admin,
+         accepted_at = v_pool_review_created_at, accepted_by = v_admin
+   where id = v_pool_replacement_id;
+  insert into public.operational_booking_replacement_audit (
+    request_id, booking_id, action, original_profile_id,
+    replacement_profile_id, actor_profile_id, created_at
+  ) values (
+    v_pool_replacement_id, v_pool_booking_id, 'accepted', v_member,
+    v_admin, v_admin, v_pool_review_created_at
+  );
+
   insert into public.notifications (profile_id, kind, title, body, destination)
   values
     (v_member, 'operational_hyrox_reserved', 'Retained pool notice',
      'Retained fixture', '#/pay/' || v_pool_booking_id::text),
     (v_member, 'operational_payment_approved', 'Retained pool receipt',
-     'Retained fixture', '#/booking/' || v_pool_booking_id::text),
-    (v_member, 'hyrox_replacement_review', 'Retained pool replacement',
      'Retained fixture', '#/booking/' || v_pool_booking_id::text);
+  insert into public.notifications (
+    profile_id, kind, title, body, destination, created_at
+  ) values (
+    v_admin, 'hyrox_replacement_review',
+    'HYROX replacement needs confirmation',
+    'An approved member accepted a paid HYROX replacement invite. Review it in Admin Payments.',
+    '#/admin/ops', v_pool_review_created_at
+  ) returning id into v_pool_review_notification_id;
 
   select to_jsonb(b) into v_pool_booking_before
     from public.operational_bookings b where b.id = v_pool_booking_id;
@@ -253,8 +308,31 @@ begin
       and not has_function_privilege('authenticated', 'public.operational_is_retired_hyrox_session(text)', 'execute')
       and not has_function_privilege('anon', 'public.operational_is_retired_hyrox_booking(uuid)', 'execute')
       and not has_function_privilege('authenticated', 'public.operational_is_retired_hyrox_booking(uuid)', 'execute'),
-    'public retirement helpers must remain owner-only'
+    'public retirement helpers must remain unavailable to browser roles'
   );
+  perform pg_temp.retire_assert(
+    has_function_privilege(
+      'service_role', 'public.operational_is_retired_hyrox_session(text)', 'execute'
+    )
+      and not has_function_privilege(
+        'service_role', 'public.operational_is_retired_hyrox_activity(text)', 'execute'
+      )
+      and not has_function_privilege(
+        'service_role', 'public.operational_is_retired_hyrox_booking(uuid)', 'execute'
+      ),
+    'avatar service role must have only the authoritative session classifier'
+  );
+  set local role service_role;
+  perform pg_temp.retire_assert(
+    public.operational_is_retired_hyrox_session(v_pool_bft_session_id)
+      and public.operational_is_retired_hyrox_session(v_pool_midtown_session_id)
+      and not public.operational_is_retired_hyrox_session(v_island_ecc_session_id)
+      and not public.operational_is_retired_hyrox_session(
+        'hyrox-bft-training-' || v_pool_date::text
+      ),
+    'service-role classifier must reject exact retired sessions only'
+  );
+  reset role;
   foreach v_signature in array array[
     'public.ensure_hyrox_cycles(date,integer)',
     'public.reserve_hyrox_cycle(text,text,boolean)',
@@ -279,6 +357,20 @@ begin
       'pool-only function must be owner-only: ' || v_signature
     );
   end loop;
+  perform pg_temp.retire_assert(
+    not exists (
+      select 1
+        from pg_proc p
+        join pg_namespace n on n.oid = p.pronamespace
+       where n.nspname = 'public'
+         and p.proname like '%pre_pool_retirement%'
+         and (
+           has_function_privilege('anon', p.oid, 'execute')
+           or has_function_privilege('authenticated', p.oid, 'execute')
+         )
+    ),
+    'renamed pre-retirement implementations must remain browser-denied'
+  );
 
   -- Templates and provisioning.
   perform pg_temp.retire_assert(
@@ -304,20 +396,30 @@ begin
   -- pool-only or shared mutation entry points for a retired target.
   perform set_config('request.jwt.claim.sub', v_member::text, true);
   set local role authenticated;
-  perform pg_temp.retire_expect_denied('select * from public.operational_hyrox_cycles');
-  perform pg_temp.retire_expect_denied('select * from public.operational_hyrox_queue_entries');
   perform pg_temp.retire_expect_denied(
-    'select public.reserve_hyrox_cycle(''' || v_cycle_id || ''',''either'',true)'
+    'select * from public.operational_hyrox_cycles',
+    'permission denied for table operational_hyrox_cycles'
+  );
+  perform pg_temp.retire_expect_denied(
+    'select * from public.operational_hyrox_queue_entries',
+    'permission denied for table operational_hyrox_queue_entries'
+  );
+  perform pg_temp.retire_expect_denied(
+    'select public.reserve_hyrox_cycle(''' || v_cycle_id || ''',''either'',true)',
+    'permission denied for function reserve_hyrox_cycle'
   );
   perform pg_temp.retire_expect_rejected(
-    'select public.reserve_operational_session(''' || v_pool_bft_session_id || ''')'
+    'select public.reserve_operational_session(''' || v_pool_bft_session_id || ''')',
+    'P0002', 'Session not found.'
   );
   perform pg_temp.retire_expect_rejected(
-    'select public.mark_operational_payment(''' || v_pool_booking_id || ''',''fps'',''blocked'')'
+    'select public.mark_operational_payment(''' || v_pool_booking_id || ''',''fps'',''blocked'')',
+    'P0002', 'Booking not found.'
   );
   perform pg_temp.retire_expect_rejected(
     'select public.create_operational_replacement_request(''' || v_pool_booking_id
-      || ''',''' || repeat('b', 64) || ''',now()+interval ''1 hour'')'
+      || ''',''' || repeat('b', 64) || ''',now()+interval ''1 hour'')',
+    'P0002', 'Booking not found.'
   );
   perform pg_temp.retire_assert(
     not exists (select 1 from public.operational_activity_templates
@@ -355,32 +457,55 @@ begin
   -- child-session controls.
   perform set_config('request.jwt.claim.sub', v_admin::text, true);
   set local role authenticated;
-  perform pg_temp.retire_expect_denied('select * from public.operational_hyrox_cycles');
   perform pg_temp.retire_expect_denied(
-    'select public.finalize_hyrox_venue_plan(''' || v_cycle_id || ''')'
+    'select * from public.operational_hyrox_cycles',
+    'permission denied for table operational_hyrox_cycles'
   );
   perform pg_temp.retire_expect_denied(
-    'select public.cancel_hyrox_cycle(''' || v_cycle_id || ''',''blocked'')'
+    'select public.finalize_hyrox_venue_plan(''' || v_cycle_id || ''')',
+    'permission denied for function finalize_hyrox_venue_plan'
+  );
+  perform pg_temp.retire_expect_denied(
+    'select public.cancel_hyrox_cycle(''' || v_cycle_id || ''',''blocked'')',
+    'permission denied for function cancel_hyrox_cycle'
   );
   perform pg_temp.retire_expect_rejected(
-    'select public.set_operational_notice(''' || v_pool_bft_session_id || ''',''blocked'')'
+    'select public.set_operational_notice(''' || v_pool_bft_session_id || ''',''blocked'')',
+    'P0002', 'Session not found.'
   );
   perform pg_temp.retire_expect_rejected(
-    'select public.set_operational_attendance(''' || v_pool_booking_id || ''',true)'
+    'select public.set_operational_attendance(''' || v_pool_booking_id || ''',true)',
+    'P0002', 'Booking not found.'
   );
   perform pg_temp.retire_expect_rejected(
     'select public.mark_operational_payment(''' || v_unallocated_pool_booking_id
-      || ''',''fps'',''blocked'')'
+      || ''',''fps'',''blocked'')',
+    'P0002', 'Booking not found.'
   );
   perform pg_temp.retire_expect_rejected(
     'select public.admin_decide_operational_replacement(''' || v_pool_replacement_id
-      || ''',false,''blocked'')'
+      || ''',false,''blocked'')',
+    'P0002', 'Replacement request not found.'
   );
   perform pg_temp.retire_assert(
     not exists (select 1 from public.operational_bookings where id = v_pool_booking_id)
       and not exists (select 1 from public.list_operational_replacement_requests()
         where booking_id = v_pool_booking_id),
     'Admin payment and replacement reads must exclude retained pool rows'
+  );
+  perform pg_temp.retire_assert(
+    not exists (
+      select 1 from public.notifications where id = v_pool_review_notification_id
+    ),
+    'realistic retired replacement-review notification must be hidden from Admin'
+  );
+  update public.notifications
+     set read_at = now()
+   where id = v_pool_review_notification_id;
+  get diagnostics v_rows = row_count;
+  perform pg_temp.retire_assert(
+    v_rows = 0,
+    'Admin must not mark a hidden retired replacement-review notification read'
   );
   reset role;
   perform set_config('request.jwt.claim.sub', '', true);
@@ -442,9 +567,102 @@ begin
   )->>'requestId')::uuid into v_ecc_replacement_id;
   reset role;
 
+  -- Both replacement conflict checks must ignore retained active pool
+  -- bookings whether the booking is allocated or still unallocated. Each
+  -- deliberate subtransaction is rolled back so the real lifecycle below can
+  -- run once and retained fixture snapshots remain unchanged.
+  begin
+    insert into public.operational_bookings (
+      profile_id, session_id, hyrox_cycle_id, status, reserved_at,
+      pay_deadline_at, payment_marked_at, payment_method, paid_at, confirmed_by,
+      venue_preference, fallback_acknowledged_at, allocation_state,
+      allocation_source, allocated_at, allocation_snapshot, snapshot
+    ) values (
+      v_admin, v_pool_bft_session_id, v_cycle_id, 'confirmed', now(),
+      now() + interval '1 day', now(), 'fps', now(), v_admin, 'either', now(),
+      'final', 'automatic', now(),
+      jsonb_build_array(jsonb_build_object('session_id', v_pool_bft_session_id)),
+      jsonb_build_object('name', 'ITC HYROX', 'booking_mode', 'weekly_pool')
+    ) returning id into v_temp_pool_booking_id;
+    perform set_config('request.jwt.claim.sub', v_admin::text, true);
+    set local role authenticated;
+    perform public.accept_operational_replacement_request(repeat('c', 64));
+    reset role;
+    update public.operational_bookings set status = 'expired'
+     where id = v_temp_pool_booking_id;
+    update public.operational_bookings set status = 'confirmed'
+     where id = v_unallocated_pool_booking_id;
+    perform set_config('request.jwt.claim.sub', v_admin::text, true);
+    set local role authenticated;
+    perform public.admin_decide_operational_replacement(
+      v_ecc_replacement_id, true, 'allocated acceptance / unallocated confirmation'
+    );
+    reset role;
+    raise exception 'rollback replacement conflict scenario one';
+  exception when raise_exception then
+    if sqlerrm <> 'rollback replacement conflict scenario one' then raise; end if;
+  end;
+
+  begin
+    update public.operational_bookings set status = 'confirmed'
+     where id = v_unallocated_pool_booking_id;
+    perform set_config('request.jwt.claim.sub', v_admin::text, true);
+    set local role authenticated;
+    perform public.accept_operational_replacement_request(repeat('c', 64));
+    reset role;
+    update public.operational_bookings set status = 'expired'
+     where id = v_unallocated_pool_booking_id;
+    insert into public.operational_bookings (
+      profile_id, session_id, hyrox_cycle_id, status, reserved_at,
+      pay_deadline_at, payment_marked_at, payment_method, paid_at, confirmed_by,
+      venue_preference, fallback_acknowledged_at, allocation_state,
+      allocation_source, allocated_at, allocation_snapshot, snapshot
+    ) values (
+      v_admin, v_pool_bft_session_id, v_cycle_id, 'confirmed', now(),
+      now() + interval '1 day', now(), 'fps', now(), v_admin, 'either', now(),
+      'final', 'automatic', now(),
+      jsonb_build_array(jsonb_build_object('session_id', v_pool_bft_session_id)),
+      jsonb_build_object('name', 'ITC HYROX', 'booking_mode', 'weekly_pool')
+    );
+    perform set_config('request.jwt.claim.sub', v_admin::text, true);
+    set local role authenticated;
+    perform public.admin_decide_operational_replacement(
+      v_ecc_replacement_id, true, 'unallocated acceptance / allocated confirmation'
+    );
+    reset role;
+    raise exception 'rollback replacement conflict scenario two';
+  exception when raise_exception then
+    if sqlerrm <> 'rollback replacement conflict scenario two' then raise; end if;
+  end;
+
   perform set_config('request.jwt.claim.sub', v_admin::text, true);
   set local role authenticated;
   perform public.accept_operational_replacement_request(repeat('c', 64));
+  select id into v_ecc_review_notification_id
+    from public.notifications
+   where profile_id = v_admin
+     and kind = 'hyrox_replacement_review'
+     and destination = '#/admin/ops'
+     and id <> v_pool_review_notification_id
+   order by created_at desc, id desc
+   limit 1;
+  perform pg_temp.retire_assert(
+    v_ecc_review_notification_id is not null
+      and exists (
+        select 1 from public.notifications where id = v_ecc_review_notification_id
+      )
+      and not exists (
+        select 1 from public.notifications where id = v_pool_review_notification_id
+      ),
+    'Admin must see Island ECC review notification but not retained pool review'
+  );
+  update public.notifications set read_at = now()
+   where id = v_ecc_review_notification_id;
+  get diagnostics v_rows = row_count;
+  perform pg_temp.retire_assert(
+    v_rows = 1,
+    'Admin must retain read-marker access to Island ECC review notifications'
+  );
   select public.admin_decide_operational_replacement(
     v_ecc_replacement_id, true, 'Island ECC replacement accepted'
   ) into v_result;

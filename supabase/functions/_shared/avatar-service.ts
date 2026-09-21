@@ -64,6 +64,7 @@ export interface AvatarDatabaseAdapter {
   submitReview(profileId: string, path: string): Promise<AvatarTransition>;
   setGoogle(profileId: string, path: string): Promise<AvatarTransition>;
   removeCustom(profileId: string): Promise<AvatarTransition>;
+  isRetiredHyroxSession(sessionId: string): Promise<boolean>;
   listSessionAttendees(sessionId: string): Promise<AvatarMemberRow[]>;
   listAdminMembers(): Promise<AvatarMemberRow[]>;
   hideAvatar(profileId: string, actorId: string, reason: string): Promise<AvatarTransition>;
@@ -73,6 +74,24 @@ export interface AvatarDatabaseAdapter {
     decision: 'approve' | 'reject',
     reason: string | null,
   ): Promise<AvatarTransition>;
+}
+
+export type SessionRetirementRpc = (
+  functionName: string,
+  parameters: Record<string, string>,
+) => PromiseLike<{ data: unknown; error: unknown }>;
+
+export async function authoritativeSessionIsRetired(
+  sessionId: string,
+  rpc: SessionRetirementRpc,
+): Promise<boolean> {
+  const { data, error } = await rpc('operational_is_retired_hyrox_session', {
+    p_session_id: sessionId,
+  });
+  if (error || typeof data !== 'boolean') {
+    throw new Error('Session retirement lookup failed');
+  }
+  return data;
 }
 
 export interface AvatarStorageAdapter {
@@ -446,6 +465,12 @@ export function createDefaultAvatarDependencies(): ProcessAvatarDependencies {
       });
       if (error) throw new Error('Avatar removal failed');
       return rpcTransition(data, profileId);
+    },
+    async isRetiredHyroxSession(sessionId) {
+      return await authoritativeSessionIsRetired(
+        sessionId,
+        (functionName, parameters) => service.rpc(functionName, parameters),
+      );
     },
     async listSessionAttendees(sessionId) {
       const { data, error } = await service

@@ -68,6 +68,7 @@ function moderationHarness(options: {
       submitReview: () => Promise.reject(new Error('unused')),
       setGoogle: () => Promise.reject(new Error('unused')),
       removeCustom: () => Promise.reject(new Error('unused')),
+      isRetiredHyroxSession: () => Promise.resolve(false),
       listSessionAttendees: () => Promise.resolve([]),
       listAdminMembers: () => Promise.resolve([]),
       hideAvatar(profileId, actorId, reason) {
