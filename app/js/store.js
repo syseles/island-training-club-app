@@ -78,6 +78,7 @@ let liveGivingCampaign = null;
 // in memory only; device-local persistence stores UUID-keyed operations.
 let livePaymentDirectory = new Map();
 const liveReplacementTokens = new Map();
+const livePendingReplacementStates = new Map();
 const LIVE_PROFILE_TTL_MS = 30_000;
 const AVATAR_CACHE_EXPIRY_SKEW_MS = 30_000;
 const AVATAR_APPROVED_ROLES = new Set(["member", "admin", "superadmin", "super_admin"]);
@@ -1280,9 +1281,19 @@ export function getBooking(id) {
 
 export function replacementRequestForBooking(bookingId) {
   if (isLive()) {
-    if (bookingIsRetired(retirementBooking(bookingId))) return null;
+    if (bookingIsRetired(retirementBooking(bookingId))) {
+      livePendingReplacementStates.delete(bookingId);
+      liveReplacementTokens.delete(bookingId);
+      return null;
+    }
     const request = liveOps.liveReplacementRequestForBooking?.(bookingId) ?? null;
-    return request && !bookingIsRetired(request) ? request : null;
+    const pending = livePendingReplacementStates.get(bookingId) || null;
+    if (pending && request?.requestId !== pending.requestId) return pending;
+    if (request && !bookingIsRetired(request)) {
+      livePendingReplacementStates.delete(bookingId);
+      return request;
+    }
+    return pending;
   }
   return state.replacementRequests
     .filter((request) => request.bookingId === bookingId
@@ -1423,7 +1434,21 @@ export async function createReplacementRequest(bookingId, now = Date.now()) {
     const token = globalThis.crypto?.randomUUID?.() || uid("replacement-invite");
     const hash = await liveOps.hashReplacementToken(token);
     const request = await liveOps.liveCreateReplacementRequest(bookingId, hash, eligibility.expiresAt);
+    if (request?.retired) throw retiredTargetError();
     liveReplacementTokens.set(bookingId, token);
+    if (request?.cachePending) {
+      const pending = {
+        requestId: request.requestId || null,
+        bookingId,
+        status: "pending",
+        createdAt: now,
+        expiresAt: eligibility.expiresAt,
+        cachePending: true,
+      };
+      livePendingReplacementStates.set(bookingId, pending);
+      return { ...pending, inviteToken: token };
+    }
+    livePendingReplacementStates.delete(bookingId);
     return { ...request, inviteToken: token };
   }
   requireAuthorizedPaymentOwner(booking.userId);
@@ -1462,7 +1487,9 @@ export async function createReplacementRequest(bookingId, now = Date.now()) {
 export async function acceptReplacement(token, now = Date.now()) {
   if (isLive()) {
     const hash = await liveOps.hashReplacementToken(token);
-    return liveOps.liveAcceptReplacement(hash);
+    const request = await liveOps.liveAcceptReplacement(hash);
+    if (request?.retired) throw retiredTargetError();
+    return request;
   }
   const actor = replacementActor();
   const request = replacementRequestByToken(token);
@@ -1498,7 +1525,9 @@ export async function acceptReplacement(token, now = Date.now()) {
 export async function declineReplacement(token, now = Date.now()) {
   if (isLive()) {
     const hash = await liveOps.hashReplacementToken(token);
-    return liveOps.liveDeclineReplacement(hash);
+    const request = await liveOps.liveDeclineReplacement(hash);
+    if (request?.retired) throw retiredTargetError();
+    return request;
   }
   const actor = replacementActor();
   const request = replacementRequestByToken(token);
@@ -1515,7 +1544,16 @@ export async function declineReplacement(token, now = Date.now()) {
 }
 
 export async function cancelReplacement(requestId, now = Date.now()) {
-  if (isLive()) return liveOps.liveCancelReplacement(requestId);
+  if (isLive()) {
+    const request = await liveOps.liveCancelReplacement(requestId);
+    if (request?.retired) throw retiredTargetError();
+    for (const [bookingId, pending] of livePendingReplacementStates) {
+      if (pending.requestId !== requestId) continue;
+      livePendingReplacementStates.delete(bookingId);
+      liveReplacementTokens.delete(bookingId);
+    }
+    return request;
+  }
   const request = state.replacementRequests.find((item) => item.id === requestId);
   if (!request) return null;
   requireAuthorizedPaymentOwner(request.originalUserId);
@@ -1532,7 +1570,9 @@ export async function cancelReplacement(requestId, now = Date.now()) {
 export async function decideReplacement(requestId, confirm, reason = null, now = Date.now()) {
   if (isLive()) {
     requirePaymentAdminActor();
-    return liveOps.liveDecideReplacement(requestId, confirm, reason);
+    const request = await liveOps.liveDecideReplacement(requestId, confirm, reason);
+    if (request?.retired) throw retiredTargetError();
+    return request;
   }
   const actor = requirePaymentAdminActor();
   const request = state.replacementRequests.find((item) => item.id === requestId);

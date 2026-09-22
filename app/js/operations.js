@@ -192,11 +192,12 @@ function buildReplacementRequestRow(row) {
   };
 }
 
-async function replacementRequestsWithActiveRelationships(rows) {
+async function replacementRelationshipStates(rows) {
   const requests = (rows || []).map(buildReplacementRequestRow).filter(Boolean);
   const sessionRelationships = new Map();
   const unresolvedSessionIds = [];
   for (const request of requests) {
+    if (request.cycleId || liveCache.retiredBookingIds.has(request.bookingId)) continue;
     const booking = liveCache.bookings.find((row) => row.id === request.bookingId) || null;
     const sessionId = request.sessionId || booking?.sessionId || null;
     if (!sessionId || sessionRelationships.has(sessionId)) continue;
@@ -212,17 +213,27 @@ async function replacementRequestsWithActiveRelationships(rows) {
       sessionRelationships.set(row.id, { id: row.id, activityId: row.activity_id });
     }
   }
-  return requests.filter((request) => {
-    if (request.cycleId || liveCache.retiredBookingIds.has(request.bookingId)) return false;
+  return requests.map((request) => {
+    if (request.cycleId || liveCache.retiredBookingIds.has(request.bookingId)) {
+      return { request, relationship: "retired" };
+    }
     const booking = liveCache.bookings.find((row) => row.id === request.bookingId) || null;
     const sessionId = request.sessionId || booking?.sessionId || null;
     const session = sessionRelationships.get(sessionId);
     // Security-definer replacement RPC rows must carry a resolvable canonical
-    // direct-session relationship. Ambiguous rows fail closed.
-    return Boolean(session)
-      && !isRetiredHyroxBooking(request, (id) => sessionRelationships.get(id) || null)
-      && !isRetiredHyroxBooking(booking, (id) => sessionRelationships.get(id) || null);
+    // direct-session relationship. Ambiguous rows fail closed, but remain
+    // distinct from rows whose relationship explicitly proves retirement.
+    if (!session) return { request, relationship: "unresolved" };
+    const retired = isRetiredHyroxBooking(request, (id) => sessionRelationships.get(id) || null)
+      || isRetiredHyroxBooking(booking, (id) => sessionRelationships.get(id) || null);
+    return { request, relationship: retired ? "retired" : "active" };
   });
+}
+
+async function replacementRequestsWithActiveRelationships(rows) {
+  return (await replacementRelationshipStates(rows))
+    .filter(({ relationship }) => relationship === "active")
+    .map(({ request }) => request);
 }
 
 function safeReplacementMutationResult(row) {
@@ -236,15 +247,20 @@ function safeReplacementMutationResult(row) {
 
 function evictUnreconciledReplacement(row) {
   const request = buildReplacementRequestRow(row);
-  liveCache.replacementRequests = liveCache.replacementRequests.filter((cached) =>
-    cached.requestId !== request?.requestId && cached.bookingId !== request?.bookingId);
+  if (request?.requestId) {
+    liveCache.replacementRequests = liveCache.replacementRequests.filter((cached) =>
+      cached.requestId !== request.requestId);
+  } else if (request?.bookingId) {
+    liveCache.replacementRequests = liveCache.replacementRequests.filter((cached) =>
+      cached.bookingId !== request.bookingId);
+  }
 }
 
 async function cacheReplacementRequest(row) {
   const safeResult = safeReplacementMutationResult(row);
-  let request;
+  let classified;
   try {
-    [request] = await replacementRequestsWithActiveRelationships([row]);
+    [classified] = await replacementRelationshipStates([row]);
   } catch {
     // The mutation already succeeded authoritatively. Keep the cache closed to
     // unresolved data without reporting the successful write as a failure;
@@ -252,6 +268,11 @@ async function cacheReplacementRequest(row) {
     evictUnreconciledReplacement(row);
     return safeResult;
   }
+  if (classified?.relationship === "retired") {
+    evictUnreconciledReplacement(row);
+    return { retired: true };
+  }
+  const request = classified?.relationship === "active" ? classified.request : null;
   if (!request?.requestId) {
     evictUnreconciledReplacement(row);
     return safeResult;

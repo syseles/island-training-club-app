@@ -5981,6 +5981,80 @@ await delayedClickMutation({
   beforeResolve: () => Object.assign(routedDeferServerRow, confirmedServerRow),
   successToast: "Payment confirmed — member notified",
 });
+// A successful create remains actionable and non-duplicable while its
+// post-RPC relationship enrichment is reconciling.
+const reconcilingReplacementRow = {
+  requestId: "reconciling-create-request",
+  bookingId: routedDeferBooking.id,
+  status: "pending",
+  originalDisplayName: "Riley Runner",
+  replacementDisplayName: null,
+  sessionId: "post-success-ecc-replacement-session",
+  snapshot: {
+    name: "ITC HYROX",
+    kind: "paid",
+    dateISO: routingSessions[0].dateISO,
+    time: routingSessions[0].time,
+  },
+  createdAt: fixedIso,
+  expiresAt: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+};
+const previousSameBookingReplacement = {
+  ...reconcilingReplacementRow,
+  requestId: "previous-same-booking-request",
+  sessionId: routedDeferBooking.sessionId,
+  status: "rejected",
+  createdAt: "2025-01-01T00:00:00.000Z",
+};
+operationalRpcHandler = (name, args) => name === "list_operational_replacement_requests"
+  ? Promise.resolve({ data: [structuredClone(previousSameBookingReplacement)], error: null })
+  : delegatedBaseOperationalRpcHandler(name, args);
+await operations.liveListReplacementRequests();
+operationalSessionRelationshipReadErrors.set(
+  reconcilingReplacementRow.sessionId,
+  { message: "post-create relationship temporarily unavailable" },
+);
+let reconcilingCreateCalls = 0;
+operationalRpcHandler = (name, args) => {
+  if (name === "create_operational_replacement_request") {
+    operationalRpcCalls.push({ name, args: structuredClone(args) });
+    reconcilingCreateCalls += 1;
+    return Promise.resolve({ data: structuredClone(reconcilingReplacementRow), error: null });
+  }
+  return delegatedBaseOperationalRpcHandler(name, args);
+};
+location.hash = `#/booking/${routedDeferBooking.id}`;
+toastStack.children.length = 0;
+const replacementCreateControl = operationControl("BUTTON", "", "Create private invite");
+replacementCreateControl.dataset = {
+  action: "replacement-create",
+  booking: routedDeferBooking.id,
+};
+replacementCreateControl.closest = () => replacementCreateControl;
+const reconcilingCreate = click({ target: replacementCreateControl });
+const duplicateReconcilingCreate = click({ target: replacementCreateControl });
+await Promise.all([reconcilingCreate, duplicateReconcilingCreate]);
+assert.equal(reconcilingCreateCalls, 1,
+  "created-but-reconciling replacement state must suppress duplicate creation");
+assert.deepEqual(toastStack.children.map((item) => item.textContent), [
+  "Private replacement invite created — details are refreshing",
+]);
+assert.equal(
+  operations.liveReplacementRequestForBooking(routedDeferBooking.id)?.requestId,
+  previousSameBookingReplacement.requestId,
+  "unresolved create must retain older same-booking cache history",
+);
+const reconcilingReplacement = store.replacementRequestForBooking(routedDeferBooking.id);
+assert.equal(reconcilingReplacement.status, "pending");
+assert.equal(reconcilingReplacement.cachePending, true);
+assert.ok(store.replacementInviteTokenForBooking(routedDeferBooking.id),
+  "created-but-reconciling state must retain its private token in memory");
+assert.match(viewEl.innerHTML, /Invite created — details are refreshing/);
+assert.match(viewEl.innerHTML, /Share via WhatsApp/);
+assert.doesNotMatch(viewEl.innerHTML, /Create private invite/,
+  "created-but-reconciling view must not invite a duplicate create");
+operationalRpcHandler = delegatedBaseOperationalRpcHandler;
+
 const paidControlServerRow = operationalTableRows.operational_sessions
   .find((row) => row.id === routingSessions[0].id);
 const reopenControlServerRow = operationalTableRows.operational_sessions
@@ -7548,6 +7622,7 @@ console.log("ok  inline map mount respects stale generation ownership");
 // mutations cache only redacted request metadata after authoritative refresh.
 const replacementBaseHandler = operationalRpcHandler;
 const replacementCalls = [];
+let replacementListRowsOverride = null;
 let replacementRow = {
   requestId: "replacement-request-1",
   bookingId: "island-ecc-booking",
@@ -7566,7 +7641,7 @@ operationalRpcHandler = (name, args) => {
     return Promise.resolve({ data: null, error: { message: "replacement decision unavailable" } });
   }
   if (name === "list_operational_replacement_requests") {
-    return Promise.resolve({ data: [{
+    return Promise.resolve({ data: replacementListRowsOverride || [{
       ...replacementRow,
       requestId: "retired-replacement-request",
       bookingId: "historical-retired-replacement-booking",
@@ -7631,6 +7706,36 @@ assert.equal(
   "accepted",
   "failed live replacement mutations must not overwrite the filtered active cache",
 );
+const olderSameBookingRequest = {
+  ...replacementRow,
+  requestId: "older-same-booking-request",
+  bookingId: "same-booking-history",
+  sessionId: "historical-ecc-replacement-session",
+  status: "rejected",
+  createdAt: "2026-05-01T00:00:00.000Z",
+};
+replacementListRowsOverride = [olderSameBookingRequest];
+await operations.liveListReplacementRequests();
+replacementRow = {
+  ...replacementRow,
+  requestId: "newer-same-booking-request",
+  bookingId: olderSameBookingRequest.bookingId,
+  sessionId: "post-success-ecc-replacement-session",
+  status: "accepted",
+  createdAt: "2026-06-01T00:00:00.000Z",
+};
+operationalSessionRelationshipReadErrors.set(
+  replacementRow.sessionId,
+  { message: "newer same-booking relationship unavailable" },
+);
+await operations.liveAcceptReplacement(replacementHash);
+assert.equal(
+  operations.liveReplacementRequestForBooking(olderSameBookingRequest.bookingId)?.requestId,
+  olderSameBookingRequest.requestId,
+  "failed enrichment for a new request must preserve older same-booking history",
+);
+replacementListRowsOverride = null;
+
 for (const mutation of ["create", "accept"]) {
   replacementRow = {
     ...replacementRow,
@@ -7656,4 +7761,23 @@ for (const mutation of ["create", "accept"]) {
   assert.equal(operations.liveReplacementRequestForBooking(replacementRow.bookingId), null,
     `unresolved successful replacement ${mutation} data must not enter the cache`);
 }
+replacementRow = {
+  ...replacementRow,
+  requestId: "retired-response-secret-request",
+  bookingId: "retired-response-booking",
+  cycleId: "retired-hyrox-cycle",
+  sessionId: "retired-response-unknown-session",
+  status: "accepted",
+};
+const retiredResponseQueryCount = operationalSessionQueries.length;
+const retiredMutationResult = await operations.liveAcceptReplacement(replacementHash);
+assert.deepEqual(retiredMutationResult, { retired: true },
+  "explicitly retired mutation responses must return only a retirement marker");
+assert.equal("requestId" in retiredMutationResult, false);
+assert.equal("status" in retiredMutationResult, false);
+assert.equal(operationalSessionQueries.slice(retiredResponseQueryCount).some((query) =>
+  query.ids?.includes(replacementRow.sessionId)), false,
+  "an explicit retired cycle relationship must not require session enrichment");
+assert.equal(operations.liveReplacementRequestForBooking(replacementRow.bookingId), null,
+  "explicitly retired mutation responses must stay out of cache");
 console.log("ok  live HYROX replacement hashing, RPC payloads, redaction, and failure preservation");

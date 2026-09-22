@@ -1057,8 +1057,10 @@ document.addEventListener("click", async (e) => {
       if (controlBusy.has(el)) break;
       try {
         await withBusyControl(el, "Creating invite…", async () => {
-          await store.createReplacementRequest(el.dataset.booking, Date.now());
-          toast("Private replacement invite created — share it via WhatsApp");
+          const request = await store.createReplacementRequest(el.dataset.booking, Date.now());
+          toast(request?.cachePending
+            ? "Private replacement invite created — details are refreshing"
+            : "Private replacement invite created — share it via WhatsApp");
           await renderWithFeedback();
         });
       } catch (err) { toast(err.message || "Unable to create replacement invite", true); }
