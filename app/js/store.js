@@ -374,6 +374,21 @@ function retireLocalHyroxPool() {
     return retiredInviteTokens.has(id);
   };
 
+  // The local acceptance producer used only a generic Admin link. Classify
+  // before pruning requests/bookings; an unmatched HYROX-only review is not
+  // proof of active provenance. Retired evidence wins timestamp ambiguity.
+  const retiredReviewNoticeIds = new Set(state.notifications.filter((notice) => {
+    if (notice.kind !== "hyrox-replacement-review") return false;
+    const matches = state.replacementRequests.filter((request) =>
+      request.acceptedAt != null && request.acceptedAt === notice.createdAt);
+    if (matches.some(requestTargetsPool)) return true;
+    return !matches.length || matches.some((request) => {
+      const booking = bookingForId(request.bookingId);
+      const session = sessionForId(booking?.sessionId);
+      return !session || isRetiredHyroxSession(session);
+    });
+  }).map((notice) => notice.id));
+
   state.activities = state.activities.filter(
     (activity) => !isRetiredHyroxActivityId(activity.id)
   );
@@ -390,7 +405,8 @@ function retireLocalHyroxPool() {
     (entry) => !recordTargetsPool(entry)
   );
   state.notifications = state.notifications.filter((notification) =>
-    !isRetiredHyroxNotification(notification, bookingForId)
+    !retiredReviewNoticeIds.has(notification.id)
+    && !isRetiredHyroxNotification(notification, bookingForId)
     && !recordTargetsPool(notification)
     && !retiredReceiptIds.has(notification.receiptId ?? notification.receipt_id)
     && !routeTargetsPool(notification.destination)
@@ -1457,7 +1473,7 @@ export function replacementRequestForBooking(bookingId) {
 }
 
 // One authoritative read per attempt: never retry a successful create RPC.
-// A failed/missing list result leaves the memory-only overlay in place so the
+// A failed/missing invite result leaves the memory-only overlay in place so the
 // owner can explicitly retry without minting another invite or token.
 export async function refreshReplacementRequest(bookingId) {
   const booking = getBooking(bookingId);
@@ -1465,7 +1481,12 @@ export async function refreshReplacementRequest(bookingId) {
   requireAuthorizedPaymentOwner(booking.userId);
   if (isLive()) {
     try {
-      await liveOps.liveListReplacementRequests();
+      const token = liveReplacementTokens.get(bookingId);
+      if (!token) throw new Error("Private invite unavailable.");
+      const hash = await liveOps.hashReplacementToken(token);
+      await liveOps.liveRefreshReplacementRequest(
+        bookingId, livePendingReplacementStates.get(bookingId)?.requestId, hash,
+      );
     } catch {
       if (!livePendingReplacementStates.has(bookingId)) {
         throw new Error("Replacement details unavailable. Please retry refresh.");

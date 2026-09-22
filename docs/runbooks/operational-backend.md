@@ -43,9 +43,10 @@ This rollout is strictly backend-first deployment. A frontend containing retirem
 Use this sequence without reordering or combining its gates:
 
 1. **Inventory, apply, and verify the backend and RPC boundary.** Run the count-only inventory, apply only the reviewed retirement migration, compare retained counts, and complete pool RPC denial and Island ECC active-RPC checks.
-2. **Deploy the reviewed preview.** Deploy the reviewed preview revision against that verified migrated backend; do not promote it yet.
-3. **Run browser UI and Island ECC acceptance.** Against the deployed preview, verify browser UI and the full Island ECC lifecycle, exact deep-link behavior, and absence of retired data.
-4. **Promote the exact accepted snapshot.** Promote only the exact preview commit accepted in step 3, then repeat bounded production checks.
+2. **Deploy and verify the avatar boundary.** Deploy the reviewed `resolve-profile-avatars` Edge Function only after SQL classifier/grant verification; record its artifact revision and pass the direct authenticated endpoint gates below before any browser acceptance.
+3. **Deploy the reviewed preview.** Deploy the reviewed preview revision against that verified migrated backend; do not promote it yet.
+4. **Run browser UI and Island ECC acceptance.** Against the deployed preview, verify browser UI and the full Island ECC lifecycle, exact deep-link behavior, and absence of retired data.
+5. **Promote the exact accepted snapshot.** Promote only the exact preview commit accepted in step 4, then repeat bounded production checks.
 
 The local gates below precede this release sequence and never replace any production or preview gate.
 
@@ -87,6 +88,8 @@ supabase migration list --linked
 ```
 
 Stop if the target or history is unexpected, if `20260922000001` is already present without matching reviewed evidence, or if Island ECC is absent/inactive.
+
+The SHA-256 identifies the complete reviewed SQL, including generic notification provenance; the version alone is not artifact identity. These final-review corrections revise the not-yet-deployed source artifact. Discard prior approval/hash evidence for this file and record a fresh reviewed digest. If any target already applied a different digest under `20260922000001`, stop: do not reapply this file or repair history to pretend it matches. That target requires a new, separately reviewed forward correction migration.
 
 Run the following in trusted read-only SQL. It deliberately emits canonical activity/status labels and counts only—never member names, emails, profile IDs, payment references, replacement tokens, notification bodies, or screenshots of row content.
 
@@ -156,6 +159,22 @@ with retired_sessions as (
            union all select '#/pay/' || id::text from retired_bookings
          )
       or (
+        n.kind = 'operational_payment_marked'
+        and exists (
+          select 1 from public.operational_bookings b
+           where b.payment_marked_at = n.created_at
+             and b.id in (select id from retired_bookings)
+        )
+      )
+      or (
+        n.kind = 'operational_gym_finalized'
+        and exists (
+          select 1 from public.operational_sessions s
+           where s.gym_confirmed_at = n.created_at
+             and s.id in (select id from retired_sessions)
+        )
+      )
+      or (
         n.kind = 'hyrox_replacement_review'
         and (
           exists (
@@ -178,6 +197,8 @@ select metric, bucket, row_count
 ```
 
 The `hyrox_replacement_review` branch mirrors the pre-migration relationship rule: a notice matching any retired booking is counted; an ambiguous notice with no replacement at the same acceptance/creation timestamp is conservatively counted; and a notice is excluded only when that timestamp resolves exclusively to a proven active replacement such as Island ECC. If active and retired replacements share a timestamp, the retired match wins. The query emits only the aggregate bucket—never notification IDs or content. The rollback-scoped integration includes retired, unmatched, and proven-active Island ECC review-notice controls and asserts the expected aggregate classification.
+
+Generic `operational_payment_marked` and `operational_gym_finalized` producers use the same transaction timestamp as `payment_marked_at` and `gym_confirmed_at`. The inventory follows those authoritative booking/session relationships: any retired match hides (even with an active match), ECC-only matches remain active, and unrelated generic notices without HYROX provenance are not blanket-hidden. No body parsing or notification rewriting is used.
 
 Record the UTC query time and count-only evidence. Confirm with the data owner that future BFT/Midtown/pool rows are the acknowledged test records. A mismatch or evidence of genuine future member activity blocks deployment; do not infer consent, cancel it, migrate it, or inspect personal fields.
 
@@ -292,7 +313,37 @@ supabase migration list --linked
 
 Never repair a historical pool version as part of this rollout.
 
-### 5. Pre-preview backend and RPC denial/active checks
+### 5. Deploy and verify the avatar service-role boundary
+
+This is a separate, explicitly authorized Edge Function deployment, not part of Vercel deployment. Do not deploy now as part of local implementation. After step 4, verify as a trusted operator that `operational_is_retired_hyrox_session(text)` exists, is security-definer with `search_path=public`, denies `PUBLIC`/`anon`/`authenticated`, and grants `service_role` EXECUTE:
+
+```sql
+select p.prosecdef, p.proconfig,
+       has_function_privilege('service_role', p.oid, 'EXECUTE') as service_execute
+  from pg_proc p
+ where p.oid = 'public.operational_is_retired_hyrox_session(text)'::regprocedure;
+```
+
+From the reviewed checkout only, and with separate deployment authorization:
+
+```bash
+git rev-parse HEAD
+shasum -a 256 supabase/functions/resolve-profile-avatars/index.ts \
+  supabase/functions/_shared/avatar-service.ts
+supabase functions deploy resolve-profile-avatars --project-ref "$SUPABASE_PROJECT_REF"
+```
+
+Record the deployed artifact revision (commit plus function/shared-adapter digests and deployment version), target project, and UTC time. Retain the reviewed shared adapter in the bundle. An old resolver bypasses RLS through service-role reads: SQL success alone never closes this boundary.
+
+**Direct authenticated endpoint gates**, independent of frontend routing: use disposable approved-member and Admin access tokens (never log tokens or avatar response payloads). Send GET requests directly to `/functions/v1/resolve-profile-avatars?scope=session&sessionId=<URL-encoded-canonical-session-id>` with `Authorization: Bearer <access-token>` and the project's public API key.
+
+- BFT and Midtown retained sessions: HTTP 404 with only `{"error":"Session not found"}`; no attendee identities, avatar payload, or signed URLs. Verify no attendee read/signing occurs using privacy-safe instrumentation in the disposable replica.
+- Active Island ECC with disposable attendee/avatar fixtures: HTTP 200 and the expected authorized attendee presentations; confirm signing still works without retaining the URLs or identities in evidence.
+- **classifier-failure fail-closed**: on a disposable local replica of the exact artifact, inject a classifier lookup error (or temporarily revoke its service grant there only), then call the authenticated HTTP endpoint. Require HTTP 500 with only `{"error":"Profile photos could not be loaded"}` and zero attendee reads/signing. Restore the local grant and repeat ECC success. Never break the classifier in a shared project to test failure.
+
+Record status, count-only assertions, revision and target, not private payloads. Every gate must pass before endpoint/browser acceptance is declared complete or a preview is accepted. Unit mocks do not substitute for direct HTTP acceptance of the deployed artifact. Recheck BFT/Midtown denial and ECC success on the authorized target after deployment; failure-injection evidence comes from the disposable replica.
+
+### 6. Pre-preview backend and RPC denial/active checks
 
 Use separate disposable approved-member and Admin API sessions against the migrated backend. This is an RPC/data-boundary gate, not browser UI acceptance.
 
@@ -304,11 +355,11 @@ Use separate disposable approved-member and Admin API sessions against the migra
 
 Any failure blocks preview deployment.
 
-### 6. Deploy the reviewed preview
+### 7. Deploy the reviewed preview
 
 Deploy the reviewed preview revision—the exact tested commit—against the migrated and verified backend. Confirm the served revision and target Supabase project. Do not merge or promote it yet.
 
-### 7. Browser UI and Island ECC acceptance
+### 8. Browser UI and Island ECC acceptance
 
 Against that deployed preview, use separate visitor, pending, approved-member, Admin, and Super Admin browser sessions in current Chrome and Safari at 375 px.
 
@@ -320,15 +371,15 @@ Against that deployed preview, use separate visitor, pending, approved-member, A
 
 Record fixture UUIDs and bounded UTC timestamps only. Never retain names, emails, tokens, payment references, notification bodies, or screenshots containing personal data. Any failure blocks production promotion.
 
-### 8. Promote the exact accepted snapshot
+### 9. Promote the exact accepted snapshot
 
-Promote only the exact preview commit accepted in step 7. Wait for the production deployment, confirm its served revision, repeat minimal canonical-route/browser-denial and Island ECC lifecycle checks, compare retained counts once more, and remove all disposable fixtures.
+Promote only the exact preview commit accepted in step 8. Wait for the production deployment, confirm its served revision, repeat minimal canonical-route/browser-denial and Island ECC lifecycle checks, compare retained counts once more, and remove all disposable fixtures.
 
 A failed or unexecuted backend or preview gate blocks promotion. Frontend rollback alone does not restore pool access and must never point old pool UI at the migrated backend.
 
 ## Forward-only rollback
 
-Rollback is a forward-only rollback: preserve all retained rows and write a new, separately reviewed forward migration that explicitly restores any intended template activation, policies, grants, functions, and provisioning. Pair it with a compatible frontend deployment in backend-first order.
+Rollback is a forward-only rollback: preserve all retained rows and write a new, separately reviewed forward migration that explicitly restores any intended template activation, policies, grants, functions, and provisioning. Pair it with a compatible frontend deployment and compatible avatar Edge Function artifact in backend-first order. Keep the fail-closed resolver while retirement is intended; never roll back to the old service-role resolver that bypasses classification. Any intentional reopening must review the database, Edge Function and frontend together, deploy SQL prerequisites first, then the compatible resolver, rerun direct endpoint gates, and only then accept the frontend.
 
 Never edit or replay applied migration history. Never delete or mark down `20260922000001_retire_bft_midtown_hyrox_pool.sql`, alter historical pool migrations, drop/truncate retained tables, or reconstruct state from browser caches. If only the retirement frontend is defective, redeploy a reviewed compatible frontend that keeps pool entry points unavailable while the backend boundary remains in force.
 
@@ -343,6 +394,7 @@ Never edit or replay applied migration history. Never delete or mark down `20260
 - [ ] Only `20260922000001_retire_bft_midtown_hyrox_pool.sql` applied.
 - [ ] Template, helper, grant, RLS, shared-RPC guard, and Island ECC checks pass.
 - [ ] Retained counts/statuses and notification count equal the baseline.
+- [ ] Reviewed avatar artifact revision deployed after classifier/grant verification; direct BFT/Midtown denial, ECC success and disposable classifier-failure fail-closed gates pass.
 - [ ] Browser denial and full Island ECC direct-session acceptance pass.
 - [ ] Migration history records `20260922000001` exactly once.
 - [ ] Testing frontend acceptance precedes exact-snapshot production promotion.

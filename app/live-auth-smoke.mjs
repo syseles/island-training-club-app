@@ -3560,6 +3560,43 @@ const historicalBookingBase = {
   created_at: fixedIso,
   updated_at: fixedIso,
 };
+// Mixed cutover: stale direct snapshots arrive after RLS already hides sessions.
+const unresolvedDirectRows = ["stale-bft", "delayed-ecc"].map((id) => ({
+  ...historicalBookingBase, id, session_id: `${id}-session`, hyrox_cycle_id: null,
+  snapshot: { name: "ITC HYROX", venue: id === "stale-bft" ? "BFT Causeway Bay" : "Island ECC" },
+}));
+const unresolvedReceipts = unresolvedDirectRows.map((row) => ({
+  id: `${row.id}-receipt`, booking_id: row.id, session_id: row.session_id,
+  profile_id: authUser.id, amount_hkd: 180, issued_at: fixedIso,
+}));
+unresolvedReceipts.push({ ...unresolvedReceipts[0], id: "orphan-receipt", booking_id: "missing-booking", session_id: "missing-session" });
+const nonDirectControl = {
+  ...historicalBookingBase, id: "non-direct-control", session_id: null,
+  hyrox_cycle_id: "community-cycle-2099-01-03",
+};
+const nonDirectReceipt = {
+  ...unresolvedReceipts[0], id: "non-direct-receipt", booking_id: nonDirectControl.id,
+  session_id: null, hyrox_cycle_id: nonDirectControl.hyrox_cycle_id,
+};
+operationalTableRows.operational_bookings.push(...unresolvedDirectRows, nonDirectControl);
+operationalTableRows.operational_receipts.push(...unresolvedReceipts, nonDirectReceipt);
+await operations.refreshOperationalState();
+for (const row of unresolvedDirectRows) assert.equal(operations.liveBookingById(row.id), null,
+  "unresolved direct booking must fail closed even with a display snapshot");
+for (const row of unresolvedReceipts) assert.equal(operations.liveReceiptById(row.id), null,
+  "unresolved direct receipt must fail closed");
+assert.ok(operations.liveBookingById(nonDirectControl.id), "non-direct non-pool behavior is unchanged");
+assert.ok(operations.liveReceiptById(nonDirectReceipt.id), "non-direct non-pool receipt remains visible");
+operationalTableRows.operational_sessions.push({ ...historicalSessionRows[0], id: "delayed-ecc-session" });
+await operations.refreshOperationalState();
+assert.ok(operations.liveBookingById("delayed-ecc"), "later canonical ECC hydration recovers booking");
+assert.ok(operations.liveReceiptById("delayed-ecc-receipt"), "later canonical ECC hydration recovers receipt");
+assert.equal(operations.liveBookingById("stale-bft"), null);
+assert.equal(operations.liveReceiptById("stale-bft-receipt"), null);
+operationalTableRows.operational_bookings = operationalTableRows.operational_bookings.filter((row) => ![...unresolvedDirectRows, nonDirectControl].some((item) => item.id === row.id));
+operationalTableRows.operational_receipts = operationalTableRows.operational_receipts.filter((row) => ![...unresolvedReceipts, nonDirectReceipt].some((item) => item.id === row.id));
+operationalTableRows.operational_sessions = operationalTableRows.operational_sessions.filter((row) => row.id !== "delayed-ecc-session");
+console.log("ok  unresolved stale direct records fail closed and ECC recovers");
 operationalTableRows.operational_sessions.push(...historicalSessionRows);
 operationalTableRows.operational_bookings.push(
   { ...historicalBookingBase, id: "history-old-booking", session_id: "history-old-session", snapshot: { session_date: "2026-07-01" } },
@@ -6117,14 +6154,26 @@ operationalSessionRelationshipReadErrors.set(
 let reconcilingCreateCalls = 0;
 let reconciliationListCalls = 0;
 let reconciliationListFails = true;
+const recoveryActor = store.currentUser();
+const recoveryRole = recoveryActor.role;
+recoveryActor.role = "member";
+assert.equal(recoveryActor.id, routedDeferBooking.userId, "recovery is by the ordinary booking owner");
+let recoveryTokenHash;
+let forbiddenMemberListCalls = 0;
 operationalRpcHandler = (name, args) => {
   if (name === "list_operational_replacement_requests") {
+    forbiddenMemberListCalls += 1;
+    return Promise.resolve({ data: null, error: { code: "42501", message: "Admin access required." } });
+  }
+  if (name === "get_operational_replacement_invite") {
+    assert.equal(args.p_token_hash, recoveryTokenHash, "member read requires the private invite hash");
     reconciliationListCalls += 1;
     return Promise.resolve(reconciliationListFails
-      ? { data: null, error: { message: "Replacement list temporarily unavailable" } }
-      : { data: [structuredClone(reconcilingReplacementRow)], error: null });
+      ? { data: null, error: { message: "Replacement invite temporarily unavailable" } }
+      : { data: structuredClone(reconcilingReplacementRow), error: null });
   }
   if (name === "create_operational_replacement_request") {
+    recoveryTokenHash = args.p_token_hash;
     operationalRpcCalls.push({ name, args: structuredClone(args) });
     reconcilingCreateCalls += 1;
     return Promise.resolve({ data: structuredClone(reconcilingReplacementRow), error: null });
@@ -6144,8 +6193,9 @@ const duplicateReconcilingCreate = click({ target: replacementCreateControl });
 await Promise.all([reconcilingCreate, duplicateReconcilingCreate]);
 assert.equal(reconcilingCreateCalls, 1,
   "created-but-reconciling replacement state must suppress duplicate creation");
+assert.equal(forbiddenMemberListCalls, 0, "member recovery must never call the Admin-only list RPC");
 assert.equal(reconciliationListCalls, 1,
-  "cache-pending create must attempt exactly one authoritative reconciliation");
+  "cache-pending create must attempt exactly one token-authorized reconciliation");
 assert.deepEqual(toastStack.children.map((item) => item.textContent), [
   "Private replacement invite created — details unavailable; retry refresh",
 ]);
@@ -6176,25 +6226,25 @@ await Promise.all([
   click({ target: replacementRefreshControl }),
   click({ target: replacementRefreshControl }),
 ]);
-assert.equal(reconciliationListCalls, 2, "each retry must make only one list call");
+assert.equal(reconciliationListCalls, 2, "each retry must make only one token-authorized invite call");
 assert.equal(store.replacementRequestForBooking(routedDeferBooking.id).cachePending, true);
 assert.match(viewEl.innerHTML, /Invite created — details unavailable/);
 assert.match(viewEl.innerHTML, /Retry refresh/);
 assert.equal(reconcilingCreateCalls, 1, "failed retry must never create another invite");
 reconciliationListFails = false;
 operationalSessionRelationshipReadErrors.set(reconcilingReplacementRow.sessionId,
-  { message: "List enrichment temporarily unavailable" });
+  { message: "Invite enrichment temporarily unavailable" });
 await click({ target: replacementRefreshControl });
 assert.equal(reconciliationListCalls, 3);
 assert.equal(store.replacementRequestForBooking(routedDeferBooking.id).cachePending, true,
-  "list enrichment failure must also retain duplicate suppression and explicit retry");
+  "invite enrichment failure must also retain duplicate suppression and explicit retry");
 assert.match(viewEl.innerHTML, /Invite created — details unavailable/);
 operationalSessionRelationshipReadErrors.delete(reconcilingReplacementRow.sessionId);
 await click({ target: replacementRefreshControl });
 assert.equal(reconciliationListCalls, 4);
 const authoritativeReplacement = store.replacementRequestForBooking(routedDeferBooking.id);
 assert.equal(authoritativeReplacement.requestId, reconcilingReplacementRow.requestId);
-assert.equal(authoritativeReplacement.cachePending, undefined, "successful list clears pending overlay");
+assert.equal(authoritativeReplacement.cachePending, undefined, "successful member invite lookup clears pending overlay");
 assert.equal(authoritativeReplacement.sessionId, reconcilingReplacementRow.sessionId);
 assert.match(viewEl.innerHTML, /Share via WhatsApp/);
 assert.match(viewEl.innerHTML, /Share this single-use invite before/);
@@ -6204,23 +6254,35 @@ assert.equal(reconcilingCreateCalls, 1, "successful retry is read-only too");
 assert.ok([...mem.values()].every((value) => !value.includes(pendingInviteToken)),
   "reconciliation must never persist the private invite token");
 // Removing the authoritative row must not resurrect a supposedly cleared overlay.
+recoveryActor.role = recoveryRole;
 operationalRpcHandler = (name, args) => name === "list_operational_replacement_requests"
   ? Promise.resolve({ data: [], error: null })
   : delegatedBaseOperationalRpcHandler(name, args);
 await operations.liveListReplacementRequests();
 assert.equal(store.replacementRequestForBooking(routedDeferBooking.id), null);
-// Also recover within create's single automatic list attempt, without a retry click.
+// Also recover within create's single automatic invite lookup, without a retry click.
 operationalSessionRelationshipReadErrors.set(reconcilingReplacementRow.sessionId,
   { message: "Initial create enrichment failed again" });
 let automaticReconciliationCalls = 0;
+recoveryActor.role = "member";
 operationalRpcHandler = (name, args) => {
   if (name === "create_operational_replacement_request") {
+    recoveryTokenHash = args.p_token_hash;
     return Promise.resolve({ data: structuredClone(reconcilingReplacementRow), error: null });
   }
   if (name === "list_operational_replacement_requests") {
+    throw new Error("Admin access required.");
+  }
+  if (name === "get_operational_replacement_invite") {
+    assert.equal(args.p_token_hash, recoveryTokenHash);
     automaticReconciliationCalls += 1;
     operationalSessionRelationshipReadErrors.delete(reconcilingReplacementRow.sessionId);
-    return Promise.resolve({ data: [structuredClone(reconcilingReplacementRow)], error: null });
+    return Promise.resolve({ data: structuredClone(reconcilingReplacementRow), error: null });
+  }
+  if (name === "cancel_operational_replacement_request") {
+    assert.equal(recoveryActor.role, "member");
+    assert.equal(args.p_request_id, reconcilingReplacementRow.requestId);
+    return Promise.resolve({ data: { ...reconcilingReplacementRow, status: "cancelled" }, error: null });
   }
   return delegatedBaseOperationalRpcHandler(name, args);
 };
@@ -6232,8 +6294,12 @@ assert.match(viewEl.innerHTML, /Share via WhatsApp/);
 assert.doesNotMatch(viewEl.innerHTML, /replacement-refresh|Create private invite/);
 assert.ok([...mem.values()].every((value) =>
   !value.includes(store.replacementInviteTokenForBooking(routedDeferBooking.id))));
+assert.match(viewEl.innerHTML, /replacement-cancel/, "recovered invite exposes cancellation");
+await store.cancelReplacement(reconcilingReplacementRow.requestId);
+assert.equal(store.replacementRequestForBooking(routedDeferBooking.id).status, "cancelled");
 operationalRpcHandler = delegatedBaseOperationalRpcHandler;
 
+recoveryActor.role = recoveryRole;
 const paidControlServerRow = operationalTableRows.operational_sessions
   .find((row) => row.id === routingSessions[0].id);
 const reopenControlServerRow = operationalTableRows.operational_sessions

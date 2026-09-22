@@ -233,6 +233,26 @@ as $$
        where public.operational_is_retired_hyrox_activity(s.activity_id)
          and p_destination = '#/activity/' || s.id
     )
+    -- Historical generic Admin producers use now() both on the authoritative
+    -- payment/gym record and notification. Any retired match wins, including
+    -- transactions that also contain active ECC work. Unlike HYROX-only review
+    -- notices, unrelated generic notices without provenance remain visible.
+    or (
+      coalesce(p_kind, '') = 'operational_payment_marked'
+      and exists (
+        select 1 from public.operational_bookings b
+         where b.payment_marked_at = p_created_at
+           and public.operational_is_retired_hyrox_booking(b.id)
+      )
+    )
+    or (
+      coalesce(p_kind, '') = 'operational_gym_finalized'
+      and exists (
+        select 1 from public.operational_sessions s
+         where s.gym_confirmed_at = p_created_at
+           and public.operational_is_retired_hyrox_activity(s.activity_id)
+      )
+    )
     or (
       coalesce(p_kind, '') = 'hyrox_replacement_review'
       and (

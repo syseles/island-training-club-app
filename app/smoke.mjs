@@ -388,6 +388,23 @@ store.resetLocalData();
       lookalike: { userId: "collector-e", cycleId: "community-cycle-2099-01-03", sessionId: "event-hyrox-bft-party-2099-01-03" },
     },
   };
+  // Historical local producer has only kind/link and Date.now() provenance.
+  v23PoolFixture.replacementRequests[0].acceptedAt = 1000;
+  v23PoolFixture.replacementRequests[2].acceptedAt = 2000;
+  v23PoolFixture.replacementRequests.push(
+    { id: "ambiguous-pool", bookingId: "pool-booking", acceptedAt: 3000 },
+    { id: "ambiguous-ecc", bookingId: "ecc-booking", acceptedAt: 3000 },
+  );
+  const reviewNotice = (id, createdAt) => ({
+    id, userId: "review-admin", kind: "hyrox-replacement-review",
+    body: "A HYROX replacement needs Admin confirmation.",
+    link: "#/admin/ops", createdAt, read: false,
+  });
+  v23PoolFixture.notifications.push(
+    reviewNotice("retired-review", 1000), reviewNotice("ecc-review", 2000),
+    reviewNotice("ambiguous-review", 3000), reviewNotice("unmatched-review", 4000),
+  );
+  const expectedEccReview = structuredClone(v23PoolFixture.notifications.find((row) => row.id === "ecc-review"));
   const expectedEccBooking = {
     ...structuredClone(v23PoolFixture.bookings[3]),
     replacementUserId: null,
@@ -415,6 +432,10 @@ store.resetLocalData();
   const migrated = store.load();
 
   assert.equal(migrated.version, 24);
+  assert.deepEqual(store.notificationsFor("review-admin"), [expectedEccReview],
+    "generic local review notices must retain only proven active ECC provenance");
+  assert.equal(store.notificationsFor("review-admin").filter((row) => !row.read).length, 1,
+    "retired, ambiguous and unmatched review notices must not inflate unread counts");
   assert.equal(migrated.activities.some((row) => ["hyrox-bft", "hyrox-midtown"].includes(row.id)), false);
   assert.equal(migrated.activities.some((row) => row.id === "hyrox-quarry-bay"), true);
   assert.equal(Object.keys(migrated.hyroxCycles).length, 0);
@@ -533,6 +554,11 @@ for (const [name, expectedHash] of protectedPoolMigrationHashes) {
 }
 console.log("ok  HYROX retirement migration version and historical pool migrations are protected");
 
+for (const path of ["committee-feedback-tracker.md", "feedback-tracker-builder.js", "feedback-tracker-lists.csv"]) {
+  assert.doesNotMatch(readFileSync(resolve(__dirnameSmoke, "../docs", path), "utf8"),
+    /HYROX Cycle|HYROX Registration/, `${path} must not offer retired screens`);
+}
+
 const currentHyroxDocPaths = [
   "../README.md",
   "../docs/runbooks/operational-backend.md",
@@ -579,9 +605,10 @@ const markdownSection = (source, heading, headingLevel) => {
 };
 const releaseSequenceMarkers = [
   "1. **Inventory, apply, and verify the backend and RPC boundary.**",
-  "2. **Deploy the reviewed preview.**",
-  "3. **Run browser UI and Island ECC acceptance.**",
-  "4. **Promote the exact accepted snapshot.**",
+  "2. **Deploy and verify the avatar boundary.**",
+  "3. **Deploy the reviewed preview.**",
+  "4. **Run browser UI and Island ECC acceptance.**",
+  "5. **Promote the exact accepted snapshot.**",
 ];
 function assertHyroxRunbookContract(source, relativePath) {
   const rollout = markdownSection(
@@ -597,6 +624,12 @@ function assertHyroxRunbookContract(source, relativePath) {
     `${relativePath} must order backend, preview, browser acceptance, then promotion`);
   assert.match(sequence, /pool RPC denial and Island ECC active-RPC checks/i,
     `${relativePath} must verify the RPC boundary before preview deployment`);
+  assert.match(sequence, /Deploy the reviewed `resolve-profile-avatars` Edge Function/,
+    `${relativePath} must explicitly deploy the service-role boundary upgrade`);
+  assert.match(rollout, /classifier-failure fail-closed/,
+    `${relativePath} requires direct endpoint failure acceptance`);
+  assert.match(rollout, /direct authenticated endpoint/i);
+  assert.match(rollout, /artifact revision/i);
   assert.match(sequence, /reviewed preview revision/i,
     `${relativePath} must deploy the reviewed preview before UI acceptance`);
   assert.match(sequence, /browser UI and the full Island ECC lifecycle/i,
@@ -611,6 +644,7 @@ function assertHyroxRunbookContract(source, relativePath) {
     `${relativePath} rollback must require an actionable new forward migration`);
   assert.match(rollback, /compatible frontend deployment/i,
     `${relativePath} rollback must require a compatible frontend`);
+  assert.match(rollback, /compatible.*Edge Function/i);
   assert.match(rollback, /Never edit or replay applied migration history\./i,
     `${relativePath} rollback must prohibit editing or replaying applied history`);
   assert.doesNotMatch(rollback,
@@ -625,9 +659,17 @@ for (const [relativePath, source] of currentHyroxDocs.slice(1)) {
 }
 const operationalRunbookSource = currentHyroxDocs.find(([path]) =>
   path.endsWith("operational-backend.md"))?.[1] || "";
+assert.match(operationalRunbookSource, /version alone is not artifact identity/i);
 assert.match(operationalRunbookSource,
   /n\.kind = 'hyrox_replacement_review'[\s\S]*?r\.accepted_at = n\.created_at[\s\S]*?r\.booking_id in \(select id from retired_bookings\)[\s\S]*?not exists \([\s\S]*?r\.accepted_at = n\.created_at/i,
   "pre-apply inventory must conservatively count retired and unmatched replacement-review notices");
+for (const [kind, timestamp] of [
+  ["operational_payment_marked", "payment_marked_at"],
+  ["operational_gym_finalized", "gym_confirmed_at"],
+]) {
+  assert.ok(operationalRunbookSource.includes(`n.kind = '${kind}'`));
+  assert.ok(operationalRunbookSource.includes(`${timestamp} = n.created_at`));
+}
 assert.match(operationalRunbookSource,
   /query emits only the aggregate bucket—never notification IDs or content/i,
   "production replacement-review inventory must remain count-only");

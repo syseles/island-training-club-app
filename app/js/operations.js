@@ -268,7 +268,7 @@ async function cacheReplacementRequest(row) {
   } catch {
     // The mutation already succeeded authoritatively. Keep the cache closed to
     // unresolved data without reporting the successful write as a failure;
-    // The Store's bounded explicit replacement-list read can reconcile it;
+    // The Store's bounded token-authorized invite read can reconcile it;
     // ordinary operational hydration does not fetch replacement requests.
     evictUnreconciledReplacement(row);
     return safeResult;
@@ -439,15 +439,25 @@ function replaceState(payload) {
   }
   liveCache.templates = (payload.templates || [])
     .filter((row) => !isRetiredHyroxActivityId(row.activity_id ?? row.activityId));
-  liveCache.bookings = payload.bookings
-    .filter((row) => !isRetiredHyroxBooking(row, getSession));
+  const hasActiveSession = (id) => {
+    const session = getSession(id);
+    return Boolean(session?.activityId ?? session?.activity_id) && !isRetiredHyroxSession(session);
+  };
+  const bookingIsActive = (row) => !isRetiredHyroxBooking(row, getSession)
+    && (Boolean(row.cycleId) || hasActiveSession(row.sessionId));
+  liveCache.bookings = payload.bookings.filter(bookingIsActive);
   liveCache.queues = payload.queues
     .filter((row) => {
       const session = getSession(row.sessionId ?? row.session_id);
       return Boolean(session) && !isRetiredHyroxSession(session);
     });
-  liveCache.receipts = payload.receipts
-    .filter((row) => !isRetiredHyroxReceipt(row, getBooking));
+  liveCache.receipts = payload.receipts.filter((row) => {
+    if (isRetiredHyroxReceipt(row, getBooking)) return false;
+    const booking = getBooking(row.bookingId);
+    if (booking && !bookingIsActive(booking)) return false;
+    return Boolean(row.cycleId)
+      || hasActiveSession(row.sessionId || booking?.sessionId);
+  });
   // Collector assignments are shared week records with no product relation.
   // Keep them intact so Island ECC still resolves its collector.
   liveCache.assignments = new Map(
@@ -970,6 +980,19 @@ export async function liveReplacementInvite(tokenHash) {
   }, { skipRefresh: true });
   const [request] = await replacementRequestsWithActiveRelationships([row]);
   return request || null;
+}
+
+// Owner recovery uses the existing approved-member token capability, never
+// the Admin-only list. Validate identity before touching the shared cache.
+export async function liveRefreshReplacementRequest(bookingId, requestId, tokenHash) {
+  const row = await runOperationalRpc("get_operational_replacement_invite", {
+    p_token_hash: tokenHash,
+  }, { skipRefresh: true });
+  const request = buildReplacementRequestRow(row);
+  if (request?.bookingId !== bookingId || (requestId && request.requestId !== requestId)) {
+    throw new Error("Replacement details unavailable. Please retry refresh.");
+  }
+  return cacheReplacementRequest(row);
 }
 
 export async function liveAcceptReplacement(tokenHash) {

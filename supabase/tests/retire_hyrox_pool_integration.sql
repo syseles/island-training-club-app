@@ -383,6 +383,34 @@ begin
     'renamed pre-retirement implementations must remain browser-denied'
   );
 
+  perform pg_temp.retire_assert(
+    not has_function_privilege('anon', 'public.operational_notification_is_retired_hyrox(text,text,timestamptz)', 'execute')
+      and not has_function_privilege('authenticated', 'public.operational_notification_is_retired_hyrox(text,text,timestamptz)', 'execute')
+      and has_function_privilege('authenticated', 'private.operational_notification_is_active(text,text,timestamptz)', 'execute'),
+    'notification classifier stays private to browser policy evaluation'
+  );
+  perform pg_temp.retire_assert(
+    not exists (
+      select 1 from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+       where (n.nspname = 'private' and p.proname like 'operational_%_is_active')
+          or (n.nspname = 'public' and p.proname in (
+            'operational_is_retired_hyrox_session', 'operational_is_retired_hyrox_booking',
+            'operational_notification_is_retired_hyrox', 'get_operational_replacement_invite',
+            'list_operational_replacement_requests'))
+       group by p.oid, p.prosecdef, p.proconfig
+       having not p.prosecdef or not coalesce('search_path=public' = any(p.proconfig), false)
+    ),
+    'classification and replacement security definers have fixed search paths'
+  );
+  perform pg_temp.retire_assert(
+    (select count(*) from pg_policies where schemaname = 'public' and tablename = 'notifications'
+      and cmd in ('SELECT', 'UPDATE', 'ALL')) = 2
+      and not exists (select 1 from pg_policies where schemaname = 'public' and tablename = 'notifications'
+        and cmd in ('SELECT', 'UPDATE', 'ALL')
+        and policyname not in ('self read active notifications', 'self mark active notification read')),
+    'notification policies cannot be OR-composed with a legacy permissive policy'
+  );
+
   -- Templates and provisioning.
   perform pg_temp.retire_assert(
     not (select active from public.operational_activity_templates where activity_id = 'hyrox-bft'),
@@ -574,6 +602,21 @@ begin
 
   perform set_config('request.jwt.claim.sub', v_member::text, true);
   set local role authenticated;
+  perform pg_temp.retire_expect_denied(
+    'select public.list_operational_replacement_requests()', 'Admin access required.'
+  );
+  select public.create_operational_replacement_request(
+    v_ecc_booking_id, repeat('b', 64), now() + interval '12 hours'
+  ) into v_result;
+  perform pg_temp.retire_assert(
+    public.get_operational_replacement_invite(repeat('b', 64))->>'requestId' = v_result->>'requestId'
+      and not (public.get_operational_replacement_invite(repeat('b', 64)) ?| array['token_hash', 'tokenHash', 'inviteToken']),
+    'ordinary member token-hash recovery succeeds without Admin listing or token disclosure'
+  );
+  perform pg_temp.retire_assert(
+    public.cancel_operational_replacement_request((v_result->>'requestId')::uuid)->>'status' = 'cancelled',
+    'ordinary member can cancel the recovered invite'
+  );
   select (public.create_operational_replacement_request(
     v_ecc_booking_id, repeat('c', 64), now() + interval '12 hours'
   )->>'requestId')::uuid into v_ecc_replacement_id;
@@ -788,6 +831,98 @@ begin
         where id = v_pool_replacement_id) = 1,
     'all retained pool fixture row counts must remain unchanged'
   );
+end;
+$$;
+
+-- Historical generic Admin producers: timestamp relationships, not body parsing.
+-- Includes direct pre-pool BFT, Midtown, ECC-only, mixed-transaction ambiguity,
+-- and unrelated generic notices with no HYROX provenance.
+do $$
+declare
+  v_admin uuid := 'a2200000-0000-0000-0000-000000000001';
+  v_member uuid := 'a2200000-0000-0000-0000-000000000002';
+  v_kind text;
+  v_case integer;
+  v_activity text;
+  v_session text;
+  v_time timestamptz;
+  v_id uuid;
+  v_before jsonb;
+  v_rows integer;
+  v_hidden boolean;
+  v_inventory_hidden boolean;
+begin
+  foreach v_kind in array array['operational_payment_marked', 'operational_gym_finalized'] loop
+    for v_case in 1..6 loop
+      v_time := '2001-01-01Z'::timestamptz + v_case * interval '1 day'
+        + case when v_kind = 'operational_gym_finalized' then interval '10 days' else interval '0' end;
+      -- 1 BFT, 2 Midtown, 3 ECC-only, 4 retired+active, 5 no relationship,
+      -- 6 historical unallocated pool payment (no direct session).
+      foreach v_activity in array case v_case
+        when 1 then array['hyrox-bft'] when 2 then array['hyrox-midtown']
+        when 3 then array['hyrox-quarry-bay']
+        when 4 then array['hyrox-bft', 'hyrox-quarry-bay'] else array[]::text[] end loop
+        v_session := v_activity || '-' || v_time::date;
+        insert into public.operational_sessions
+          (id, activity_id, session_date, start_time, duration_minutes, venue, capacity, price_hkd, is_open, gym_confirmed_at, gym_confirmed_by)
+        values (v_session, v_activity, v_time::date, '11:00', 60, 'Fixture venue', 30, 180, true,
+          case when v_kind = 'operational_gym_finalized' then v_time end,
+          case when v_kind = 'operational_gym_finalized' then v_admin end);
+        if v_kind = 'operational_payment_marked' then
+          insert into public.operational_bookings
+            (profile_id, session_id, status, pay_deadline_at, payment_marked_at, snapshot)
+          values (v_member, v_session, 'confirmed', v_time, v_time, '{"name":"ITC HYROX","kind":"paid"}');
+        end if;
+      end loop;
+      if v_case = 6 and v_kind = 'operational_payment_marked' then
+        update public.operational_bookings set payment_marked_at = v_time
+         where profile_id = v_admin and session_id is null and hyrox_cycle_id is not null;
+      end if;
+      insert into public.notifications (profile_id, kind, title, body, destination, created_at)
+      values (case when v_case = 6 then v_member else v_admin end, v_kind,
+        case when v_kind = 'operational_payment_marked' then 'HYROX payment claim submitted' else 'Gym confirmation recorded' end,
+        case when v_kind = 'operational_payment_marked' then 'Review the payment claim for ' || v_time::date || '.'
+          else 'Gym confirmation recorded for ' || coalesce(v_session, 'unrelated') || '.' end,
+        '#/admin/payments', v_time)
+      returning id into v_id;
+      v_hidden := v_case in (1, 2, 4) or (v_case = 6 and v_kind = 'operational_payment_marked');
+      -- Same pre-apply-compatible predicates as the count-only inventory.
+      with retired_sessions as (
+        select id from public.operational_sessions where activity_id in ('hyrox-bft', 'hyrox-midtown')
+      ), retired_bookings as (
+        select id from public.operational_bookings
+         where hyrox_cycle_id is not null or session_id in (select id from retired_sessions)
+      )
+      select (n.kind = 'operational_payment_marked' and exists (
+        select 1 from public.operational_bookings b
+         where b.payment_marked_at = n.created_at and b.id in (select id from retired_bookings)
+      )) or (n.kind = 'operational_gym_finalized' and exists (
+        select 1 from public.operational_sessions s
+         where s.gym_confirmed_at = n.created_at and s.id in (select id from retired_sessions)
+      )) into v_inventory_hidden from public.notifications n where id = v_id;
+      perform pg_temp.retire_assert(v_inventory_hidden = v_hidden,
+        'count-only generic notification inventory must match the RLS classifier');
+      perform pg_temp.retire_assert(
+        public.operational_notification_is_retired_hyrox(v_kind, '#/admin/payments', v_time) = v_hidden,
+        'generic producer classification: ' || v_kind || ' case ' || v_case);
+      select to_jsonb(n) into v_before from public.notifications n where id = v_id;
+      perform set_config('request.jwt.claim.sub',
+        (case when v_case = 6 then v_member else v_admin end)::text, true);
+      set local role authenticated;
+      perform pg_temp.retire_assert(
+        (select count(*) from public.notifications where id = v_id) = case when v_hidden then 0 else 1 end,
+        'generic notice SELECT and unread-count boundary');
+      update public.notifications set read_at = now() where id = v_id;
+      get diagnostics v_rows = row_count;
+      perform pg_temp.retire_assert(v_rows = case when v_hidden then 0 else 1 end,
+        'generic notice mark-read boundary');
+      reset role;
+      if v_hidden then
+        perform pg_temp.retire_assert((select to_jsonb(n) = v_before from public.notifications n where id = v_id),
+          'retained generic notice must remain byte-identical');
+      end if;
+    end loop;
+  end loop;
 end;
 $$;
 
