@@ -97,6 +97,7 @@ declare
   v_pool_queue_id uuid;
   v_pool_replacement_id uuid;
   v_pool_review_notification_id uuid;
+  v_unmatched_review_notification_id uuid;
   v_pool_review_created_at timestamptz;
   v_ecc_booking_id uuid;
   v_ecc_queue_id uuid;
@@ -105,6 +106,8 @@ declare
   v_attendance_booking_id uuid;
   v_temp_pool_booking_id uuid;
   v_notification_count integer;
+  v_inventory_retired_review_count integer;
+  v_inventory_active_review_count integer;
   v_cycle_count integer;
   v_pool_booking_before jsonb;
   v_pool_queue_before jsonb;
@@ -268,6 +271,14 @@ begin
     'An approved member accepted a paid HYROX replacement invite. Review it in Admin Payments.',
     '#/admin/ops', v_pool_review_created_at
   ) returning id into v_pool_review_notification_id;
+  insert into public.notifications (
+    profile_id, kind, title, body, destination, created_at
+  ) values (
+    v_admin, 'hyrox_replacement_review',
+    'HYROX replacement needs confirmation',
+    'Unmatched retained review fixture',
+    '#/admin/ops', v_pool_review_created_at - interval '1 second'
+  ) returning id into v_unmatched_review_notification_id;
 
   select to_jsonb(b) into v_pool_booking_before
     from public.operational_bookings b where b.id = v_pool_booking_id;
@@ -495,13 +506,14 @@ begin
   );
   perform pg_temp.retire_assert(
     not exists (
-      select 1 from public.notifications where id = v_pool_review_notification_id
+      select 1 from public.notifications
+       where id in (v_pool_review_notification_id, v_unmatched_review_notification_id)
     ),
-    'realistic retired replacement-review notification must be hidden from Admin'
+    'realistic retired and unmatched replacement-review notifications must be hidden from Admin'
   );
   update public.notifications
      set read_at = now()
-   where id = v_pool_review_notification_id;
+   where id in (v_pool_review_notification_id, v_unmatched_review_notification_id);
   get diagnostics v_rows = row_count;
   perform pg_temp.retire_assert(
     v_rows = 0,
@@ -652,10 +664,71 @@ begin
         select 1 from public.notifications where id = v_ecc_review_notification_id
       )
       and not exists (
-        select 1 from public.notifications where id = v_pool_review_notification_id
+        select 1 from public.notifications
+         where id in (v_pool_review_notification_id, v_unmatched_review_notification_id)
       ),
     'Admin must see Island ECC review notification but not retained pool review'
   );
+  reset role;
+
+  -- Exercise the pre-apply-compatible count-only inventory predicate using a
+  -- retired relationship, an unmatched conservative case, and a review notice
+  -- proven to belong only to active Island ECC. Only aggregate counts leave
+  -- this assertion; no fixture identifier or notification content is emitted.
+  with retired_sessions as (
+    select id
+      from public.operational_sessions
+     where activity_id in ('hyrox-bft', 'hyrox-midtown')
+  ), retired_bookings as (
+    select b.id
+      from public.operational_bookings b
+     where b.hyrox_cycle_id is not null
+        or b.session_id in (select id from retired_sessions)
+  ), classified as (
+    select n.id,
+           n.kind like 'operational_hyrox\_%' escape '\'
+             or n.destination in (
+                  select '#/activity/' || id from retired_sessions
+                  union all select '#/booking/' || id::text from retired_bookings
+                  union all select '#/pay/' || id::text from retired_bookings
+                )
+             or (
+               n.kind = 'hyrox_replacement_review'
+               and (
+                 exists (
+                   select 1
+                     from public.operational_booking_replacement_requests r
+                    where r.accepted_at = n.created_at
+                      and r.booking_id in (select id from retired_bookings)
+                 )
+                 or not exists (
+                   select 1
+                     from public.operational_booking_replacement_requests r
+                    where r.accepted_at = n.created_at
+                 )
+               )
+             ) as retired
+      from public.notifications n
+     where n.id in (
+       v_pool_review_notification_id,
+       v_unmatched_review_notification_id,
+       v_ecc_review_notification_id
+     )
+  )
+  select count(*) filter (where retired),
+         count(*) filter (where not retired)
+    into v_inventory_retired_review_count, v_inventory_active_review_count
+    from classified;
+  perform pg_temp.retire_assert(
+    v_inventory_retired_review_count = 2,
+    'count-only inventory classifies retired and unmatched replacement review notices'
+  );
+  perform pg_temp.retire_assert(
+    v_inventory_active_review_count = 1,
+    'count-only inventory preserves the proven active Island ECC replacement review notice'
+  );
+
+  set local role authenticated;
   update public.notifications set read_at = now()
    where id = v_ecc_review_notification_id;
   get diagnostics v_rows = row_count;

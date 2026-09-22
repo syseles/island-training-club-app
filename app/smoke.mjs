@@ -567,15 +567,108 @@ for (const staleCurrentContract of [
   assert.doesNotMatch(currentHyroxDocSource, staleCurrentContract,
     `current documentation must not retain active-pool guidance: ${staleCurrentContract}`);
 }
-for (const [relativePath, source] of currentHyroxDocs.slice(1)) {
+
+const markdownSection = (source, heading, headingLevel) => {
+  const start = source.indexOf(heading);
+  assert.ok(start >= 0, `missing documentation section ${heading}`);
+  const candidates = Array.from({ length: headingLevel.length }, (_, index) =>
+    source.indexOf(`\n${"#".repeat(index + 1)} `, start + heading.length))
+    .filter((position) => position >= 0);
+  const next = candidates.length ? Math.min(...candidates) : source.length;
+  return source.slice(start, next);
+};
+const releaseSequenceMarkers = [
+  "1. **Inventory, apply, and verify the backend and RPC boundary.**",
+  "2. **Deploy the reviewed preview.**",
+  "3. **Run browser UI and Island ECC acceptance.**",
+  "4. **Promote the exact accepted snapshot.**",
+];
+function assertHyroxRunbookContract(source, relativePath) {
+  const rollout = markdownSection(
+    source,
+    "## HYROX pool retirement: backend-first deployment",
+    "##",
+  );
+  const sequence = markdownSection(rollout, "### Executable release sequence", "###");
+  const markerPositions = releaseSequenceMarkers.map((marker) => sequence.indexOf(marker));
+  assert.ok(markerPositions.every((position) => position >= 0),
+    `${relativePath} must contain every executable release step`);
+  assert.deepEqual(markerPositions, [...markerPositions].sort((a, b) => a - b),
+    `${relativePath} must order backend, preview, browser acceptance, then promotion`);
+  assert.match(sequence, /pool RPC denial and Island ECC active-RPC checks/i,
+    `${relativePath} must verify the RPC boundary before preview deployment`);
+  assert.match(sequence, /reviewed preview revision/i,
+    `${relativePath} must deploy the reviewed preview before UI acceptance`);
+  assert.match(sequence, /browser UI and the full Island ECC lifecycle/i,
+    `${relativePath} must run UI acceptance against the preview`);
+
+  const rollbackHeading = source.includes("\n## Forward-only rollback")
+    ? "## Forward-only rollback"
+    : "### Forward-only rollback";
+  const rollback = markdownSection(source, rollbackHeading,
+    rollbackHeading.startsWith("## ") ? "##" : "###");
+  assert.match(rollback, /new, separately reviewed forward migration/i,
+    `${relativePath} rollback must require an actionable new forward migration`);
+  assert.match(rollback, /compatible frontend deployment/i,
+    `${relativePath} rollback must require a compatible frontend`);
+  assert.match(rollback, /Never edit or replay applied migration history\./i,
+    `${relativePath} rollback must prohibit editing or replaying applied history`);
+  assert.doesNotMatch(rollback,
+    /Edit and replay the applied retirement migration to (?:restore|roll back)/i,
+    `${relativePath} must reject destructive rollback instructions`);
   assert.match(source, /count-only evidence/i,
     `${relativePath} must require privacy-safe production inventory evidence`);
-  const migrationAt = source.indexOf("20260922000001_retire_bft_midtown_hyrox_pool.sql");
-  const frontendAt = source.search(/deploy (?:the )?(?:Testing\/preview |dependent )?frontend/i);
-  assert.ok(migrationAt >= 0 && frontendAt > migrationAt,
-    `${relativePath} must put the retirement migration before frontend deployment`);
 }
-console.log("ok  current HYROX documentation enforces ECC-only rollout, deep-link, retention, and rollback contracts");
+
+for (const [relativePath, source] of currentHyroxDocs.slice(1)) {
+  assertHyroxRunbookContract(source, relativePath);
+}
+const operationalRunbookSource = currentHyroxDocs.find(([path]) =>
+  path.endsWith("operational-backend.md"))?.[1] || "";
+assert.match(operationalRunbookSource,
+  /n\.kind = 'hyrox_replacement_review'[\s\S]*?r\.accepted_at = n\.created_at[\s\S]*?r\.booking_id in \(select id from retired_bookings\)[\s\S]*?not exists \([\s\S]*?r\.accepted_at = n\.created_at/i,
+  "pre-apply inventory must conservatively count retired and unmatched replacement-review notices");
+assert.match(operationalRunbookSource,
+  /query emits only the aggregate bucket—never notification IDs or content/i,
+  "production replacement-review inventory must remain count-only");
+
+for (const [relativePath, source] of currentHyroxDocs.slice(1)) {
+  const unsafeRollback = source.replace(
+    /(?:###|##) Forward-only rollback[\s\S]*?(?=\n## |\n### |$)/,
+    `${source.includes("\n## Forward-only rollback") ? "##" : "###"} Forward-only rollback\n\nForward-only rollback. Edit and replay the applied retirement migration to restore pool access.\n`,
+  );
+  assert.throws(() => assertHyroxRunbookContract(unsafeRollback, `${relativePath} unsafe fixture`),
+    /new forward migration|compatible frontend|editing or replaying|destructive rollback/,
+    `${relativePath} contract must reject unsafe applied-history rollback`);
+
+  const invertedRollout = source
+    .replace(releaseSequenceMarkers[1], "__PREVIEW_STEP__")
+    .replace(releaseSequenceMarkers[2], releaseSequenceMarkers[1])
+    .replace("__PREVIEW_STEP__", releaseSequenceMarkers[2]);
+  assert.throws(() => assertHyroxRunbookContract(invertedRollout, `${relativePath} inverted fixture`),
+    /order backend, preview, browser acceptance, then promotion/,
+    `${relativePath} contract must reject inverted preview/acceptance order`);
+  const missingRollout = source.replace(releaseSequenceMarkers[1], "");
+  assert.throws(() => assertHyroxRunbookContract(missingRollout, `${relativePath} missing fixture`),
+    /every executable release step/,
+    `${relativePath} contract must reject a missing preview deployment step`);
+}
+
+const retirementIntegrationContractSource = readFileSync(
+  resolve(__dirnameSmoke, "../supabase/tests/retire_hyrox_pool_integration.sql"),
+  "utf8",
+);
+for (const marker of [
+  "count-only inventory classifies retired and unmatched replacement review notices",
+  "count-only inventory preserves the proven active Island ECC replacement review notice",
+]) {
+  assert.ok(retirementIntegrationContractSource.includes(marker),
+    `retirement integration must prove ${marker}`);
+}
+assert.match(retirementIntegrationContractSource,
+  /select count\(\*\) filter \(where retired\),\s*count\(\*\) filter \(where not retired\)\s*into v_inventory_retired_review_count, v_inventory_active_review_count/i,
+  "replacement-review inventory fixtures must expose only aggregate retired/active counts");
+console.log("ok  current HYROX documentation enforces executable rollout, inventory, deep-link, retention, and rollback contracts");
 
 const storeSource = readFileSync(resolve(__dirnameSmoke, "js/store.js"), "utf8");
 const weekVenueSource = storeSource.match(

@@ -38,6 +38,17 @@ Production has known migration-history drift. Do **not** replay the chain, use u
 
 This rollout is strictly backend-first deployment. A frontend containing retirement behavior must not target an unmigrated project.
 
+### Executable release sequence
+
+Use this sequence without reordering or combining its gates:
+
+1. **Inventory, apply, and verify the backend and RPC boundary.** Run the count-only inventory, apply only the reviewed retirement migration, compare retained counts, and complete pool RPC denial and Island ECC active-RPC checks.
+2. **Deploy the reviewed preview.** Deploy the reviewed preview revision against that verified migrated backend; do not promote it yet.
+3. **Run browser UI and Island ECC acceptance.** Against the deployed preview, verify browser UI and the full Island ECC lifecycle, exact deep-link behavior, and absence of retired data.
+4. **Promote the exact accepted snapshot.** Promote only the exact preview commit accepted in step 3, then repeat bounded production checks.
+
+The local gates below precede this release sequence and never replace any production or preview gate.
+
 ### 1. Local gates
 
 From the reviewed checkout, prove migration-version uniqueness and run the complete local safety suite:
@@ -144,11 +155,29 @@ with retired_sessions as (
            union all select '#/booking/' || id::text from retired_bookings
            union all select '#/pay/' || id::text from retired_bookings
          )
+      or (
+        n.kind = 'hyrox_replacement_review'
+        and (
+          exists (
+            select 1
+              from public.operational_booking_replacement_requests r
+             where r.accepted_at = n.created_at
+               and r.booking_id in (select id from retired_bookings)
+          )
+          or not exists (
+            select 1
+              from public.operational_booking_replacement_requests r
+             where r.accepted_at = n.created_at
+          )
+        )
+      )
 )
 select metric, bucket, row_count
   from metrics
  order by metric, bucket;
 ```
+
+The `hyrox_replacement_review` branch mirrors the pre-migration relationship rule: a notice matching any retired booking is counted; an ambiguous notice with no replacement at the same acceptance/creation timestamp is conservatively counted; and a notice is excluded only when that timestamp resolves exclusively to a proven active replacement such as Island ECC. If active and retired replacements share a timestamp, the retired match wins. The query emits only the aggregate bucket—never notification IDs or content. The rollback-scoped integration includes retired, unmatched, and proven-active Island ECC review-notice controls and asserts the expected aggregate classification.
 
 Record the UTC query time and count-only evidence. Confirm with the data owner that future BFT/Midtown/pool rows are the acknowledged test records. A mismatch or evidence of genuine future member activity blocks deployment; do not infer consent, cancel it, migrate it, or inspect personal fields.
 
@@ -263,37 +292,45 @@ supabase migration list --linked
 
 Never repair a historical pool version as part of this rollout.
 
-### 5. Browser denial and Island ECC acceptance
+### 5. Pre-preview backend and RPC denial/active checks
 
-Use separate disposable approved-member and Admin fixtures against the migrated backend.
+Use separate disposable approved-member and Admin API sessions against the migrated backend. This is an RPC/data-boundary gate, not browser UI acceptance.
 
-1. As member and Admin browser sessions, attempts to select pool cycles/queues must fail or return no rows; retired templates, sessions, bookings, receipts, replacements, and notifications must not hydrate.
-2. Pool reservation, waitlist, venue choice/switch, allocation, cancellation, reminder, payment, attendance, and replacement attempts must be denied before any row, audit, queue, or notification side effect.
-3. Re-run count-only evidence and confirm all retained counts remain unchanged and no retirement notification was added.
-4. Complete Island ECC reserve → mark paid → Admin confirmation → receipt → attendance. Exercise waitlist behavior with disposable capacity fixtures where applicable.
-5. Create and accept a disposable Island ECC replacement invite; Admin confirmation changes only the effective attendee. The original payer, payment, receipt owner, amount, and direct session remain unchanged.
-6. Verify visitor, pending, member, Admin, and Super Admin Home/Schedule/Admin surfaces show Island ECC once and no active pool controls or indirect pool counts.
-7. Verify exact deep-link behavior without RPC or avatar calls: known retired Activity, pool, booking, payment, checkout, and receipt references show `This session is no longer available.` and keep their original URL; an unknown identifier shows the existing safe not-found state. Neither case redirects to Island ECC.
-8. Remove all disposable fixtures and prove cleanup with count-only queries.
+1. As member and Admin API clients, attempts to select pool cycles/queues must fail or return no rows; retired templates, sessions, bookings, receipts, replacements, and notifications must not hydrate.
+2. Pool reservation, waitlist, venue choice/switch, allocation, cancellation, reminder, payment, attendance, and replacement RPCs must be denied before any row, audit, queue, or notification side effect.
+3. Exercise Island ECC active RPCs with disposable fixtures: reserve, mark paid, Admin confirm, issue/read receipt, attendance, waitlist where applicable, and replacement acceptance/confirmation. Verify replacement preserves original payer, payment, receipt owner, amount, and direct session.
+4. Re-run count-only evidence. Retained rows/statuses and the complete pool-related notification count—including retired/unmatched replacement-review notices—must equal baseline.
+5. Remove API fixtures and prove cleanup with count-only queries.
 
-Record fixture UUIDs and bounded UTC timestamps only. Never retain names, emails, tokens, payment references, notification bodies, or screenshots containing personal data.
+Any failure blocks preview deployment.
 
-### 6. Frontend order
+### 6. Deploy the reviewed preview
 
-Only after steps 1–5 pass:
+Deploy the reviewed preview revision—the exact tested commit—against the migrated and verified backend. Confirm the served revision and target Supabase project. Do not merge or promote it yet.
 
-1. deploy the Testing/preview frontend from the reviewed commit against the migrated project;
-2. repeat browser denial, exact deep-link, and full Island ECC acceptance in current Chrome and Safari at 375 px;
-3. promote the exact accepted Testing snapshot to production;
-4. repeat minimal canonical-route and Island ECC acceptance, then compare retained counts once more.
+### 7. Browser UI and Island ECC acceptance
 
-A failed or unexecuted backend gate blocks frontend promotion. Frontend rollback alone does not restore pool access and must never point old pool UI at the migrated backend.
+Against that deployed preview, use separate visitor, pending, approved-member, Admin, and Super Admin browser sessions in current Chrome and Safari at 375 px.
+
+1. Verify Home, Schedule, Profile/history/notifications, Admin Activities, and Admin Payments show Island ECC once, expose no active pool controls or indirect pool counts, and do not clip horizontally.
+2. Verify known retired Activity, pool, booking, payment, checkout, and receipt deep links show `This session is no longer available.` and keep the original URL without RPC/avatar calls. Unknown identifiers keep the safe not-found state. Neither redirects to Island ECC.
+3. Through the browser UI, complete the full Island ECC lifecycle: reserve → mark paid → Admin confirmation → receipt → attendance, plus waitlist behavior where applicable.
+4. Create and accept an Island ECC replacement invite, then confirm it as Admin. Verify only effective attendee ownership changes; payer/payment/receipt ownership remains unchanged.
+5. Compare retained count-only evidence again, confirm no retirement notification was created, remove all preview fixtures, and prove cleanup.
+
+Record fixture UUIDs and bounded UTC timestamps only. Never retain names, emails, tokens, payment references, notification bodies, or screenshots containing personal data. Any failure blocks production promotion.
+
+### 8. Promote the exact accepted snapshot
+
+Promote only the exact preview commit accepted in step 7. Wait for the production deployment, confirm its served revision, repeat minimal canonical-route/browser-denial and Island ECC lifecycle checks, compare retained counts once more, and remove all disposable fixtures.
+
+A failed or unexecuted backend or preview gate blocks promotion. Frontend rollback alone does not restore pool access and must never point old pool UI at the migrated backend.
 
 ## Forward-only rollback
 
-Rollback is a forward-only rollback: preserve all retained rows and write a new, separately reviewed migration that explicitly restores any intended template activation, policies, grants, functions, and provisioning. Pair it with a compatible frontend deployment in backend-first order.
+Rollback is a forward-only rollback: preserve all retained rows and write a new, separately reviewed forward migration that explicitly restores any intended template activation, policies, grants, functions, and provisioning. Pair it with a compatible frontend deployment in backend-first order.
 
-Never edit, delete, replay, or mark down `20260922000001_retire_bft_midtown_hyrox_pool.sql`; never alter historical pool migrations; never drop/truncate retained tables; and never reconstruct state from browser caches. If only the retirement frontend is defective, redeploy a reviewed frontend that keeps pool entry points unavailable while the backend boundary remains in force.
+Never edit or replay applied migration history. Never delete or mark down `20260922000001_retire_bft_midtown_hyrox_pool.sql`, alter historical pool migrations, drop/truncate retained tables, or reconstruct state from browser caches. If only the retirement frontend is defective, redeploy a reviewed compatible frontend that keeps pool entry points unavailable while the backend boundary remains in force.
 
 ## Release checklist
 

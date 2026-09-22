@@ -243,40 +243,23 @@ and remote history.
 
 Follow the complete [operational backend retirement
 procedure](operational-backend.md#hyrox-pool-retirement-backend-first-deployment).
-Its required order is:
 
-1. Run the static safety test plus a clean disposable migration replay and the
-   rollback-scoped retirement integration.
-2. Collect the trusted SQL production inventory and retain count-only evidence.
-   Do not log member names, emails, profile IDs, payment references,
-   replacement tokens, notification bodies, or screenshots of row content.
-   Confirm future pool rows are the acknowledged test records.
-3. Apply and verify only
-   `20260922000001_retire_bft_midtown_hyrox_pool.sql`. Confirm BFT/Midtown are
-   inactive, Island ECC remains active, browser reads and pool RPCs are denied,
-   shared RPC guards reject retired targets before side effects, retained row
-   counts/statuses are unchanged, and no retirement notification was inserted.
-4. Record only version `20260922000001` after every backend check passes. Then
-   deploy the Testing/preview frontend against that migrated project; never
-   deploy the dependent frontend first.
-5. In separate disposable member/Admin sessions, prove retired cycles, queues,
-   bookings, receipts, replacements, and notifications do not hydrate. Verify
-   known retired and unknown deep links use the exact behavior above. Complete
-   Island ECC reserve → mark paid → Admin confirm → receipt → attendance,
-   waitlist, and replacement acceptance without changing payer/receipt owner.
-6. Promote the exact accepted Testing snapshot, repeat minimal production
-   acceptance, compare the count-only evidence again, and remove fixtures.
+### Executable release sequence
 
-A failed or unexecuted backend, privacy, retained-count, denial, or Island ECC
-check blocks frontend deployment. Do not treat a successful SQL command alone
-as acceptance.
+Use this sequence without reordering or combining its gates:
 
-Rollback is a **forward-only rollback**. Preserve retained rows and add a new,
-reviewed migration for any intentional restoration of template state, grants,
-policies, functions, or provisioning, followed by a compatible frontend
-revision in backend-first order. Never edit/replay the applied retirement or
-historical migrations, drop retained tables, or expose the old pool UI while
-the retirement backend remains active.
+1. **Inventory, apply, and verify the backend and RPC boundary.** Run local gates, collect and retain count-only evidence from production, apply only `20260922000001_retire_bft_midtown_hyrox_pool.sql`, compare retained counts, and complete pool RPC denial and Island ECC active-RPC checks with disposable API fixtures. The notification inventory must count retired and unmatched `hyrox_replacement_review` notices while excluding a review notice proven to belong only to active Island ECC.
+2. **Deploy the reviewed preview.** Deploy the reviewed preview revision—the exact tested commit—against the migrated and verified project; confirm the served revision and Supabase target without promoting it.
+3. **Run browser UI and Island ECC acceptance.** Against that preview, verify browser UI and the full Island ECC lifecycle in separate visitor/member/Admin sessions: retired data stays absent, deep-link behavior is exact, and Island ECC reserve/payment/confirmation/receipt/attendance/waitlist/replacement paths work without payer or receipt transfer.
+4. **Promote the exact accepted snapshot.** Promote only the exact preview commit accepted in step 3, then repeat bounded production route, denial, count-only, Island ECC, and fixture-cleanup checks.
+
+A failed or unexecuted local, inventory, backend, RPC, preview, privacy, retained-count, denial, or Island ECC gate blocks the next step. Do not treat a successful SQL command alone as acceptance, and do not run browser UI acceptance against the previous frontend.
+
+### Forward-only rollback
+
+Rollback is a **forward-only rollback**. Preserve retained rows and add a new, separately reviewed forward migration for any intentional restoration of template state, grants, policies, functions, or provisioning, followed by a compatible frontend deployment in backend-first order.
+
+Never edit or replay applied migration history. Never delete or mark down the applied retirement migration, alter historical migrations, drop retained tables, or expose the old pool UI while the retirement backend remains active. A frontend-only rollback must remain compatible with the retirement backend and keep retired entry points unavailable.
 
 ## Private prayer requests: deployment, acceptance, and rollback
 
