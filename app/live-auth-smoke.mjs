@@ -172,6 +172,7 @@ let givingCampaignRows = [];
 let operationalRpcHandler = null;
 let operationalAuthSubOverride = null;
 let operationalVenueOverrideReadError = null;
+const operationalSessionRelationshipReadErrors = new Map();
 let operationalRsvpCountError = null;
 let operationalRsvpCountRowsOverride = null;
 let operationalAttendanceError = null;
@@ -740,11 +741,19 @@ const fakeSupabase = {
       const rows = operationalTableRows[table];
       const sessionFilters = { since: null, ids: null };
       const result = () => {
-        const error = table === "operational_session_venue_overrides"
+        let error = table === "operational_session_venue_overrides"
           ? operationalVenueOverrideReadError
           : table === "operational_hyrox_queue_entries" && !liveSession
             ? { message: "permission denied for table operational_hyrox_queue_entries" }
             : null;
+        if (table === "operational_sessions" && sessionFilters.ids) {
+          const failedId = sessionFilters.ids.find((id) =>
+            operationalSessionRelationshipReadErrors.has(id));
+          if (failedId) {
+            error = operationalSessionRelationshipReadErrors.get(failedId);
+            operationalSessionRelationshipReadErrors.delete(failedId);
+          }
+        }
         if (table === "operational_session_venue_overrides") {
           operationalVenueOverrideReadError = null;
         }
@@ -1184,6 +1193,17 @@ const historicalRelationshipSessions = [
     id: "historical-ecc-replacement-session",
     activity_id: "hyrox-quarry-bay",
     session_date: "2026-06-20",
+    start_time: "11:00:00",
+    duration_minutes: 60,
+    venue: "10/F, Island ECC, Quarry Bay",
+    capacity: 30,
+    price_hkd: 180,
+    is_open: true,
+  },
+  {
+    id: "post-success-ecc-replacement-session",
+    activity_id: "hyrox-quarry-bay",
+    session_date: "2026-06-13",
     start_time: "11:00:00",
     duration_minutes: 60,
     venue: "10/F, Island ECC, Quarry Bay",
@@ -1831,20 +1851,32 @@ assert.equal(operationalRpcCalls.length, retiredMutationCallCount,
   "retired session and booking targets must be rejected before any live RPC");
 const attendeeRpcCount = operationalRpcCalls
   .filter((call) => call.name === "get_operational_attendee_names").length;
-await assert.rejects(
-  () => store.attendeeNamesFor(retiredBftSessionId),
-  /This session is no longer available\./,
-);
+for (const retiredSessionId of [
+  retiredBftSessionId,
+  "hyrox-bft-2099-02-07",
+  "hyrox-midtown-2099-02-07",
+]) {
+  await assert.rejects(
+    () => store.attendeeNamesFor(retiredSessionId),
+    /This session is no longer available\./,
+  );
+}
 assert.equal(
   operationalRpcCalls.filter((call) => call.name === "get_operational_attendee_names").length,
   attendeeRpcCount,
-  "retired attendee selectors must stop before the live RPC",
+  "hydrated and unloaded retired attendee selectors must stop before the live RPC",
 );
-await store.attendeeNamesFor(islandEccSessionId);
+for (const activeOrLookalikeId of [
+  islandEccSessionId,
+  "hyrox-quarry-bay-2099-02-07",
+  "event-hyrox-bft-party-2099-02-07",
+]) {
+  await store.attendeeNamesFor(activeOrLookalikeId);
+}
 assert.equal(
   operationalRpcCalls.filter((call) => call.name === "get_operational_attendee_names").length,
-  attendeeRpcCount + 1,
-  "Island ECC attendee selectors must retain the live RPC",
+  attendeeRpcCount + 3,
+  "Island ECC and unrelated lookalike attendee selectors must retain the live RPC",
 );
 
 const attendanceRow = operationalTableRows.operational_bookings
@@ -7599,4 +7631,29 @@ assert.equal(
   "accepted",
   "failed live replacement mutations must not overwrite the filtered active cache",
 );
+for (const mutation of ["create", "accept"]) {
+  replacementRow = {
+    ...replacementRow,
+    requestId: `post-success-${mutation}-request`,
+    bookingId: `post-success-${mutation}-booking`,
+    sessionId: "post-success-ecc-replacement-session",
+    status: mutation === "create" ? "pending" : "accepted",
+  };
+  operationalSessionRelationshipReadErrors.set(
+    "post-success-ecc-replacement-session",
+    { message: `post-success ${mutation} relationship unavailable` },
+  );
+  const result = mutation === "create"
+    ? await operations.liveCreateReplacementRequest(
+      replacementRow.bookingId, replacementHash, replacementExpiry
+    )
+    : await operations.liveAcceptReplacement(replacementHash);
+  assert.deepEqual(result, {
+    requestId: replacementRow.requestId,
+    status: replacementRow.status,
+    cachePending: true,
+  }, `successful replacement ${mutation} must return a safe authoritative result`);
+  assert.equal(operations.liveReplacementRequestForBooking(replacementRow.bookingId), null,
+    `unresolved successful replacement ${mutation} data must not enter the cache`);
+}
 console.log("ok  live HYROX replacement hashing, RPC payloads, redaction, and failure preservation");

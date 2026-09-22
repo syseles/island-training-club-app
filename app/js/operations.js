@@ -225,9 +225,37 @@ async function replacementRequestsWithActiveRelationships(rows) {
   });
 }
 
+function safeReplacementMutationResult(row) {
+  const request = buildReplacementRequestRow(row);
+  return {
+    requestId: request?.requestId || null,
+    status: request?.status || "updated",
+    cachePending: true,
+  };
+}
+
+function evictUnreconciledReplacement(row) {
+  const request = buildReplacementRequestRow(row);
+  liveCache.replacementRequests = liveCache.replacementRequests.filter((cached) =>
+    cached.requestId !== request?.requestId && cached.bookingId !== request?.bookingId);
+}
+
 async function cacheReplacementRequest(row) {
-  const [request] = await replacementRequestsWithActiveRelationships([row]);
-  if (!request?.requestId) return null;
+  const safeResult = safeReplacementMutationResult(row);
+  let request;
+  try {
+    [request] = await replacementRequestsWithActiveRelationships([row]);
+  } catch {
+    // The mutation already succeeded authoritatively. Keep the cache closed to
+    // unresolved data without reporting the successful write as a failure;
+    // Realtime or the next explicit refresh/list can reconcile it later.
+    evictUnreconciledReplacement(row);
+    return safeResult;
+  }
+  if (!request?.requestId) {
+    evictUnreconciledReplacement(row);
+    return safeResult;
+  }
   const index = liveCache.replacementRequests.findIndex((item) => item.requestId === request.requestId);
   if (index >= 0) liveCache.replacementRequests[index] = request;
   else liveCache.replacementRequests.push(request);

@@ -31,6 +31,7 @@ import {
   isRetiredHyroxBooking,
   isRetiredHyroxReceipt,
   isRetiredHyroxNotification,
+  isRetiredHyroxLegacyRouteId,
 } from "./hyrox-retirement.js";
 import { normalizeMeetingPoint, normalizeVenueLocation } from "./venue.js";
 import * as liveOps from "./operations.js";
@@ -111,10 +112,15 @@ const retirementBoundaryActive = () => isLive() || Number(state?.version || 0) >
 
 function assertActiveSessionTarget(sessionOrId) {
   if (!retirementBoundaryActive()) return;
-  const session = typeof sessionOrId === "object"
+  const canonicalSession = typeof sessionOrId === "object"
     ? sessionOrId
     : retirementSession(sessionOrId);
-  if (isRetiredHyroxSession(session)) throw retiredTargetError();
+  const unloadedLegacyRoute = typeof sessionOrId === "string"
+    && !canonicalSession
+    && isRetiredHyroxLegacyRouteId(sessionOrId);
+  if (isRetiredHyroxSession(canonicalSession) || unloadedLegacyRoute) {
+    throw retiredTargetError();
+  }
 }
 
 function assertActiveBookingTarget(bookingOrId) {
