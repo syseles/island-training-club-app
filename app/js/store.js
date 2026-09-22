@@ -27,6 +27,7 @@ import { config, supabase, isLive } from "./config.js";
 import { INDEMNITY_VERSION } from "./documents.js";
 import { normalizeAvatarPresentation } from "./avatar.js";
 import {
+  isRetiredHyroxActivityId,
   isRetiredHyroxSession,
   isRetiredHyroxBooking,
   isRetiredHyroxReceipt,
@@ -53,7 +54,7 @@ const APPLY_DRAFT_KEY = "itc.apply.draft.v1";
 const APPLY_DRAFT_VERSION = 1;
 const LAST_ROUTE_KEY = "itc.last-route.v1";
 const LAST_ROUTE_VERSION = 1;
-const STATE_VERSION = 23;
+const STATE_VERSION = 24;
 
 const ROUTE_ID = "[A-Za-z0-9._~-]+";
 const RESTORABLE_ROUTE_PATTERNS = [
@@ -259,6 +260,115 @@ function normalizeReceiptCounter() {
 // One-time, versioned migrations for persisted state that predates a
 // seed-data revision. Each step runs once per version so admin edits made
 // afterwards are not reverted on the next load.
+function retireLocalHyroxPool() {
+  const sessionForId = (id) => findSession(state.activities, String(id || ""));
+  const retiredSessionIds = new Set();
+  const collectSessionId = (id) => {
+    const value = String(id || "");
+    if (isRetiredHyroxLegacyRouteId(value)) retiredSessionIds.add(value);
+  };
+  const collectRecordSession = (record) => {
+    if (!record || typeof record !== "object") return;
+    const sessionId = record.sessionId ?? record.session_id;
+    if (isRetiredHyroxSession(record) && sessionId) {
+      retiredSessionIds.add(String(sessionId));
+    }
+    collectSessionId(sessionId);
+  };
+
+  for (const id of Object.keys(state.queues)) collectSessionId(id);
+  for (const id of Object.keys(state.sessionOverrides)) collectSessionId(id);
+  for (const cycle of Object.values(state.hyroxCycles)) {
+    collectSessionId(cycle?.bftSessionId ?? cycle?.bft_session_id);
+    collectSessionId(cycle?.midtownSessionId ?? cycle?.midtown_session_id);
+  }
+  for (const collection of [
+    state.bookings,
+    state.receipts,
+    state.replacementRequests,
+    state.replacementAudit,
+    state.notifications,
+    Object.values(state.duty),
+  ]) {
+    for (const record of collection) collectRecordSession(record);
+  }
+
+  const bookingById = new Map(state.bookings.map((booking) => [booking.id, booking]));
+  const bookingTargetsPool = (booking) => Boolean(booking) && (
+    isRetiredHyroxBooking(booking, sessionForId)
+    || retiredSessionIds.has(String(booking.sessionId ?? booking.session_id ?? ""))
+  );
+  const retiredBookingIds = new Set(
+    state.bookings.filter(bookingTargetsPool).map((booking) => booking.id)
+  );
+  const requestTargetsPool = (request) => Boolean(request) && (
+    Boolean(request.cycleId ?? request.hyrox_cycle_id)
+    || isRetiredHyroxSession(request)
+    || retiredSessionIds.has(String(request.sessionId ?? request.session_id ?? ""))
+    || retiredBookingIds.has(request.bookingId ?? request.booking_id)
+  );
+  const retiredRequests = state.replacementRequests.filter(requestTargetsPool);
+  const retiredRequestIds = new Set(retiredRequests.map((request) => request.id));
+  const retiredInviteTokens = new Set(
+    retiredRequests.map((request) => request.inviteToken).filter(Boolean)
+  );
+  const bookingForId = (id) => bookingById.get(id) || null;
+  const recordTargetsPool = (record) => Boolean(record) && (
+    Boolean(record.cycleId ?? record.hyrox_cycle_id)
+    || isRetiredHyroxActivityId(record.activityId ?? record.activity_id)
+    || retiredSessionIds.has(String(record.sessionId ?? record.session_id ?? ""))
+    || retiredBookingIds.has(record.bookingId ?? record.booking_id)
+    || retiredRequestIds.has(record.requestId ?? record.request_id)
+  );
+  const receiptTargetsPool = (receipt) =>
+    isRetiredHyroxReceipt(receipt, bookingForId) || recordTargetsPool(receipt);
+  const retiredReceiptIds = new Set(
+    state.receipts.filter(receiptTargetsPool).map((receipt) => receipt.id)
+  );
+  const routeTargetsPool = (value) => {
+    const match = String(value || "").match(
+      /^#\/(activity|checkout|hyrox|booking|pay|receipt|replacement)\/([^/?#]+)(?:\/register)?$/
+    );
+    if (!match) return false;
+    const [, route, id] = match;
+    if (["activity", "checkout", "hyrox"].includes(route)) {
+      return isRetiredHyroxLegacyRouteId(id);
+    }
+    if (["booking", "pay"].includes(route)) return retiredBookingIds.has(id);
+    if (route === "receipt") return retiredReceiptIds.has(id);
+    return retiredInviteTokens.has(id);
+  };
+
+  state.activities = state.activities.filter(
+    (activity) => !isRetiredHyroxActivityId(activity.id)
+  );
+  for (const collection of [state.queues, state.sessionOverrides]) {
+    for (const id of Object.keys(collection)) {
+      if (retiredSessionIds.has(id)) delete collection[id];
+    }
+  }
+  state.receipts = state.receipts.filter((receipt) => !receiptTargetsPool(receipt));
+  state.replacementRequests = state.replacementRequests.filter(
+    (request) => !requestTargetsPool(request)
+  );
+  state.replacementAudit = state.replacementAudit.filter(
+    (entry) => !recordTargetsPool(entry)
+  );
+  state.notifications = state.notifications.filter((notification) =>
+    !isRetiredHyroxNotification(notification, bookingForId)
+    && !recordTargetsPool(notification)
+    && !retiredReceiptIds.has(notification.receiptId ?? notification.receipt_id)
+    && !routeTargetsPool(notification.destination)
+    && !routeTargetsPool(notification.link)
+  );
+  for (const [key, assignment] of Object.entries(state.duty)) {
+    if (recordTargetsPool(assignment)) delete state.duty[key];
+  }
+  state.bookings = state.bookings.filter((booking) => !retiredBookingIds.has(booking.id));
+  state.hyroxCycles = {};
+  state.hyroxCycleQueues = {};
+}
+
 function migrate() {
   // Persisted prototypes may predate individual collections or contain null
   // values. Normalize every collection before a legacy step or early return.
@@ -709,6 +819,12 @@ function migrate() {
       }
     }
   }
+  if (v < 24) {
+    // v24: retire the device-local BFT/Midtown shared pool after every older
+    // migration has run. Relationship fields and exact legacy route IDs are
+    // authoritative; arbitrary BFT/Midtown substrings are never classified.
+    retireLocalHyroxPool();
+  }
   state.version = STATE_VERSION;
 }
 
@@ -1077,6 +1193,9 @@ export function getActivity(id) {
 
 export function saveActivity(draft) {
   requirePaymentAdminActor();
+  if (retirementBoundaryActive() && isRetiredHyroxActivityId(draft?.id)) {
+    throw retiredTargetError();
+  }
   const existing = state.activities.find((a) => a.id === draft.id);
   const record = {
     ...draft,
@@ -2048,7 +2167,7 @@ export function hyroxCycleForDate(dateISO) {
 }
 
 export function scheduleHyroxCycle(dateISO) {
-  if (isLive()) throw retiredTargetError();
+  if (retirementBoundaryActive()) throw retiredTargetError();
   requirePaymentAdminActor();
   const id = hyroxCycleId(dateISO);
   const date = new Date(`${dateISO}T00:00:00Z`);

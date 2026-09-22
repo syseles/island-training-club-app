@@ -56,6 +56,10 @@ assert.equal(isRetiredHyroxReceipt({ cycleId: "hyrox-pool-1" }, getBooking), tru
 
 assert.equal(isRetiredHyroxNotification({ kind: "operational_hyrox_reserved" }, getBooking), true);
 assert.equal(isRetiredHyroxNotification({ kind: "operational_hyrox_payment_reminder" }, getBooking), true);
+assert.equal(isRetiredHyroxNotification({ kind: "hyrox-waitlisted" }, getBooking), true,
+  "device-local pool-only notification kinds retire without substring matching");
+assert.equal(isRetiredHyroxNotification({ kind: "hyrox-replacement-confirmed" }, getBooking), false,
+  "replacement kinds remain relationship-scoped for Island ECC");
 assert.equal(isRetiredHyroxNotification({ kind: "operational_hyrox_quarry_bay_payment" }, getBooking), false,
   "unknown lookalike notification kinds are not hidden by a prefix match");
 assert.equal(isRetiredHyroxNotification({ kind: "payment_confirmed", bookingId: "pooled-booking" }, getBooking), true);
