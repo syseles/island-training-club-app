@@ -16,7 +16,6 @@ globalThis.localStorage = {
 const store = await import("./js/store.js");
 const views = await import("./js/views.js");
 const data = await import("./js/data.js");
-const hyroxCycle = await import("./js/hyrox-cycle.js");
 const { buildIndemnityCsv } = await import("./js/exports.js");
 
 const indemnityExportCsv = buildIndemnityCsv([{
@@ -1798,7 +1797,23 @@ assert.doesNotMatch(integratedViewSource, /\["approvals", "Approvals"\]/,
   "Approvals must be merged into Members instead of remaining a separate tab");
 assert.doesNotMatch(integratedStyleSource, /\.hyrox-(?:cycle-row|registration|reserve-card|preference-grid|radio|pool-card|threshold-rule|booking-preference)\b/,
   "retired member pool components must not retain CSS");
-assert.match(integratedViewSource, /function adminHyroxWeeklyBookingSetup\(memberUsers\)[\s\S]*?HYROX weekly booking setup/);
+assert.doesNotMatch(integratedStyleSource,
+  /\.(?:admin-hyrox-counts?|admin-upcoming-weeks|admin-roster-reject|hyrox-admin-cycle|hyrox-gym-controls|hyrox-queue-state)\b/,
+  "retired Admin pool components must not retain CSS");
+for (const sharedStyle of [
+  ".hyrox-venue-card", ".hyrox-island-ecc-card", ".admin-payment-group",
+  ".admin-attendance-session", ".admin-roster-row", ".replacement-admin-row",
+]) {
+  assert.ok(integratedStyleSource.includes(sharedStyle),
+    `shared Island ECC/replacement style must remain: ${sharedStyle}`);
+}
+for (const retiredAdminHelper of [
+  "adminHyroxGymControls", "paymentVisibleHyroxCycles", "adminHyroxCycleCards",
+  "adminHyroxWeeklyBookingSetup", "adminHyroxVenuePreferenceLabel",
+]) {
+  assert.equal(integratedViewSource.includes(retiredAdminHelper), false,
+    `retired Admin pool helper remains: ${retiredAdminHelper}`);
+}
 assert.doesNotMatch(integratedViewSource, /function adminHyroxProvisioningInfo/);
 assert.match(integratedViewSource, /function venueDisplayName\(session\)/);
 assert.match(integratedViewSource, /Mark confirmed with \$\{esc\(venueName\)\}/);
@@ -2807,10 +2822,8 @@ installLocalFixtures(); store.signIn("admin@example.test");
     () => store.saveActivity({ id: "hyrox-bft", name: "Retired", kind: "paid" }),
     /This session is no longer available\./,
   );
-  assert.throws(
-    () => store.scheduleHyroxCycle("2099-01-03"),
-    /This session is no longer available\./,
-  );
+  assert.equal(typeof store.scheduleHyroxCycle, "undefined",
+    "retired Admin cycle provisioning must not remain exported");
   assert.equal(localStorage.getItem("itc.prototype.v1"), beforeRetiredMutations,
     "v24 pool mutation denials must not change local state");
 }
@@ -2859,14 +2872,50 @@ try {
 }
 store.signIn("admin@example.test");
 console.log("ok  Admin Members exposes a gated all-profile indemnity export");
+const adminActivitiesHtml = await views.viewAdmin("activities");
 const adminScheduleHtml = await views.viewAdmin("payments");
-if (!adminScheduleHtml.includes("HYROX weekly booking setup")
-    || adminScheduleHtml.includes("created automatically")
-    || adminScheduleHtml.includes("BFT + Midtown parent cards")
-    || adminScheduleHtml.includes("form-hyrox-cycle-schedule")) {
-  throw new Error("Admin Payments must use the collapsed HYROX weekly booking setup section without redundant provisioning copy");
+const retiredAdminPoolCopy = /BFT|Midtown|shared pool|venue allocation|switch queue|weekly booking setup/i;
+for (const [surface, html] of [
+  ["Admin Activities", adminActivitiesHtml],
+  ["Admin Payments", adminScheduleHtml],
+]) {
+  assert.doesNotMatch(html, retiredAdminPoolCopy, `${surface} must not render retired pool operations`);
+  assert.doesNotMatch(html,
+    /hyrox-allocation-close|midtown-toggle|form-cancel-hyrox-cycle|hyrox-plan-retry|form-hyrox-payment-reject/,
+    `${surface} must not render retired pool action contracts`);
+  assert.match(html, /Island ECC/, `${surface} must retain Island ECC administration`);
 }
-console.log("ok  Admin Payments uses the collapsed HYROX weekly booking setup section");
+const islandEccAdminRosters = [...adminScheduleHtml.matchAll(
+  /data-payment-roster="(hyrox-quarry-bay-[^"]+)"/g
+)].map((match) => match[1]);
+assert.ok(islandEccAdminRosters.length > 0, "Admin Payments must render Island ECC financial rosters");
+assert.equal(new Set(islandEccAdminRosters).size, islandEccAdminRosters.length,
+  "Admin Payments must render each Island ECC financial roster exactly once");
+for (const activeContract of [
+  'case "confirm-payment"', 'case "attendance-toggle"', 'case "replacement-decision"',
+  'case "join-waitlist"', 'case "leave-waitlist"', 'case "cancel-booking"',
+  'case "form-gym-note"',
+]) {
+  assert.ok(integratedAppSource.includes(activeContract),
+    `direct Island ECC action contract must remain: ${activeContract}`);
+}
+for (const retiredContract of [
+  'case "hyrox-plan-retry"', 'case "midtown-toggle"',
+  'case "hyrox-allocation-close"', 'case "form-cancel-hyrox-cycle"',
+  'case "form-hyrox-payment-reject"',
+]) {
+  assert.equal(integratedAppSource.includes(retiredContract), false,
+    `retired Admin pool action contract remains: ${retiredContract}`);
+}
+for (const retiredApi of [
+  "hyroxCycleBookings", "hyroxCycles", "hyroxCycleForDate", "scheduleHyroxCycle",
+  "hyroxCycleQueues", "sweepHyroxCycleDeadlines", "rejectHyroxCyclePayment",
+  "finalizeHyroxVenuePlan", "closeHyroxVenueAllocation", "cancelHyroxCycle",
+  "isMidtown", "midtownOpenFor", "setMidtownOpen",
+]) {
+  assert.equal(typeof store[retiredApi], "undefined", `retired Admin pool API remains: ${retiredApi}`);
+}
+console.log("ok  Admin Activities and Payments retain one direct Island ECC workflow without pool operations");
 
 // --- Admin Giving (local mode) ---
 // Empty local state still surfaces an actionable Create campaign link.
@@ -4128,78 +4177,6 @@ store.resetLocalData();
   } else console.log("ok  v7 migration clears unrecognizable donor ID");
 }
 
-// --- pooled HYROX registration: HKT checkpoints + allocation rules ---
-{
-  const saturday = "2026-09-05";
-  assert.equal(hyroxCycle.hyroxCycleId(saturday), "hyrox-pool-2026-09-05");
-  assert.throws(
-    () => hyroxCycle.hyroxCycleId("2026-09-04"),
-    /Saturday/,
-  );
-  assert.throws(
-    () => hyroxCycle.hyroxPaymentDeadline("2026-02-30"),
-    /Invalid HYROX cycle date/,
-  );
-  assert.equal(
-    hyroxCycle.hyroxRegistrationOpensAt(saturday),
-    Date.parse("2026-08-31T18:00:00+08:00"),
-  );
-  assert.equal(
-    hyroxCycle.hyroxPaymentReminderAt(saturday),
-    Date.parse("2026-09-03T16:00:00+08:00"),
-  );
-  assert.equal(
-    hyroxCycle.hyroxPaymentDeadline(saturday),
-    Date.parse("2026-09-03T18:00:00+08:00"),
-  );
-  assert.equal(
-    hyroxCycle.hyroxHolderGraceDeadline(saturday),
-    Date.parse("2026-09-03T19:00:00+08:00"),
-  );
-  assert.equal(
-    hyroxCycle.hyroxPromotedPaymentDeadline(saturday),
-    Date.parse("2026-09-03T20:00:00+08:00"),
-  );
-  assert.equal(
-    hyroxCycle.hyroxChoiceDeadline(saturday) - 2 * 3600 * 1000,
-    Date.parse("2026-09-04T19:00:00+08:00"),
-  );
-  assert.equal(
-    hyroxCycle.hyroxChoiceDeadline(saturday),
-    Date.parse("2026-09-04T21:00:00+08:00"),
-  );
-
-  const allocations = hyroxCycle.allocateHyroxVenues([
-    { id: "paid-midtown", paidAt: 1, venuePreference: "midtown" },
-    { id: "paid-bft", paidAt: 2, venuePreference: "bft" },
-    { id: "paid-either", paidAt: 3, venuePreference: "either" },
-  ], {
-    bftSessionId: "hyrox-bft-2026-09-05",
-    midtownSessionId: "hyrox-midtown-2026-09-05",
-  });
-  assert.deepEqual(allocations.map(({ bookingId, sessionId }) => [bookingId, sessionId]), [
-    ["paid-midtown", "hyrox-midtown-2026-09-05"],
-    ["paid-bft", "hyrox-bft-2026-09-05"],
-    ["paid-either", "hyrox-bft-2026-09-05"],
-  ]);
-
-  const bftDemand = Array.from({ length: 21 }, (_, index) => ({
-    id: `booking-${String(index + 1).padStart(2, "0")}`,
-    paidAt: 100,
-    venuePreference: "bft",
-  })).reverse();
-  const bftDemandAllocation = hyroxCycle.allocateHyroxVenues(bftDemand, {
-    bftSessionId: "hyrox-bft-2026-09-05",
-    midtownSessionId: "hyrox-midtown-2026-09-05",
-  });
-  assert.deepEqual(
-    bftDemandAllocation.map((row) => row.bookingId),
-    Array.from({ length: 21 }, (_, index) => `booking-${String(index + 1).padStart(2, "0")}`),
-  );
-  assert.equal(bftDemandAllocation.filter((row) => row.sessionId.includes("hyrox-bft")).length, 20);
-  assert.equal(bftDemandAllocation.at(-1).sessionId, "hyrox-midtown-2026-09-05");
-  console.log("ok  pooled HYROX checkpoints and deterministic venue allocation");
-}
 // Every accepted historical schema version must run its original migration
 // chain before the exact v24 retirement step, preserving non-pool state.
 for (let version = 9; version <= 23; version++) {
@@ -5404,7 +5381,6 @@ console.log("ok  reset");
   installLocalFixtures();
   const paidSessions = store.upcomingSessions(70).filter((session) =>
     session.kind === "paid" && !session.cancelled && !data.sessionStarted(session)
-      && !store.isMidtown(session)
   );
   if (paidSessions.length < 3) throw new Error("attendance tests need three future paid sessions");
 
@@ -5753,7 +5729,7 @@ store.load();
 // Payment access belongs at the state seam, including mutations called
 // without rendering their gated controls first.
 const paymentGateSession = store.upcomingSessions(14).find(
-  (session) => session.kind === "paid" && !data.sessionStarted(session) && !store.isMidtown(session)
+  (session) => session.kind === "paid" && !data.sessionStarted(session)
 );
 if (!paymentGateSession) throw new Error("Payment seam checks need an upcoming paid session");
 for (const blockedId of ["giving-pending", "giving-declined", "missing-member"]) {
@@ -5771,7 +5747,7 @@ for (const blockedId of ["giving-pending", "giving-declined", "missing-member"])
   }
 }
 const authoritySessions = store.upcomingSessions(42).filter(
-  (session) => session.kind === "paid" && !data.sessionStarted(session) && !store.isMidtown(session)
+  (session) => session.kind === "paid" && !data.sessionStarted(session)
 );
 const cancelledAuthoritySession = authoritySessions.find((session) => session.id !== paymentGateSession.id);
 const tamperAuthoritySession = authoritySessions.find(
@@ -5935,7 +5911,6 @@ for (const mutate of [
   () => store.setSessionTime(paymentGateSession.id, "11:00"),
   () => store.setSessionNotice(paymentGateSession.id, "Unauthorized note"),
   () => store.setVenueTBC(paymentGateSession.id, true),
-  () => store.setMidtownOpen(paymentGateSession.id, true),
   () => store.setDuty("giving-other", paymentGateSession.dateISO),
   () => store.updateCollectorPayouts("giving-other", { paymeLink: "bad", fpsPhone: "bad" }),
   () => store.confirmGymBooking(paymentGateSession.id, "Unauthorized"),
@@ -5959,7 +5934,7 @@ if (movedByOwner.userId !== "giving-member" || movedByOwner.status !== "confirme
   throw new Error("approved booking owner should be able to defer their booking");
 }
 const releaseSession = store.upcomingSessions(28).find((session) =>
-  session.kind === "paid" && !data.sessionStarted(session) && !store.isMidtown(session)
+  session.kind === "paid" && !data.sessionStarted(session)
   && session.id !== movedByOwner.sessionId
 );
 if (!releaseSession) throw new Error("authorization regression needs a release session");
@@ -6161,7 +6136,7 @@ const receiptMigrationFixture = {
 mem.set("itc.prototype.v1", JSON.stringify(receiptMigrationFixture));
 store.load();
 const receiptSession = store.upcomingSessions(14).find(
-  (session) => session.kind === "paid" && !data.sessionStarted(session) && !store.isMidtown(session)
+  (session) => session.kind === "paid" && !data.sessionStarted(session)
 );
 if (!receiptSession) throw new Error("post-migration receipt check needs an upcoming paid session");
 const migratedReservation = store.reserveSession("receipt-member", receiptSession, Date.now());

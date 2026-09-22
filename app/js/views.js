@@ -127,8 +127,7 @@ function sessionRow(s, { past, showDate = true, highlight } = {}) {
   // A session the signed-in member has already booked shows a "Booked"
   // badge instead of price/spots, so Home, Schedule and the booking itself
   // all tell the same story. Per-week overrides (cancelled, time, venue
-  // TBC, notice, Midtown open/closed) surface here so the Schedule tab
-  // mirrors the detail page.
+  // TBC, notice) surface here so the Schedule tab mirrors the detail page.
   const user = store.currentUser();
   const booked = user ? store.userBookingFor(user.id, s.id) : null;
   const reserved = user ? store.userReservationFor(user.id, s.id) : null;
@@ -2548,20 +2547,14 @@ function adminRosterName(userId, memberUsers) {
   return member?.fullName || member?.preferredName || "Member";
 }
 
-function adminHyroxVenuePreferenceLabel(preference) {
-  if (preference === "bft") return "BFT Causeway Bay";
-  if (preference === "midtown") return "Midtown 28";
-  return "Either venue";
-}
-
-function adminQueueDisclosure({ id, title, subtitle, entries, memberUsers, preference = false, closed = false }) {
+function adminQueueDisclosure({ id, title, subtitle, entries, memberUsers }) {
   // Queue selectors already provide queue order; never alphabetize requests.
-  const rows = closed ? [] : entries;
+  const rows = entries || [];
   return `<details class="admin-payment-group admin-queue-group" name="roster-${esc(id)}" data-queue-title="${esc(title)}">
-    <summary><span><strong>${esc(title)}</strong>${subtitle ? `<span class="muted small">${esc(subtitle)}</span>` : ""}</span><span class="badge neutral">${closed ? "Closed" : rows.length}</span></summary>
-    ${closed ? `<p class="muted small">Switching closed Friday at 9 PM HKT. Unmatched members keep their assigned venue.</p>` : rows.length ? `<ol class="admin-queue-list">${rows.map((entry) => {
+    <summary><span><strong>${esc(title)}</strong>${subtitle ? `<span class="muted small">${esc(subtitle)}</span>` : ""}</span><span class="badge neutral">${rows.length}</span></summary>
+    ${rows.length ? `<ol class="admin-queue-list">${rows.map((entry) => {
       const userId = typeof entry === "string" ? entry : entry.userId;
-      return `<li><strong>${esc(adminRosterName(userId, memberUsers))}</strong>${preference ? `<span class="muted small">Preference: ${esc(adminHyroxVenuePreferenceLabel(entry.venuePreference))}</span>` : ""}</li>`;
+      return `<li><strong>${esc(adminRosterName(userId, memberUsers))}</strong></li>`;
     }).join("")}</ol>` : `<p class="muted small">No active requests.</p>`}
   </details>`;
 }
@@ -2591,7 +2584,7 @@ function adminPaymentRoster({ id, label, dateISO, venue, bookings, memberUsers, 
       const rows = grouped.get(state);
       return `<details class="admin-payment-group" name="roster-${esc(id)}" data-payment-state="${state}"${state === "awaiting_confirmation" && rows.length ? " open" : ""}>
         <summary><span>${esc(text)}</span><span class="badge ${badgeClass}">${rows.length}</span></summary>
-        ${rows.length ? rows.map((booking) => `<div class="admin-roster-row"><strong>${esc(displayName(booking))}</strong>${state === "awaiting_confirmation" ? `<button class="btn sm" type="button" data-action="confirm-payment" data-booking="${esc(booking.id)}">Confirm received</button>` : `<span class="badge ${badgeClass}">${esc(text)}</span>`}</div>${state === "awaiting_confirmation" && booking.cycleId ? `<form id="form-hyrox-payment-reject" class="admin-roster-reject" data-booking="${esc(booking.id)}"><div class="field"><label>Reject reason<input name="reason" required placeholder="e.g. Reference not found"></label></div><button class="btn danger ghost sm" type="submit">Reject claim</button></form>` : ""}`).join("") : `<p class="muted small">No members in this state.</p>`}
+        ${rows.length ? rows.map((booking) => `<div class="admin-roster-row"><strong>${esc(displayName(booking))}</strong>${state === "awaiting_confirmation" ? `<button class="btn sm" type="button" data-action="confirm-payment" data-booking="${esc(booking.id)}">Confirm received</button>` : `<span class="badge ${badgeClass}">${esc(text)}</span>`}</div>`).join("") : `<p class="muted small">No members in this state.</p>`}
       </details>`;
     }).join("")}
     ${queue}
@@ -2631,8 +2624,6 @@ function adminAttendanceSession(session, memberUsers) {
 
 function venueDisplayName(session) {
   const identity = `${session?.id || ""} ${session?.location || ""}`.toLowerCase();
-  if (identity.includes("bft")) return "BFT";
-  if (identity.includes("midtown")) return "Midtown 28";
   if (identity.includes("island ecc") || identity.includes("quarry bay")) return "Island ECC";
   return session?.location || "venue";
 }
@@ -2642,9 +2633,8 @@ function adminCapacityLine(count, capacity) {
   return `<p class="muted small admin-capacity-line">${count} active places · ${available}</p>`;
 }
 
-function adminVenueHandoff(session, { message, override, meta = "", extra = "", ready = true, heading = venueDisplayName(session), subheading = "", cardClass = "" }) {
+function adminVenueHandoff(session, { message, override, meta = "", extra = "", heading = venueDisplayName(session), subheading = "", cardClass = "" }) {
   const venueName = venueDisplayName(session);
-  const blockedCopy = "Available after venue allocation is finalized.";
   return `<div class="card hyrox-venue-card mt16 ${cardClass}"><div class="card-body">
     ${meta}
     <div class="section-head"><div><h3>${esc(heading)}</h3>${subheading ? `<p class="muted small hyrox-card-subtitle">${esc(subheading)}</p>` : ""}</div>${override.gymConfirmedAt ? `<span class="badge free">Confirmed</span>` : `<span class="badge neutral">Venue handoff</span>`}</div>
@@ -2656,147 +2646,24 @@ function adminVenueHandoff(session, { message, override, meta = "", extra = "", 
       </div>
       ${override.gymConfirmedAt
         ? `<p class="badge free mt8">Confirmed with ${esc(venueName)} · ${new Date(override.gymConfirmedAt).toLocaleDateString("en-HK", { day: "numeric", month: "short" })}${override.gymNote ? ` — ${esc(override.gymNote)}` : ""}</p>`
-        : ready
-          ? `<p class="muted small mt8">Send the confirmed headcount to the venue, then record their confirmation.</p>
-             <div class="btn-row mt16">
-              <a class="btn sm" href="https://wa.me/?text=${encodeURIComponent(message)}" target="_blank" rel="noopener">Send via WhatsApp</a>
-              <button class="btn ghost sm" type="button" data-action="copy-gym" data-msg="${esc(message)}">Copy message</button>
-            </div>
-            <form id="form-gym-note" data-session="${esc(session.id)}" class="mt8">
-              <div class="field"><label>Note (optional)</label><input name="note" placeholder="e.g. confirmed 16 with ${esc(venueName)}"></div>
-              <button class="btn sm" type="submit">Mark confirmed with ${esc(venueName)}</button>
-            </form>`
-          : `<p class="badge neutral mt8">${blockedCopy}</p>`}
+        : `<p class="muted small mt8">Send the confirmed headcount to the venue, then record their confirmation.</p>
+           <div class="btn-row mt16">
+            <a class="btn sm" href="https://wa.me/?text=${encodeURIComponent(message)}" target="_blank" rel="noopener">Send via WhatsApp</a>
+            <button class="btn ghost sm" type="button" data-action="copy-gym" data-msg="${esc(message)}">Copy message</button>
+          </div>
+          <form id="form-gym-note" data-session="${esc(session.id)}" class="mt8">
+            <div class="field"><label>Note (optional)</label><input name="note" placeholder="e.g. confirmed 16 with ${esc(venueName)}"></div>
+            <button class="btn sm" type="submit">Mark confirmed with ${esc(venueName)}</button>
+          </form>`}
     </section>
   </div></div>`;
 }
 
-function adminHyroxGymControls(cycle, memberUsers) {
-  const sessionIds = (cycle.venuePlan === "bft_only"
-    ? [cycle.bftSessionId]
-    : [cycle.bftSessionId, cycle.midtownSessionId]).filter(Boolean);
-  const ready = cycle.venuePlan !== "pending" && !!cycle.allocationClosedAt;
-  if (!sessionIds.length) return "";
-  return `<div class="hyrox-gym-controls"><h3>Venue handoff</h3>
-    ${!ready ? `<p class="muted small">BFT and Midtown 28 handoff controls appear after venue allocation is finalized.</p>` : ""}
-    ${sessionIds.map((sessionId) => {
-      const session = store.getSession(sessionId);
-      if (!session) return "";
-      const override = store.weekVenueOverride(sessionId);
-      const paidCount = store.paymentRosterBookings().filter((booking) =>
-        booking.sessionId === sessionId && ["confirmed", "attended"].includes(booking.status)
-      ).length;
-      const message = `ITC HYROX booking — ${fmtDate(cycle.dateISO)} at ${session.location}. Confirmed: ${paidCount}.`;
-      const otherId = sessionId === cycle.bftSessionId ? cycle.midtownSessionId : cycle.bftSessionId;
-      const other = store.getSession(otherId);
-      const queue = cycle.venuePlan === "both" ? adminQueueDisclosure({
-        id: sessionId,
-        title: `Switch requests into ${venueDisplayName(session)}`,
-        subtitle: `Already booked at ${venueDisplayName(other)}`,
-        entries: store.hyroxCycleQueues(cycle.id).venueSwitches.filter((entry) => entry.targetSessionId === sessionId),
-        memberUsers,
-        closed: !!cycle.allocationClosedAt || Date.now() >= cycle.venueChoiceDeadlineAt,
-      }) : "";
-      const extra = cycle.venuePlan === "pending" ? "" : `${queue}${adminAttendanceSession(session, memberUsers)}`;
-      return adminVenueHandoff(session, { message, override, ready, extra });
-    }).join("")}
-  </div>`;
-}
-
-function paymentVisibleHyroxCycles(financialBookings, now = Date.now()) {
-  return store.hyroxCycles().filter((cycle) => {
-    const active = financialBookings.some((booking) => booking.cycleId === cycle.id);
-    const childSessions = [cycle.bftSessionId, cycle.midtownSessionId]
-      .map((sessionId) => sessionId ? store.getSession(sessionId) : null)
-      .filter(Boolean);
-    const closesAt = childSessions.length
-      ? Math.max(...childSessions.map((session) => store.attendanceWindowForSession(session, now).closesAt))
-      : cycle.venueChoiceDeadlineAt + 24 * 60 * 60_000;
-    return active || (now >= cycle.registrationOpensAt && now <= closesAt);
-  });
-}
-
-function adminHyroxCycleCards(memberUsers, cycles = paymentVisibleHyroxCycles(store.paymentRosterBookings())) {
-  const financialBookings = store.paymentRosterBookings();
-  return cycles.map((cycle) => {
-    const bookings = store.hyroxCycleBookings(cycle.id);
-    const active = bookings.filter((booking) => store.paymentStateForBooking(booking));
-    const claims = bookings.filter((booking) => store.paymentStateForBooking(booking) === "awaiting_confirmation");
-    const queues = store.hyroxCycleQueues(cycle.id);
-    const locked = Date.now() < cycle.registrationOpensAt && cycle.registrationState === "draft";
-    const afterPromotion = Date.now() >= cycle.promotedPaymentDeadlineAt;
-    const cycleFinancialBookings = financialBookings.filter((booking) => booking.cycleId === cycle.id);
-    const paymentRoster = adminPaymentRoster({
-      id: cycle.id,
-      label: "ITC HYROX weekly cycle",
-      dateISO: cycle.dateISO,
-      venue: active.some((booking) => !booking.sessionId)
-        ? "Venue allocation pending"
-        : cycle.venuePlan === "both" ? "BFT + Midtown 28" : "BFT",
-      bookings: cycleFinancialBookings,
-      memberUsers,
-      queue: adminQueueDisclosure({
-        id: cycle.id, title: "Weekly waitlist",
-        subtitle: "Waiting for a place in the shared pool",
-        entries: queues.weeklyWaitlist, memberUsers, preference: true,
-      }),
-    });
-    const allocationPending = cycleFinancialBookings.some((booking) =>
-      !booking.sessionId && ["confirmed", "attended"].includes(booking.status)
-    ) || (cycle.venuePlan === "pending" && cycleFinancialBookings.some((booking) => !booking.sessionId));
-    const retry = !claims.length && cycle.venuePlan === "pending" && cycle.reconciliationStartedAt
-      ? `<button class="btn sm" type="button" data-action="hyrox-plan-retry" data-cycle="${esc(cycle.id)}">Retry automatic venue plan</button>` : "";
-    const close = cycle.venuePlan !== "pending" && !cycle.allocationClosedAt && Date.now() >= cycle.venueChoiceDeadlineAt
-      ? `<button class="btn ghost sm" type="button" data-action="hyrox-allocation-close" data-cycle="${esc(cycle.id)}">Close venue allocation</button>` : "";
-    const openingDate = new Date(cycle.registrationOpensAt).toLocaleDateString("en-HK", {
-      timeZone: "Asia/Hong_Kong", day: "numeric", month: "short",
-    });
-    return `<section class="card hyrox-admin-cycle mt16" data-hyrox-week="${esc(cycle.dateISO)}"><div class="card-body">
-      <div class="section-head"><div><span class="kicker">${esc(fmtDate(cycle.dateISO))}</span><h2>ITC HYROX<br><span>Payment reconciliation</span></h2></div><span class="badge ${locked ? "neutral" : "warn"}">${locked ? "Locked" : esc(cycle.registrationState)}</span></div>
-      <p class="muted small">${locked ? `Registration opens Mon ${esc(openingDate)} · 6 PM HKT.` : afterPromotion ? "Final reconciliation summary after Thursday 8 PM HKT." : "Payment review runs Thursday at 6 PM HKT."}</p>
-      ${paymentRoster}
-      ${adminCapacityLine(active.length, cycle.capacity)}
-      ${allocationPending ? `<p class="muted small mt16">Expected-arrivals roster available after venue allocation.</p>` : ""}
-      <div class="actions">${retry}${close}</div>${adminHyroxGymControls(cycle, memberUsers)}
-      <form id="form-cancel-hyrox-cycle" class="mt16" data-cycle="${esc(cycle.id)}"><div class="field"><label>Cancel this HYROX cycle — reason</label><input name="reason" required placeholder="e.g. Gym unavailable"></div><button class="btn danger ghost sm" type="submit">Cancel HYROX cycle</button></form>
-    </div></section>${adminIslandEccHandoff(cycle, memberUsers)}`;
-  }).join("");
-}
-
-function adminHyroxWeeklyBookingSetup(memberUsers) {
-  // Week grouping follows Hong Kong, independent of the Admin's device zone.
-  const saturday = new Date(Date.now() + 8 * 60 * 60_000);
-  saturday.setUTCDate(saturday.getUTCDate() + (6 - saturday.getUTCDay() + 7) % 7);
-  const currentDate = saturday.toISOString().slice(0, 10);
-  const futureDates = new Set(Array.from({ length: 3 }, (_, index) => {
-    const day = new Date(saturday);
-    day.setUTCDate(day.getUTCDate() + (index + 1) * 7);
-    return day.toISOString().slice(0, 10);
-  }));
-  const cycles = store.hyroxCycles();
-  const upcoming = cycles.filter((cycle) => futureDates.has(cycle.dateISO))
-    .sort((a, b) => a.dateISO.localeCompare(b.dateISO));
-  const visibleIds = new Set(paymentVisibleHyroxCycles(store.paymentRosterBookings()).map((cycle) => cycle.id));
-  const current = cycles.filter((cycle) => !futureDates.has(cycle.dateISO)
-    && (cycle.dateISO === currentDate || visibleIds.has(cycle.id)))
-    .sort((a, b) => (a.dateISO === currentDate ? -1 : b.dateISO === currentDate ? 1 : b.dateISO.localeCompare(a.dateISO)));
-  const groupedDates = new Set([...current, ...upcoming].map((cycle) => cycle.dateISO));
-  return `<details class="admin-section mt24">
-    <summary><h2>HYROX weekly booking setup</h2></summary>
-    ${adminHyroxCycleCards(memberUsers, current)}
-    <details class="admin-upcoming-weeks mt24">
-      <summary><h3>Upcoming weeks</h3><span class="badge neutral">${upcoming.length}</span></summary>
-      <p class="muted small mt8">The next three Saturdays. Previewing a week does not open member registration.</p>
-      ${adminHyroxCycleCards(memberUsers, upcoming) || `<p class="muted small mt8">No upcoming weeks provisioned yet.</p>`}
-    </details>
-    ${adminFinalizeGym(memberUsers, groupedDates)}
-  </details>`;
-}
-
 async function adminOps(viewer, memberUsers, profilePhone = "") {
   const upcoming = store.upcomingSessions(21).filter((s) => s.category === "HYROX" && !sessionStarted(s));
-  const thisWeekSat = upcoming[0]?.dateISO;
-  const dutyUser = thisWeekSat ? store.collectorFor(`hyrox-bft-${thisWeekSat}`) : null;
+  const thisWeekSession = upcoming[0] || null;
+  const thisWeekSat = thisWeekSession?.dateISO;
+  const dutyUser = thisWeekSession ? store.collectorFor(thisWeekSession.id) : null;
   const admins = (memberUsers || []).filter(
     (u) => isAdminRole(u.role) && u.status === "approved"
   );
@@ -2808,7 +2675,7 @@ async function adminOps(viewer, memberUsers, profilePhone = "") {
     <details class="admin-section mt16">
       <summary><h2>Payment duty</h2></summary>
     <div class="card mt8"><div class="card-body">
-      <p class="muted small">One collector per week covers both venues. Member payment screens show this collector’s PayMe/FPS details.</p>
+      <p class="muted small">One collector per week handles paid-session reconciliation. Member payment screens show this collector’s PayMe/FPS details.</p>
       <p class="mt8">On duty this week: <strong>${dutyUser ? esc(dutyUser.preferredName || dutyUser.fullName) : "—"}</strong></p>
       <div class="btn-row">
         ${dutyUser?.id !== viewer.id ? `<button class="btn sm" type="button" data-action="duty-claim" data-week="${thisWeekSat}">I’m on duty this week</button>` : ""}
@@ -2851,7 +2718,7 @@ async function adminOps(viewer, memberUsers, profilePhone = "") {
     ${dutyCard}
     ${pendingCard}
     ${replacementCard}
-    ${adminHyroxWeeklyBookingSetup(memberUsers)}`;
+    ${adminFinalizeGym(memberUsers)}`;
 }
 
 async function adminReplacementReview() {
@@ -2881,7 +2748,6 @@ async function adminReplacementReview() {
 function adminPaidSessionControls() {
   const upcoming = store.upcomingSessions(21).filter(
     (s) => !s.oneOff && s.category === "HYROX" && s.kind === "paid" && !sessionStarted(s)
-      && ![store.hyroxCycleForDate(s.dateISO)?.bftSessionId, store.hyroxCycleForDate(s.dateISO)?.midtownSessionId].includes(s.id)
   );
   const sessionCards = upcoming.map((s) => {
     const override = store.getSession(s.id);
@@ -2929,8 +2795,6 @@ function adminFinalizeGymCard(s, cardClass = "", memberUsers = []) {
   const venueName = venueDisplayName(s);
   const venueCardClass = cardClass || (venueName === "Island ECC" ? "hyrox-island-ecc-card" : "");
   const message = `ITC HYROX booking — ${fmtDate(s.dateISO)} ${fmtTime(s.time)} at ${s.location}. Confirmed: ${confirmed.length} of ${s.capacity}. Names: ${names.join(", ")}. Total: ${fmtMoney(confirmed.length * s.price)}.`;
-  const isMid = store.isMidtown(s);
-  const open = store.midtownOpenFor(s);
   const paymentRoster = adminPaymentRoster({
     id: s.id,
     label: s.name || "ITC HYROX",
@@ -2950,54 +2814,33 @@ function adminFinalizeGymCard(s, cardClass = "", memberUsers = []) {
     heading: `ITC HYROX - ${venueName}`,
     subheading: "Payment reconciliation",
     cardClass: venueCardClass,
-    extra: `${paymentRoster}${adminCapacityLine(held.length, s.capacity)}${adminAttendanceSession(s, memberUsers)}${isMid
-      ? `<p class="muted small mt8">Registration: <strong>${open ? "Open" : "Closed"}</strong></p>
-         <button class="btn ghost sm" type="button" data-action="midtown-toggle" data-session="${esc(s.id)}" data-open="${open ? "0" : "1"}">${open ? "Close Midtown" : "Open Midtown"}</button>`
-      : ""}`,
+    extra: `${paymentRoster}${adminCapacityLine(held.length, s.capacity)}${adminAttendanceSession(s, memberUsers)}`,
   });
 }
 
-function adminIslandEccHandoff(cycle, memberUsers) {
-  const childIds = [cycle.bftSessionId, cycle.midtownSessionId].filter(Boolean);
-  const financialSessionIds = store.paymentRosterBookings()
-    .filter((booking) => booking.sessionId && booking.snapshot?.dateISO === cycle.dateISO)
-    .map((booking) => booking.sessionId);
-  const candidates = [
-    ...store.upcomingSessions(35),
-    ...financialSessionIds.map((sessionId) => store.getSession(sessionId)).filter(Boolean),
-  ];
-  const session = candidates.find((candidate) => {
-    if (candidate.category !== "HYROX" || candidate.dateISO !== cycle.dateISO
-        || childIds.includes(candidate.id)) return false;
-    return !store.getSession(candidate.id).cancelled;
-  });
-  return session ? adminFinalizeGymCard(session, "hyrox-island-ecc-card", memberUsers) : "";
+function adminIslandEccHandoff(session, memberUsers) {
+  if (!session || session.activityId !== "hyrox-quarry-bay" || session.cancelled) return "";
+  return adminFinalizeGymCard(session, "hyrox-island-ecc-card", memberUsers);
 }
 
-function adminFinalizeGym(memberUsers, groupedDates = null) {
+function adminFinalizeGym(memberUsers) {
   const financialBookings = store.paymentRosterBookings();
-  const cycleDates = groupedDates || new Set(paymentVisibleHyroxCycles(financialBookings).map((cycle) => cycle.dateISO));
   const candidates = new Map(store.upcomingSessions(21)
-    .filter((session) => session.category === "HYROX")
+    .filter((session) => session.activityId === "hyrox-quarry-bay")
     .map((session) => [session.id, session]));
   for (const booking of financialBookings) {
-    if (!booking.sessionId || booking.cycleId) continue;
+    if (!booking.sessionId) continue;
     const session = store.getSession(booking.sessionId);
-    if (session?.category === "HYROX") candidates.set(session.id, session);
+    if (session?.activityId === "hyrox-quarry-bay") candidates.set(session.id, session);
   }
   const upcoming = [...candidates.values()].filter((session) => {
-    const cycleChildren = [
-      store.hyroxCycleForDate(session.dateISO)?.bftSessionId,
-      store.hyroxCycleForDate(session.dateISO)?.midtownSessionId,
-    ];
     const hasActiveBooking = financialBookings.some((booking) => booking.sessionId === session.id);
     const start = hktEventStartMs(session.dateISO, session.time);
     const withinDisplayWindow = Date.now() >= start - 21 * 24 * 60 * 60_000
       && store.attendanceWindowForSession(session).state !== "locked";
-    return !cycleDates.has(session.dateISO) && !cycleChildren.includes(session.id)
-      && (hasActiveBooking || withinDisplayWindow);
+    return hasActiveBooking || withinDisplayWindow;
   }).sort((a, b) => hktEventStartMs(a.dateISO, a.time) - hktEventStartMs(b.dateISO, b.time));
-  const cards = upcoming.map((session) => adminFinalizeGymCard(session, "", memberUsers)).join("");
+  const cards = upcoming.map((session) => adminIslandEccHandoff(session, memberUsers)).join("");
   return `
     <section class="admin-control-group mt24" aria-labelledby="hyrox-venue-handoff-title">
       <div class="section-head"><h3 id="hyrox-venue-handoff-title">Venue handoff</h3></div>

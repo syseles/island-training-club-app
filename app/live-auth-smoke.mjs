@@ -1721,9 +1721,14 @@ console.log("ok  live prayer actions use authoritative RPCs, safe normalization,
 
 await operations.ensureLiveSessionWindow();
 assert.deepEqual(
-  operationalRpcCalls.find((call) => call.name === "ensure_hyrox_cycles")?.args,
+  operationalRpcCalls.find((call) => call.name === "ensure_operational_sessions")?.args,
   { p_start_date: fixedHktTodayIso, p_weeks: 16 },
-  "live boot must automatically provision the bounded HYROX cycle window",
+  "live boot must keep the generic operational session window provisioned",
+);
+assert.equal(
+  operationalRpcCalls.some((call) => call.name === "ensure_hyrox_cycles"),
+  false,
+  "live boot must not provision retired HYROX pool cycles",
 );
 await store.hydrateLiveOperations();
 const hydratedFreeSessions = store.upcomingSessions(21)
@@ -1790,9 +1795,8 @@ assert.equal(typeof store.getHyroxCycle, "undefined");
 assert.equal(typeof operations.listLiveHyroxCycles, "undefined");
 assert.equal(typeof operations.getLiveHyroxCycle, "undefined");
 assert.equal(typeof operations.liveHyroxQueuesForCycle, "undefined");
-assert.deepEqual(store.hyroxCycleQueues("hyrox-pool-2099-01-03"), {
-  weeklyWaitlist: [], venueSwitches: [],
-});
+assert.equal(typeof store.hyroxCycleQueues, "undefined",
+  "the retired Admin pool queue selector must be removed");
 assert.equal(operationalTableQueries.includes("operational_hyrox_cycles"), false,
   "hydration must not query retired pool cycles");
 assert.equal(operationalTableQueries.includes("operational_hyrox_queue_entries"), false,
@@ -1928,11 +1932,6 @@ assert.equal(store.getBooking("island-ecc-booking")?.status, "confirmed");
 assert.equal(store.getBooking("island-ecc-booking")?.attendedAt, null);
 assert.equal(store.getBooking("island-ecc-booking")?.attendedBy, null);
 console.log("ok  live attendance rows map and RPC mutations refresh authoritative state");
-assert.equal(
-  operationalRpcCalls.filter((call) => call.name === "sweep_hyrox_cycle_deadlines").length,
-  1,
-  "initial live hydration must sweep HYROX deadlines",
-);
 for (const removedPoolAdapter of [
   "liveReserveHyroxCycle",
   "liveJoinHyroxCycleWaitlist",
@@ -1945,45 +1944,24 @@ for (const removedPoolAdapter of [
   "liveLeaveHyroxVenueSwitchQueue",
   "liveCloseHyroxVenueAllocation",
   "liveCancelHyroxCycle",
+  "liveSweepHyroxDeadlines",
+  "liveSetMidtownOpen",
 ]) {
   assert.equal(typeof operations[removedPoolAdapter], "undefined",
     `${removedPoolAdapter} must be removed with the retired pool workflow`);
 }
-assert.equal(typeof operations.liveSweepHyroxDeadlines, "function",
-  "the hydration deadline sweep remains until Admin pool cleanup");
-const successfulHyroxRpcHandler = operationalRpcHandler;
-operationalRpcHandler = (name, args) => {
-  if (name === "sweep_hyrox_cycle_deadlines") {
-    operationalRpcCalls.push({ name, args: structuredClone(args) });
-    return Promise.resolve({ data: null, error: { message: "HYROX sweep unavailable" } });
-  }
-  return successfulHyroxRpcHandler(name, args);
-};
-await assert.rejects(
-  () => store.hydrateLiveOperations({ force: true }),
-  /HYROX sweep unavailable/,
-  "HYROX sweep failures must surface instead of falling back to local state",
-);
-assert.equal(operations.operationalStateStatus().error, "HYROX sweep unavailable");
-operationalRpcHandler = successfulHyroxRpcHandler;
+for (const retiredRpc of [
+  "sweep_hyrox_cycle_deadlines", "send_hyrox_member_payment_reminders",
+  "send_hyrox_collector_payment_reminder", "send_hyrox_venue_reminders",
+]) {
+  assert.equal(operationalRpcCalls.some((call) => call.name === retiredRpc), false,
+    `hydration must not invoke retired pool RPC ${retiredRpc}`);
+}
 await store.hydrateLiveOperations({ force: true });
 assert.equal(typeof store.reserveHyroxCycle, "undefined",
   "the retired pooled reservation action must not remain exported");
-operationalRpcHandler = successfulHyroxRpcHandler;
-const sweepCountBeforeAnonymousHydration = operationalRpcCalls
-  .filter((call) => call.name === "sweep_hyrox_cycle_deadlines").length;
 liveSession = null;
 await store.hydrateLiveOperations({ force: true });
-assert.equal(
-  operationalRpcCalls.filter((call) => call.name === "sweep_hyrox_cycle_deadlines").length,
-  sweepCountBeforeAnonymousHydration,
-  "anonymous live hydration must not invoke the authenticated HYROX sweep",
-);
-assert.deepEqual(
-  store.hyroxCycleQueues("hyrox-pool-2099-01-03"),
-  { weeklyWaitlist: [], venueSwitches: [] },
-  "anonymous live hydration must omit private HYROX queues",
-);
 liveSession = {
   access_token: "test-access-token", token_type: "bearer", expires_in: 3600,
   expires_at: 9999999999, refresh_token: "test-refresh-token", user: authUser,
@@ -2969,8 +2947,35 @@ assert.doesNotMatch(liveActivitiesHtml, /BFT Causeway Bay \(BFT\)|Midtown28 Fitn
 assert.doesNotMatch(liveActivitiesHtml, /confirmed in-app|awaiting payment|Not open/,
   "Live Admin Activities must not carry HYROX booking/payment status");
 const livePaymentsHtml = await views.viewAdmin("payments");
+for (const [surface, html] of [
+  ["Live Admin Activities", liveActivitiesHtml],
+  ["Live Admin Payments", livePaymentsHtml],
+]) {
+  assert.doesNotMatch(html, /BFT|Midtown|shared pool|venue allocation|switch queue|weekly booking setup/i,
+    `${surface} must not render retired pool operations`);
+  assert.doesNotMatch(html,
+    /hyrox-allocation-close|midtown-toggle|form-cancel-hyrox-cycle|hyrox-plan-retry|form-hyrox-payment-reject/,
+    `${surface} must not expose retired pool action contracts`);
+  assert.match(html, /Island ECC/, `${surface} must retain Island ECC administration`);
+}
+const liveIslandEccRosters = [...livePaymentsHtml.matchAll(
+  /data-payment-roster="(hyrox-quarry-bay-[^"]+)"/g
+)].map((match) => match[1]);
+assert.ok(liveIslandEccRosters.length > 0, "Live Admin Payments must render Island ECC");
+assert.equal(new Set(liveIslandEccRosters).size, liveIslandEccRosters.length,
+  "Live Admin Payments must render each Island ECC session once");
 assert.match(livePaymentsHtml, /Payment reconciliation|HYROX booking &amp; payment/,
-  "Live Admin Payments must carry HYROX payment controls");
+  "Live Admin Payments must carry Island ECC payment controls");
+for (const contract of [
+  'case "confirm-payment"', 'case "attendance-toggle"', 'case "replacement-decision"',
+  'case "join-waitlist"', 'case "leave-waitlist"', 'case "cancel-booking"',
+  'case "form-gym-note"',
+]) {
+  assert.ok(appSource.includes(contract), `direct Island ECC handler must remain: ${contract}`);
+}
+for (const contract of ['case "hyrox-plan-retry"', 'case "midtown-toggle"']) {
+  assert.equal(appSource.includes(contract), false, `retired Admin pool handler remains: ${contract}`);
+}
 const liveActivityEditorHtml = views.viewAdminActivity("wnt");
 assert.match(liveActivityEditorHtml, /Weekly Event Controls &gt; Free &amp; RSVP Events/);
 console.log("ok  live Admin Activities groups dated controls without changing form contracts");
@@ -3325,7 +3330,7 @@ if (!pendingAccount.includes("Accepted")) {
 if (!pendingAccount.includes("Yes")) {
   throw new Error("Pending Profile should render the fetched application photo consent");
 }
-const gatedPaidSession = store.upcomingSessions(14).find((session) => session.kind === "paid" && !store.isMidtown(session));
+const gatedPaidSession = store.upcomingSessions(14).find((session) => session.kind === "paid");
 if (!gatedPaidSession) throw new Error("Live access checks need an upcoming paid session");
 store.currentUser().role = "super_admin";
 store.currentUser().status = "approved";
@@ -3941,7 +3946,7 @@ assert.ok(operations.livePayoutFor("unassigned-super"),
 // in-memory Admin directory. UUID-keyed duty and payout operations must remain
 // usable without persisting or reloading an editable identity directory.
 const memberPaySession = store.upcomingSessions(28).find((session) =>
-  session.kind === "paid" && !store.isMidtown(session)
+  session.kind === "paid"
   && session.id !== gatedPaidSession.id
 );
 if (!memberPaySession) throw new Error("Live payout transition needs another paid session");
@@ -5648,7 +5653,7 @@ console.log("ok  Payment route and visibility refresh RLS-suppressed assigned pa
 // capture values before controls are disabled, suppress duplicates, and expose
 // success/navigation only after authoritative settlement.
 const routingSessions = store.upcomingSessions(28).filter((session) =>
-  session.kind === "paid" && !store.isMidtown(session) && !session.cancelled
+  session.kind === "paid" && !session.cancelled
   && !store.userReservationFor(authUser.id, session.id)
   && !store.userBookingFor(authUser.id, session.id)
 );

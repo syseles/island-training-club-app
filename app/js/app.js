@@ -1348,27 +1348,6 @@ document.addEventListener("click", async (e) => {
       break;
     }
 
-    case "hyrox-plan-retry":
-      if (controlBusy.has(el)) break;
-      try {
-        await withBusyControl(el, "Retrying…", async () => {
-          await store.finalizeHyroxVenuePlan(el.dataset.cycle);
-          toast("Automatic venue plan retried — members notified");
-          await renderWithFeedback();
-        });
-      } catch (err) { toast(err.message || "Unable to retry automatic venue plan", true); }
-      break;
-
-    case "midtown-toggle":
-      try {
-        await withBusyControl(el, "Updating…", async () => {
-          await store.setMidtownOpen(el.dataset.session, el.dataset.open === "1");
-          toast(el.dataset.open === "1" ? "Midtown opened — interest list converting" : "Midtown closed");
-          await renderWithFeedback();
-        });
-      } catch (err) { toast(err.message || "Unable to update Midtown", true); }
-      break;
-
     case "venue-tbc-toggle":
       try {
         await withBusyControl(el, "Updating…", async () => {

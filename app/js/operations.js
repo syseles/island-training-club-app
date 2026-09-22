@@ -511,42 +511,9 @@ function operationalProblem(error) {
   if (message.includes("Booking not found")) return new Error("Booking not found.");
   if (message.includes("Queue entry not found")) return new Error("Queue entry not found.");
   if (message.includes("Authentication required")) return new Error("Authentication required.");
-  if (message.includes("Choose BFT, Midtown, or Either")) return new Error("Choose BFT, Midtown, or Either.");
-  if (message.includes("Fallback acknowledgement is required")) return new Error("Fallback acknowledgement is required.");
-  if (message.includes("HYROX cycle not found")) return new Error("HYROX cycle not found.");
-  if (message.includes("This HYROX cycle is cancelled")) return new Error("This HYROX cycle is cancelled.");
-  if (message.includes("HYROX registration opens Monday")) return new Error("HYROX registration opens Monday at 6 PM HKT.");
-  if (message.includes("HYROX registration is closed")) return new Error("HYROX registration is closed.");
-  if (message.includes("HYROX registration is full")) return new Error("HYROX registration is full. Join the weekly waitlist.");
-  if (message.includes("You already joined this HYROX registration")) return new Error("You already joined this HYROX registration.");
-  if (message.includes("You already have a HYROX booking for this Saturday")) return new Error("You already have a HYROX booking for this Saturday.");
-  if (message.includes("HYROX places are still available")) return new Error("HYROX places are still available.");
-  if (message.includes("HYROX queue entry not found")) return new Error("HYROX queue entry not found.");
-  if (message.includes("Queue entry is no longer active")) return new Error("Queue entry is no longer active.");
-  if (message.includes("Use the weekly HYROX registration")) return new Error("Use the weekly HYROX registration.");
-  if (message.includes("Payment rejection reason is required")) return new Error("Payment rejection reason is required.");
-  if (message.includes("Booking has no pending payment claim")) return new Error("Booking has no pending payment claim.");
-  if (message.includes("Venue changes are available only when both gyms open")) return new Error("Venue changes are available only when both gyms open.");
-  if (message.includes("Booking allocation is not changeable")) return new Error("Booking allocation is not changeable.");
-  if (message.includes("Venue changes closed Friday at 9 PM HKT")) return new Error("Venue changes closed Friday at 9 PM HKT.");
-  if (message.includes("Venue changes close Friday at 9 PM HKT")) return new Error("Venue changes close Friday at 9 PM HKT.");
-  if (message.includes("Target venue is not part of this HYROX cycle")) return new Error("Target venue is not part of this HYROX cycle.");
-  if (message.includes("Target venue is full")) return new Error("Target venue is full.");
-  if (message.includes("Choose the other venue in this HYROX cycle")) return new Error("Choose the other venue in this HYROX cycle.");
-  if (message.includes("You already have an active HYROX queue request")) return new Error("You already have an active HYROX queue request.");
-  if (message.includes("Venue-switch request is no longer active")) return new Error("Venue-switch request is no longer active.");
-  if (message.includes("HYROX venue plan is not ready")) return new Error("HYROX venue plan is not ready.");
-  if (message.includes("HYROX cycle is already cancelled")) return new Error("HYROX cycle is already cancelled.");
-  if (message.includes("Cancel the weekly HYROX cycle instead")) return new Error("Cancel the weekly HYROX cycle instead.");
-  if (message.includes("Midtown availability is derived from the weekly HYROX plan")) return new Error("Midtown availability is derived from the weekly HYROX plan.");
-  if (message.includes("HYROX venue allocation must be closed first")) return new Error("HYROX venue allocation must be closed first.");
-  if (message.includes("HYROX child venue is not enabled by the weekly plan")) return new Error("HYROX child venue is not enabled by the weekly plan.");
-  if (message.includes("Midtown toggle is only valid")) return new Error("Midtown toggle is only valid for Midtown sessions.");
-  if (message.includes("Interest list is only for closed Midtown")) return new Error("Interest list is only for closed Midtown sessions.");
   if (message.includes("Waitlist is only for open sessions")) return new Error("Waitlist is only for open sessions.");
   if (message.includes("Waitlist is only for full sessions")) return new Error("Waitlist is only for full sessions.");
   if (message.includes("Session is not full")) return new Error("Session is not full.");
-  if (message.includes("Interest list is only")) return new Error("Interest list is only for closed Midtown sessions.");
   if (message.includes("Activity venue is fixed.")
       || message.includes("replacement invite")
       || message.includes("replacement request")
@@ -691,11 +658,6 @@ export async function ensureLiveSessionWindow() {
       p_weeks: 16,
     });
     if (error) throw operationalProblem(error);
-    const { error: hyroxError } = await supabase.rpc("ensure_hyrox_cycles", {
-      p_start_date: iso,
-      p_weeks: 16,
-    });
-    if (hyroxError) throw operationalProblem(hyroxError);
   } catch (err) {
     console.warn("ensureLiveSessionWindow failed", err);
   }
@@ -1047,38 +1009,6 @@ export async function liveDecideReplacement(requestId, confirm, reason) {
   return cacheReplacementRequest(row);
 }
 
-export async function liveSweepHyroxDeadlines({ refresh = true, now = Date.now() } = {}) {
-  try {
-    const pNow = now instanceof Date ? now.toISOString() : new Date(now).toISOString();
-    await runOperationalRpc(
-      "send_hyrox_member_payment_reminders",
-      { p_now: pNow },
-      { skipRefresh: true }
-    );
-    const result = await runOperationalRpc(
-      "sweep_hyrox_cycle_deadlines",
-      { p_now: pNow },
-      { skipRefresh: true }
-    );
-    await runOperationalRpc(
-      "send_hyrox_collector_payment_reminder",
-      { p_now: pNow },
-      { skipRefresh: true }
-    );
-    await runOperationalRpc(
-      "send_hyrox_venue_reminders",
-      { p_now: pNow },
-      { skipRefresh: true }
-    );
-    if (refresh) await refreshOperationalState();
-    return result;
-  } catch (error) {
-    liveCache.error = operationalProblem(error);
-    notifyListeners();
-    throw liveCache.error;
-  }
-}
-
 export async function liveSetOperationalAttendance(bookingId, arrived) {
   await runOperationalRpc("set_operational_attendance", {
     p_booking_id: bookingId,
@@ -1207,13 +1137,6 @@ export async function liveSetSessionNotice(sessionId, notice) {
   return runOperationalRpc("set_operational_notice", {
     p_session_id: sessionId,
     p_notice: notice || "",
-  });
-}
-
-export async function liveSetMidtownOpen(sessionId, enabled) {
-  return runOperationalRpc("set_operational_midtown_open", {
-    p_session_id: sessionId,
-    p_enabled: !!enabled,
   });
 }
 
