@@ -209,7 +209,8 @@ function buildHowToUseTab(ss) {
   const old = ss.getSheetByName('How to use');
   if (old) ss.deleteSheet(old);
   const sheet = ss.insertSheet('How to use');
-  sheet.getRange(1, 1, HOW_TO_USE.length, 1).setValues(HOW_TO_USE);
+  const rows = HOW_TO_USE.map(([text]) => [text]);
+  sheet.getRange(1, 1, rows.length, 1).setValues(rows);
   sheet.setColumnWidth(1, 720);
   const text = sheet.getRange(1, 1, HOW_TO_USE.length, 1);
   text.setWrap(true).setFontSize(11).setVerticalAlignment('top');
