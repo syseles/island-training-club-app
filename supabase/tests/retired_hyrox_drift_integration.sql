@@ -1,0 +1,95 @@
+-- Expanded by verify_retired_hyrox_drift.py --sql. Disposable local only.
+-- All fixtures, observed drift and repeated repair roll back, including on RED.
+\set ON_ERROR_STOP on
+begin;
+create function pg_temp.drift_assert(ok boolean) returns void language plpgsql as $$
+begin if not coalesce(ok,false) then raise exception 'drift assertion failed'; end if; end;
+$$;
+create function pg_temp.drift_rows() returns jsonb language plpgsql as $$
+declare t record; result jsonb := '{}'::jsonb; value text;
+begin
+  for t in select schemaname,tablename from pg_tables
+    where schemaname in ('public','auth','supabase_migrations') order by 1,2 loop
+    execute format('select md5(coalesce(string_agg(to_jsonb(t)::text,E''\n'' order by to_jsonb(t)::text),'''')) from %I.%I t',t.schemaname,t.tablename) into value;
+    result := result || jsonb_build_object(t.schemaname||'.'||t.tablename,value);
+  end loop;
+  return result;
+end;
+$$;
+create function pg_temp.drift_catalog() returns jsonb language sql as $$
+select jsonb_build_array(
+ (select jsonb_agg(jsonb_build_array(p.oid,pg_get_functiondef(p.oid),p.proacl) order by p.oid)
+  from pg_proc p join pg_namespace n on n.oid=p.pronamespace where n.nspname in ('public','private') and p.prokind='f'),
+ (select jsonb_agg(to_jsonb(p) order by schemaname,tablename,policyname) from pg_policies p),
+ (select jsonb_agg(jsonb_build_array(c.oid,c.relacl,c.relrowsecurity,c.relforcerowsecurity,c.relowner) order by c.oid)
+  from pg_class c join pg_namespace n on n.oid=c.relnamespace where n.nspname in ('public','private') and c.relkind='r'),
+ (select jsonb_agg(to_jsonb(d) order by oid) from pg_default_acl d),
+ (select jsonb_agg(to_jsonb(r) order by oid) from pg_roles r));
+$$;
+insert into auth.users(id,email,raw_user_meta_data) values
+ ('a2230000-0000-0000-0000-000000000001','drift-member@itc.invalid','{}');
+update public.profiles set role='member' where id='a2230000-0000-0000-0000-000000000001';
+insert into public.operational_sessions(id,activity_id,session_date,start_time,duration_minutes,venue,capacity,price_hkd,is_open)
+ select activity_id||'-2098-01-04',activity_id,'2098-01-04',start_time,duration_minutes,venue,capacity,price_hkd,true
+ from public.operational_activity_templates where activity_id in ('hyrox-bft','hyrox-midtown','hyrox-quarry-bay');
+insert into public.operational_hyrox_cycles(id,session_date,bft_session_id,midtown_session_id,
+ registration_opens_at,payment_deadline_at,holder_grace_deadline_at,promoted_payment_deadline_at,venue_choice_deadline_at)
+ values('hyrox-pool-2098-01-04','2098-01-04','hyrox-bft-2098-01-04','hyrox-midtown-2098-01-04',
+ '2098-01-01','2098-01-02','2098-01-02 01:00Z','2098-01-02 02:00Z','2098-01-03');
+create temporary table drift_before as select pg_temp.drift_rows() rows,pg_temp.drift_catalog() catalog;
+
+-- Exact private diagnostic drift: no PUBLIC ACL, two PUBLIC policies, browser
+-- EXECUTE only on the reviewed empty generator (not reserve/join).
+create policy "public read HYROX cycles" on public.operational_hyrox_cycles for select to public using (true);
+create policy "member read own HYROX cycle queues" on public.operational_hyrox_queue_entries
+ for select to public using ((profile_id = (select auth.uid())) or public.operational_is_admin());
+grant select on public.operational_hyrox_cycles to anon,authenticated;
+grant select on public.operational_hyrox_queue_entries to authenticated;
+grant execute on function public.ensure_hyrox_cycles(date,integer) to anon,authenticated;
+set local role authenticated;
+select set_config('request.jwt.claim.sub','a2230000-0000-0000-0000-000000000001',true);
+select pg_temp.drift_assert(exists(select 1 from public.operational_hyrox_cycles where id='hyrox-pool-2098-01-04'));
+reset role;
+
+-- APPLY 00003
+
+select pg_temp.drift_assert(rows=pg_temp.drift_rows() and catalog=pg_temp.drift_catalog()) from drift_before;
+-- Second application must be catalog- and row-idempotent, with no history edit.
+-- APPLY 00003
+select pg_temp.drift_assert(rows=pg_temp.drift_rows() and catalog=pg_temp.drift_catalog()) from drift_before;
+do $$ declare r text; t text;
+begin
+ foreach r in array array['anon','authenticated'] loop
+  foreach t in array array['operational_hyrox_cycles','operational_hyrox_queue_entries'] loop
+   perform pg_temp.drift_assert(not has_table_privilege(r,'public.'||t,'SELECT'));
+   perform pg_temp.drift_assert(not has_any_column_privilege(r,'public.'||t,'SELECT'));
+  end loop;
+  perform pg_temp.drift_assert(not has_function_privilege(r,'public.ensure_hyrox_cycles(date,integer)','EXECUTE'));
+ end loop;
+ perform pg_temp.drift_assert(has_function_privilege('service_role','public.ensure_hyrox_cycles(date,integer)','EXECUTE'));
+ perform pg_temp.drift_assert(has_table_privilege('service_role','public.operational_hyrox_cycles','SELECT'));
+end; $$;
+-- Actual SQL permission denials, not an empty retained-cohort success.
+set local role anon;
+do $$ begin
+ begin perform 1 from public.operational_hyrox_cycles; raise exception 'unexpected read'; exception when insufficient_privilege then null; end;
+ begin perform 1 from public.operational_hyrox_queue_entries; raise exception 'unexpected read'; exception when insufficient_privilege then null; end;
+ begin perform public.ensure_hyrox_cycles(current_date,1); raise exception 'unexpected execute'; exception when insufficient_privilege then null; end;
+end; $$;
+reset role;
+set local role authenticated;
+do $$ begin
+ begin perform 1 from public.operational_hyrox_cycles; raise exception 'unexpected read'; exception when insufficient_privilege then null; end;
+ begin perform 1 from public.operational_hyrox_queue_entries; raise exception 'unexpected read'; exception when insufficient_privilege then null; end;
+ begin perform public.ensure_hyrox_cycles(current_date,1); raise exception 'unexpected execute'; exception when insufficient_privilege then null; end;
+end; $$;
+select pg_temp.drift_assert(exists(select 1 from public.operational_sessions where id='hyrox-quarry-bay-2098-01-04'));
+select pg_temp.drift_assert((public.reserve_operational_session('hyrox-quarry-bay-2098-01-04')).session_id='hyrox-quarry-bay-2098-01-04');
+reset role;
+-- Independent inherited PUBLIC grants must also be closed; no default ACL fix.
+grant select on public.operational_hyrox_cycles,public.operational_hyrox_queue_entries to public;
+grant execute on function public.ensure_hyrox_cycles(date,integer) to public;
+-- APPLY 00003
+select pg_temp.drift_assert(catalog=pg_temp.drift_catalog()) from drift_before;
+select 'OK: exact drift, browser denial, preservation, idempotence, PUBLIC and Island ECC';
+rollback;

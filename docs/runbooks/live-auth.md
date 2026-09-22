@@ -233,14 +233,25 @@ Island ECC.
 
 `00001` already applied once in production:
 `supabase/migrations/20260922000001_retire_bft_midtown_hyrox_pool.sql`.
-The reviewed forward correction is
-`supabase/migrations/20260922000002_harden_retired_hyrox_boundary.sql`, the new
-source tip after `00001` on a clean disposable filename-ordered replay.
-Production has known history drift: never replay that chain, run `db push`
-or `--include-all`, or edit/reapply/repair `00001`. Apply only `00002` after
-hash/preflight: confirmed project, approved commit/SHA-256, backup/PITR,
-prerequisite schema, `00001` exactly once and `00002` absent, no unexpected
-history, and count-only evidence for the baseline. Unexpected findings mean STOP.
+The forward correction
+`supabase/migrations/20260922000002_harden_retired_hyrox_boundary.sql` also already applied once.
+The new source tip is `supabase/migrations/20260922000003_reassert_retired_hyrox_pool_acls.sql`.
+Production has known history drift: never replay that chain, run `db push` or `--include-all`.
+Never edit, replay, reapply, or repair `00001` or `00002`.
+Apply only 00003 after hash/preflight: confirmed project, approved commit/SHA-256,
+backup/PITR, both earlier versions exactly once and 00003 absent, exact observed
+policy/ACL drift only, and count-only evidence. Unexpected findings mean STOP.
+
+For the stopped Task 7 journal, follow the operational runbook's 00003 recovery
+order: preserve the mode-0600 v5 journal; never clear uncertainty or use ordinary
+cleanup-only. After verified repair and all three history versions exactly once,
+use only separately reviewed one-off recovery with durable lock/receipt, a fresh
+short-lived journal/hash/count-bound acknowledgement, exact provenance/FK closure,
+and locked SERIALIZABLE exact-ID/xmin/full-row-digest cleanup. Recheck the original
+fixture-excluded baseline and retained digests, post-00003 catalog/history/source/ACL
+contracts, and zero fixtures before journal removal. Any mismatch preserves evidence.
+Resolver version 8 is already deployed on this stopped target; do not redeploy it
+for this ACL-only repair. No remote action or promotion is authorized here.
 
 Follow the complete [operational backend retirement
 procedure](operational-backend.md#hyrox-pool-retirement-backend-first-deployment).
@@ -249,7 +260,7 @@ procedure](operational-backend.md#hyrox-pool-retirement-backend-first-deployment
 
 Use this sequence without reordering or combining its gates:
 
-1. **Inventory, apply, and verify the backend and RPC boundary.** Complete local gates and hash/preflight; apply only `20260922000002_harden_retired_hyrox_boundary.sql` with separate authorization; verify exact helper/notification ACLs, latest preserved roster source, unchanged RLS and retained counts, and complete pool RPC denial and Island ECC active-RPC checks. `00001` already applied once; never replay, edit, or repair it. The notification inventory must count retired and unmatched `hyrox_replacement_review` notices while excluding a review notice proven to belong only to active Island ECC.
+1. **Inventory, apply, and verify the backend and RPC boundary.** Complete local gates and hash/preflight; apply only `20260922000003_reassert_retired_hyrox_pool_acls.sql` with separate authorization; verify exact pool policy/ACL repair, unchanged bodies/domain rows/older history, existing helper/notification/roster contracts, and complete pool RPC denial and Island ECC active-RPC checks. Complete the separately reviewed one-off recovery before resuming acceptance. `00001` already applied once, as did `00002`; never replay, edit, or repair either. The notification inventory must count retired and unmatched `hyrox_replacement_review` notices while excluding a review notice proven to belong only to active Island ECC.
 2. **Deploy and verify the avatar boundary.** Deploy the reviewed `resolve-profile-avatars` Edge Function only after migration classifier/grant verification, with separate authorization. Record the artifact revision (commit, resolver/shared-adapter digests, deployment version and project). Follow the operational runbook's direct authenticated endpoint gates: BFT/Midtown neutral 404 denial without attendee payloads/signing, Island ECC 200 success, and classifier-failure fail-closed 500 with zero attendee reads/signing on a disposable replica. Do not inject failures in shared services. This upgrade is required before endpoint/browser acceptance; Vercel does not deploy Edge Functions.
 3. **Deploy the reviewed preview.** Deploy the reviewed preview revision—the exact tested commit—against the migrated and verified project; confirm the served revision and Supabase target without promoting it.
 4. **Run browser UI and Island ECC acceptance.** Against that preview, verify browser UI and the full Island ECC lifecycle in separate visitor/member/Admin sessions: retired data stays absent, deep-link behavior is exact, and Island ECC reserve/payment/confirmation/receipt/attendance/waitlist/replacement paths work without payer or receipt transfer.
@@ -320,7 +331,7 @@ test -z "$(find supabase/migrations -maxdepth 1 -type f -name '*.sql' \
   -exec basename {} \; | cut -d_ -f1 | sort | uniq -d)"
 test "$(find supabase/migrations -maxdepth 1 -type f -name '*.sql' \
   -exec basename {} \; | sort | tail -1)" = \
-  "20260922000002_harden_retired_hyrox_boundary.sql"
+  "20260922000003_reassert_retired_hyrox_pool_acls.sql"
 test -f supabase/migrations/20260921000001_prayer_requests.sql
 test -f supabase/migrations/20260921000002_declined_profile_decisions.sql
 ```
@@ -337,8 +348,9 @@ supabase start --yes \
 The startup output must list each migration version once, apply
 `20260921000001_prayer_requests.sql`, then
 `20260921000002_declined_profile_decisions.sql`, then
-`20260922000001_retire_bft_midtown_hyrox_pool.sql`, and finally
-`20260922000002_harden_retired_hyrox_boundary.sql`. Run both integration files
+`20260922000001_retire_bft_midtown_hyrox_pool.sql`,
+`20260922000002_harden_retired_hyrox_boundary.sql`, and finally
+`20260922000003_reassert_retired_hyrox_pool_acls.sql`. Run both integration files
 inside the disposable database container with stop-on-error enabled:
 
 ```bash

@@ -107,4 +107,5 @@ if check_forbidden_statements "$TMP_DIR/cancellation.sql" >/dev/null 2>&1; then
 fi
 
 python3 "$ROOT/supabase/tests/verify_retired_hyrox_correction.py"
+python3 "$ROOT/supabase/tests/verify_retired_hyrox_drift.py"
 echo "retired HYROX pool migration safety passed"
