@@ -4206,6 +4206,63 @@ for (let version = 9; version <= 23; version++) {
 }
 console.log("ok  every v9-v23 fixture reaches v24 with Island ECC and unrelated records intact");
 
+// v14 Swimming migration remains part of the accepted v13-to-v24 chain.
+// Repair only exact historical defaults; preserve every Admin customization.
+{
+  const historicalSwimmingV13 = structuredClone(freshV24State);
+  historicalSwimmingV13.version = 13;
+  const historicalWater = historicalSwimmingV13.activities.find(
+    (activity) => activity.id === "water"
+  );
+  Object.assign(historicalWater, {
+    location: "Victoria Park Swimming Pool",
+    mapsQuery: "Victoria Park Swimming Pool, Hong Kong",
+    photo: "../assets/itc/main.webp",
+  });
+  localStorage.setItem("itc.prototype.v1", JSON.stringify(historicalSwimmingV13));
+  const repaired = store.load();
+  assert.equal(repaired.version, 24, "the historical Swimming fixture must reach v24");
+  assert.deepEqual(
+    Object.fromEntries(["location", "mapsQuery", "photo"].map((field) => [
+      field,
+      repaired.activities.find((activity) => activity.id === "water")?.[field],
+    ])),
+    {
+      location: "TBC",
+      mapsQuery: "",
+      photo: "../assets/itc/water.webp",
+    },
+    "v14 must repair exact historical Swimming defaults before v24",
+  );
+
+  const customizedSwimmingV13 = structuredClone(freshV24State);
+  customizedSwimmingV13.version = 13;
+  const customizedWater = customizedSwimmingV13.activities.find(
+    (activity) => activity.id === "water"
+  );
+  Object.assign(customizedWater, {
+    location: "Custom Pool",
+    mapsQuery: "Custom Pool, Hong Kong",
+    photo: "../assets/itc/custom-pool.webp",
+  });
+  localStorage.setItem("itc.prototype.v1", JSON.stringify(customizedSwimmingV13));
+  const preserved = store.load();
+  assert.equal(preserved.version, 24, "the customized Swimming fixture must reach v24");
+  assert.deepEqual(
+    Object.fromEntries(["location", "mapsQuery", "photo"].map((field) => [
+      field,
+      preserved.activities.find((activity) => activity.id === "water")?.[field],
+    ])),
+    {
+      location: "Custom Pool",
+      mapsQuery: "Custom Pool, Hong Kong",
+      photo: "../assets/itc/custom-pool.webp",
+    },
+    "v14 must preserve Admin-customized Swimming values through v24",
+  );
+}
+console.log("ok  v14 Swimming defaults repair and Admin customizations survive the v13-to-v24 chain");
+
 // --- Generic Socials preview: rolling seven-day selector ---
 store.resetLocalData();
 installLocalFixtures();
