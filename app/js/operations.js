@@ -264,7 +264,8 @@ async function cacheReplacementRequest(row) {
   } catch {
     // The mutation already succeeded authoritatively. Keep the cache closed to
     // unresolved data without reporting the successful write as a failure;
-    // Realtime or the next explicit refresh/list can reconcile it later.
+    // The Store's bounded explicit replacement-list read can reconcile it;
+    // ordinary operational hydration does not fetch replacement requests.
     evictUnreconciledReplacement(row);
     return safeResult;
   }

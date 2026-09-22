@@ -1059,11 +1059,24 @@ document.addEventListener("click", async (e) => {
         await withBusyControl(el, "Creating invite…", async () => {
           const request = await store.createReplacementRequest(el.dataset.booking, Date.now());
           toast(request?.cachePending
-            ? "Private replacement invite created — details are refreshing"
+            ? "Private replacement invite created — details unavailable; retry refresh"
             : "Private replacement invite created — share it via WhatsApp");
           await renderWithFeedback();
         });
       } catch (err) { toast(err.message || "Unable to create replacement invite", true); }
+      break;
+
+    case "replacement-refresh":
+      if (controlBusy.has(el)) break;
+      try {
+        await withBusyControl(el, "Refreshing…", async () => {
+          const request = await store.refreshReplacementRequest(el.dataset.booking);
+          toast(request?.cachePending
+            ? "Invite created — details unavailable; retry refresh"
+            : "Replacement details refreshed", !!request?.cachePending);
+          await renderWithFeedback();
+        });
+      } catch (err) { toast(err.message || "Unable to refresh replacement details", true); }
       break;
 
     case "replacement-accept":

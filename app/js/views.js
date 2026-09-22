@@ -2549,14 +2549,16 @@ export function viewBooking(bookingId) {
           <p class="muted small">Your paid booking is final — no refund or deferral. If an approved ITC friend is taking your place, contact ITC so an Admin can record and confirm the manual replacement. Payment and receipt ownership stay with you.</p>
           <button class="btn mt12" type="button" data-action="replacement-create" data-booking="${esc(b.id)}">Create private invite</button>
         </div></div>`;
+      } else if (replacement.cachePending) {
+        actions += `<div class="card mt16 replacement-panel"><div class="card-body">
+          <h3>Invite created — details unavailable</h3>
+          <p class="muted small">Your invite was created, but we could not load its current details. Retry refresh to check its status and share it. This will not create another invite. Your booking remains yours until Admin confirmation.</p>
+          <button class="btn mt12" type="button" data-action="replacement-refresh" data-booking="${esc(b.id)}">Retry refresh</button>
+        </div></div>`;
       } else if (replacement.status === "pending") {
         actions += `<div class="card mt16 replacement-panel"><div class="card-body">
-          <h3>${replacement.cachePending
-            ? "Invite created — details are refreshing"
-            : "I can’t attend — arrange a replacement"}</h3>
-          <p class="muted small">${replacement.cachePending
-            ? "Your private invite is ready to share while its details finish refreshing. Your booking remains yours until Admin confirmation."
-            : `Share this single-use invite before ${esc(fmtDay(replacement.expiresAt))}. Your booking remains yours until Admin confirmation.`}</p>
+          <h3>I can’t attend — arrange a replacement</h3>
+          <p class="muted small">Share this single-use invite before ${esc(fmtDay(replacement.expiresAt))}. Your booking remains yours until Admin confirmation.</p>
           ${shareHref ? `<a class="btn mt12" href="${esc(shareHref)}" target="_blank" rel="noopener">Share via WhatsApp</a>` : `<p class="muted small mt12">The private link is available immediately after creating the invite.</p>`}
           ${replacement.id || replacement.requestId
             ? `<button class="btn ghost mt8" type="button" data-action="replacement-cancel" data-request="${esc(replacement.id || replacement.requestId)}">Cancel invite</button>`

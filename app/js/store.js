@@ -1302,6 +1302,25 @@ export function replacementRequestForBooking(bookingId) {
     .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0))[0] ?? null;
 }
 
+// One authoritative read per attempt: never retry a successful create RPC.
+// A failed/missing list result leaves the memory-only overlay in place so the
+// owner can explicitly retry without minting another invite or token.
+export async function refreshReplacementRequest(bookingId) {
+  const booking = getBooking(bookingId);
+  if (!booking) replacementRequestError("Booking not found.");
+  requireAuthorizedPaymentOwner(booking.userId);
+  if (isLive()) {
+    try {
+      await liveOps.liveListReplacementRequests();
+    } catch {
+      if (!livePendingReplacementStates.has(bookingId)) {
+        throw new Error("Replacement details unavailable. Please retry refresh.");
+      }
+    }
+  }
+  return replacementRequestForBooking(bookingId);
+}
+
 export function replacementInviteTokenForBooking(bookingId) {
   if (isLive()) return liveReplacementTokens.get(bookingId) || null;
   return replacementRequestForBooking(bookingId)?.inviteToken || null;
@@ -1431,6 +1450,10 @@ export async function createReplacementRequest(bookingId, now = Date.now()) {
   if (!eligibility.ok) replacementRequestError("This booking cannot arrange a replacement.");
   if (isLive()) {
     requireAuthorizedPaymentOwner(booking.userId);
+    const active = replacementRequestForBooking(bookingId);
+    if (active?.cachePending || ["pending", "accepted"].includes(active?.status)) {
+      replacementRequestError("A replacement invite is already active for this booking.");
+    }
     const token = globalThis.crypto?.randomUUID?.() || uid("replacement-invite");
     const hash = await liveOps.hashReplacementToken(token);
     const request = await liveOps.liveCreateReplacementRequest(bookingId, hash, eligibility.expiresAt);
@@ -1446,7 +1469,8 @@ export async function createReplacementRequest(bookingId, now = Date.now()) {
         cachePending: true,
       };
       livePendingReplacementStates.set(bookingId, pending);
-      return { ...pending, inviteToken: token };
+      const reconciled = await refreshReplacementRequest(bookingId);
+      return { ...reconciled, inviteToken: token };
     }
     livePendingReplacementStates.delete(bookingId);
     return { ...request, inviteToken: token };

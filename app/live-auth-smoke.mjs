@@ -6015,7 +6015,15 @@ operationalSessionRelationshipReadErrors.set(
   { message: "post-create relationship temporarily unavailable" },
 );
 let reconcilingCreateCalls = 0;
+let reconciliationListCalls = 0;
+let reconciliationListFails = true;
 operationalRpcHandler = (name, args) => {
+  if (name === "list_operational_replacement_requests") {
+    reconciliationListCalls += 1;
+    return Promise.resolve(reconciliationListFails
+      ? { data: null, error: { message: "Replacement list temporarily unavailable" } }
+      : { data: [structuredClone(reconcilingReplacementRow)], error: null });
+  }
   if (name === "create_operational_replacement_request") {
     operationalRpcCalls.push({ name, args: structuredClone(args) });
     reconcilingCreateCalls += 1;
@@ -6036,8 +6044,10 @@ const duplicateReconcilingCreate = click({ target: replacementCreateControl });
 await Promise.all([reconcilingCreate, duplicateReconcilingCreate]);
 assert.equal(reconcilingCreateCalls, 1,
   "created-but-reconciling replacement state must suppress duplicate creation");
+assert.equal(reconciliationListCalls, 1,
+  "cache-pending create must attempt exactly one authoritative reconciliation");
 assert.deepEqual(toastStack.children.map((item) => item.textContent), [
-  "Private replacement invite created — details are refreshing",
+  "Private replacement invite created — details unavailable; retry refresh",
 ]);
 assert.equal(
   operations.liveReplacementRequestForBooking(routedDeferBooking.id)?.requestId,
@@ -6049,10 +6059,79 @@ assert.equal(reconcilingReplacement.status, "pending");
 assert.equal(reconcilingReplacement.cachePending, true);
 assert.ok(store.replacementInviteTokenForBooking(routedDeferBooking.id),
   "created-but-reconciling state must retain its private token in memory");
-assert.match(viewEl.innerHTML, /Invite created — details are refreshing/);
-assert.match(viewEl.innerHTML, /Share via WhatsApp/);
+assert.match(viewEl.innerHTML, /Invite created — details unavailable/);
+assert.match(viewEl.innerHTML, /data-action="replacement-refresh"/);
+assert.doesNotMatch(viewEl.innerHTML, /Share via WhatsApp|details are refreshing/);
 assert.doesNotMatch(viewEl.innerHTML, /Create private invite/,
-  "created-but-reconciling view must not invite a duplicate create");
+  "created-but-unavailable view must not invite a duplicate create");
+const pendingInviteToken = store.replacementInviteTokenForBooking(routedDeferBooking.id);
+await assert.rejects(store.createReplacementRequest(routedDeferBooking.id), /already active/);
+assert.equal(reconcilingCreateCalls, 1, "pending Store guard must reject a stale create control");
+const replacementRefreshControl = operationControl("BUTTON", "", "Retry refresh");
+replacementRefreshControl.dataset = {
+  action: "replacement-refresh", booking: routedDeferBooking.id,
+};
+replacementRefreshControl.closest = () => replacementRefreshControl;
+await Promise.all([
+  click({ target: replacementRefreshControl }),
+  click({ target: replacementRefreshControl }),
+]);
+assert.equal(reconciliationListCalls, 2, "each retry must make only one list call");
+assert.equal(store.replacementRequestForBooking(routedDeferBooking.id).cachePending, true);
+assert.match(viewEl.innerHTML, /Invite created — details unavailable/);
+assert.match(viewEl.innerHTML, /Retry refresh/);
+assert.equal(reconcilingCreateCalls, 1, "failed retry must never create another invite");
+reconciliationListFails = false;
+operationalSessionRelationshipReadErrors.set(reconcilingReplacementRow.sessionId,
+  { message: "List enrichment temporarily unavailable" });
+await click({ target: replacementRefreshControl });
+assert.equal(reconciliationListCalls, 3);
+assert.equal(store.replacementRequestForBooking(routedDeferBooking.id).cachePending, true,
+  "list enrichment failure must also retain duplicate suppression and explicit retry");
+assert.match(viewEl.innerHTML, /Invite created — details unavailable/);
+operationalSessionRelationshipReadErrors.delete(reconcilingReplacementRow.sessionId);
+await click({ target: replacementRefreshControl });
+assert.equal(reconciliationListCalls, 4);
+const authoritativeReplacement = store.replacementRequestForBooking(routedDeferBooking.id);
+assert.equal(authoritativeReplacement.requestId, reconcilingReplacementRow.requestId);
+assert.equal(authoritativeReplacement.cachePending, undefined, "successful list clears pending overlay");
+assert.equal(authoritativeReplacement.sessionId, reconcilingReplacementRow.sessionId);
+assert.match(viewEl.innerHTML, /Share via WhatsApp/);
+assert.match(viewEl.innerHTML, /Share this single-use invite before/);
+assert.doesNotMatch(viewEl.innerHTML, /details unavailable|replacement-refresh|Create private invite/);
+assert.equal(store.replacementInviteTokenForBooking(routedDeferBooking.id), pendingInviteToken);
+assert.equal(reconcilingCreateCalls, 1, "successful retry is read-only too");
+assert.ok([...mem.values()].every((value) => !value.includes(pendingInviteToken)),
+  "reconciliation must never persist the private invite token");
+// Removing the authoritative row must not resurrect a supposedly cleared overlay.
+operationalRpcHandler = (name, args) => name === "list_operational_replacement_requests"
+  ? Promise.resolve({ data: [], error: null })
+  : delegatedBaseOperationalRpcHandler(name, args);
+await operations.liveListReplacementRequests();
+assert.equal(store.replacementRequestForBooking(routedDeferBooking.id), null);
+// Also recover within create's single automatic list attempt, without a retry click.
+operationalSessionRelationshipReadErrors.set(reconcilingReplacementRow.sessionId,
+  { message: "Initial create enrichment failed again" });
+let automaticReconciliationCalls = 0;
+operationalRpcHandler = (name, args) => {
+  if (name === "create_operational_replacement_request") {
+    return Promise.resolve({ data: structuredClone(reconcilingReplacementRow), error: null });
+  }
+  if (name === "list_operational_replacement_requests") {
+    automaticReconciliationCalls += 1;
+    operationalSessionRelationshipReadErrors.delete(reconcilingReplacementRow.sessionId);
+    return Promise.resolve({ data: [structuredClone(reconcilingReplacementRow)], error: null });
+  }
+  return delegatedBaseOperationalRpcHandler(name, args);
+};
+await click({ target: replacementCreateControl });
+assert.equal(automaticReconciliationCalls, 1);
+assert.equal(store.replacementRequestForBooking(routedDeferBooking.id).cachePending, undefined);
+assert.match(viewEl.innerHTML, /Share this single-use invite before/);
+assert.match(viewEl.innerHTML, /Share via WhatsApp/);
+assert.doesNotMatch(viewEl.innerHTML, /replacement-refresh|Create private invite/);
+assert.ok([...mem.values()].every((value) =>
+  !value.includes(store.replacementInviteTokenForBooking(routedDeferBooking.id))));
 operationalRpcHandler = delegatedBaseOperationalRpcHandler;
 
 const paidControlServerRow = operationalTableRows.operational_sessions
