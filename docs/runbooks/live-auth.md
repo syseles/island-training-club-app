@@ -231,15 +231,16 @@ Known retired HYROX deep links render `This session is no longer available.`;
 unknown IDs keep the existing safe not-found behavior; neither redirects to
 Island ECC.
 
-The reviewed backend artifact is
-`supabase/migrations/20260922000001_retire_bft_midtown_hyrox_pool.sql`. Its
-exact migration order is after `20260921000001_prayer_requests.sql` and
-`20260921000002_declined_profile_decisions.sql`; on a clean disposable stack it
-is the final source-tip migration after the complete filename-ordered chain.
-Production has known history drift, so do not replay that chain, run `db push`
-or `--include-all`, or repair an older version. Apply only the retirement
-migration after confirming its hash, the linked project, prerequisite schema,
-and remote history.
+`00001` already applied once in production:
+`supabase/migrations/20260922000001_retire_bft_midtown_hyrox_pool.sql`.
+The reviewed forward correction is
+`supabase/migrations/20260922000002_harden_retired_hyrox_boundary.sql`, the new
+source tip after `00001` on a clean disposable filename-ordered replay.
+Production has known history drift: never replay that chain, run `db push`
+or `--include-all`, or edit/reapply/repair `00001`. Apply only `00002` after
+hash/preflight: confirmed project, approved commit/SHA-256, backup/PITR,
+prerequisite schema, `00001` exactly once and `00002` absent, no unexpected
+history, and count-only evidence for the baseline. Unexpected findings mean STOP.
 
 Follow the complete [operational backend retirement
 procedure](operational-backend.md#hyrox-pool-retirement-backend-first-deployment).
@@ -248,11 +249,13 @@ procedure](operational-backend.md#hyrox-pool-retirement-backend-first-deployment
 
 Use this sequence without reordering or combining its gates:
 
-1. **Inventory, apply, and verify the backend and RPC boundary.** Run local gates, collect and retain count-only evidence from production, apply only `20260922000001_retire_bft_midtown_hyrox_pool.sql`, compare retained counts, and complete pool RPC denial and Island ECC active-RPC checks with disposable API fixtures. The notification inventory must count retired and unmatched `hyrox_replacement_review` notices while excluding a review notice proven to belong only to active Island ECC.
+1. **Inventory, apply, and verify the backend and RPC boundary.** Complete local gates and hash/preflight; apply only `20260922000002_harden_retired_hyrox_boundary.sql` with separate authorization; verify exact helper/notification ACLs, latest preserved roster source, unchanged RLS and retained counts, and complete pool RPC denial and Island ECC active-RPC checks. `00001` already applied once; never replay, edit, or repair it. The notification inventory must count retired and unmatched `hyrox_replacement_review` notices while excluding a review notice proven to belong only to active Island ECC.
 2. **Deploy and verify the avatar boundary.** Deploy the reviewed `resolve-profile-avatars` Edge Function only after migration classifier/grant verification, with separate authorization. Record the artifact revision (commit, resolver/shared-adapter digests, deployment version and project). Follow the operational runbook's direct authenticated endpoint gates: BFT/Midtown neutral 404 denial without attendee payloads/signing, Island ECC 200 success, and classifier-failure fail-closed 500 with zero attendee reads/signing on a disposable replica. Do not inject failures in shared services. This upgrade is required before endpoint/browser acceptance; Vercel does not deploy Edge Functions.
 3. **Deploy the reviewed preview.** Deploy the reviewed preview revision—the exact tested commit—against the migrated and verified project; confirm the served revision and Supabase target without promoting it.
 4. **Run browser UI and Island ECC acceptance.** Against that preview, verify browser UI and the full Island ECC lifecycle in separate visitor/member/Admin sessions: retired data stays absent, deep-link behavior is exact, and Island ECC reserve/payment/confirmation/receipt/attendance/waitlist/replacement paths work without payer or receipt transfer.
 5. **Promote the exact accepted snapshot.** Promote only the exact preview commit accepted in step 4, then repeat bounded production route, denial, count-only, Island ECC, and fixture-cleanup checks.
+
+Before step 2, verify service_role has only the session classifier among retirement helpers; the restored attendee helper denies PUBLIC/anon/authenticated/service_role and matches the exact latest `20260910000002_operational_attendee_names_rsvp.sql` body with postgres owner, stable SECURITY DEFINER and fixed search_path. Leave the guarded public wrapper unchanged. Verify notifications: anon has no privileges; authenticated has only SELECT and UPDATE(read_at), never other column UPDATE or INSERT/DELETE/TRUNCATE/TRIGGER/REFERENCES. Keep both reviewed RLS policies unchanged. Check effective ACLs without executing destructive statements. Run local paid/replacement/free RSVP roster and own-active-notification read/mark-read tests with rollback; production read-only verification must not invoke mutating RPCs or create fixtures. Global defaults and unrelated legacy/job grants are not changed by this narrow correction. Confirm each new/applied version exactly once without changing older history, then proceed with resolver deployment.
 
 A failed or unexecuted local, inventory, backend, RPC, preview, privacy, retained-count, denial, or Island ECC gate blocks the next step. Do not treat a successful SQL command alone as acceptance, and do not run browser UI acceptance against the previous frontend.
 
@@ -307,9 +310,9 @@ shell output, CI logs, deployment notes, or tickets.
 ### Clean local migration and rollback-scoped integration gate
 
 From the repository root, first prove that migration versions are unique and
-that the current source tip is the reviewed HYROX retirement migration. The
-prayer and decision migrations must remain immediately ordered before that
-later source tip; a non-empty duplicate-version result or any other final
+that the current source tip is the reviewed HYROX forward correction. The
+prayer and decision migrations must remain ordered before retirement and its
+forward correction; a non-empty duplicate-version result or any other final
 filename blocks rollout:
 
 ```bash
@@ -317,7 +320,7 @@ test -z "$(find supabase/migrations -maxdepth 1 -type f -name '*.sql' \
   -exec basename {} \; | cut -d_ -f1 | sort | uniq -d)"
 test "$(find supabase/migrations -maxdepth 1 -type f -name '*.sql' \
   -exec basename {} \; | sort | tail -1)" = \
-  "20260922000001_retire_bft_midtown_hyrox_pool.sql"
+  "20260922000002_harden_retired_hyrox_boundary.sql"
 test -f supabase/migrations/20260921000001_prayer_requests.sql
 test -f supabase/migrations/20260921000002_declined_profile_decisions.sql
 ```
@@ -333,8 +336,9 @@ supabase start --yes \
 
 The startup output must list each migration version once, apply
 `20260921000001_prayer_requests.sql`, then
-`20260921000002_declined_profile_decisions.sql`, and finally
-`20260922000001_retire_bft_midtown_hyrox_pool.sql`. Run both integration files
+`20260921000002_declined_profile_decisions.sql`, then
+`20260922000001_retire_bft_midtown_hyrox_pool.sql`, and finally
+`20260922000002_harden_retired_hyrox_boundary.sql`. Run both integration files
 inside the disposable database container with stop-on-error enabled:
 
 ```bash

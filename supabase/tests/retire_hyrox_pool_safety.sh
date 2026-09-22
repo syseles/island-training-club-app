@@ -106,4 +106,5 @@ if check_forbidden_statements "$TMP_DIR/cancellation.sql" >/dev/null 2>&1; then
   fail "self-test accepted a deployment-time cancellation invocation"
 fi
 
+python3 "$ROOT/supabase/tests/verify_retired_hyrox_correction.py"
 echo "retired HYROX pool migration safety passed"

@@ -28,11 +28,12 @@ For a **clean disposable database only**, replay every repository migration once
 3. `20260808000003_operational_admin_rpcs.sql`
 4. `20260808000004_operational_realtime_seed.sql`
 5. all later migrations in filename order, including the historical pool schema/RPC migrations `20260903000001`–`20260904000002`, attendance `20260909000001`, replacement migrations `20260910000001`–`20260910000006`, free-event migration `20260920000001`, prayer migration `20260921000001`, and decision repair `20260921000002`;
-6. `20260922000001_retire_bft_midtown_hyrox_pool.sql` last.
+6. `20260922000001_retire_bft_midtown_hyrox_pool.sql`;
+7. `20260922000002_harden_retired_hyrox_boundary.sql` last.
 
 Do not skip or rewrite historical files in a clean replay: the final retirement migration depends on the schema they created and then closes its browser boundary.
 
-Production has known migration-history drift. Do **not** replay the chain, use unqualified `supabase db push`, use `--include-all`, or repair an older migration as part of this rollout. Confirm the linked project and remote history first. Apply only the reviewed source-tip file `supabase/migrations/20260922000001_retire_bft_midtown_hyrox_pool.sql` after its prerequisites and production inventory are verified.
+Production has known migration-history drift. Do **not** replay the chain, use unqualified `supabase db push`, use `--include-all`, or repair an older migration as part of this rollout. Confirm the linked project and remote history first. `00001` already applied once in production. Apply only the reviewed source-tip file `supabase/migrations/20260922000002_harden_retired_hyrox_boundary.sql` after its hash/preflight and production inventory are verified. Never edit, reapply, replay, or repair `00001`.
 
 ## HYROX pool retirement: backend-first deployment
 
@@ -42,7 +43,7 @@ This rollout is strictly backend-first deployment. A frontend containing retirem
 
 Use this sequence without reordering or combining its gates:
 
-1. **Inventory, apply, and verify the backend and RPC boundary.** Run the count-only inventory, apply only the reviewed retirement migration, compare retained counts, and complete pool RPC denial and Island ECC active-RPC checks.
+1. **Inventory, apply, and verify the backend and RPC boundary.** Complete hash/preflight and count-only inventory; apply only `20260922000002_harden_retired_hyrox_boundary.sql`; verify exact helper/notification grants, latest preserved roster source, unchanged policies and retained counts, and complete pool RPC denial and Island ECC active-RPC checks. `00001` already applied once; do not replay, edit, or repair it.
 2. **Deploy and verify the avatar boundary.** Deploy the reviewed `resolve-profile-avatars` Edge Function only after SQL classifier/grant verification; record its artifact revision and pass the direct authenticated endpoint gates below before any browser acceptance.
 3. **Deploy the reviewed preview.** Deploy the reviewed preview revision against that verified migrated backend; do not promote it yet.
 4. **Run browser UI and Island ECC acceptance.** Against the deployed preview, verify browser UI and the full Island ECC lifecycle, exact deep-link behavior, and absence of retired data.
@@ -59,9 +60,10 @@ test -z "$(find supabase/migrations -maxdepth 1 -type f -name '*.sql' \
   -exec basename {} \; | cut -d_ -f1 | sort | uniq -d)"
 test "$(find supabase/migrations -maxdepth 1 -type f -name '*.sql' \
   -exec basename {} \; | sort | tail -1)" = \
-  "20260922000001_retire_bft_midtown_hyrox_pool.sql"
-shasum -a 256 supabase/migrations/20260922000001_retire_bft_midtown_hyrox_pool.sql
+  "20260922000002_harden_retired_hyrox_boundary.sql"
+shasum -a 256 supabase/migrations/20260922000002_harden_retired_hyrox_boundary.sql
 bash supabase/tests/retire_hyrox_pool_safety.sh
+python3 supabase/tests/verify_retired_hyrox_correction.py
 ```
 
 Reset a disposable local Supabase stack, replay the unmodified chain, and run the rollback-scoped integration:
@@ -73,7 +75,10 @@ supabase db reset --local --no-seed
 docker exec -i supabase_db_island-training-club-app \
   psql -U postgres -d postgres -X -P pager=off -v ON_ERROR_STOP=1 \
   < supabase/tests/retire_hyrox_pool_integration.sql
+python3 supabase/tests/verify_retired_hyrox_correction.py --integration
 ```
+
+The correction integration recreates production function defaults, service grants, broad notification table/column grants and the older preserved roster in one transaction. It verifies exact ACLs, unchanged RLS/defaults/notification rows, ECC paid/replacement rosters, free RSVP rosters and member mark-read, then rolls back. `--integration --red` deliberately omits `00002` and must fail (connection close rolls back). Forbidden mutations including TRUNCATE are checked with catalog privilege predicates, never executed.
 
 Expected: the integration emits `OK: retired HYROX pool boundary`, ends with `ROLLBACK`, and exits zero. Never run this reset or integration against production, Testing, staging, a shared database, or a database containing real user data.
 
@@ -87,9 +92,9 @@ supabase link --project-ref "$SUPABASE_PROJECT_REF"
 supabase migration list --linked
 ```
 
-Stop if the target or history is unexpected, if `20260922000001` is already present without matching reviewed evidence, or if Island ECC is absent/inactive.
+Stop unless `20260922000001` is present exactly once with the Step 2 reviewed evidence, `20260922000002` is absent, BFT/Midtown are inactive, and Island ECC is active. Known older history gaps are not permission to replay or repair anything. Stop on duplicate/unexpected versions or artifact mismatch.
 
-The SHA-256 identifies the complete reviewed SQL, including generic notification provenance; the version alone is not artifact identity. These final-review corrections revise the not-yet-deployed source artifact. Discard prior approval/hash evidence for this file and record a fresh reviewed digest. If any target already applied a different digest under `20260922000001`, stop: do not reapply this file or repair history to pretend it matches. That target requires a new, separately reviewed forward correction migration.
+The SHA-256 identifies the complete reviewed SQL; the version alone is not artifact identity. Keep the applied `00001` digest `81f66371c360d9e6aed31f4130f38df891aad4100abdbddf2aa1c0d92e7aadb8` unchanged. Recompute the new `00002` digest and compare it with the approved forward-correction report before application. Retain reviewed commit/hash, target, prerequisites, backup/PITR evidence and count-only baseline. Preflight the three reported differences: postgres/public default EXECUTE grants, notification table/column ACL drift, and the preserved attendee body. Confirm the wrapper/policies still match reviewed `00001`; unexpected divergence blocks this narrow correction.
 
 Run the following in trusted read-only SQL. It deliberately emits canonical activity/status labels and counts only—never member names, emails, profile IDs, payment references, replacement tokens, notification bodies, or screenshots of row content.
 
@@ -210,22 +215,17 @@ Generic `operational_payment_marked` and `operational_gym_finalized` producers i
 
 Direct Island ECC uses title `Payment marked for hyrox-quarry-bay` and body `A member marked payment on <session-date>.`; sharing a date with a retained cycle does not match the fingerprint. ECC-only timestamps and unrelated generic notices remain active. Near matches, missing retained dates, and arbitrary HYROX wording do not establish fingerprint provenance. This uses full-string equality to a known historical producer, never substring inference, free-text date parsing, or notification rewriting. Inventory output remains counts only—never title/body content.
 
-The policy adapter and revoked public classifier now take `(text, text, timestamptz, text, text)` in kind/destination/created_at/title/body order; SELECT and both UPDATE predicates pass the original row fields. The private adapter is executable only by authenticated policy evaluation, not anon/PUBLIC; the public classifier remains revoked from all browser roles. The pending migration defines only this signature, with no three-argument overload. A target that already applied the earlier artifact requires a new reviewed forward correction, including safe replacement of dependent policies and removal/revocation of obsolete signatures—not reapplication of the revised file.
+The policy adapter and revoked public classifier now take `(text, text, timestamptz, text, text)` in kind/destination/created_at/title/body order; SELECT and both UPDATE predicates pass the original row fields. The private adapter is executable only by authenticated policy evaluation, not anon/PUBLIC; the public classifier remains revoked from all browser roles. The applied `00001` defines only this signature, with no three-argument overload. The production review verified these policies and signatures; `00002` intentionally leaves them unchanged. Any different policy/signature state requires separate review, never reapplication of `00001`.
 
 Record the UTC query time and count-only evidence. Confirm with the data owner that future BFT/Midtown/pool rows are the acknowledged test records. A mismatch or evidence of genuine future member activity blocks deployment; do not infer consent, cancel it, migrate it, or inspect personal fields.
 
-### 3. Apply only the retirement migration
+### 3. Apply only the forward correction
 
-Reconfirm that the production templates are still in the expected pre-retirement state and the remote migration list does not contain `20260922000001`. With explicit production authorization, apply the reviewed file unchanged to the confirmed project using the trusted Supabase SQL Editor or the separately approved linked CLI command:
+`00001` already applied once. After the hash/preflight above and separate explicit production authorization, apply only the complete reviewed `supabase/migrations/20260922000002_harden_retired_hyrox_boundary.sql` atomically using the trusted migration application procedure (SQL Editor: explicit BEGIN/COMMIT around the unchanged file). Do not use broad chain push, edit/reapply `00001`, or repair its history. This local implementation does not authorize any remote action.
 
-```bash
-supabase db query --linked \
-  --file supabase/migrations/20260922000001_retire_bft_midtown_hyrox_pool.sql
-```
+Command success is not acceptance. Do not deploy the resolver or dependent frontend yet. Do not run cancellation RPCs or any cleanup statement.
 
-Command success is not acceptance. Do not deploy the dependent frontend yet. Do not run cancellation RPCs or any cleanup statement.
-
-### 4. Verify backend state before history repair or frontend deployment
+### 4. Verify backend state before resolver deployment
 
 The template query must return BFT and Midtown inactive and Island ECC active:
 
@@ -299,7 +299,7 @@ select x.table_name,
  order by x.table_name;
 ```
 
-Every row must have `rls_enabled = true`, `browser_read_policies = 0`, and both mutation values false. Then rerun the exact inventory query from step 2. Every retained-domain count and status bucket must equal the pre-apply evidence; only the BFT/Midtown template `active` flags may change. The pool-related notification count must also be unchanged.
+Every row must have `rls_enabled = true`, `browser_read_policies = 0`, and both mutation values false. Then rerun the exact inventory query from step 2. Every retained-domain count and status bucket must equal the pre-correction evidence; no template flags, domain rows, or notification rows may change in `00002`. The pool-related notification count must also be unchanged.
 
 Finally verify Island ECC remains present and future direct sessions remain available:
 
@@ -314,16 +314,66 @@ select t.activity_id, t.active, t.venue, t.capacity, t.price_hkd,
  group by t.activity_id, t.active, t.venue, t.capacity, t.price_hkd;
 ```
 
-Expected: one active `hyrox-quarry-bay` template at Island ECC, capacity 30, HK$180, with the expected current/future session window. Any failed check blocks history repair and frontend deployment.
+Expected: one active `hyrox-quarry-bay` template at Island ECC, capacity 30, HK$180, with the expected current/future session window. Any failed check blocks resolver and frontend deployment.
 
-After every backend check and retained-count comparison passes, record only the new version and immediately re-list history:
+Verify effective ACLs, not merely explicit migration statements: `service_role` may execute the session classifier only among retirement classifiers/adapters; activity, booking, notification classifiers and all three private policy adapters must deny it. All public classifiers deny PUBLIC/anon/authenticated. The preserved attendee implementation denies PUBLIC/anon/authenticated/service_role, is owned by postgres, stable SECURITY DEFINER with `search_path=public`, and its body must exactly match `20260910000002_operational_attendee_names_rsvp.sql` (body MD5 `64c519f7652df631b654191575a51680`, compare full reviewed source too). The public guarded wrapper and its authenticated grant remain unchanged. Prove BFT/Midtown empty rosters, ECC paid/replacement names without payer transfer, and free RSVP names in disposable local acceptance; use no fixture creation or mutating RPCs for read-only production verification.
 
-```bash
-supabase migration repair 20260922000001 --status applied --linked --yes
-supabase migration list --linked
+For notifications, verify RLS and both complete reviewed policy predicates unchanged; anon has no table or column privileges, authenticated has only table SELECT and column UPDATE(read_at). Inspect every column for SELECT/INSERT/UPDATE/REFERENCES and every table privilege including TRUNCATE/TRIGGER/REFERENCES. No other UPDATE, INSERT, DELETE or TRUNCATE may be effective. Inspect PUBLIC/inherited grants too. Do not execute forbidden mutations to test denial. Read-only production metadata checks plus local member read/read_at and cross-recipient/retired denial tests are required; RLS alone is not evidence of correct grants.
+
+Production defaults remain unchanged: object-specific revokes close this boundary, not all service/legacy/job privileges. Other preserved implementations and generic sweep grants observed in Step 2 remain a separate review item, not claimed owner-only here. No reviewed runtime requires direct service access to the restored attendee helper or notification classifier; the definer wrapper/policy adapters call internally as postgres. The resolver calls only the public session classifier.
+
+After all checks pass, record only the new `20260922000002` through the separately approved migration-history procedure if the application tool did not record it. Confirm `00001` and `00002` each occur exactly once and no other history row changed. Never repair `00001` or any historical version. Then proceed to step 5; any STOP leaves the resolver/frontend undeployed.
+
+#### Read-only correction ACL/source gate
+
+Run as the trusted operator in a read-only transaction. Every returned `ok` must be true. These queries do not invoke application RPCs or execute forbidden mutations; preserve the Step 2 full policy/wrapper comparison and count-only inventory gates as well.
+
+```sql
+begin transaction isolation level repeatable read read only;
+with helpers(signature, service_execute) as (values
+  ('public.operational_is_retired_hyrox_activity(text)', false),
+  ('public.operational_is_retired_hyrox_booking(uuid)', false),
+  ('public.operational_is_retired_hyrox_session(text)', true),
+  ('public.operational_notification_is_retired_hyrox(text,text,timestamptz,text,text)', false),
+  ('public.get_operational_attendee_names_pre_pool_retirement_20260922(text)', false)
+)
+select signature,
+       not has_function_privilege('anon', signature, 'EXECUTE')
+       and not has_function_privilege('authenticated', signature, 'EXECUTE')
+       and has_function_privilege('service_role', signature, 'EXECUTE') = service_execute as ok
+  from helpers;
+
+with roles(role_name) as (values ('anon'), ('authenticated')),
+privileges(privilege) as (values ('SELECT'), ('INSERT'), ('UPDATE'), ('DELETE'),
+  ('TRUNCATE'), ('REFERENCES'), ('TRIGGER'))
+select role_name, bool_and(has_table_privilege(role_name, 'public.notifications', privilege)
+  = (role_name = 'authenticated' and privilege = 'SELECT')) as ok
+from roles cross join privileges group by role_name;
+
+with roles(role_name) as (values ('anon'), ('authenticated')),
+privileges(privilege) as (values ('SELECT'), ('INSERT'), ('UPDATE'), ('REFERENCES'))
+select role_name, bool_and(has_column_privilege(role_name, 'public.notifications', a.attname, privilege)
+  = (role_name = 'authenticated' and (privilege = 'SELECT'
+       or (privilege = 'UPDATE' and a.attname = 'read_at')))) as ok
+from roles cross join privileges cross join pg_attribute a
+where a.attrelid = 'public.notifications'::regclass and a.attnum > 0 and not a.attisdropped
+ group by role_name;
+
+select p.proname, not has_function_privilege('service_role', p.oid, 'EXECUTE')
+  and has_function_privilege('authenticated', p.oid, 'EXECUTE')
+  and has_function_privilege('anon', p.oid, 'EXECUTE')
+    = (p.proname <> 'operational_notification_is_active') as ok
+from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+where n.nspname = 'private' and p.proname in
+ ('operational_booking_is_active', 'operational_session_is_active', 'operational_notification_is_active');
+
+select md5(prosrc) = '64c519f7652df631b654191575a51680'
+  and prosecdef and provolatile = 's' and proconfig = array['search_path=public']
+  and pg_get_userbyid(proowner) = 'postgres'
+  and not exists (select 1 from aclexplode(proacl) where grantee = 0) as ok
+from pg_proc where oid = 'public.get_operational_attendee_names_pre_pool_retirement_20260922(text)'::regprocedure;
+rollback;
 ```
-
-Never repair a historical pool version as part of this rollout.
 
 ### 5. Deploy and verify the avatar service-role boundary
 
@@ -398,16 +448,16 @@ Never edit or replay applied migration history. Never delete or mark down `20260
 ## Release checklist
 
 - [ ] Reviewed commit and migration SHA-256 recorded.
-- [ ] Migration versions unique; retirement migration is source tip.
+- [ ] Migration versions unique; forward correction `00002` is source tip; `00001` hash unchanged.
 - [ ] Disposable clean replay and rollback-scoped retirement integration pass.
 - [ ] Correct linked project, backups, and remote migration history confirmed.
 - [ ] Pre-apply count-only evidence recorded without personal or payment data.
 - [ ] Future pool records confirmed as acknowledged test data.
-- [ ] Only `20260922000001_retire_bft_midtown_hyrox_pool.sql` applied.
+- [ ] `00001` already applied once; only reviewed `20260922000002_harden_retired_hyrox_boundary.sql` applied after hash/preflight.
 - [ ] Template, helper, grant, RLS, shared-RPC guard, and Island ECC checks pass.
 - [ ] Retained counts/statuses and notification count equal the baseline.
 - [ ] Reviewed avatar artifact revision deployed after classifier/grant verification; direct BFT/Midtown denial, ECC success and disposable classifier-failure fail-closed gates pass.
 - [ ] Browser denial and full Island ECC direct-session acceptance pass.
-- [ ] Migration history records `20260922000001` exactly once.
+- [ ] Migration history records `20260922000001` and `20260922000002` exactly once each; older history unchanged.
 - [ ] Testing frontend acceptance precedes exact-snapshot production promotion.
 - [ ] Disposable fixtures removed and final count-only evidence recorded.

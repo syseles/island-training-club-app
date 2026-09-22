@@ -531,7 +531,21 @@ assert.ok(
   migrationNames.filter((name) => name.startsWith("20260922000001_")).length <= 1,
   "HYROX retirement migration version 20260922000001 must be unique",
 );
+assert.equal(migrationVersions.get("20260922000002"),
+  "20260922000002_harden_retired_hyrox_boundary.sql",
+  "production correction must use a unique forward migration");
+const correctionSource = readFileSync(resolve(__dirnameSmoke,
+  "../supabase/migrations/20260922000002_harden_retired_hyrox_boundary.sql"), "utf8");
+const latestRosterSource = readFileSync(resolve(__dirnameSmoke,
+  "../supabase/migrations/20260910000002_operational_attendee_names_rsvp.sql"), "utf8");
+const latestRosterDefinition = latestRosterSource.match(
+  /create or replace function public\.get_operational_attendee_names\([\s\S]*?\n\$\$;/)[0];
+assert.ok(correctionSource.includes(latestRosterDefinition.replace(
+  "public.get_operational_attendee_names(",
+  "public.get_operational_attendee_names_pre_pool_retirement_20260922(")),
+  "forward correction must preserve exact latest roster semantics");
 const protectedPoolMigrationHashes = new Map([
+  ["20260922000001_retire_bft_midtown_hyrox_pool.sql", "81f66371c360d9e6aed31f4130f38df891aad4100abdbddf2aa1c0d92e7aadb8"],
   ["20260903000001_hyrox_cycle_schema.sql", "0e9129a1b078217ec8459ff42e65b2b9529dcaf1d43a88825041f8260a364bd7"],
   ["20260903000002_hyrox_cycle_member_rpcs.sql", "38d500cbc859bf92c06854b88ae37769f1ea8b61a941330514a71a253d89cc78"],
   ["20260903000003_hyrox_cycle_reconciliation.sql", "4789b3d0ce3ed5ff1dc0128ad1cc9bbf927a936746c1c8ce4fba3d850c35bebd"],
@@ -571,6 +585,10 @@ const currentHyroxDocs = currentHyroxDocPaths.map((relativePath) => [
 for (const [relativePath, source] of currentHyroxDocs) {
   assert.match(source, /20260922000001_retire_bft_midtown_hyrox_pool\.sql/,
     `${relativePath} must name the pool-retirement migration`);
+  assert.match(source, /20260922000002_harden_retired_hyrox_boundary\.sql/,
+    `${relativePath} must name the forward correction`);
+  assert.match(source, /00001`? (?:is |was )?already applied once/i,
+    `${relativePath} must acknowledge the applied production boundary`);
   assert.match(source, /Island ECC is the (?:sole|only) active HYROX session/i,
     `${relativePath} must state the sole active HYROX contract`);
   assert.match(source, /Retained BFT\/Midtown pool test records are\s+hidden from browser roles, not deleted\./i,
@@ -622,6 +640,12 @@ function assertHyroxRunbookContract(source, relativePath) {
     `${relativePath} must contain every executable release step`);
   assert.deepEqual(markerPositions, [...markerPositions].sort((a, b) => a - b),
     `${relativePath} must order backend, preview, browser acceptance, then promotion`);
+  assert.match(sequence,
+    /hash\/preflight[\s\S]*apply only[^\n]*20260922000002_harden_retired_hyrox_boundary\.sql[\s\S]*verify/i,
+    `${relativePath} must order hash/preflight, only 00002, then verification`);
+  assert.doesNotMatch(rollout,
+    /(?:--file\s+supabase\/migrations\/20260922000001|migration repair 20260922000001|apply only\s+`(?:supabase\/migrations\/)?20260922000001)/i,
+    `${relativePath} must never instruct replay or repair of 00001`);
   assert.match(sequence, /pool RPC denial and Island ECC active-RPC checks/i,
     `${relativePath} must verify the RPC boundary before preview deployment`);
   assert.match(sequence, /Deploy the reviewed `resolve-profile-avatars` Edge Function/,
@@ -684,6 +708,16 @@ assert.match(operationalRunbookSource,
   "production replacement-review inventory must remain count-only");
 
 for (const [relativePath, source] of currentHyroxDocs.slice(1)) {
+  const replayApplied = source.replace(
+    "### Executable release sequence",
+    "### Executable release sequence\n\nsupabase migration repair 20260922000001 --status applied",
+  );
+  assert.throws(() => assertHyroxRunbookContract(replayApplied, `${relativePath} replay fixture`),
+    /never instruct replay or repair/);
+  const missingCorrection = source.replaceAll(
+    "20260922000002_harden_retired_hyrox_boundary.sql", "unreviewed.sql");
+  assert.throws(() => assertHyroxRunbookContract(missingCorrection, `${relativePath} correction fixture`),
+    /hash\/preflight, only 00002/);
   const unsafeRollback = source.replace(
     /(?:###|##) Forward-only rollback[\s\S]*?(?=\n## |\n### |$)/,
     `${source.includes("\n## Forward-only rollback") ? "##" : "###"} Forward-only rollback\n\nForward-only rollback. Edit and replay the applied retirement migration to restore pool access.\n`,
