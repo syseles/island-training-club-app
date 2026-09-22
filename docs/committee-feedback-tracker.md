@@ -36,16 +36,16 @@ Add a new tab named **Lists**. Enter these values, one list per column, starting
 
 | A: Committee | B: App area | C: Status | D: Priority | E: Committee importance |
 | --- | --- | --- | --- | --- |
-| Leadership | Home | New | Critical | Critical |
-| Events | Schedule & Booking | Under review | High | Important |
-| Media & Comms | Giving / Shop | Accepted | Medium | Nice to have |
-| Giving | Profile | In progress | Low | |
-| Facilities | Community | Shipped | | |
+| *(add your own)* | Home | New | Critical | Critical |
+| | Schedule & Booking | Under review | High | Important |
+| | Giving / Shop | Accepted | Medium | Nice to have |
+| | Profile | In progress | Low | |
+| | Community | Shipped | | |
 | | Notifications | Declined | | |
 | | Admin | Deferred | | |
 | | Other | | | |
 
-> The committee names above are placeholders. Rename them to match your actual committees before sharing the sheet. Leave a few blank rows under each list for growth — the validation ranges below already include them.
+> Column A (Committee) ships empty on purpose — add your actual committee names under the header before sharing the sheet. The Committee dropdown on the tracker stays empty until you do. Leave a few blank rows under each list for growth — the validation ranges below already include them.
 
 ## Step 3: Add Dropdowns To The Tracker Tab
 
