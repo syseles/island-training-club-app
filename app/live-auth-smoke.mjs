@@ -1074,6 +1074,8 @@ assert.equal(
 
 const islandEccSessionId = `hyrox-quarry-bay-${normalWeeklyFixtureDates[0]}`;
 const retiredBftSessionId = `hyrox-bft-${normalWeeklyFixtureDates[0]}`;
+const retiredRouteBookingId = "booking-8f30c7a1";
+const retiredRouteReceiptId = "receipt-4d92be67";
 const paidBookingFields = {
   status: "confirmed",
   reserved_at: fixedIso,
@@ -1091,7 +1093,7 @@ const paidBookingFields = {
 operationalTableRows.operational_bookings.push(
   {
     ...paidBookingFields,
-    id: "retired-bft-booking",
+    id: retiredRouteBookingId,
     profile_id: fixtureMember.id,
     session_id: retiredBftSessionId,
     hyrox_cycle_id: null,
@@ -1128,9 +1130,9 @@ operationalTableRows.operational_queue_entries.push(
 );
 operationalTableRows.operational_receipts.push(
   {
-    id: "retired-bft-receipt",
+    id: retiredRouteReceiptId,
     receipt_number: "ITC-2026-BFT",
-    booking_id: "retired-bft-booking",
+    booking_id: retiredRouteBookingId,
     profile_id: fixtureMember.id,
     session_id: retiredBftSessionId,
     hyrox_cycle_id: null,
@@ -1768,10 +1770,20 @@ assert.deepEqual(
 assert.equal(store.getSession(retiredBftSessionId), null);
 assert.ok(store.getSession(islandEccSessionId), "Island ECC sessions must remain available");
 assert.equal(store.getBooking("pooled-booking"), null);
-assert.equal(store.getBooking("retired-bft-booking"), null);
+assert.equal(store.getBooking(retiredRouteBookingId), null);
 assert.ok(store.getBooking("island-ecc-booking"), "Island ECC bookings must remain available");
 assert.equal(store.getReceipt("pooled-receipt"), null);
-assert.equal(store.getReceipt("retired-bft-receipt"), null);
+assert.equal(store.getReceipt(retiredRouteReceiptId), null);
+assert.equal(operations.isLiveRetiredReceiptId(retiredRouteReceiptId), true,
+  "retired receipt identity must remain only in the in-memory route tombstone");
+assert.equal(operations.isLiveRetiredReceiptId("island-ecc-receipt"), false,
+  "Island ECC receipt IDs must not enter the retirement tombstone");
+assert.equal(store.isRetiredHyroxMemberRoute("booking", retiredRouteBookingId), true,
+  "relationship-backed retired booking IDs must retain non-display route identity");
+assert.equal(store.isRetiredHyroxMemberRoute("receipt", retiredRouteReceiptId), true,
+  "relationship-backed retired receipt IDs must retain non-display route identity");
+assert.equal(store.isRetiredHyroxMemberRoute("receipt", "island-ecc-receipt"), false,
+  "Island ECC receipts must remain active");
 assert.ok(store.getReceipt("island-ecc-receipt"), "Island ECC receipts must remain available");
 assert.equal(typeof store.listHyroxCycles, "undefined");
 assert.equal(typeof store.getHyroxCycle, "undefined");
@@ -1817,7 +1829,7 @@ const retirementNotificationRows = [
     kind: "operational_payment_confirmed",
     title: "Old BFT payment",
     body: "Retained BFT fixture",
-    destination: "#/booking/retired-bft-booking",
+    destination: `#/booking/${retiredRouteBookingId}`,
     created_at: fixedIso,
     read_at: null,
   },
@@ -1843,9 +1855,9 @@ const retiredMutationCallCount = operationalRpcCalls.length;
 for (const mutate of [
   () => store.reserveSession(fixtureMember.id, retiredBftSessionId),
   () => store.markBookingPaid("pooled-booking", "FPS", "retired"),
-  () => store.confirmBookingPayment("retired-bft-booking"),
+  () => store.confirmBookingPayment(retiredRouteBookingId),
   () => store.releaseReservation("pooled-booking"),
-  () => store.setBookingAttendance("retired-bft-booking", true),
+  () => store.setBookingAttendance(retiredRouteBookingId, true),
 ]) {
   await assert.rejects(async () => mutate(), /This session is no longer available\./);
 }
@@ -4531,9 +4543,129 @@ assert.deepEqual(
   "expected boot/hash application failures must be explicitly observed without noisy stderr"
 );
 
-// Route-level coverage must exercise the app wiring, not only the pure route
-// policy helper. Preserve every mutable fixture because later tests reuse them.
+// Retired deep-link coverage exercises the actual hash router for visitors,
+// approved members, and unfinished pending applicants. Preserve all shared
+// identity fixtures because later delegated-action tests reuse them.
 applicationReadError = null;
+const routeIdentityFixture = {
+  authUser: structuredClone(authUser),
+  profile: structuredClone(profile),
+  session: liveSession,
+  applications: new Map([...applicationRows].map(([id, row]) => [id, structuredClone(row)])),
+  hash: location.hash,
+};
+const renderHashRoute = async (route) => {
+  location.hash = route;
+  await windowListeners.get("hashchange")();
+  await new Promise(setImmediate);
+  return elements.get("view").innerHTML;
+};
+const configureRouteViewer = async (viewer) => {
+  if (viewer === "public") {
+    liveSession = null;
+    await store.getCurrentUser();
+    return;
+  }
+  const approved = viewer === "approved";
+  Object.assign(authUser, approved ? {
+    id: "approved-member",
+    email: "micah.member@example.com",
+    user_metadata: { full_name: "Micah Member", avatar_url: "" },
+  } : routeIdentityFixture.authUser);
+  Object.assign(profile, approved ? {
+    id: "approved-member",
+    email: "micah.member@example.com",
+    full_name: "Micah Member",
+    avatar_url: "",
+    role: "member",
+  } : { ...routeIdentityFixture.profile, role: "pending" });
+  liveSession = { ...routeIdentityFixture.session, user: authUser };
+  if (approved) applicationRows.set(authUser.id, {
+    profile_id: authUser.id,
+    mobile: "+852 6000 0000",
+  });
+  else applicationRows.delete(authUser.id);
+  await store.getCurrentUser();
+};
+const retiredHashRoutes = [
+  `#/activity/${retiredBftSessionId}`,
+  "#/hyrox/hyrox-pool-2099-01-03/register",
+  `#/booking/${retiredRouteBookingId}`,
+  `#/receipt/${retiredRouteReceiptId}`,
+];
+const retiredRouteRpcCount = operationalRpcCalls.length;
+const retiredRouteSessionAvatarCount = avatarResolveCalls
+  .filter((call) => new URL(call.url).searchParams.get("scope") === "session").length;
+const retiredRouteAttendeeRpcCount = operationalRpcCalls
+  .filter((call) => call.name === "get_operational_attendee_names").length;
+try {
+  for (const viewer of ["public", "pending", "approved"]) {
+    await configureRouteViewer(viewer);
+    for (const route of retiredHashRoutes) {
+      const html = await renderHashRoute(route);
+      assert.match(html, /<h2>This session is no longer available\.<\/h2>/,
+        `${viewer} ${route} must render the exact neutral retired state`);
+      assert.doesNotMatch(html, /404|Island ECC|notification/i,
+        `${viewer} ${route} must not reveal, redirect, or notify`);
+      assert.equal(location.hash, route, `${viewer} ${route} must keep its original hash`);
+      if (viewer === "pending") {
+        await app.maybeRedirectToApply();
+        assert.equal(location.hash, route,
+          `pending onboarding must exempt recognized retired route ${route}`);
+      }
+    }
+  }
+
+  await configureRouteViewer("pending");
+  const authRefreshRoute = `#/receipt/${retiredRouteReceiptId}`;
+  await renderHashRoute(authRefreshRoute);
+  await dispatchAuthStateChange("SIGNED_IN");
+  assert.equal(location.hash, authRefreshRoute,
+    "SIGNED_IN refresh must preserve a recognized retired route for unfinished pending applicants");
+  assert.match(elements.get("view").innerHTML, /<h2>This session is no longer available\.<\/h2>/);
+  assert.equal(operationalRpcCalls.length, retiredRouteRpcCount,
+    "retired route rendering must not invoke operational RPCs");
+  assert.equal(
+    operationalRpcCalls.filter((call) => call.name === "get_operational_attendee_names").length,
+    retiredRouteAttendeeRpcCount,
+    "retired Activity routing must not request attendee names",
+  );
+  assert.equal(
+    avatarResolveCalls.filter((call) => new URL(call.url).searchParams.get("scope") === "session").length,
+    retiredRouteSessionAvatarCount,
+    "retired Activity routing must not resolve attendee avatars",
+  );
+
+  await configureRouteViewer("approved");
+  const islandActivityHtml = await renderHashRoute(`#/activity/${islandEccSessionId}`);
+  assert.match(islandActivityHtml, /Manage booking/,
+    "Island ECC Activity must retain its direct booking control through the router");
+  assert.match(islandActivityHtml, /Get directions/,
+    "Island ECC Activity must retain directions through the router");
+  const islandPayHtml = await renderHashRoute(`#/pay/${memberPayBooking.id}`);
+  assert.match(islandPayHtml, /I’ve paid/,
+    "Island ECC payment must retain its direct mark-paid control through the router");
+  const islandBookingHtml = await renderHashRoute("#/booking/island-ecc-booking");
+  assert.match(islandBookingHtml, /View receipt/,
+    "Island ECC booking must retain its receipt control through the router");
+  assert.match(islandBookingHtml, /Create private invite/,
+    "Island ECC booking must retain its replacement control through the router");
+  const islandReceiptHtml = await renderHashRoute("#/receipt/island-ecc-receipt");
+  assert.match(islandReceiptHtml, /ITC-2026-ECC/,
+    "Island ECC receipt must remain normal through the router");
+} finally {
+  Object.assign(authUser, routeIdentityFixture.authUser);
+  Object.assign(profile, routeIdentityFixture.profile);
+  liveSession = routeIdentityFixture.session;
+  applicationRows.clear();
+  routeIdentityFixture.applications.forEach((row, id) => applicationRows.set(id, row));
+  location.hash = routeIdentityFixture.hash;
+  await store.getCurrentUser();
+}
+console.log("ok  retired deep links stay neutral across router identities and preserve Island ECC controls");
+
+// Pending-route policy coverage preserves every mutable fixture because later
+// tests reuse them.
 const redirectFixture = {
   session: liveSession,
   role: profile.role,

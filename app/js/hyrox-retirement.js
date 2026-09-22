@@ -84,12 +84,9 @@ export const isRetiredHyroxNotification = (notification, getBooking = () => null
   || isRetiredHyroxBooking(notification)
   || isRetiredHyroxBooking(getBooking(notificationBookingId(notification)));
 
-const RETIRED_HYROX_LEGACY_ROUTE_IDS = new Set(["retired-pool-booking"]);
-
 export const isRetiredHyroxLegacyRouteId = (id) => {
   const value = String(id || "");
-  return RETIRED_HYROX_LEGACY_ROUTE_IDS.has(value)
-    || isRetiredHyroxActivityId(value)
+  return isRetiredHyroxActivityId(value)
     || isRetiredHyroxCycleId(value)
     || /^hyrox-(?:bft|midtown)-\d{4}-\d{2}-\d{2}$/.test(value);
 };

@@ -141,12 +141,21 @@ export function isRetiredHyroxMemberRoute(kind, id) {
   const routeId = String(id || "");
   if (["booking", "pay"].includes(routeKind)) return bookingIsRetired(retirementBooking(routeId));
   if (routeKind === "receipt") {
+    if (isLive() && liveOps.isLiveRetiredReceiptId(routeId)) return true;
     const receipt = isLive()
       ? liveOps.liveReceiptById(routeId)
       : state?.receipts?.find((row) => row.id === routeId);
     return receiptIsRetired(receipt);
   }
   return false;
+}
+
+export function isRetiredHyroxHashRoute(route) {
+  const value = String(route || "");
+  const direct = value.match(/^#\/(activity|checkout|pay|booking|receipt)\/([^/?#]+)$/);
+  if (direct) return isRetiredHyroxMemberRoute(direct[1], direct[2]);
+  const cycle = value.match(/^#\/hyrox\/([^/?#]+)(?:\/register)?$/);
+  return Boolean(cycle && isRetiredHyroxMemberRoute("hyrox", cycle[1]));
 }
 
 export function isRestorableRoute(route) {
@@ -201,7 +210,8 @@ export function startupRoute(currentHash, userId = null) {
 export function shouldRedirectPendingApplicant({ role, hasApplication, route } = {}) {
   return role === "pending"
     && !hasApplication
-    && !["#/apply", "#/community/prayers"].includes(route);
+    && !["#/apply", "#/community/prayers"].includes(route)
+    && !isRetiredHyroxHashRoute(route);
 }
 
 function freshState() {

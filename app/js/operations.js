@@ -59,6 +59,7 @@ const liveCache = {
   replacementRequests: [],
   retiredSessionIds: new Set(),
   retiredBookingIds: new Set(),
+  retiredReceiptIds: new Set(),
   rsvpCountError: null,
   loaded: false,
   loading: null,
@@ -419,6 +420,8 @@ function replaceState(payload) {
     .filter(isRetiredHyroxSession).map((row) => row.id));
   liveCache.retiredBookingIds = new Set(payload.bookings
     .filter((row) => isRetiredHyroxBooking(row, getSession)).map((row) => row.id));
+  liveCache.retiredReceiptIds = new Set(payload.receipts
+    .filter((row) => isRetiredHyroxReceipt(row, getBooking)).map((row) => row.id));
   liveCache.sessions = new Map(payload.sessions
     .filter((row) => !isRetiredHyroxSession(row)).map((row) => [row.id, row]));
   if (payload.replacementRequests) {
@@ -861,6 +864,10 @@ export function liveRetiredSessionStub(id) {
 
 export function liveRetiredBookingStub(id) {
   return liveCache.retiredBookingIds.has(id) ? { id, activityId: "hyrox-bft" } : null;
+}
+
+export function isLiveRetiredReceiptId(id) {
+  return liveCache.retiredReceiptIds.has(id);
 }
 
 export function liveActivityTemplates() {

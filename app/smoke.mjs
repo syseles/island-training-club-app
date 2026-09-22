@@ -5672,7 +5672,6 @@ assert.match(views.viewRetiredSession(), />This session is no longer available\.
 for (const [kind, id] of [
   ["activity", "hyrox-bft-2099-01-03"],
   ["hyrox", "hyrox-pool-2099-01-03"],
-  ["booking", "retired-pool-booking"],
 ]) {
   assert.equal(store.isRetiredHyroxMemberRoute(kind, id), true,
     `${kind}/${id} must resolve to the retired route state`);
@@ -5684,7 +5683,6 @@ assert.equal(store.isRetiredHyroxMemberRoute("activity", "unknown-session"), fal
 for (const retiredRouteView of [
   views.viewActivity("hyrox-bft-2099-01-03"),
   views.viewRetiredSession("hyrox-pool-2099-01-03"),
-  views.viewBooking("retired-pool-booking"),
 ]) {
   assert.match(retiredRouteView, /This session is no longer available\./,
     "known retired member deep links must render the neutral state");
@@ -5702,6 +5700,10 @@ for (const retiredMarker of [
   assert.equal(integratedAppSource.includes(retiredMarker), false,
     `retired member pool route/action remains: ${retiredMarker}`);
 }
+assert.equal(integratedViewSource.includes("retired-pool-booking"), false,
+  "production views must not hard-code a test-only retired booking ID");
+assert.equal(integratedAppSource.includes("retired-pool-booking"), false,
+  "production routing must not hard-code a test-only retired booking ID");
 for (const api of ["viewHyroxCycle", "viewHyroxRegistration"]) {
   assert.equal(typeof views[api], "undefined", `retired pooled view remains exported: ${api}`);
 }
@@ -5717,7 +5719,6 @@ for (const [surface, html] of [
   ["visitor Home", views.viewHome()],
   ["Schedule", views.viewSchedule()],
   ["retired activity", views.viewActivity("hyrox-bft-2099-01-03")],
-  ["retired booking", views.viewBooking("retired-pool-booking")],
 ]) {
   assert.doesNotMatch(html, retiredMemberCopy, `${surface} must not render retired pool copy`);
 }
