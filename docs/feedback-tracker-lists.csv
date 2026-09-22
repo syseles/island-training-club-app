@@ -1,0 +1,24 @@
+Committee,Screen/Flow,Feedback type,Status,Priority,Committee importance
+,Home,Not working (bug),New,Critical,Critical
+,Schedule,Looks wrong (visual),Under review,High,Important
+,Activity details,Wording / unclear text,Accepted,Medium,Nice to have
+,Booking flow,Confusing flow,In progress,Low,
+,Checkout & payment,Feature suggestion,Shipped,,
+,Receipt,Question,Declined,,
+,HYROX Cycle,,Deferred,,,
+,HYROX Registration,,,,
+,Giving,,,,
+,Community,,,,
+,Profile — overview,,,,
+,Profile — Bookings & History,,,,
+,Profile — Membership Details,,,,
+,Profile — Indemnity / waiver,,,,
+,Profile — Payments & Receipts,,,,
+,Profile — Privacy & Notifications,,,,
+,Notifications,,,,
+,Sign in / magic link,,,,
+,Membership application,,,,
+,Admin — members & approvals,,,,
+,Admin — activities,,,,
+,Admin — giving campaigns,,,,
+,Something else,,,,

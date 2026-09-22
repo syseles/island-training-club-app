@@ -48,6 +48,8 @@ You should now have 14 headers across row 1:
 
 Add a new tab named **Lists**. Enter these values, one list per column, starting at row 2 (row 1 holds the labels):
 
+> Faster: **File → Import → Upload** `docs/feedback-tracker-lists.csv` with **Insert new sheet(s)**, then rename the imported tab to **Lists**.
+
 | A: Committee | B: Screen/Flow | C: Feedback type | D: Status | E: Priority | F: Committee importance |
 | --- | --- | --- | --- | --- | --- |
 | *(add your own)* | Home | Not working (bug) | New | Critical | Critical |
@@ -102,6 +104,8 @@ Optional but recommended:
 ## Step 4: Add The How To Use Tab
 
 Add a tab named **How to use**, positioned first. Paste this text (one block per row is fine — this tab is for reading, not formatting):
+
+> Faster: **File → Import → Upload** `docs/feedback-tracker-how-to-use.csv` with **Insert new sheet(s)**, rename the tab to **How to use**, and drag it to the first tab position.
 
 > **How to submit feedback**
 >
