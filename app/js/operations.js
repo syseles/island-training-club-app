@@ -15,6 +15,7 @@ import { SEED_ACTIVITIES } from "./data.js";
 import { isLive, supabase } from "./config.js";
 import {
   isRetiredHyroxActivityId,
+  isRetiredHyroxCycleId,
   isRetiredHyroxSession,
   isRetiredHyroxBooking,
   isRetiredHyroxReceipt,
@@ -197,7 +198,8 @@ async function replacementRelationshipStates(rows) {
   const sessionRelationships = new Map();
   const unresolvedSessionIds = [];
   for (const request of requests) {
-    if (request.cycleId || liveCache.retiredBookingIds.has(request.bookingId)) continue;
+    if (isRetiredHyroxCycleId(request.cycleId)
+        || liveCache.retiredBookingIds.has(request.bookingId)) continue;
     const booking = liveCache.bookings.find((row) => row.id === request.bookingId) || null;
     const sessionId = request.sessionId || booking?.sessionId || null;
     if (!sessionId || sessionRelationships.has(sessionId)) continue;
@@ -214,7 +216,8 @@ async function replacementRelationshipStates(rows) {
     }
   }
   return requests.map((request) => {
-    if (request.cycleId || liveCache.retiredBookingIds.has(request.bookingId)) {
+    if (isRetiredHyroxCycleId(request.cycleId)
+        || liveCache.retiredBookingIds.has(request.bookingId)) {
       return { request, relationship: "retired" };
     }
     const booking = liveCache.bookings.find((row) => row.id === request.bookingId) || null;
@@ -869,7 +872,7 @@ export function liveRetiredSessionStub(id) {
 }
 
 export function liveRetiredBookingStub(id) {
-  return liveCache.retiredBookingIds.has(id) ? { id, cycleId: "retired" } : null;
+  return liveCache.retiredBookingIds.has(id) ? { id, activityId: "hyrox-bft" } : null;
 }
 
 export function liveActivityTemplates() {

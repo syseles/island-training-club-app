@@ -28,6 +28,7 @@ import { INDEMNITY_VERSION } from "./documents.js";
 import { normalizeAvatarPresentation } from "./avatar.js";
 import {
   isRetiredHyroxActivityId,
+  isRetiredHyroxCycleId,
   isRetiredHyroxSession,
   isRetiredHyroxBooking,
   isRetiredHyroxReceipt,
@@ -263,6 +264,7 @@ function normalizeReceiptCounter() {
 function retireLocalHyroxPool() {
   const sessionForId = (id) => findSession(state.activities, String(id || ""));
   const retiredSessionIds = new Set();
+  const retiredCycleIds = new Set();
   const collectSessionId = (id) => {
     const value = String(id || "");
     if (isRetiredHyroxLegacyRouteId(value)) retiredSessionIds.add(value);
@@ -276,11 +278,27 @@ function retireLocalHyroxPool() {
     collectSessionId(sessionId);
   };
 
+  const collectCycleId = (id) => {
+    const value = String(id || "");
+    if (isRetiredHyroxCycleId(value)) retiredCycleIds.add(value);
+  };
+  const cycleIdFor = (record) => record?.cycleId ?? record?.hyrox_cycle_id;
+
   for (const id of Object.keys(state.queues)) collectSessionId(id);
   for (const id of Object.keys(state.sessionOverrides)) collectSessionId(id);
-  for (const cycle of Object.values(state.hyroxCycles)) {
-    collectSessionId(cycle?.bftSessionId ?? cycle?.bft_session_id);
-    collectSessionId(cycle?.midtownSessionId ?? cycle?.midtown_session_id);
+  for (const [key, cycle] of Object.entries(state.hyroxCycles)) {
+    const childSessionIds = [
+      cycle?.bftSessionId ?? cycle?.bft_session_id,
+      cycle?.midtownSessionId ?? cycle?.midtown_session_id,
+    ].filter(Boolean);
+    for (const id of childSessionIds) collectSessionId(id);
+    if (isRetiredHyroxCycleId(key)
+        || isRetiredHyroxCycleId(cycle?.id)
+        || isRetiredHyroxSession(cycle)
+        || childSessionIds.some((id) => isRetiredHyroxLegacyRouteId(id))) {
+      retiredCycleIds.add(String(key));
+      if (cycle?.id) retiredCycleIds.add(String(cycle.id));
+    }
   }
   for (const collection of [
     state.bookings,
@@ -290,19 +308,23 @@ function retireLocalHyroxPool() {
     state.notifications,
     Object.values(state.duty),
   ]) {
-    for (const record of collection) collectRecordSession(record);
+    for (const record of collection) {
+      collectRecordSession(record);
+      collectCycleId(cycleIdFor(record));
+    }
   }
 
   const bookingById = new Map(state.bookings.map((booking) => [booking.id, booking]));
   const bookingTargetsPool = (booking) => Boolean(booking) && (
     isRetiredHyroxBooking(booking, sessionForId)
+    || retiredCycleIds.has(String(cycleIdFor(booking) || ""))
     || retiredSessionIds.has(String(booking.sessionId ?? booking.session_id ?? ""))
   );
   const retiredBookingIds = new Set(
     state.bookings.filter(bookingTargetsPool).map((booking) => booking.id)
   );
   const requestTargetsPool = (request) => Boolean(request) && (
-    Boolean(request.cycleId ?? request.hyrox_cycle_id)
+    retiredCycleIds.has(String(cycleIdFor(request) || ""))
     || isRetiredHyroxSession(request)
     || retiredSessionIds.has(String(request.sessionId ?? request.session_id ?? ""))
     || retiredBookingIds.has(request.bookingId ?? request.booking_id)
@@ -314,7 +336,7 @@ function retireLocalHyroxPool() {
   );
   const bookingForId = (id) => bookingById.get(id) || null;
   const recordTargetsPool = (record) => Boolean(record) && (
-    Boolean(record.cycleId ?? record.hyrox_cycle_id)
+    retiredCycleIds.has(String(cycleIdFor(record) || ""))
     || isRetiredHyroxActivityId(record.activityId ?? record.activity_id)
     || retiredSessionIds.has(String(record.sessionId ?? record.session_id ?? ""))
     || retiredBookingIds.has(record.bookingId ?? record.booking_id)

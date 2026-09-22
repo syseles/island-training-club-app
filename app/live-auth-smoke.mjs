@@ -7840,11 +7840,25 @@ for (const mutation of ["create", "accept"]) {
   assert.equal(operations.liveReplacementRequestForBooking(replacementRow.bookingId), null,
     `unresolved successful replacement ${mutation} data must not enter the cache`);
 }
+operationalSessionRelationshipReadErrors.delete("post-success-ecc-replacement-session");
+replacementRow = {
+  ...replacementRow,
+  requestId: "nonpool-cycle-ecc-request",
+  bookingId: "nonpool-cycle-ecc-booking",
+  cycleId: "island-ecc-cycle-2099-01-03",
+  sessionId: "post-success-ecc-replacement-session",
+  status: "accepted",
+};
+const nonpoolCycleResult = await operations.liveAcceptReplacement(replacementHash);
+assert.equal(nonpoolCycleResult.requestId, replacementRow.requestId,
+  "an Island ECC replacement with a non-pool cycle ID must remain active");
+assert.equal(nonpoolCycleResult.status, "accepted");
+assert.equal(nonpoolCycleResult.retired, undefined);
 replacementRow = {
   ...replacementRow,
   requestId: "retired-response-secret-request",
   bookingId: "retired-response-booking",
-  cycleId: "retired-hyrox-cycle",
+  cycleId: "hyrox-pool-2099-01-03",
   sessionId: "retired-response-unknown-session",
   status: "accepted",
 };

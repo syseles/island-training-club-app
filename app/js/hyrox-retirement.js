@@ -55,16 +55,19 @@ const RETIRED_POOL_NOTIFICATION_KINDS = new Set([
 export const isRetiredHyroxActivityId = (id) =>
   RETIRED_HYROX_ACTIVITY_IDS.has(String(id || ""));
 
+export const isRetiredHyroxCycleId = (id) =>
+  /^hyrox-pool-\d{4}-\d{2}-\d{2}$/.test(String(id || ""));
+
 export const isRetiredHyroxSession = (session) =>
   isRetiredHyroxActivityId(session?.activityId ?? session?.activity_id);
 
 export const isRetiredHyroxBooking = (booking, getSession = () => null) =>
-  Boolean(booking?.cycleId ?? booking?.hyrox_cycle_id)
+  isRetiredHyroxCycleId(booking?.cycleId ?? booking?.hyrox_cycle_id)
   || isRetiredHyroxSession(booking)
   || isRetiredHyroxSession(getSession(booking?.sessionId ?? booking?.session_id));
 
 export const isRetiredHyroxReceipt = (receipt, getBooking = () => null) =>
-  Boolean(receipt?.cycleId ?? receipt?.hyrox_cycle_id)
+  isRetiredHyroxCycleId(receipt?.cycleId ?? receipt?.hyrox_cycle_id)
   || isRetiredHyroxBooking(receipt)
   || isRetiredHyroxBooking(getBooking(receipt?.bookingId ?? receipt?.booking_id));
 
@@ -78,10 +81,12 @@ const notificationBookingId = (notification) => {
 
 export const isRetiredHyroxNotification = (notification, getBooking = () => null) =>
   RETIRED_POOL_NOTIFICATION_KINDS.has(String(notification?.kind || ""))
+  || isRetiredHyroxBooking(notification)
   || isRetiredHyroxBooking(getBooking(notificationBookingId(notification)));
 
 export const isRetiredHyroxLegacyRouteId = (id) => {
   const value = String(id || "");
   return isRetiredHyroxActivityId(value)
-    || /^hyrox-(?:bft|midtown|pool)-\d{4}-\d{2}-\d{2}$/.test(value);
+    || isRetiredHyroxCycleId(value)
+    || /^hyrox-(?:bft|midtown)-\d{4}-\d{2}-\d{2}$/.test(value);
 };
