@@ -1216,6 +1216,7 @@ export function attendeesFor(session) {
 
 export async function attendeeNamesFor(sessionId) {
   if (!sessionId) return [];
+  assertActiveSessionTarget(sessionId);
   if (isLive()) return liveOps.liveAttendeeNamesForSession(sessionId);
   const session = getSession(sessionId);
   return session ? attendeesFor(session) : [];

@@ -335,7 +335,12 @@ const operationalTableRows = {
     status: "paid",
     issued_at: "2098-12-29T10:04:00.000Z",
   }],
-  collector_assignments: [],
+  collector_assignments: [{
+    week_start: "2099-01-03",
+    collector_profile_id: fixtureMember.id,
+    assigned_by: "approved-admin",
+    assigned_at: "2098-12-29T09:00:00.000Z",
+  }],
   collector_payout_profiles: [],
   operational_session_venue_overrides: [{
     session_id: "wnt-2026-08-26",
@@ -1141,6 +1146,87 @@ operationalTableRows.operational_receipts.push(
   },
 );
 
+const historicalRelationshipSessions = [
+  {
+    id: "historical-retired-queue-session",
+    activity_id: "hyrox-bft",
+    session_date: "2026-07-01",
+    start_time: "11:15:00",
+    duration_minutes: 60,
+    venue: "BFT Causeway Bay",
+    capacity: 20,
+    price_hkd: 180,
+    is_open: true,
+  },
+  {
+    id: "historical-ecc-queue-session",
+    activity_id: "hyrox-quarry-bay",
+    session_date: "2026-07-01",
+    start_time: "11:00:00",
+    duration_minutes: 60,
+    venue: "10/F, Island ECC, Quarry Bay",
+    capacity: 30,
+    price_hkd: 180,
+    is_open: true,
+  },
+  {
+    id: "historical-retired-replacement-session",
+    activity_id: "hyrox-midtown",
+    session_date: "2026-06-20",
+    start_time: "11:00:00",
+    duration_minutes: 60,
+    venue: "Midtown28 Fitness",
+    capacity: 12,
+    price_hkd: 180,
+    is_open: false,
+  },
+  {
+    id: "historical-ecc-replacement-session",
+    activity_id: "hyrox-quarry-bay",
+    session_date: "2026-06-20",
+    start_time: "11:00:00",
+    duration_minutes: 60,
+    venue: "10/F, Island ECC, Quarry Bay",
+    capacity: 30,
+    price_hkd: 180,
+    is_open: true,
+  },
+].map((row) => ({
+  ...row,
+  venue_tbc: false,
+  notice: null,
+  cancelled_at: null,
+  cancelled_by: null,
+  cancelled_source: null,
+  cancel_reason: null,
+  gym_confirmed_at: null,
+  gym_confirmed_by: null,
+  gym_note: null,
+  created_at: fixedIso,
+  updated_at: fixedIso,
+}));
+operationalTableRows.operational_sessions.push(...historicalRelationshipSessions);
+operationalTableRows.operational_queue_entries.push(
+  {
+    id: "historical-retired-queue",
+    session_id: "historical-retired-queue-session",
+    profile_id: fixtureMember.id,
+    kind: "waitlist",
+    status: "active",
+    joined_at: fixedIso,
+    resolved_at: null,
+  },
+  {
+    id: "historical-ecc-queue",
+    session_id: "historical-ecc-queue-session",
+    profile_id: fixtureMember.id,
+    kind: "waitlist",
+    status: "active",
+    joined_at: fixedIso,
+    resolved_at: null,
+  },
+);
+
 const seededRsvpLunchId = `lunch-${normalWeeklyFixtureDates[0]}`;
 const seededRsvpSnapshot = {
   name: "Post-Training Lunch",
@@ -1675,6 +1761,22 @@ assert.equal(operationalTableQueries.includes("operational_hyrox_cycles"), false
   "hydration must not query retired pool cycles");
 assert.equal(operationalTableQueries.includes("operational_hyrox_queue_entries"), false,
   "hydration must not query retired pool queues");
+assert.equal(
+  operations.liveQueueForSession("historical-retired-queue-session").waitlist.length,
+  0,
+  "an out-of-horizon retired direct queue must not enter the live cache",
+);
+assert.equal(
+  operations.liveQueueForSession("historical-ecc-queue-session").waitlist[0]?.id,
+  "historical-ecc-queue",
+  "a same-shape out-of-horizon Island ECC queue must remain active",
+);
+assert.ok(operationalSessionQueries.some((query) =>
+  query.ids?.includes("historical-retired-queue-session")
+  && query.ids?.includes("historical-ecc-queue-session")
+), "queue session relationships must be fetched by canonical session ID");
+assert.equal(operations.liveAssigneeForWeek("2099-01-03")?.userId, fixtureMember.id,
+  "collector duty is a shared week record and must remain available for Island ECC");
 
 const retirementNotificationRows = [
   {
@@ -1727,6 +1829,23 @@ for (const mutate of [
 }
 assert.equal(operationalRpcCalls.length, retiredMutationCallCount,
   "retired session and booking targets must be rejected before any live RPC");
+const attendeeRpcCount = operationalRpcCalls
+  .filter((call) => call.name === "get_operational_attendee_names").length;
+await assert.rejects(
+  () => store.attendeeNamesFor(retiredBftSessionId),
+  /This session is no longer available\./,
+);
+assert.equal(
+  operationalRpcCalls.filter((call) => call.name === "get_operational_attendee_names").length,
+  attendeeRpcCount,
+  "retired attendee selectors must stop before the live RPC",
+);
+await store.attendeeNamesFor(islandEccSessionId);
+assert.equal(
+  operationalRpcCalls.filter((call) => call.name === "get_operational_attendee_names").length,
+  attendeeRpcCount + 1,
+  "Island ECC attendee selectors must retain the live RPC",
+);
 
 const attendanceRow = operationalTableRows.operational_bookings
   .find((booking) => booking.id === "island-ecc-booking");
@@ -7418,9 +7537,14 @@ operationalRpcHandler = (name, args) => {
     return Promise.resolve({ data: [{
       ...replacementRow,
       requestId: "retired-replacement-request",
-      bookingId: "retired-bft-booking",
-      sessionId: retiredBftSessionId,
-    }, replacementRow], error: null });
+      bookingId: "historical-retired-replacement-booking",
+      sessionId: "historical-retired-replacement-session",
+    }, {
+      ...replacementRow,
+      requestId: "historical-ecc-replacement-request",
+      bookingId: "historical-ecc-replacement-booking",
+      sessionId: "historical-ecc-replacement-session",
+    }], error: null });
   }
   if (name === "accept_operational_replacement_request") {
     replacementRow = { ...replacementRow, status: "accepted", replacementDisplayName: "Friend Member" };
@@ -7451,9 +7575,17 @@ assert.equal(invite.originalDisplayName, "Payer Member");
 assert.equal(invite.tokenHash, undefined, "live invite mapping must omit token hashes");
 const acceptedReplacement = await operations.liveAcceptReplacement(replacementHash);
 assert.equal(acceptedReplacement.status, "accepted");
+const replacementRelationshipQueryCount = operationalSessionQueries.length;
 const listedReplacements = await operations.liveListReplacementRequests();
-assert.equal(listedReplacements.length, 1, "retired replacement requests must not enter the live cache");
+assert.equal(listedReplacements.length, 1,
+  "out-of-horizon retired replacement requests must not enter the live cache");
+assert.equal(listedReplacements[0].requestId, "historical-ecc-replacement-request",
+  "a same-shape out-of-horizon Island ECC replacement must remain active");
 assert.equal(listedReplacements[0].status, "accepted");
+assert.ok(operationalSessionQueries.slice(replacementRelationshipQueryCount).some((query) =>
+  query.ids?.includes("historical-retired-replacement-session")
+  && query.ids?.includes("historical-ecc-replacement-session")
+), "replacement session relationships must be fetched by canonical session ID");
 assert.equal("tokenHash" in listedReplacements[0], false, "Admin replacement rows must not expose token hashes");
 assert.equal("email" in listedReplacements[0], false, "Admin replacement rows must not expose contact fields");
 assert.equal("paymentReference" in listedReplacements[0], false, "Admin replacement rows must not expose payment references");
@@ -7463,8 +7595,8 @@ await assert.rejects(
   /replacement decision unavailable/,
 );
 assert.equal(
-  operations.liveReplacementRequestForBooking("island-ecc-booking").status,
+  operations.liveReplacementRequestForBooking("historical-ecc-replacement-booking").status,
   "accepted",
-  "failed live replacement mutations must not overwrite the cache",
+  "failed live replacement mutations must not overwrite the filtered active cache",
 );
 console.log("ok  live HYROX replacement hashing, RPC payloads, redaction, and failure preservation");

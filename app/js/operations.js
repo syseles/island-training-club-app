@@ -192,16 +192,42 @@ function buildReplacementRequestRow(row) {
   };
 }
 
-function replacementRequestIsRetired(request) {
-  if (!request) return false;
-  const getSession = (id) => liveCache.sessions.get(id) || liveRetiredSessionStub(id);
-  return isRetiredHyroxBooking(request, getSession)
-    || liveCache.retiredBookingIds.has(request.bookingId);
+async function replacementRequestsWithActiveRelationships(rows) {
+  const requests = (rows || []).map(buildReplacementRequestRow).filter(Boolean);
+  const sessionRelationships = new Map();
+  const unresolvedSessionIds = [];
+  for (const request of requests) {
+    const booking = liveCache.bookings.find((row) => row.id === request.bookingId) || null;
+    const sessionId = request.sessionId || booking?.sessionId || null;
+    if (!sessionId || sessionRelationships.has(sessionId)) continue;
+    const known = liveCache.sessions.get(sessionId) || liveRetiredSessionStub(sessionId);
+    if (known) sessionRelationships.set(sessionId, known);
+    else unresolvedSessionIds.push(sessionId);
+  }
+  if (unresolvedSessionIds.length) {
+    const { data, error } = await supabase.from("operational_sessions").select("*")
+      .in("id", [...new Set(unresolvedSessionIds)]);
+    if (error) throw operationalProblem(error);
+    for (const row of data || []) {
+      sessionRelationships.set(row.id, { id: row.id, activityId: row.activity_id });
+    }
+  }
+  return requests.filter((request) => {
+    if (request.cycleId || liveCache.retiredBookingIds.has(request.bookingId)) return false;
+    const booking = liveCache.bookings.find((row) => row.id === request.bookingId) || null;
+    const sessionId = request.sessionId || booking?.sessionId || null;
+    const session = sessionRelationships.get(sessionId);
+    // Security-definer replacement RPC rows must carry a resolvable canonical
+    // direct-session relationship. Ambiguous rows fail closed.
+    return Boolean(session)
+      && !isRetiredHyroxBooking(request, (id) => sessionRelationships.get(id) || null)
+      && !isRetiredHyroxBooking(booking, (id) => sessionRelationships.get(id) || null);
+  });
 }
 
-function cacheReplacementRequest(row) {
-  const request = buildReplacementRequestRow(row);
-  if (!request?.requestId || replacementRequestIsRetired(request)) return null;
+async function cacheReplacementRequest(row) {
+  const [request] = await replacementRequestsWithActiveRelationships([row]);
+  if (!request?.requestId) return null;
   const index = liveCache.replacementRequests.findIndex((item) => item.requestId === request.requestId);
   if (index >= 0) liveCache.replacementRequests[index] = request;
   else liveCache.replacementRequests.push(request);
@@ -345,20 +371,31 @@ function replaceState(payload) {
   if (payload.replacementRequests) {
     liveCache.replacementRequests = payload.replacementRequests
       .map(buildReplacementRequestRow)
-      .filter((row) => row && !isRetiredHyroxBooking(row, getSession)
-        && !isRetiredHyroxBooking(getBooking(row.bookingId), getSession));
+      .filter((row) => {
+        if (!row || row.cycleId) return false;
+        const booking = getBooking(row.bookingId);
+        const sessionId = row.sessionId || booking?.sessionId || booking?.session_id;
+        const session = getSession(sessionId);
+        return Boolean(session)
+          && !isRetiredHyroxBooking(row, getSession)
+          && !isRetiredHyroxBooking(booking, getSession);
+      });
   }
   liveCache.templates = (payload.templates || [])
     .filter((row) => !isRetiredHyroxActivityId(row.activity_id ?? row.activityId));
   liveCache.bookings = payload.bookings
     .filter((row) => !isRetiredHyroxBooking(row, getSession));
   liveCache.queues = payload.queues
-    .filter((row) => !isRetiredHyroxSession(getSession(row.sessionId ?? row.session_id)));
+    .filter((row) => {
+      const session = getSession(row.sessionId ?? row.session_id);
+      return Boolean(session) && !isRetiredHyroxSession(session);
+    });
   liveCache.receipts = payload.receipts
     .filter((row) => !isRetiredHyroxReceipt(row, getBooking));
+  // Collector assignments are shared week records with no product relation.
+  // Keep them intact so Island ECC still resolves its collector.
   liveCache.assignments = new Map(
-    payload.assignments.filter((row) => !isRetiredHyroxSession(row))
-      .map((row) => [row.saturdayISO, row])
+    payload.assignments.map((row) => [row.saturdayISO, row])
   );
   liveCache.payout = new Map(
     payload.payouts.map((row) => [row.profileId, row])
@@ -537,8 +574,15 @@ async function fetchOperationalState({ authenticated } = {}) {
   const templatesById = new Map(templateRows.map((t) => [t.activity_id, t]));
   const currentSessionRows = sessions.data || [];
   const currentSessionIds = new Set(currentSessionRows.map((row) => row.id));
-  const missingSessionIds = [...new Set((bookings.data || [])
-    .map((row) => row.session_id)
+  // Direct queues and receipts can outlive the narrow Schedule horizon just
+  // like bookings. Resolve every canonical session relationship before cache
+  // filtering; unresolved direct rows are not admitted below.
+  const relatedSessionIds = [
+    ...(bookings.data || []).map((row) => row.session_id),
+    ...(queues.data || []).map((row) => row.session_id),
+    ...(receipts.data || []).map((row) => row.session_id),
+  ];
+  const missingSessionIds = [...new Set(relatedSessionIds
     .filter((id) => id && !currentSessionIds.has(id)))];
   let historicalSessionRows = [];
   if (missingSessionIds.length) {
@@ -550,7 +594,7 @@ async function fetchOperationalState({ authenticated } = {}) {
     historicalSessionRows = historicalSessions.data || [];
   }
   // Keep the Schedule horizon query narrow while adding only sessions needed
-  // to give a user's historical booking its authoritative display metadata.
+  // to resolve historical booking, receipt, and direct-queue relationships.
   const sessionRowsById = new Map();
   for (const row of [...currentSessionRows, ...historicalSessionRows]) {
     if (!sessionRowsById.has(row.id)) {
@@ -570,8 +614,10 @@ async function fetchOperationalState({ authenticated } = {}) {
     bookings: (bookings.data || []).map((row) => buildBookingRow(row, sessionsById)),
     queues: (queues.data || []).map(buildQueueRow),
     receipts: (receipts.data || []).map(buildReceiptRow),
-    assignments: (assignments.data || [])
-      .filter((row) => !isRetiredHyroxSession(row)).map(buildAssignmentRow),
+    // Collector duty is shared by week across paid sessions. The table has no
+    // activity/session/cycle relation, so retaining it is required for Island
+    // ECC and retirement must not be inferred from the week date.
+    assignments: (assignments.data || []).map(buildAssignmentRow),
     payouts: [...payoutRowsByProfile.values()].map(buildPayoutRow),
     payoutError: assignedPayouts.error,
     venueOverrides: (venueOverrides.data || []).map(buildVenueOverrideRow),
@@ -912,8 +958,8 @@ export async function liveReplacementInvite(tokenHash) {
   const row = await runOperationalRpc("get_operational_replacement_invite", {
     p_token_hash: tokenHash,
   }, { skipRefresh: true });
-  const request = buildReplacementRequestRow(row);
-  return replacementRequestIsRetired(request) ? null : request;
+  const [request] = await replacementRequestsWithActiveRelationships([row]);
+  return request || null;
 }
 
 export async function liveAcceptReplacement(tokenHash) {
@@ -939,8 +985,7 @@ export async function liveCancelReplacement(requestId) {
 
 export async function liveListReplacementRequests() {
   const rows = await runOperationalRpc("list_operational_replacement_requests", {}, { skipRefresh: true });
-  const requests = (rows || []).map(buildReplacementRequestRow)
-    .filter((request) => request && !replacementRequestIsRetired(request));
+  const requests = await replacementRequestsWithActiveRelationships(rows || []);
   liveCache.replacementRequests = requests;
   return requests;
 }
