@@ -855,18 +855,6 @@ export function listLiveSessions() {
   return [...liveCache.sessions.values()].map(applyLiveVenueOverride);
 }
 
-export function listLiveHyroxCycles() {
-  return [];
-}
-
-export function getLiveHyroxCycle() {
-  return null;
-}
-
-export function liveHyroxQueuesForCycle() {
-  return { weeklyWaitlist: [], venueSwitches: [] };
-}
-
 export function liveRetiredSessionStub(id) {
   return liveCache.retiredSessionIds.has(id) ? { id, activityId: "hyrox-bft" } : null;
 }
@@ -1084,29 +1072,6 @@ export async function liveSweepHyroxDeadlines({ refresh = true, now = Date.now()
   }
 }
 
-export const liveReserveHyroxCycle = (cycleId, preference, fallbackAcknowledged) =>
-  runOperationalRpc("reserve_hyrox_cycle", {
-    p_cycle_id: cycleId,
-    p_preference: preference,
-    p_fallback_acknowledged: fallbackAcknowledged,
-  });
-
-export const liveJoinHyroxCycleWaitlist = (cycleId, preference, fallbackAcknowledged) =>
-  runOperationalRpc("join_hyrox_cycle_waitlist", {
-    p_cycle_id: cycleId,
-    p_preference: preference,
-    p_fallback_acknowledged: fallbackAcknowledged,
-  });
-
-export const liveLeaveHyroxCycleQueue = (entryId) =>
-  runOperationalRpc("leave_hyrox_cycle_queue", { p_entry_id: entryId });
-
-export const liveRejectHyroxPayment = (bookingId, reason) =>
-  runOperationalRpc("reject_hyrox_cycle_payment", {
-    p_booking_id: bookingId,
-    p_reason: reason,
-  });
-
 export async function liveSetOperationalAttendance(bookingId, arrived) {
   await runOperationalRpc("set_operational_attendance", {
     p_booking_id: bookingId,
@@ -1114,36 +1079,6 @@ export async function liveSetOperationalAttendance(bookingId, arrived) {
   });
   return liveBookingById(bookingId);
 }
-
-export const liveScheduleHyroxCycle = (cycleId) =>
-  runOperationalRpc("schedule_hyrox_cycle", { p_cycle_id: cycleId });
-
-export const liveFinalizeHyroxVenuePlan = (cycleId) =>
-  runOperationalRpc("finalize_hyrox_venue_plan", { p_cycle_id: cycleId });
-
-export const liveSelectHyroxVenue = (bookingId, sessionId) =>
-  runOperationalRpc("select_hyrox_cycle_venue", {
-    p_booking_id: bookingId,
-    p_target_session_id: sessionId,
-  });
-
-export const liveJoinHyroxVenueSwitchQueue = (bookingId, sessionId) =>
-  runOperationalRpc("join_hyrox_venue_switch_queue", {
-    p_booking_id: bookingId,
-    p_target_session_id: sessionId,
-  });
-
-export const liveLeaveHyroxVenueSwitchQueue = (entryId) =>
-  runOperationalRpc("leave_hyrox_venue_switch_queue", { p_entry_id: entryId });
-
-export const liveCloseHyroxVenueAllocation = (cycleId) =>
-  runOperationalRpc("close_hyrox_venue_allocation", { p_cycle_id: cycleId });
-
-export const liveCancelHyroxCycle = (cycleId, reason) =>
-  runOperationalRpc("cancel_hyrox_cycle", {
-    p_cycle_id: cycleId,
-    p_reason: reason,
-  });
 
 export async function liveReserveSession(sessionId) {
   const row = await runOperationalRpc("reserve_operational_session", { p_session_id: sessionId });

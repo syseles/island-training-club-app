@@ -1796,12 +1796,8 @@ assert.match(integratedViewSource, /export async function viewAdmin\(tab = "memb
   "Admin must default to Members");
 assert.doesNotMatch(integratedViewSource, /\["approvals", "Approvals"\]/,
   "Approvals must be merged into Members instead of remaining a separate tab");
-assert.match(integratedStyleSource, /@media \(max-width: 600px\)[\s\S]*?\.session-row\.hyrox-cycle-row\s*\{[\s\S]*?grid-template-columns:\s*44px minmax\(0, 1fr\);/,
-  "HYROX cycle rows must switch to two columns on mobile");
-assert.match(integratedStyleSource, /@media \(max-width: 600px\)[\s\S]*?\.hyrox-cycle-row \.row-end\s*\{[\s\S]*?grid-column:\s*2;/,
-  "HYROX cycle status must move below the details on mobile");
-assert.match(integratedViewSource, /class="hyrox-cycle-content"[\s\S]*?class="hyrox-cycle-venues"/,
-  "HYROX cycle rows must expose stable hooks for readable mobile details");
+assert.doesNotMatch(integratedStyleSource, /\.hyrox-(?:cycle-row|registration|reserve-card|preference-grid|radio|pool-card|threshold-rule|booking-preference)\b/,
+  "retired member pool components must not retain CSS");
 assert.match(integratedViewSource, /function adminHyroxWeeklyBookingSetup\(memberUsers\)[\s\S]*?HYROX weekly booking setup/);
 assert.doesNotMatch(integratedViewSource, /function adminHyroxProvisioningInfo/);
 assert.match(integratedViewSource, /function venueDisplayName\(session\)/);
@@ -3438,6 +3434,11 @@ if (r1.payDeadlineAt !== data.nextPayDeadline(islandEccSession.dateISO, reservat
   throw new Error("reservation deadline should follow the checkpoint rule");
 const after = store.spotsLeft(islandEccSession);
 if (after !== before - 1) throw new Error(`reserved spot not held (${before} -> ${after})`);
+const islandEccPayHtml = views.viewPay(r1.id);
+assert.match(islandEccPayHtml, /10\/F, Island ECC, Quarry Bay/,
+  "Island ECC direct payment must retain its venue wording");
+assert.match(islandEccPayHtml, /I’ve paid/,
+  "Island ECC direct payment must retain the mark-paid control");
 console.log(`ok  reservation holds a spot ${before} -> ${after}`);
 const unpaidHistoryHtml = await views.viewAccount("history");
 if (!unpaidHistoryHtml.includes("HK$180 to be paid") || unpaidHistoryHtml.includes("paid HK$180")) {
@@ -3557,8 +3558,14 @@ try {
 if (!views.viewHome().includes(bookedActivityLink)) {
   throw new Error("confirmed future booking fixture must be restored after My Week mutations");
 }
-await check("booking confirmation", () => views.viewBooking(booking.id));
-await check("receipt", () => views.viewReceipt(receipt.id));
+const islandEccBookingHtml = await check("booking confirmation", () => views.viewBooking(booking.id));
+const islandEccReceiptHtml = await check("receipt", () => views.viewReceipt(receipt.id));
+assert.match(islandEccBookingHtml, /View receipt/,
+  "Island ECC direct booking must retain its receipt control");
+assert.match(islandEccBookingHtml, /Create private invite/,
+  "Island ECC direct booking must retain its replacement control");
+assert.match(islandEccReceiptHtml, /ITC HYROX/,
+  "Island ECC direct receipt must remain renderable");
 const memberActivityWithAvatars = await check("activity (member, booked)", () => views.viewActivity(paid.id, {
   avatarRows: [{
     profileId: "member-visible-only-to-resolver",
@@ -3655,6 +3662,23 @@ const bookingProfileHtml = await views.viewAccount();
 const allBookingsHtml = await views.viewAccount("bookings");
 const attendedBookingsHtml = await views.viewAccount("bookings", "attended");
 const legacyHistoryHtml = await views.viewAccount("history");
+const paymentsAndReceiptsHtml = await views.viewAccount("payments");
+const memberNotificationHtml = await views.viewNotifications(new Date(), await store.listMyNotifications());
+const retiredMemberPattern = /BFT Causeway Bay|Midtown28|Midtown 28|BFT \+ Midtown Pool|venue allocation|switch queue|Wait for Midtown/i;
+for (const [surface, html] of [
+  ["Home", views.viewHome()],
+  ["Schedule", views.viewSchedule()],
+  ["Profile", bookingProfileHtml],
+  ["Bookings", allBookingsHtml],
+  ["History", legacyHistoryHtml],
+  ["Payments & Receipts", paymentsAndReceiptsHtml],
+  ["Booking", islandEccBookingHtml],
+  ["Receipt", islandEccReceiptHtml],
+  ["Notifications", memberNotificationHtml],
+]) {
+  assert.doesNotMatch(html, retiredMemberPattern, `${surface} must not render retired pool copy`);
+}
+console.log("ok  member surfaces omit retired pool copy and keep Island ECC controls");
 for (const [label, html] of [
   ["bookings", allBookingsHtml],
   ["attended bookings", attendedBookingsHtml],
@@ -5641,23 +5665,63 @@ for (const marker of [
     console.error(`FAIL integrated Giving router missing ${marker}`);
   }
 }
-for (const marker of [
-  'case "hyrox":', 'views.viewHyroxRegistration(arg)', 'views.viewHyroxCycle(arg)',
-  'case "form-hyrox-reserve":', 'store.reserveHyroxCycle(',
+assert.equal(typeof views.viewRetiredSession, "function",
+  "member routes must expose the neutral retired-session view");
+assert.match(views.viewRetiredSession(), />This session is no longer available\.<\/h2>/,
+  "the retired-session view must use the approved neutral copy exactly");
+for (const [kind, id] of [
+  ["activity", "hyrox-bft-2099-01-03"],
+  ["hyrox", "hyrox-pool-2099-01-03"],
+  ["booking", "retired-pool-booking"],
 ]) {
-  if (!integratedAppSource.includes(marker)) {
-    failures++;
-    console.error(`FAIL HYROX router missing ${marker}`);
-  }
+  assert.equal(store.isRetiredHyroxMemberRoute(kind, id), true,
+    `${kind}/${id} must resolve to the retired route state`);
+}
+assert.equal(store.isRetiredHyroxMemberRoute("activity", "hyrox-quarry-bay-2099-01-03"), false,
+  "Island ECC deep links must remain active");
+assert.equal(store.isRetiredHyroxMemberRoute("activity", "unknown-session"), false,
+  "unknown deep links must keep the ordinary not-found contract");
+for (const retiredRouteView of [
+  views.viewActivity("hyrox-bft-2099-01-03"),
+  views.viewRetiredSession("hyrox-pool-2099-01-03"),
+  views.viewBooking("retired-pool-booking"),
+]) {
+  assert.match(retiredRouteView, /This session is no longer available\./,
+    "known retired member deep links must render the neutral state");
+  assert.doesNotMatch(retiredRouteView, /Island ECC|notification|redirect/i,
+    "retired deep links must not redirect or imply a notification");
+}
+for (const retiredMarker of [
+  "views.viewHyroxRegistration(arg)", "views.viewHyroxCycle(arg)",
+  'case "form-hyrox-reserve":', "store.reserveHyroxCycle(",
+  'case "select-hyrox-venue":', 'case "join-hyrox-switch-queue":',
+  'case "leave-hyrox-switch-queue":', 'case "join-interest":', 'case "leave-interest":',
+  'case "hyrox-allocation-close":', 'case "form-hyrox-payment-reject":',
+  'case "form-cancel-hyrox-cycle":',
+]) {
+  assert.equal(integratedAppSource.includes(retiredMarker), false,
+    `retired member pool route/action remains: ${retiredMarker}`);
+}
+for (const api of ["viewHyroxCycle", "viewHyroxRegistration"]) {
+  assert.equal(typeof views[api], "undefined", `retired pooled view remains exported: ${api}`);
 }
 for (const api of [
-  "viewHyroxCycle", "viewHyroxRegistration",
+  "reserveHyroxCycle", "joinHyroxCycleWaitlist", "leaveHyroxCycleQueue",
+  "selectHyroxCycleVenue", "joinHyroxVenueSwitchQueue", "leaveHyroxVenueSwitchQueue",
+  "joinInterest", "leaveInterest", "interestPosition",
 ]) {
-  if (typeof views[api] !== "function") {
-    failures++;
-    console.error(`FAIL pooled HYROX view missing ${api}`);
-  }
+  assert.equal(typeof store[api], "undefined", `retired member pool action remains exported: ${api}`);
 }
+const retiredMemberCopy = /BFT Causeway Bay|Midtown28|Midtown 28|BFT \+ Midtown Pool|venue allocation|switch queue|Wait for Midtown/i;
+for (const [surface, html] of [
+  ["visitor Home", views.viewHome()],
+  ["Schedule", views.viewSchedule()],
+  ["retired activity", views.viewActivity("hyrox-bft-2099-01-03")],
+  ["retired booking", views.viewBooking("retired-pool-booking")],
+]) {
+  assert.doesNotMatch(html, retiredMemberCopy, `${surface} must not render retired pool copy`);
+}
+
 for (const api of [
   "updateMyDonorId", "campaigns", "activeGivingCampaign", "listGivingCampaigns",
   "getActiveGivingCampaign", "saveGivingCampaign", "publishGivingCampaign",
@@ -5696,8 +5760,6 @@ for (const blockedId of ["giving-pending", "giving-declined", "missing-member"])
     () => store.reserveSession(blockedId, paymentGateSession),
     () => store.joinWaitlist(blockedId, paymentGateSession.id),
     () => store.leaveWaitlist(blockedId, paymentGateSession.id),
-    () => store.joinInterest(blockedId, paymentGateSession.id),
-    () => store.leaveInterest(blockedId, paymentGateSession.id),
   ]) {
     try {
       mutate();
@@ -5780,7 +5842,6 @@ if (approvedReservation.sessionId !== paymentGateSession.id || approvedReservati
 }
 console.log("ok  reservations resolve authoritative sessions and reject forged/unknown input");
 store.joinWaitlist("giving-member", "authz-waitlist-session");
-store.joinInterest("giving-member", "authz-interest-session");
 const assertPaymentImpersonationRejected = (label, mutate) => {
   try {
     mutate();
@@ -5802,13 +5863,10 @@ for (const actor of [
     () => store.markBookingPaid(approvedReservation.id, "FPS", `IMPERSONATED-${actor.label}`),
     () => store.joinWaitlist("giving-member", `authz-join-waitlist-${actor.label}`),
     () => store.leaveWaitlist("giving-member", "authz-waitlist-session"),
-    () => store.joinInterest("giving-member", `authz-join-interest-${actor.label}`),
-    () => store.leaveInterest("giving-member", "authz-interest-session"),
   ]) assertPaymentImpersonationRejected(actor.label, mutate);
 }
 if (store.getBooking(approvedReservation.id).paymentMarkedAt
-    || store.waitlistPosition("giving-member", "authz-waitlist-session") !== 1
-    || store.interestPosition("giving-member", "authz-interest-session") !== 1) {
+    || store.waitlistPosition("giving-member", "authz-waitlist-session") !== 1) {
   throw new Error("rejected Payment impersonation must not mutate state");
 }
 store.signIn("giving-admin@example.test");
@@ -5932,7 +5990,6 @@ if (administeredSession.time !== "11:00" || !administeredSession.notice
   throw new Error("approved Admin should retain weekly session operations");
 }
 store.leaveWaitlist("giving-member", "authz-waitlist-session");
-store.leaveInterest("giving-member", "authz-interest-session");
 console.log("ok  Payment seams enforce self-service/Admin boundaries and derive confirmation identity");
 
 const givingFpsId = `FPS<&"'>`;

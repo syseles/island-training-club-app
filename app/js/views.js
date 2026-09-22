@@ -10,6 +10,7 @@ import { isLive } from "./config.js";
 import * as liveOps from "./operations.js";
 import { sessionCancellationCopy } from "./operations.js";
 import { avatarMarkup } from "./avatar.js";
+import { isRetiredHyroxLegacyRouteId } from "./hyrox-retirement.js";
 import {
   normalizeMeetingPoint,
   normalizeVenueLocation,
@@ -122,74 +123,6 @@ function spotsLabel(s) {
 const fmtDeadline = (ts) =>
   new Date(ts).toLocaleString("en-HK", { weekday: "short", hour: "numeric", minute: "2-digit" });
 
-function hyroxCycleVenues(cycle) {
-  return [cycle.bftSessionId, cycle.midtownSessionId].map((id) => store.getSession(id)).filter(Boolean);
-}
-
-function hyroxVenuePreferenceLabel(preference) {
-  if (preference === "bft") return "BFT Causeway Bay";
-  if (preference === "midtown") return "Midtown 28";
-  return "Either venue";
-}
-
-function hyroxAssignedVenue(cycle, booking, assignedSession) {
-  if (assignedSession?.location) return assignedSession.location;
-  const cycleSession = cycle && booking.sessionId
-    ? hyroxCycleVenues(cycle).find((session) => session.id === booking.sessionId)
-    : null;
-  if (cycleSession?.location) return cycleSession.location;
-  const snapshots = Array.isArray(booking.allocationSnapshot) ? booking.allocationSnapshot : [];
-  return snapshots.at(-1)?.venue || snapshots.at(-1)?.location || null;
-}
-
-function hyroxCycleStatus(cycle) {
-  const now = Date.now();
-  if (cycle.registrationState === "cancelled") return { label: "Cancelled", className: "danger" };
-  if (now < cycle.registrationOpensAt) return {
-    label: "Sign up opens Monday at 6 PM HKT",
-    compactLabel: "Opens Mon · 6 PM",
-    className: "neutral",
-  };
-  if (cycle.venuePlan === "bft_only") return { label: "BFT only", className: "free" };
-  if (cycle.venuePlan === "both") return { label: cycle.allocationClosedAt ? "Both gyms confirmed" : "Both gyms open", className: "free" };
-  if (cycle.registrationState === "reconciling") return { label: "Payment review", className: "warn" };
-  return { label: "Registration open", className: "paid" };
-}
-
-function hyroxCycleBookingForUser(cycle) {
-  const user = store.currentUser();
-  if (!user) return null;
-  return store.bookingsForUser(user.id).find((booking) => booking.cycleId === cycle.id
-    && ["reserved", "confirmed", "attended"].includes(booking.status)) || null;
-}
-
-function hyroxCycleRow(cycle) {
-  const status = hyroxCycleStatus(cycle);
-  const booking = hyroxCycleBookingForUser(cycle);
-  const action = booking
-    ? `<span class="badge free">${booking.status === "reserved" ? "Payment due" : booking.status === "attended" ? "Arrived" : "Booked"}</span>`
-    : `<span class="badge ${status.className}">${esc(status.compactLabel || status.label)}</span>`;
-  const venues = hyroxCycleVenues(cycle)
-    .sort((a, b) => a.time.localeCompare(b.time));
-  const venueDetails = venues
-    .map((venue) => `<span>${esc(venue.location)} · ${esc(fmtTime(venue.time))}</span>`)
-    .join("");
-  return `<a class="session-row hyrox-cycle-row" href="#/hyrox/${esc(cycle.id)}">
-    <time>${esc(fmtTime(venues[0]?.time || "00:00"))}</time>
-    <div class="hyrox-cycle-content"><h3>ITC HYROX<br><span>BFT + Midtown Pool</span></h3><p class="hyrox-cycle-venues">${venueDetails}</p></div>
-    <div class="row-end">${action}</div>
-  </a>`;
-}
-
-function hyroxVenueCards(cycle) {
-  return hyroxCycleVenues(cycle).map((venue) => `
-    <div class="card hyrox-venue-card">
-      <span class="kicker">${esc(venue.location)}</span>
-      <h3>${esc(fmtTime(venue.time))}</h3>
-      <p class="muted small">${venue.capacity} places · ${fmtMoney(venue.price)}</p>
-    </div>`).join("");
-}
-
 function sessionRow(s, { past, showDate = true, highlight } = {}) {
   // A session the signed-in member has already booked shows a "Booked"
   // badge instead of price/spots, so Home, Schedule and the booking itself
@@ -199,7 +132,6 @@ function sessionRow(s, { past, showDate = true, highlight } = {}) {
   const user = store.currentUser();
   const booked = user ? store.userBookingFor(user.id, s.id) : null;
   const reserved = user ? store.userReservationFor(user.id, s.id) : null;
-  const midtownClosed = s.kind === "paid" && store.isMidtown(s) && !store.midtownOpenFor(s);
   let end;
   if (s.cancelled) {
     end = `<span class="badge danger">Cancelled</span>`;
@@ -214,8 +146,6 @@ function sessionRow(s, { past, showDate = true, highlight } = {}) {
     end = `<span class="badge free">RSVP</span><span class="spots">${going} going</span>`;
   } else if (s.kind === "free") {
     end = `<span class="badge free">Free</span><span class="spots">Just show up</span>`;
-  } else if (midtownClosed) {
-    end = `<span class="badge neutral">Not yet open</span>`;
   } else {
     end = `${store.spotsLeft(s) > 0 ? `<span class="badge paid">${fmtMoney(s.price)}</span>` : ""}${spotsLabel(s)}`;
   }
@@ -360,17 +290,12 @@ export function viewHome() {
     emptyMsg = "No open sessions this week — check back soon.";
     weekHeading = "My Week";
   } else {
-    const bookings = store.bookingsForUser(user.id);
-    const pooledBookings = bookings
-      .filter((booking) => booking.cycleId && booking.status === "confirmed")
-      .filter((booking) => !booking.sessionId || !sessionStarted(store.getSession(booking.sessionId)));
-    const pooledSessionIds = new Set(pooledBookings.map((booking) => booking.sessionId).filter(Boolean));
     const bookedIds = new Set(
-      bookings
-        .filter((booking) => booking.status === "confirmed" && !booking.cycleId && !sessionStarted(booking.snapshot))
+      store.bookingsForUser(user.id)
+        .filter((booking) => booking.status === "confirmed" && !sessionStarted(booking.snapshot))
         .map((booking) => booking.sessionId)
     );
-    rows = [...upcoming.filter((session) => bookedIds.has(session.id) && !pooledSessionIds.has(session.id)), ...pooledBookings];
+    rows = upcoming.filter((session) => bookedIds.has(session.id));
     emptyMsg = `Nothing booked this week yet. <a href="#/schedule" style="color:var(--accent)">Find a session →</a>`;
     weekHeading = "My Week";
   }
@@ -410,8 +335,7 @@ export function viewHome() {
     </div>
     <div class="session-list">
       ${rows.length
-        ? rows.map((item, i) => item.cycleId ? pooledBookingRow(item, { highlight: i === 0 })
-          : sessionRow(item, { highlight: i === 0 })).join("")
+        ? rows.map((item, i) => sessionRow(item, { highlight: i === 0 })).join("")
         : `<div class="empty">${emptyMsg}</div>`}
     </div>
     <div class="section-head"><h2>The Club</h2><a href="#/community">More →</a></div>
@@ -492,16 +416,11 @@ export function viewSchedule() {
       </button>`;
   }).join("");
 
-  const cycle = store.hyroxCycleForDate(scheduleState.selected);
-  const cycleChildIds = cycle ? new Set([cycle.bftSessionId, cycle.midtownSessionId]) : new Set();
   const list = weekSessions
     .filter((s) => s.dateISO === scheduleState.selected)
-    .filter((s) => !cycleChildIds.has(s.id))
     .filter((s) => matchesFilter(s, scheduleState.filter));
-  const poolItem = cycle && matchesFilter({ category: "HYROX" }, scheduleState.filter)
-    ? hyroxCycleRow(cycle) : "";
-  const listHTML = list.length || poolItem
-    ? `${poolItem}${list.map((s) => sessionRow(s, { past: sessionStarted(s), showDate: false })).join("")}`
+  const listHTML = list.length
+    ? list.map((s) => sessionRow(s, { past: sessionStarted(s), showDate: false })).join("")
     : `<div class="empty">No ${scheduleState.filter === "all" ? "" : esc(scheduleState.filter) + " "}sessions on ${esc(fmtDate(scheduleState.selected))}.</div>`;
 
   return `
@@ -524,76 +443,11 @@ export function viewSchedule() {
 
 // --- Activity detail ------------------------------------------------------------------
 
-export function viewHyroxCycle(cycleId) {
-  const cycle = store.getHyroxCycle(cycleId);
-  if (!cycle) return viewNotFound("That HYROX registration does not exist.");
-  const status = hyroxCycleStatus(cycle);
-  const user = store.currentUser();
-  const approved = user?.status === "approved";
-  const booking = hyroxCycleBookingForUser(cycle);
-  const open = (cycle.registrationState === "open" || Date.now() >= cycle.registrationOpensAt)
-    && Date.now() < cycle.paymentDeadlineAt && cycle.registrationState !== "cancelled";
-  const action = cycle.registrationState === "cancelled"
-    ? `<div class="banner warn"><span class="kicker">Cancelled</span><p>Session cancelled by ITC — ${esc(cycle.cancelReason || "reason unavailable")}.</p></div>`
-    : booking ? `<div class="banner"><p>Your HYROX registration is already in your account.</p><a class="btn sm" href="#/booking/${booking.id}">View booking</a></div>`
-      : approved && open ? `<a class="btn" href="#/hyrox/${esc(cycle.id)}/register">Reserve your place</a>`
-        : approved ? memberOnlyNote(status.label) : memberOnlyNote(open ? "Approved members can reserve from Monday at 6 PM HKT." : status.label);
-  return `<div class="kicker">HYROX · ${esc(fmtDate(cycle.dateISO))}</div>
-    <h1 class="display">One weekly pool. Two possible gyms.</h1>
-    <p class="lede">Register once for the shared 32-place pool. Your venue is allocated automatically from confirmed payments.</p>
-    <div class="hyrox-pool-card"><div class="section-head"><div><span class="kicker">${esc(status.label)}</span><h2>ITC HYROX</h2></div><span class="badge paid">${fmtMoney(hyroxCycleVenues(cycle)[0]?.price || 180)}</span></div>
-      <div class="hyrox-venue-options">${hyroxVenueCards(cycle)}</div>
-      <div class="hyrox-threshold-rule"><strong>Monday 6 PM HKT</strong><span>Registration opens</span><strong>Thursday 6 PM HKT</strong><span>Standard payment deadline</span><strong>Thursday 7 PM HKT</strong><span>Holder grace ends</span><strong>Friday 9 PM HKT</strong><span>Venue changes close</span></div>
-      ${action}
-    </div>`;
-}
-
-export function viewHyroxRegistration(cycleId) {
-  const cycle = store.getHyroxCycle(cycleId);
-  if (!cycle) return viewNotFound("That HYROX registration does not exist.");
-  const user = store.currentUser();
-  if (!user || user.status !== "approved") return `${memberOnlyNote("Approved members can reserve a HYROX place.")}<a class="btn ghost" href="#/account">Go to Profile</a>`;
-  const open = (cycle.registrationState === "open" || Date.now() >= cycle.registrationOpensAt)
-    && Date.now() < cycle.paymentDeadlineAt;
-  if (!open) return viewHyroxCycle(cycleId);
-  return `<div class="hyrox-registration">
-    <span class="kicker hyrox-kicker">You’re in. · Sat ${esc(fmtDate(cycle.dateISO))}</span>
-    <h1 class="display">Pick your home gym.</h1>
-    <p class="lede">Two gyms. One epic Saturday. Tell us which one feels right and we’ll do the rest.</p>
-    <aside class="hyrox-no-deferral" aria-label="Booking policy">
-      <span class="hyrox-no-deferral-icon" aria-hidden="true">${ICONS.shield}</span>
-      <p><strong>Once paid, this booking is final</strong> — no refund and no deferral. If you can’t attend, arrange a manual replacement with an approved ITC friend. No refund or payment transfer is processed in the app; an Admin must confirm the handover.</p>
-    </aside>
-    <form id="form-hyrox-reserve" class="card hyrox-reserve-card" data-cycle="${esc(cycle.id)}">
-      <fieldset class="hyrox-preference-grid"><legend>Venue preference</legend>
-        <label class="hyrox-radio"><input type="radio" name="preference" value="bft" required>
-          <span class="hyrox-radio-card">
-            <span class="hyrox-radio-dot" aria-hidden="true"></span>
-            <span class="hyrox-radio-text"><span class="hyrox-radio-name">BFT Causeway Bay</span><span class="hyrox-radio-meta">11:15AM · 20 spots</span></span>
-          </span>
-        </label>
-        <label class="hyrox-radio"><input type="radio" name="preference" value="midtown">
-          <span class="hyrox-radio-card">
-            <span class="hyrox-radio-dot" aria-hidden="true"></span>
-            <span class="hyrox-radio-text"><span class="hyrox-radio-name">Midtown 28</span><span class="hyrox-radio-meta">11:00AM · 12 spots</span></span>
-          </span>
-        </label>
-        <label class="hyrox-radio"><input type="radio" name="preference" value="either">
-          <span class="hyrox-radio-card">
-            <span class="hyrox-radio-dot" aria-hidden="true"></span>
-            <span class="hyrox-radio-text"><span class="hyrox-radio-name">Either venue</span><span class="hyrox-radio-meta">Auto-allocate to your nearest gym</span></span>
-          </span>
-        </label>
-      </fieldset>
-      <label class="check-row"><input type="checkbox" name="fallbackAcknowledged" required> I understand that my booking will be at BFT at 11:15AM if only BFT opens.</label>
-      <div class="hyrox-threshold-rule">
-        <p>20 or fewer paid → BFT only.</p>
-        <p>More than 20 paid → both gyms.</p>
-        <p>Pay by Thursday 6 PM. Venue changes close Friday 9 PM.</p>
-      </div>
-      <button class="btn hyrox-cta" type="submit">Reserve my spot →</button>
-    </form>
-  </div>`;
+export function viewRetiredSession() {
+  return `<div class="card" data-route-not-found><div class="card-body">
+    <h2>This session is no longer available.</h2>
+    <a class="btn mt16" href="#/schedule">Back to schedule</a>
+  </div></div>`;
 }
 
 function venuePresentationHTML(presentation) {
@@ -624,6 +478,7 @@ function venuePresentationHTML(presentation) {
 }
 
 export function viewActivity(sessionId, options) {
+  if (isRetiredHyroxLegacyRouteId(sessionId)) return viewRetiredSession();
   const optionsObject = options && typeof options === "object" && !Array.isArray(options);
   const attendeeNames = optionsObject ? options.attendeeNames : options;
   const avatarRows = optionsObject ? options.avatarRows ?? null : null;
@@ -637,7 +492,6 @@ export function viewActivity(sessionId, options) {
   const spots = store.spotsLeft(s);
   const booking = user ? store.userBookingFor(user.id, s.id) : null;
   const reservation = user ? store.userReservationFor(user.id, s.id) : null;
-  const midtownClosed = s.kind === "paid" && store.isMidtown(s) && !store.midtownOpenFor(s);
   const collector = store.collectorFor(s.id);
   const collectorName = collector ? (collector.preferredName || collector.fullName) : "the on-duty collector";
 
@@ -725,30 +579,6 @@ export function viewActivity(sessionId, options) {
     } else {
       actionBlock = membersOnlyGate();
     }
-  } else if (midtownClosed) {
-    const pos = user ? store.interestPosition(user.id, s.id) : null;
-    const actionInner = isMember
-      ? pos
-        ? `
-        <div class="banner mt16">
-          <span class="kicker">Waiting for Midtown</span>
-          <p>You’re #${pos} in line. When the collector opens this session, the first ${s.capacity} in line get spots automatically.</p>
-        </div>
-        <div class="btn-row">
-          <button class="btn ghost" type="button" data-action="leave-interest" data-session="${s.id}">Leave the list</button>
-          ${directionsLink}
-        </div>`
-        : `
-        <div class="banner mt16">
-          <span class="kicker">Midtown not open yet</span>
-          <p>BFT fills first — the collector opens Midtown when demand justifies it. Join the list and you’ll auto-convert in order.</p>
-        </div>
-        <div class="btn-row">
-          <button class="btn" type="button" data-action="join-interest" data-session="${s.id}">Wait for Midtown</button>
-          ${directionsLink}
-        </div>`
-      : membersOnlyGate();
-    actionBlock = actionInner;
   } else if (booking) {
     actionBlock = `
       <div class="banner mt16">
@@ -1810,11 +1640,8 @@ async function accountIndemnity(user) {
 
 function accountPayments(user) {
   const receipts = store.receiptsForUser(user.id);
-  const pooledBookings = store.bookingsForUser(user.id)
-    .filter((booking) => booking.cycleId && ["reserved", "confirmed"].includes(booking.status));
   return `
     ${profileSubpageHeader({ title: "Payments & Receipts" })}
-    ${pooledBookings.length ? `<div class="session-list">${pooledBookings.map((booking) => pooledBookingRow(booking)).join("")}</div>` : ""}
     ${
       receipts.length
         ? `<div class="session-list">${receipts
@@ -1878,27 +1705,17 @@ async function accountPrivacy(user) {
 function bookingDisplaySnapshot(b) {
   const snapshot = b.snapshot || {};
   const session = b.sessionId ? store.getSession(b.sessionId) : null;
-  const cycle = b.cycleId ? store.getHyroxCycle(b.cycleId) : null;
   return {
     ...snapshot,
-    dateISO: snapshot.dateISO ?? session?.dateISO ?? cycle?.dateISO,
+    dateISO: snapshot.dateISO ?? session?.dateISO,
     time: snapshot.time ?? snapshot.startTime ?? session?.time ?? session?.startTime,
     name: snapshot.name ?? session?.name ?? "ITC HYROX",
-    location: snapshot.location ?? session?.location ?? (cycle ? "Venue pending" : undefined),
+    location: snapshot.location ?? session?.location,
     durationMin: snapshot.durationMin ?? session?.durationMin,
-    kind: snapshot.kind ?? session?.kind ?? (cycle ? "paid" : undefined),
+    kind: snapshot.kind ?? session?.kind,
     requiresRsvp: snapshot.requiresRsvp ?? session?.requiresRsvp ?? snapshot.kind === "rsvp",
     price: snapshot.price ?? session?.price ?? snapshot.priceHkd,
   };
-}
-
-function pooledBookingRow(b, { highlight = false } = {}) {
-  const s = bookingDisplaySnapshot(b);
-  const venue = b.sessionId ? s.location : "Venue pending";
-  return `<a class="session-row hyrox-queue-state${highlight ? " next" : ""}" href="#/booking/${esc(b.id)}">
-    <time>${esc(fmtDate(s.dateISO))}</time><div><h3>ITC HYROX</h3><p>${esc(venue)} · ${b.status === "attended" ? "Arrived" : b.status === "confirmed" ? "Confirmed" : "Payment due"}</p></div>
-    <div class="row-end"><span class="badge ${b.sessionId ? "free" : "neutral"}">${b.status === "attended" ? "Arrived" : b.sessionId ? "Booked" : "Venue pending"}</span></div>
-  </a>`;
 }
 
 function bookingCard(b) {
@@ -2225,6 +2042,7 @@ function viewApplyLocal() {
 // --- Checkout --------------------------------------------------------------------------------
 
 export function viewCheckout(sessionId) {
+  if (store.isRetiredHyroxMemberRoute("checkout", sessionId)) return viewRetiredSession();
   const s = store.getSession(sessionId);
   if (!s || s.kind !== "paid") return viewNotFound("That checkout doesn’t exist.");
   const user = store.currentUser();
@@ -2239,9 +2057,6 @@ export function viewCheckout(sessionId) {
   if (existingRes) return { redirect: `#/pay/${existingRes.id}` };
   if (sessionStarted(s) || s.cancelled || store.spotsLeft(s) <= 0)
     return { redirect: `#/activity/${sessionId}` };
-  if (store.isMidtown(s) && !store.midtownOpenFor(s))
-    return { redirect: `#/activity/${sessionId}` };
-
   return `
     <a class="back-link" href="#/activity/${s.id}">← ${esc(s.name)}</a>
     <div class="kicker mt16">Reserve your spot</div>
@@ -2275,33 +2090,25 @@ function bookingPaymentReference(booking) {
 }
 
 export function viewPay(bookingId) {
+  if (store.isRetiredHyroxMemberRoute("pay", bookingId)) return viewRetiredSession();
   const b = store.getBooking(bookingId);
   const user = store.currentUser();
   if (!b || !user || user.status !== "approved" || b.userId !== user.id) return viewNotFound("Booking not found.");
   if (b.status !== "reserved" || b.paymentMarkedAt)
     return { redirect: `#/booking/${b.id}` };
   const s = b.snapshot;
-  const cycle = b.cycleId ? store.getHyroxCycle(b.cycleId) : null;
-  const collector = store.collectorFor(cycle?.bftSessionId || b.sessionId);
+  const collector = store.collectorFor(b.sessionId);
   const cname = collector ? esc(collector.preferredName || collector.fullName) : "the on-duty collector";
   const payouts = collector ? store.collectorPayoutsFor(collector.id) : null;
   const payme = payouts?.paymeLink || collector?.paymeLink || "";
   const fps = payouts?.fpsPhone || collector?.fpsPhone || "";
   const paymentReference = bookingPaymentReference(b);
   const memberName = user.fullName || user.preferredName || "ITC Member";
-  const paymentNote = cycle
-    ? `${s.name} · ${fmtDate(s.dateISO)} · ${memberName}`
-    : `${s.name} · ${fmtDate(s.dateISO)} · ${s.location || "Venue TBC"} · ${memberName}`;
-  const paymentHeading = cycle
-    ? b.promotedFromWaitlistAt
-      ? "You’ve been promoted — pay by Thursday 8 PM"
-      : Date.now() >= cycle.paymentDeadlineAt
-        ? "Final payment grace — pay now by Thursday 7 PM"
-        : `Pay ${fmtMoney(s.price)} by Thursday 6 PM`
-    : `${fmtMoney(s.price)} to ${cname}.`;
+  const paymentNote = `${s.name} · ${fmtDate(s.dateISO)} · ${s.location || "Venue TBC"} · ${memberName}`;
+  const paymentHeading = `${fmtMoney(s.price)} to ${cname}.`;
 
   return `
-    <a class="back-link" href="${cycle ? `#/hyrox/${esc(cycle.id)}` : `#/activity/${b.sessionId}`}">← ${esc(s.name)}</a>
+    <a class="back-link" href="#/activity/${b.sessionId}">← ${esc(s.name)}</a>
     <div class="kicker mt16">Pay to secure your spot</div>
     <h1 class="display sm">${paymentHeading}</h1>
     <p class="subcopy mt8">Deadline: <strong>${fmtDeadline(b.payDeadlineAt)}</strong> — unpaid spots go to the waitlist.</p>
@@ -2447,6 +2254,7 @@ function currentBookingFor(userId, sessionId) {
 }
 
 export function viewBooking(bookingId) {
+  if (store.isRetiredHyroxMemberRoute("booking", bookingId)) return viewRetiredSession();
   const b = store.getBooking(bookingId);
   const user = store.currentUser();
   const isConfirmedAttendee = !!b?.replacementConfirmedAt && b.replacementUserId === user?.id;
@@ -2454,16 +2262,8 @@ export function viewBooking(bookingId) {
     return viewNotFound("Booking not found.");
   }
   const s = b.snapshot;
-  const cycle = b.cycleId ? store.getHyroxCycle(b.cycleId) : null;
   const assignedSession = b.sessionId ? store.getSession(b.sessionId) : null;
-  const assignedVenue = hyroxAssignedVenue(cycle, b, assignedSession);
-  const venuePreferenceCard = cycle && b.venuePreference ? `
-    <div class="card mt16 hyrox-booking-preference">
-      <div class="card-body">
-        <p class="muted small">Venue preference:</p>
-        <p><strong>${esc(hyroxVenuePreferenceLabel(b.venuePreference))}</strong>${assignedVenue ? ` · assigned to <strong>${esc(assignedVenue)}</strong>` : ""}</p>
-      </div>
-    </div>` : "";
+  const assignedVenue = assignedSession?.location || s.location;
   const started = assignedSession ? sessionStarted(assignedSession) : false;
   const receipt = store.receiptForBooking(b.id);
   const mine = b.userId === user.id;
@@ -2472,21 +2272,14 @@ export function viewBooking(bookingId) {
   let head = "";
   let actions = "";
   if (b.status === "reserved" && !b.paymentMarkedAt) {
-    const paymentHeading = cycle
-      ? b.promotedFromWaitlistAt
-        ? "You’ve been promoted — pay by Thursday 8 PM"
-        : Date.now() >= cycle.paymentDeadlineAt
-          ? "Final payment grace — pay now by Thursday 7 PM"
-          : `Pay ${fmtMoney(s.price)} by Thursday 6 PM`
-      : "Spot held.";
     head = `
-      <h1 class="display sm mt16">${paymentHeading}</h1>
+      <h1 class="display sm mt16">Spot held.</h1>
       <p class="subcopy mt8">Pay ${fmtMoney(s.price)} by <strong>${fmtDeadline(b.payDeadlineAt)}</strong> or the spot goes to the waitlist.</p>`;
     actions = mine ? `
       <a class="btn" href="#/pay/${b.id}">Pay ${fmtMoney(s.price)}</a>
       <button class="btn ghost" type="button" data-action="release-reservation" data-booking="${b.id}">Cancel booking</button>` : "";
   } else if (b.status === "reserved" && b.paymentMarkedAt) {
-    const collector = store.collectorFor(cycle?.bftSessionId || b.sessionId);
+    const collector = store.collectorFor(b.sessionId);
     const cname = collector ? esc(collector.preferredName || collector.fullName) : "the collector";
     head = `
       <h1 class="display sm mt16">Payment being confirmed.</h1>
@@ -2502,36 +2295,18 @@ export function viewBooking(bookingId) {
       <button class="btn ghost" type="button" data-action="ics-booking" data-booking="${b.id}">Add to calendar</button>
       ${mine ? `<button class="btn ghost" type="button" data-action="rsvp-withdraw" data-booking="${b.id}">Can’t make it</button>` : ""}`;
   } else if (b.status === "confirmed" && !started) {
-    const movedFrom = !cycle && mine && b.deferredFrom ? store.getBooking(b.deferredFrom) : null;
+    const movedFrom = mine && b.deferredFrom ? store.getBooking(b.deferredFrom) : null;
     head = `
       <div class="confirm-mark">${ICONS.check}</div>
-      <h1 class="display sm center mt16">${cycle ? "Your weekly HYROX place is confirmed" : movedFrom ? "Booking moved." : "You’re booked in."}</h1>
-      <p class="subcopy center mt8">${cycle
-        ? cycle.venuePlan === "both" ? "Both gyms confirmed" : b.sessionId ? "Your weekly HYROX place is confirmed" : "Your venue is pending automatic allocation."
-        : movedFrom ? "Your payment has carried over."
-          : `Booking ref <span class="mono">${esc(b.id.toUpperCase())}</span>`}</p>
-      ${cycle ? `<p class="hyrox-queue-state">${b.sessionId
-        ? `${b.allocationState === "final" ? "Your venue is final" : "Your venue is provisional until Friday 9 PM"} · ${esc(assignedVenue || "Venue pending")}`
-        : "Venue pending"}</p>` : ""}`;
-    const targets = mine ? store.deferTargetsFor(b) : [];
+      <h1 class="display sm center mt16">${movedFrom ? "Booking moved." : "You’re booked in."}</h1>
+      <p class="subcopy center mt8">${movedFrom
+        ? "Your payment has carried over."
+        : `Booking ref <span class="mono">${esc(b.id.toUpperCase())}</span>`}</p>`;
     actions = `
       ${movedFrom ? `<div class="card mt16"><div class="card-body"><strong>Previous spot released</strong><p class="muted small mt8">${esc(fmtDate(movedFrom.snapshot.dateISO))} · ${fmtTime(movedFrom.snapshot.time)}</p></div></div>` : ""}
       <button class="btn ghost" type="button" data-action="ics-booking" data-booking="${b.id}">Add to calendar</button>
       ${receipt ? `<a class="btn ghost" href="#/receipt/${receipt.id}">View receipt · ${esc(receipt.number)}</a>` : ""}
       `;
-    if (cycle && mine && cycle.venuePlan === "both" && b.allocationState === "provisional" && b.sessionId) {
-      const target = hyroxCycleVenues(cycle).find((venue) => venue.id !== b.sessionId);
-      const switchEntry = store.hyroxCycleQueues(cycle.id).venueSwitches
-        .find((entry) => entry.userId === b.userId && entry.status === "active");
-      const queueName = target?.location?.includes("BFT") ? "BFT switch queue" : "Midtown switch queue";
-      actions += `<div class="card mt16"><div class="card-body"><h3>Venue choice</h3>
-        <p class="muted small">Current assignment: <strong>${esc(assignedVenue || "Venue pending")}</strong>.</p>
-        ${switchEntry ? `<p class="hyrox-queue-state">${esc(queueName)} · queue position ${store.hyroxCycleQueuePosition(b.userId, cycle.id, "venue_switch", switchEntry.targetSessionId)}. Your ${esc(assignedVenue || "current venue")} place remains guaranteed while you wait.</p>
-          <button class="btn ghost sm" type="button" data-action="leave-hyrox-switch-queue" data-entry="${switchEntry.id}">Leave switch queue</button>`
-          : `<div class="actions"><button class="btn ghost sm" type="button" data-action="select-hyrox-venue" data-booking="${b.id}" data-session="${target?.id}">Change to ${esc(target?.location || "other venue")}</button>
-            <button class="btn ghost sm" type="button" data-action="join-hyrox-switch-queue" data-booking="${b.id}" data-session="${target?.id}">${esc(queueName)}</button></div>`}
-      </div></div>`;
-    }
     // No-deferral policy: confirmed paid bookings do not offer self-service
     // deferral. Members who can't attend can arrange a manual replacement.
     const replacement = store.replacementRequestForBooking(b.id);
@@ -2605,7 +2380,6 @@ export function viewBooking(bookingId) {
           : `<div class="line total"><span>Price</span><strong>${Number(s.price) > 0 ? fmtMoney(s.price) : "Pay your own bill"}</strong></div>`}
       </div>
     </div></div>
-    ${venuePreferenceCard}
     <div class="btn-row">
       ${actions}
       <a class="btn ghost" href="#/schedule">Back to schedule</a>
@@ -2615,6 +2389,7 @@ export function viewBooking(bookingId) {
 // --- Receipt -----------------------------------------------------------------------------------
 
 export function viewReceipt(receiptId) {
+  if (store.isRetiredHyroxMemberRoute("receipt", receiptId)) return viewRetiredSession();
   const r = store.getReceipt(receiptId);
   const user = store.currentUser();
   if (!r || !user || (r.userId !== user.id && !isAdminRole(user.role))) {
@@ -2773,6 +2548,12 @@ function adminRosterName(userId, memberUsers) {
   return member?.fullName || member?.preferredName || "Member";
 }
 
+function adminHyroxVenuePreferenceLabel(preference) {
+  if (preference === "bft") return "BFT Causeway Bay";
+  if (preference === "midtown") return "Midtown 28";
+  return "Either venue";
+}
+
 function adminQueueDisclosure({ id, title, subtitle, entries, memberUsers, preference = false, closed = false }) {
   // Queue selectors already provide queue order; never alphabetize requests.
   const rows = closed ? [] : entries;
@@ -2780,7 +2561,7 @@ function adminQueueDisclosure({ id, title, subtitle, entries, memberUsers, prefe
     <summary><span><strong>${esc(title)}</strong>${subtitle ? `<span class="muted small">${esc(subtitle)}</span>` : ""}</span><span class="badge neutral">${closed ? "Closed" : rows.length}</span></summary>
     ${closed ? `<p class="muted small">Switching closed Friday at 9 PM HKT. Unmatched members keep their assigned venue.</p>` : rows.length ? `<ol class="admin-queue-list">${rows.map((entry) => {
       const userId = typeof entry === "string" ? entry : entry.userId;
-      return `<li><strong>${esc(adminRosterName(userId, memberUsers))}</strong>${preference ? `<span class="muted small">Preference: ${esc(hyroxVenuePreferenceLabel(entry.venuePreference))}</span>` : ""}</li>`;
+      return `<li><strong>${esc(adminRosterName(userId, memberUsers))}</strong>${preference ? `<span class="muted small">Preference: ${esc(adminHyroxVenuePreferenceLabel(entry.venuePreference))}</span>` : ""}</li>`;
     }).join("")}</ol>` : `<p class="muted small">No active requests.</p>`}
   </details>`;
 }

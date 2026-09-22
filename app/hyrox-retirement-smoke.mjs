@@ -86,6 +86,7 @@ assert.equal(isRetiredHyroxNotification({ kind: "event-hyrox-bft-party" }, getBo
 assert.equal(isRetiredHyroxLegacyRouteId("hyrox-bft"), true);
 assert.equal(isRetiredHyroxLegacyRouteId("hyrox-midtown-2099-01-03"), true);
 assert.equal(isRetiredHyroxLegacyRouteId("hyrox-pool-2099-01-03"), true);
+assert.equal(isRetiredHyroxLegacyRouteId("retired-pool-booking"), true);
 assert.equal(isRetiredHyroxLegacyRouteId("hyrox-pool-1"), false);
 assert.equal(isRetiredHyroxLegacyRouteId("hyrox-quarry-bay-2099-01-03"), false);
 assert.equal(isRetiredHyroxLegacyRouteId("event-hyrox-bft-party"), false);

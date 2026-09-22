@@ -1773,7 +1773,11 @@ assert.ok(store.getBooking("island-ecc-booking"), "Island ECC bookings must rema
 assert.equal(store.getReceipt("pooled-receipt"), null);
 assert.equal(store.getReceipt("retired-bft-receipt"), null);
 assert.ok(store.getReceipt("island-ecc-receipt"), "Island ECC receipts must remain available");
-assert.equal(store.listHyroxCycles().length, 0);
+assert.equal(typeof store.listHyroxCycles, "undefined");
+assert.equal(typeof store.getHyroxCycle, "undefined");
+assert.equal(typeof operations.listLiveHyroxCycles, "undefined");
+assert.equal(typeof operations.getLiveHyroxCycle, "undefined");
+assert.equal(typeof operations.liveHyroxQueuesForCycle, "undefined");
 assert.deepEqual(store.hyroxCycleQueues("hyrox-pool-2099-01-03"), {
   weeklyWaitlist: [], venueSwitches: [],
 });
@@ -1835,7 +1839,6 @@ assert.equal(filteredLiveNotifications.some((row) => row.id === "island-ecc-paym
   "Island ECC payment notifications must remain visible");
 notificationRows.splice(-retirementNotificationRows.length);
 
-assert.equal(store.getHyroxCycle("hyrox-pool-2099-01-03"), null);
 const retiredMutationCallCount = operationalRpcCalls.length;
 for (const mutate of [
   () => store.reserveSession(fixtureMember.id, retiredBftSessionId),
@@ -1843,7 +1846,6 @@ for (const mutate of [
   () => store.confirmBookingPayment("retired-bft-booking"),
   () => store.releaseReservation("pooled-booking"),
   () => store.setBookingAttendance("retired-bft-booking", true),
-  () => store.reserveHyroxCycle(fixtureMember.id, "hyrox-pool-2099-01-03", "either", true),
 ]) {
   await assert.rejects(async () => mutate(), /This session is no longer available\./);
 }
@@ -1919,52 +1921,24 @@ assert.equal(
   1,
   "initial live hydration must sweep HYROX deadlines",
 );
-const hyroxRpcCases = [
-  ["liveReserveHyroxCycle", "reserve_hyrox_cycle", ["hyrox-pool-2099-01-03", "midtown", true], {
-    p_cycle_id: "hyrox-pool-2099-01-03", p_preference: "midtown", p_fallback_acknowledged: true,
-  }],
-  ["liveJoinHyroxCycleWaitlist", "join_hyrox_cycle_waitlist", ["hyrox-pool-2099-01-03", "either", true], {
-    p_cycle_id: "hyrox-pool-2099-01-03", p_preference: "either", p_fallback_acknowledged: true,
-  }],
-  ["liveLeaveHyroxCycleQueue", "leave_hyrox_cycle_queue", ["hyrox-queue-1"], { p_entry_id: "hyrox-queue-1" }],
-  ["liveRejectHyroxPayment", "reject_hyrox_cycle_payment", ["pooled-booking", "Unreadable reference"], {
-    p_booking_id: "pooled-booking", p_reason: "Unreadable reference",
-  }],
-  ["liveScheduleHyroxCycle", "schedule_hyrox_cycle", ["hyrox-pool-2099-01-03"], {
-    p_cycle_id: "hyrox-pool-2099-01-03",
-  }],
-  ["liveSweepHyroxDeadlines", "sweep_hyrox_cycle_deadlines", [], {}],
-  ["liveFinalizeHyroxVenuePlan", "finalize_hyrox_venue_plan", ["hyrox-pool-2099-01-03"], {
-    p_cycle_id: "hyrox-pool-2099-01-03",
-  }],
-  ["liveSelectHyroxVenue", "select_hyrox_cycle_venue", ["pooled-booking", "hyrox-midtown-2099-01-03"], {
-    p_booking_id: "pooled-booking", p_target_session_id: "hyrox-midtown-2099-01-03",
-  }],
-  ["liveJoinHyroxVenueSwitchQueue", "join_hyrox_venue_switch_queue", ["pooled-booking", "hyrox-bft-2099-01-03"], {
-    p_booking_id: "pooled-booking", p_target_session_id: "hyrox-bft-2099-01-03",
-  }],
-  ["liveLeaveHyroxVenueSwitchQueue", "leave_hyrox_venue_switch_queue", ["hyrox-queue-1"], {
-    p_entry_id: "hyrox-queue-1",
-  }],
-  ["liveCloseHyroxVenueAllocation", "close_hyrox_venue_allocation", ["hyrox-pool-2099-01-03"], {
-    p_cycle_id: "hyrox-pool-2099-01-03",
-  }],
-  ["liveCancelHyroxCycle", "cancel_hyrox_cycle", ["hyrox-pool-2099-01-03", "Storm warning"], {
-    p_cycle_id: "hyrox-pool-2099-01-03", p_reason: "Storm warning",
-  }],
-];
-for (const [exportName, rpcName, args, expectedArgs] of hyroxRpcCases) {
-  assert.equal(typeof operations[exportName], "function", `${exportName} must be exported`);
-  await operations[exportName](...args);
-  const actualArgs = operationalRpcCalls.filter((call) => call.name === rpcName).at(-1)?.args;
-  if (rpcName === "sweep_hyrox_cycle_deadlines") {
-    assert.deepEqual(Object.keys(actualArgs || {}), ["p_now"]);
-    assert.match(actualArgs.p_now, /^\d{4}-\d{2}-\d{2}T/);
-  } else {
-    assert.deepEqual(actualArgs, expectedArgs,
-      `${exportName} must send the approved ${rpcName} payload`);
-  }
+for (const removedPoolAdapter of [
+  "liveReserveHyroxCycle",
+  "liveJoinHyroxCycleWaitlist",
+  "liveLeaveHyroxCycleQueue",
+  "liveRejectHyroxPayment",
+  "liveScheduleHyroxCycle",
+  "liveFinalizeHyroxVenuePlan",
+  "liveSelectHyroxVenue",
+  "liveJoinHyroxVenueSwitchQueue",
+  "liveLeaveHyroxVenueSwitchQueue",
+  "liveCloseHyroxVenueAllocation",
+  "liveCancelHyroxCycle",
+]) {
+  assert.equal(typeof operations[removedPoolAdapter], "undefined",
+    `${removedPoolAdapter} must be removed with the retired pool workflow`);
 }
+assert.equal(typeof operations.liveSweepHyroxDeadlines, "function",
+  "the hydration deadline sweep remains until Admin pool cleanup");
 const successfulHyroxRpcHandler = operationalRpcHandler;
 operationalRpcHandler = (name, args) => {
   if (name === "sweep_hyrox_cycle_deadlines") {
@@ -1981,19 +1955,8 @@ await assert.rejects(
 assert.equal(operations.operationalStateStatus().error, "HYROX sweep unavailable");
 operationalRpcHandler = successfulHyroxRpcHandler;
 await store.hydrateLiveOperations({ force: true });
-const pooledBookingBeforeReject = structuredClone(store.getBooking("pooled-booking"));
-const pooledCycleBeforeReject = structuredClone(store.getHyroxCycle("hyrox-pool-2099-01-03"));
-const pooledQueueBeforeReject = structuredClone(store.hyroxCycleQueues("hyrox-pool-2099-01-03"));
-const retiredPoolRpcCount = operationalRpcCalls.length;
-await assert.rejects(
-  async () => store.reserveHyroxCycle("approved-member", "hyrox-pool-2099-01-03", "midtown", true),
-  /This session is no longer available\./,
-  "retired pooled reservations must stop before the live RPC boundary",
-);
-assert.equal(operationalRpcCalls.length, retiredPoolRpcCount);
-assert.deepEqual(store.getBooking("pooled-booking"), pooledBookingBeforeReject);
-assert.deepEqual(store.getHyroxCycle("hyrox-pool-2099-01-03"), pooledCycleBeforeReject);
-assert.deepEqual(store.hyroxCycleQueues("hyrox-pool-2099-01-03"), pooledQueueBeforeReject);
+assert.equal(typeof store.reserveHyroxCycle, "undefined",
+  "the retired pooled reservation action must not remain exported");
 operationalRpcHandler = successfulHyroxRpcHandler;
 const sweepCountBeforeAnonymousHydration = operationalRpcCalls
   .filter((call) => call.name === "sweep_hyrox_cycle_deadlines").length;
