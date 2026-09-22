@@ -210,7 +210,9 @@ create policy "browser read active operational receipts"
 create or replace function public.operational_notification_is_retired_hyrox(
   p_kind text,
   p_destination text,
-  p_created_at timestamptz
+  p_created_at timestamptz,
+  p_title text,
+  p_body text
 )
 returns boolean
 language sql stable
@@ -239,10 +241,22 @@ as $$
     -- notices, unrelated generic notices without provenance remain visible.
     or (
       coalesce(p_kind, '') = 'operational_payment_marked'
-      and exists (
-        select 1 from public.operational_bookings b
-         where b.payment_marked_at = p_created_at
-           and public.operational_is_retired_hyrox_booking(b.id)
+      and (
+        exists (
+          select 1 from public.operational_bookings b
+           where b.payment_marked_at = p_created_at
+             and public.operational_is_retired_hyrox_booking(b.id)
+        )
+        -- Rejection clears payment_marked_at; a later claim replaces it.
+        -- The historical pooled producer's exact fingerprint and retained
+        -- cycle date survive both transitions. This is not free-text parsing:
+        -- direct ECC has different title/body and cannot match this branch.
+        or exists (
+          select 1 from public.operational_hyrox_cycles c
+           where p_title = 'HYROX payment claim submitted'
+             and p_destination = '#/admin/payments'
+             and p_body = 'Review the payment claim for ' || c.session_date::text || '.'
+        )
       )
     )
     or (
@@ -275,13 +289,15 @@ as $$
 $$;
 
 revoke all on function public.operational_notification_is_retired_hyrox(
-  text, text, timestamptz
+  text, text, timestamptz, text, text
 ) from public, anon, authenticated;
 
 create or replace function private.operational_notification_is_active(
   p_kind text,
   p_destination text,
-  p_created_at timestamptz
+  p_created_at timestamptz,
+  p_title text,
+  p_body text
 )
 returns boolean
 language sql stable
@@ -289,14 +305,14 @@ security definer
 set search_path = public
 as $$
   select not public.operational_notification_is_retired_hyrox(
-    p_kind, p_destination, p_created_at
+    p_kind, p_destination, p_created_at, p_title, p_body
   );
 $$;
 revoke all on function private.operational_notification_is_active(
-  text, text, timestamptz
-) from public;
+  text, text, timestamptz, text, text
+) from public, anon, authenticated;
 grant execute on function private.operational_notification_is_active(
-  text, text, timestamptz
+  text, text, timestamptz, text, text
 ) to authenticated;
 
 drop policy if exists "self read notifications" on public.notifications;
@@ -305,17 +321,17 @@ create policy "self read active notifications"
   on public.notifications for select
   using (
     auth.uid() = profile_id
-    and private.operational_notification_is_active(kind, destination, created_at)
+    and private.operational_notification_is_active(kind, destination, created_at, title, body)
   );
 create policy "self mark active notification read"
   on public.notifications for update
   using (
     auth.uid() = profile_id
-    and private.operational_notification_is_active(kind, destination, created_at)
+    and private.operational_notification_is_active(kind, destination, created_at, title, body)
   )
   with check (
     auth.uid() = profile_id
-    and private.operational_notification_is_active(kind, destination, created_at)
+    and private.operational_notification_is_active(kind, destination, created_at, title, body)
   );
 
 -- =====================================================================

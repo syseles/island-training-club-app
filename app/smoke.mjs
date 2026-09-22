@@ -670,6 +670,15 @@ for (const [kind, timestamp] of [
   assert.ok(operationalRunbookSource.includes(`n.kind = '${kind}'`));
   assert.ok(operationalRunbookSource.includes(`${timestamp} = n.created_at`));
 }
+for (const fingerprint of [
+  "n.title = 'HYROX payment claim submitted'",
+  "n.destination = '#/admin/payments'",
+  "n.body = 'Review the payment claim for ' || c.session_date::text || '.'",
+]) {
+  assert.ok(operationalRunbookSource.includes(fingerprint),
+    `pre-apply inventory needs durable exact pooled producer evidence: ${fingerprint}`);
+}
+assert.match(operationalRunbookSource, /mark → reject → re-mark/);
 assert.match(operationalRunbookSource,
   /query emits only the aggregate bucket—never notification IDs or content/i,
   "production replacement-review inventory must remain count-only");

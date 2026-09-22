@@ -384,9 +384,12 @@ begin
   );
 
   perform pg_temp.retire_assert(
-    not has_function_privilege('anon', 'public.operational_notification_is_retired_hyrox(text,text,timestamptz)', 'execute')
-      and not has_function_privilege('authenticated', 'public.operational_notification_is_retired_hyrox(text,text,timestamptz)', 'execute')
-      and has_function_privilege('authenticated', 'private.operational_notification_is_active(text,text,timestamptz)', 'execute'),
+    not has_function_privilege('anon', 'public.operational_notification_is_retired_hyrox(text,text,timestamptz,text,text)', 'execute')
+      and not has_function_privilege('authenticated', 'public.operational_notification_is_retired_hyrox(text,text,timestamptz,text,text)', 'execute')
+      and not has_function_privilege('anon', 'private.operational_notification_is_active(text,text,timestamptz,text,text)', 'execute')
+      and has_function_privilege('authenticated', 'private.operational_notification_is_active(text,text,timestamptz,text,text)', 'execute')
+      and to_regprocedure('public.operational_notification_is_retired_hyrox(text,text,timestamptz)') is null
+      and to_regprocedure('private.operational_notification_is_active(text,text,timestamptz)') is null,
     'notification classifier stays private to browser policy evaluation'
   );
   perform pg_temp.retire_assert(
@@ -893,9 +896,12 @@ begin
         select id from public.operational_bookings
          where hyrox_cycle_id is not null or session_id in (select id from retired_sessions)
       )
-      select (n.kind = 'operational_payment_marked' and exists (
-        select 1 from public.operational_bookings b
-         where b.payment_marked_at = n.created_at and b.id in (select id from retired_bookings)
+      select (n.kind = 'operational_payment_marked' and (
+        exists (select 1 from public.operational_bookings b
+          where b.payment_marked_at = n.created_at and b.id in (select id from retired_bookings))
+        or exists (select 1 from public.operational_hyrox_cycles c
+          where n.title = 'HYROX payment claim submitted' and n.destination = '#/admin/payments'
+            and n.body = 'Review the payment claim for ' || c.session_date::text || '.')
       )) or (n.kind = 'operational_gym_finalized' and exists (
         select 1 from public.operational_sessions s
          where s.gym_confirmed_at = n.created_at and s.id in (select id from retired_sessions)
@@ -903,7 +909,8 @@ begin
       perform pg_temp.retire_assert(v_inventory_hidden = v_hidden,
         'count-only generic notification inventory must match the RLS classifier');
       perform pg_temp.retire_assert(
-        public.operational_notification_is_retired_hyrox(v_kind, '#/admin/payments', v_time) = v_hidden,
+        (select public.operational_notification_is_retired_hyrox(n.kind, n.destination, n.created_at, n.title, n.body)
+           from public.notifications n where n.id = v_id) = v_hidden,
         'generic producer classification: ' || v_kind || ' case ' || v_case);
       select to_jsonb(n) into v_before from public.notifications n where id = v_id;
       perform set_config('request.jwt.claim.sub',
@@ -922,6 +929,137 @@ begin
           'retained generic notice must remain byte-identical');
       end if;
     end loop;
+  end loop;
+end;
+$$;
+
+-- Replay historical mark -> reject-before-deadline -> re-mark states. The
+-- rejection writer clears the timestamp; later marks replace it, but all prior
+-- collector/Admin notices keep the exact pooled producer fingerprint.
+do $$
+declare
+  v_admin uuid := 'a2200000-0000-0000-0000-000000000001';
+  v_collector uuid := 'a2200000-0000-0000-0000-000000000002';
+  v_recipient uuid;
+  v_booking uuid;
+  v_date date;
+  v_first timestamptz := now() - interval '3 hours';
+  v_second timestamptz := now() - interval '1 hour';
+  v_ids uuid[] := array[]::uuid[];
+  v_controls uuid[] := array[]::uuid[];
+  v_id uuid;
+  v_stage integer;
+  v_case integer;
+  v_rows integer;
+  v_before jsonb;
+  v_original_before jsonb;
+  v_count integer;
+begin
+  select b.id, c.session_date into strict v_booking, v_date
+    from public.operational_bookings b
+    join public.operational_hyrox_cycles c on c.id = b.hyrox_cycle_id
+   where b.profile_id = v_admin and b.session_id is null;
+  update public.operational_bookings
+     set status = 'reserved', pay_deadline_at = now() + interval '1 day',
+         payment_marked_at = v_first, payment_method = 'fps', payment_reference = 'first claim'
+   where id = v_booking;
+
+  -- Same date as a retained pool cycle is not enough: the direct ECC producer
+  -- and exact-fingerprint near misses must all stay visible without timestamps.
+  foreach v_recipient in array array[v_admin, v_collector] loop
+    for v_case in 1..7 loop
+      insert into public.notifications (profile_id, kind, title, body, destination, created_at)
+      values (v_recipient,
+        case when v_case = 5 then 'unrelated_kind' else 'operational_payment_marked' end,
+        case when v_case = 1 then 'Payment marked for hyrox-quarry-bay'
+             when v_case = 2 then 'HYROX payment claim submitted ' else 'HYROX payment claim submitted' end,
+        case when v_case = 1 then 'A member marked payment on ' || v_date || '.'
+             when v_case = 3 then 'Review the payment claim for ' || v_date || '. '
+             when v_case = 6 then 'Review the payment claim for 1900-01-01.'
+             when v_case = 7 then 'Unrelated generic payment notice'
+             else 'Review the payment claim for ' || v_date || '.' end,
+        case when v_case = 4 then '#/admin/ops' else '#/admin/payments' end,
+        now() - interval '30 minutes') returning id into v_id;
+      v_controls := array_append(v_controls, v_id);
+    end loop;
+  end loop;
+
+  for v_stage in 0..2 loop
+    if v_stage = 1 then
+      -- Same assignments as reject_hyrox_cycle_payment before the deadline.
+      update public.operational_bookings
+         set payment_marked_at = null, payment_method = null, payment_reference = null,
+             payment_rejected_at = v_first + interval '1 hour', payment_rejected_by = v_admin,
+             payment_rejection_reason = 'Claim not received'
+       where id = v_booking;
+    elsif v_stage = 2 then
+      -- Same assignments as the next historical pooled mark transaction.
+      update public.operational_bookings
+         set payment_marked_at = v_second, payment_method = 'fps', payment_reference = 'second claim',
+             payment_rejected_at = null, payment_rejected_by = null, payment_rejection_reason = null
+       where id = v_booking;
+    end if;
+    if v_stage in (0, 2) then
+      foreach v_recipient in array array[v_admin, v_collector] loop
+        insert into public.notifications (profile_id, kind, title, body, destination, created_at)
+        values (v_recipient, 'operational_payment_marked', 'HYROX payment claim submitted',
+          'Review the payment claim for ' || v_date || '.', '#/admin/payments',
+          case when v_stage = 0 then v_first else v_second end)
+        returning id into v_id;
+        v_ids := array_append(v_ids, v_id);
+      end loop;
+    end if;
+    select jsonb_agg(to_jsonb(n) order by n.id) into v_before
+      from public.notifications n where id = any(v_ids);
+    if v_stage = 0 then
+      v_original_before := v_before;
+    else
+      perform pg_temp.retire_assert(
+        (select jsonb_agg(to_jsonb(n) order by n.id) = v_original_before
+           from public.notifications n where id = any(v_ids) and created_at = v_first),
+        'original claim rows remain byte-identical after timestamp clear/replacement');
+    end if;
+    -- Pre-apply-compatible count-only inventory, independent of current marks.
+    select count(*) into v_count from public.notifications n
+     where n.id = any(v_ids || v_controls)
+       and n.kind = 'operational_payment_marked'
+       and (exists (select 1 from public.operational_bookings b
+              left join public.operational_sessions s on s.id = b.session_id
+             where b.payment_marked_at = n.created_at
+               and (b.hyrox_cycle_id is not null or s.activity_id in ('hyrox-bft', 'hyrox-midtown')))
+         or (n.title = 'HYROX payment claim submitted' and n.destination = '#/admin/payments'
+           and exists (select 1 from public.operational_hyrox_cycles c
+             where n.body = 'Review the payment claim for ' || c.session_date::text || '.')));
+    perform pg_temp.retire_assert(v_count = cardinality(v_ids),
+      'lifecycle inventory includes every original pool claim and excludes ECC/near misses');
+    perform pg_temp.retire_assert(
+      (select count(*) from public.notifications n where n.id = any(v_ids || v_controls)
+        and public.operational_notification_is_retired_hyrox(n.kind, n.destination, n.created_at, n.title, n.body)) = v_count,
+      'lifecycle classifier and pre-apply inventory counts agree');
+
+    foreach v_recipient in array array[v_admin, v_collector] loop
+      perform set_config('request.jwt.claim.sub', v_recipient::text, true);
+      set local role authenticated;
+      perform pg_temp.retire_assert(
+        (select count(*) from public.notifications where id = any(v_ids)) = 0,
+        'original pooled claim SELECT denial after lifecycle stage ' || v_stage);
+      perform pg_temp.retire_assert(
+        (select count(*) from public.notifications where id = any(v_ids) and read_at is null) = 0,
+        'original pooled claims excluded from collector/Admin unread counts');
+      update public.notifications set read_at = now() where id = any(v_ids);
+      get diagnostics v_rows = row_count;
+      perform pg_temp.retire_assert(v_rows = 0, 'original pooled claim mark-read denied');
+      perform pg_temp.retire_assert(
+        (select count(*) from public.notifications where id = any(v_controls)) = 7,
+        'direct ECC producer and unrelated exact-fingerprint controls remain visible');
+      update public.notifications set read_at = now() where id = any(v_controls);
+      get diagnostics v_rows = row_count;
+      perform pg_temp.retire_assert(v_rows = 7, 'active controls retain mark-read access');
+      reset role;
+    end loop;
+    perform pg_temp.retire_assert(
+      (select jsonb_agg(to_jsonb(n) order by n.id) = v_before from public.notifications n where id = any(v_ids)),
+      'every retained claim notification remains byte-identical across recipient attempts');
   end loop;
 end;
 $$;

@@ -160,10 +160,18 @@ with retired_sessions as (
          )
       or (
         n.kind = 'operational_payment_marked'
-        and exists (
-          select 1 from public.operational_bookings b
-           where b.payment_marked_at = n.created_at
-             and b.id in (select id from retired_bookings)
+        and (
+          exists (
+            select 1 from public.operational_bookings b
+             where b.payment_marked_at = n.created_at
+               and b.id in (select id from retired_bookings)
+          )
+          or exists (
+            select 1 from public.operational_hyrox_cycles c
+             where n.title = 'HYROX payment claim submitted'
+               and n.destination = '#/admin/payments'
+               and n.body = 'Review the payment claim for ' || c.session_date::text || '.'
+          )
         )
       )
       or (
@@ -198,7 +206,11 @@ select metric, bucket, row_count
 
 The `hyrox_replacement_review` branch mirrors the pre-migration relationship rule: a notice matching any retired booking is counted; an ambiguous notice with no replacement at the same acceptance/creation timestamp is conservatively counted; and a notice is excluded only when that timestamp resolves exclusively to a proven active replacement such as Island ECC. If active and retired replacements share a timestamp, the retired match wins. The query emits only the aggregate bucket—never notification IDs or content. The rollback-scoped integration includes retired, unmatched, and proven-active Island ECC review-notice controls and asserts the expected aggregate classification.
 
-Generic `operational_payment_marked` and `operational_gym_finalized` producers use the same transaction timestamp as `payment_marked_at` and `gym_confirmed_at`. The inventory follows those authoritative booking/session relationships: any retired match hides (even with an active match), ECC-only matches remain active, and unrelated generic notices without HYROX provenance are not blanket-hidden. No body parsing or notification rewriting is used.
+Generic `operational_payment_marked` and `operational_gym_finalized` producers initially use the same transaction timestamp as `payment_marked_at` and `gym_confirmed_at`. Any retired timestamp match hides (even with an active match). Payment timestamps are mutable: mark → reject clears the mark, and mark → reject → re-mark replaces it. Therefore the inventory and RLS classifier also recognize the durable exact pooled producer fingerprint: kind `operational_payment_marked`, title exactly `HYROX payment claim submitted`, destination exactly `#/admin/payments`, and body exactly `Review the payment claim for <cycle-date>.` where `<cycle-date>` is a retained `operational_hyrox_cycles.session_date::text`. Every prior claim stays hidden regardless of the current booking timestamp or status. A fingerprint match wins even if another active payment shares its timestamp.
+
+Direct Island ECC uses title `Payment marked for hyrox-quarry-bay` and body `A member marked payment on <session-date>.`; sharing a date with a retained cycle does not match the fingerprint. ECC-only timestamps and unrelated generic notices remain active. Near matches, missing retained dates, and arbitrary HYROX wording do not establish fingerprint provenance. This uses full-string equality to a known historical producer, never substring inference, free-text date parsing, or notification rewriting. Inventory output remains counts only—never title/body content.
+
+The policy adapter and revoked public classifier now take `(text, text, timestamptz, text, text)` in kind/destination/created_at/title/body order; SELECT and both UPDATE predicates pass the original row fields. The private adapter is executable only by authenticated policy evaluation, not anon/PUBLIC; the public classifier remains revoked from all browser roles. The pending migration defines only this signature, with no three-argument overload. A target that already applied the earlier artifact requires a new reviewed forward correction, including safe replacement of dependent policies and removal/revocation of obsolete signatures—not reapplication of the revised file.
 
 Record the UTC query time and count-only evidence. Confirm with the data owner that future BFT/Midtown/pool rows are the acknowledged test records. A mismatch or evidence of genuine future member activity blocks deployment; do not infer consent, cancel it, migrate it, or inspect personal fields.
 
