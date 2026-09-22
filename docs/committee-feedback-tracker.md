@@ -13,8 +13,8 @@ A Google Sheet with three tabs:
 | Tab | Purpose | Who edits it |
 | --- | --- | --- |
 | How to use | Plain-language instructions for committee members | App team only |
-| Feedback tracker | The main sheet — one row per piece of feedback | Committees fill columns A–H; app team fills columns I–M |
-| Lists | Dropdown values (committees, app areas, statuses) | App team only |
+| Feedback tracker | The main sheet — one row per piece of feedback | Committees fill columns A–I; app team fills columns J–N |
+| Lists | Dropdown values (committees, screens, feedback types, statuses) | App team only |
 
 ## Step 1: Create The Sheet And Import The Tracker Tab
 
@@ -24,9 +24,9 @@ A Google Sheet with three tabs:
 4. In the repo, open `docs/feedback-tracker-import.csv` and copy the header row.
 5. Back in the sheet, select cell `A1`, paste, then check each column landed in its own cell (paste as **Paste special → Values only** if formatting looks off).
 
-You should now have 13 headers across row 1:
+You should now have 14 headers across row 1:
 
-`ID` · `Date submitted` · `Committee` · `Submitted by` · `App area` · `Summary (one line)` · `Details` · `Committee importance` · `Status` · `Priority (app team)` · `Owner` · `Response / decision` · `Date updated`
+`ID` · `Date submitted` · `Committee` · `Submitted by` · `Screen/Flow` · `Feedback type` · `Description` · `Screenshot` · `Committee importance` · `Status` · `Priority (app team)` · `Owner` · `Response / decision` · `Date updated`
 
 6. Select row 1 and apply **View → Freeze → 1 row** so headers stay visible when scrolling.
 
@@ -34,16 +34,33 @@ You should now have 13 headers across row 1:
 
 Add a new tab named **Lists**. Enter these values, one list per column, starting at row 2 (row 1 holds the labels):
 
-| A: Committee | B: App area | C: Status | D: Priority | E: Committee importance |
-| --- | --- | --- | --- | --- |
-| *(add your own)* | Home | New | Critical | Critical |
-| | Schedule & Booking | Under review | High | Important |
-| | Giving / Shop | Accepted | Medium | Nice to have |
-| | Profile | In progress | Low | |
-| | Community | Shipped | | |
-| | Notifications | Declined | | |
-| | Admin | Deferred | | |
-| | Other | | | |
+| A: Committee | B: Screen/Flow | C: Feedback type | D: Status | E: Priority | F: Committee importance |
+| --- | --- | --- | --- | --- | --- |
+| *(add your own)* | Home | Not working (bug) | New | Critical | Critical |
+| | Schedule | Looks wrong (visual) | Under review | High | Important |
+| | Activity details | Wording / unclear text | Accepted | Medium | Nice to have |
+| | Booking flow | Confusing flow | In progress | Low | |
+| | Checkout & payment | Feature suggestion | Shipped | | |
+| | Receipt | Question | Declined | | |
+| | HYROX Cycle | | Deferred | | |
+| | HYROX Registration | | | | |
+| | Giving | | | | |
+| | Community | | | | |
+| | Profile — overview | | | | |
+| | Profile — Bookings & History | | | | |
+| | Profile — Membership Details | | | | |
+| | Profile — Indemnity / waiver | | | | |
+| | Profile — Payments & Receipts | | | | |
+| | Profile — Privacy & Notifications | | | | |
+| | Notifications | | | | |
+| | Sign in / magic link | | | | |
+| | Membership application | | | | |
+| | Admin — members & approvals | | | | |
+| | Admin — activities | | | | |
+| | Admin — giving campaigns | | | | |
+| | Something else | | | | |
+
+The Screen/Flow list matches the app as it exists today: the five main tabs (Home, Schedule, Giving, Community, Profile), the booking journey (Activity details → Booking flow → Checkout & payment → Receipt), HYROX, and the admin screens. If a screen is added or renamed in the app, update this list — the dropdowns follow automatically.
 
 > Column A (Committee) ships empty on purpose — add your actual committee names under the header before sharing the sheet. The Committee dropdown on the tracker stays empty until you do. Leave a few blank rows under each list for growth — the validation ranges below already include them.
 
@@ -54,10 +71,11 @@ For each column below, select the range on **Feedback tracker**, then **Data →
 | Column | Range | Criteria | Values come from |
 | --- | --- | --- | --- |
 | C — Committee | `C2:C500` | Dropdown (from a range) | `=Lists!$A$2:$A$20` |
-| E — App area | `E2:E500` | Dropdown (from a range) | `=Lists!$B$2:$B$20` |
-| H — Committee importance | `H2:H500` | Dropdown (from a range) | `=Lists!$E$2:$E$20` |
-| I — Status | `I2:I500` | Dropdown (from a range) | `=Lists!$C$2:$C$20` |
-| J — Priority | `J2:J500` | Dropdown (from a range) | `=Lists!$D$2:$D$20` |
+| E — Screen/Flow | `E2:E500` | Dropdown (from a range) | `=Lists!$B$2:$B$40` |
+| F — Feedback type | `F2:F500` | Dropdown (from a range) | `=Lists!$C$2:$C$20` |
+| I — Committee importance | `I2:I500` | Dropdown (from a range) | `=Lists!$F$2:$F$20` |
+| J — Status | `J2:J500` | Dropdown (from a range) | `=Lists!$D$2:$D$20` |
+| K — Priority | `K2:K500` | Dropdown (from a range) | `=Lists!$E$2:$E$20` |
 
 Set every rule to **Reject the input** when invalid so typos can't bypass the dropdowns.
 
@@ -65,7 +83,7 @@ Optional but recommended:
 
 - **ID (column A):** paste `=IF(B2="","","FB-"&TEXT(ROW()-1,"000"))` into `A2` and fill down to `A500`. Each row numbers itself only once it has a submission date, so empty rows stay blank (`FB-001`, `FB-002`, …).
 - **Date submitted (column B):** add a validation rule of type **is valid date**.
-- **Date updated (column M):** same — **is valid date**.
+- **Date updated (column N):** same — **is valid date**.
 
 ## Step 4: Add The How To Use Tab
 
@@ -74,10 +92,11 @@ Add a tab named **How to use**, positioned first. Paste this text (one block per
 > **How to submit feedback**
 >
 > 1. Go to the **Feedback tracker** tab.
-> 2. Use the first empty row. Fill in columns A–H only — the grey columns (I onwards) are for the app team.
+> 2. Use the first empty row. Fill in columns A–I only — the grey columns (J onwards) are for the app team.
 > 3. One piece of feedback per row. If you have two separate suggestions, use two rows.
-> 4. Write the **Summary** as one short sentence a stranger could understand. Put detail, context, and "what we expected vs. what happened" in **Details**.
-> 5. **Committee importance** is your committee's honest view: *Critical* = blocks your committee from doing its work, *Important* = clearly worth doing, *Nice to have* = good idea, no urgency.
+> 4. Pick the **Screen/Flow** closest to where the issue is, then a **Feedback type**. In **Description**, write what you saw, where, and what you expected — a stranger should understand it without asking you anything.
+> 5. If you can, put a screenshot in the **Screenshot** cell: select the cell and press Ctrl+V (⌘V on Mac), or use **Insert → Image → Image in cell**. One screenshot per row is plenty.
+> 6. **Committee importance** is your committee's honest view: *Critical* = blocks your committee from doing its work, *Important* = clearly worth doing, *Nice to have* = good idea, no urgency.
 >
 > **What happens next**
 >
@@ -96,17 +115,17 @@ Adjust the wording to taste before sharing.
 
 This is what lets committees have **Editor** access without being able to touch status and decisions.
 
-1. On **Feedback tracker**, select columns `I` through `M` (click the column I header, shift-click column M).
+1. On **Feedback tracker**, select columns `J` through `N` (click the column J header, shift-click column N).
 2. **Data → Protect sheets and ranges.**
 3. Add a description: **App team only — do not edit**.
 4. Click **Set permissions**, choose **Restrict who can edit this range**, and select **Only you** (add co-maintainers by email if you have them).
 5. Repeat for the **Lists** tab: protect the whole sheet the same way.
 
-Committee members will now see those cells as locked. They keep full edit access to columns A–H.
+Committee members will now see those cells as locked. They keep full edit access to columns A–I.
 
 ## Step 6: Colour-Code Status
 
-On **Feedback tracker**, select `I2:I500`, then **Format → Conditional formatting**. Add one rule per status using **Format cells if → Text contains**:
+On **Feedback tracker**, select `J2:J500`, then **Format → Conditional formatting**. Add one rule per status using **Format cells if → Text contains**:
 
 | Status | Suggested colour |
 | --- | --- |
@@ -131,15 +150,16 @@ On **Feedback tracker**, select `I2:I500`, then **Format → Conditional formatt
 | B | Date submitted | Committee | When the feedback was entered |
 | C | Committee | Committee | Dropdown from Lists |
 | D | Submitted by | Committee | Person's name |
-| E | App area | Committee | Dropdown from Lists |
-| F | Summary (one line) | Committee | One short sentence |
-| G | Details | Committee | Full context, expected vs. actual |
-| H | Committee importance | Committee | Critical / Important / Nice to have |
-| I | Status | App team | Lifecycle — see below |
-| J | Priority (app team) | App team | The app team's own priority call |
-| K | Owner | App team | Who is actioning it |
-| L | Response / decision | App team | Outcome and reasoning, so committees see why |
-| M | Date updated | App team | Last time the row changed |
+| E | Screen/Flow | Committee | Dropdown from Lists — matches the app's actual screens |
+| F | Feedback type | Committee | Dropdown from Lists — bug, visual, wording, confusing flow, suggestion, question |
+| G | Description | Committee | What you saw, where, and what you expected |
+| H | Screenshot | Committee | Paste an image into the cell (Ctrl+V / ⌘V) |
+| I | Committee importance | Committee | Critical / Important / Nice to have |
+| J | Status | App team | Lifecycle — see below |
+| K | Priority (app team) | App team | The app team's own priority call |
+| L | Owner | App team | Who is actioning it |
+| M | Response / decision | App team | Outcome and reasoning, so committees see why |
+| N | Date updated | App team | Last time the row changed |
 
 ## Status Lifecycle
 
@@ -157,10 +177,10 @@ Every move to **Declined** or **Deferred** should come with a written reason. Th
 
 ## Ongoing Maintenance
 
-- **Adding a committee or app area:** edit the Lists tab; dropdowns update automatically (the validation ranges already cover rows 2–20).
+- **Adding a committee, screen, or feedback type:** edit the Lists tab; dropdowns update automatically (the validation ranges already cover rows 2–40).
 - **Archiving:** when the tracker gets long, copy rows with Status **Shipped** or **Declined** to an **Archive** tab and delete them from the tracker. Do this no more than once or twice a year.
 - **Triage rhythm:** review New rows at least weekly, and update Response / decision so committees are never looking at silence.
 
 ## Out Of Scope For Now
 
-Linking feedback rows to repo branches or issues is deliberately not in v1 — the Status column covers the lifecycle. If the volume justifies it later, add a **Linked work** column (K is a natural slot, pushing Owner right) and paste branch names there.
+Linking feedback rows to repo branches or issues is deliberately not in v1 — the Status column covers the lifecycle. If the volume justifies it later, add a **Linked work** column (L is a natural slot, pushing Owner right) and paste branch names there.
