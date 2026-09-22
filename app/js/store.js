@@ -26,6 +26,12 @@ import {
 import { config, supabase, isLive } from "./config.js";
 import { INDEMNITY_VERSION } from "./documents.js";
 import { normalizeAvatarPresentation } from "./avatar.js";
+import {
+  isRetiredHyroxSession,
+  isRetiredHyroxBooking,
+  isRetiredHyroxReceipt,
+  isRetiredHyroxNotification,
+} from "./hyrox-retirement.js";
 import { normalizeMeetingPoint, normalizeVenueLocation } from "./venue.js";
 import * as liveOps from "./operations.js";
 import {
@@ -81,6 +87,43 @@ const sessionAvatarCache = new Map();
 let adminAvatarCache = null;
 
 let state = null;
+
+function retirementSession(id) {
+  if (!id) return null;
+  if (isLive()) return liveOps.getLiveSession(id) || liveOps.liveRetiredSessionStub?.(id) || null;
+  return findSession(state?.activities || [], id)
+    || state?.oneOffEvents?.find((event) => `${event.id}-${event.dateISO}` === id)
+    || null;
+}
+
+function retirementBooking(id) {
+  if (!id) return null;
+  if (isLive()) return liveOps.liveBookingById(id) || liveOps.liveRetiredBookingStub?.(id) || null;
+  return state?.bookings?.find((booking) => booking.id === id) || null;
+}
+
+const bookingIsRetired = (booking) =>
+  isRetiredHyroxBooking(booking, retirementSession);
+const receiptIsRetired = (receipt) =>
+  isRetiredHyroxReceipt(receipt, retirementBooking);
+const retiredTargetError = () => new Error("This session is no longer available.");
+const retirementBoundaryActive = () => isLive() || Number(state?.version || 0) >= 24;
+
+function assertActiveSessionTarget(sessionOrId) {
+  if (!retirementBoundaryActive()) return;
+  const session = typeof sessionOrId === "object"
+    ? sessionOrId
+    : retirementSession(sessionOrId);
+  if (isRetiredHyroxSession(session)) throw retiredTargetError();
+}
+
+function assertActiveBookingTarget(bookingOrId) {
+  if (!retirementBoundaryActive()) return;
+  const booking = typeof bookingOrId === "object"
+    ? bookingOrId
+    : retirementBooking(bookingOrId);
+  if (bookingIsRetired(booking)) throw retiredTargetError();
+}
 
 export function isRestorableRoute(route) {
   return typeof route === "string"
@@ -1099,6 +1142,7 @@ export function attendanceBookingsForSession(sessionId) {
 }
 
 export async function setBookingAttendance(bookingId, arrived, now = Date.now()) {
+  assertActiveBookingTarget(bookingId);
   const actor = requirePaymentAdminActor();
   if (typeof arrived !== "boolean") throw new Error("Attendance state is required.");
   const booking = getBooking(bookingId);
@@ -1201,33 +1245,42 @@ export function userBookingFor(userId, sessionId) {
 
 export function bookingsForUser(userId) {
   if (isLive()) {
-    return liveOps.liveBookingsForUser(userId).slice().sort(
-      (a, b) => (b.dateISO || "").localeCompare(a.dateISO || "")
-    );
+    return liveOps.liveBookingsForUser(userId)
+      .filter((booking) => !bookingIsRetired(booking)).slice().sort(
+        (a, b) => (b.dateISO || "").localeCompare(a.dateISO || "")
+      );
   }
   return state.bookings
-    .filter((b) => b.userId === userId)
+    .filter((booking) => booking.userId === userId
+      && (!retirementBoundaryActive() || !bookingIsRetired(booking)))
     .sort((a, b) => b.snapshot.dateISO.localeCompare(a.snapshot.dateISO));
 }
 
 export function receiptsForUser(userId) {
   if (isLive()) {
-    return liveOps.liveReceiptsForUser(userId);
+    return liveOps.liveReceiptsForUser(userId).filter((receipt) => !receiptIsRetired(receipt));
   }
   return state.receipts
-    .filter((r) => r.userId === userId)
+    .filter((receipt) => receipt.userId === userId
+      && (!retirementBoundaryActive() || !receiptIsRetired(receipt)))
     .sort((a, b) => b.issuedAt - a.issuedAt);
 }
 
 export function getBooking(id) {
-  if (isLive()) return liveOps.liveBookingById(id);
-  return state.bookings.find((b) => b.id === id) ?? null;
+  const booking = retirementBooking(id);
+  return booking && (!retirementBoundaryActive() || !bookingIsRetired(booking)) ? booking : null;
 }
 
 export function replacementRequestForBooking(bookingId) {
-  if (isLive()) return liveOps.liveReplacementRequestForBooking?.(bookingId) ?? null;
+  if (isLive()) {
+    if (bookingIsRetired(retirementBooking(bookingId))) return null;
+    const request = liveOps.liveReplacementRequestForBooking?.(bookingId) ?? null;
+    return request && !bookingIsRetired(request) ? request : null;
+  }
   return state.replacementRequests
-    .filter((request) => request.bookingId === bookingId)
+    .filter((request) => request.bookingId === bookingId
+      && (!retirementBoundaryActive()
+        || (!bookingIsRetired(request) && !bookingIsRetired(retirementBooking(request.bookingId)))))
     .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0))[0] ?? null;
 }
 
@@ -1524,28 +1577,32 @@ export function effectiveAttendeeForBooking(booking) {
 }
 
 export function listHyroxCycles() {
-  if (isLive()) return liveOps.listLiveHyroxCycles();
   return [];
 }
 
 export function getHyroxCycle(id) {
-  if (isLive()) return liveOps.getLiveHyroxCycle(id);
+  if (retirementBoundaryActive()) return null;
   return hyroxCycleById(id);
 }
 
 export function hyroxCycleBookings(cycleId) {
-  if (isLive()) return liveOps.listLiveBookings((booking) => booking.cycleId === cycleId);
+  if (retirementBoundaryActive()) return [];
   return state.bookings.filter((booking) => booking.cycleId === cycleId);
 }
 
 export function getReceipt(id) {
-  if (isLive()) return liveOps.liveReceiptById(id);
-  return state.receipts.find((r) => r.id === id) ?? null;
+  const receipt = isLive()
+    ? liveOps.liveReceiptById(id)
+    : state.receipts.find((row) => row.id === id);
+  return receipt && (!retirementBoundaryActive() || !receiptIsRetired(receipt)) ? receipt : null;
 }
 
 export function receiptForBooking(bookingId) {
-  if (isLive()) return liveOps.liveReceiptForBooking(bookingId);
-  return state.receipts.find((r) => r.bookingId === bookingId) ?? null;
+  if (retirementBoundaryActive() && bookingIsRetired(retirementBooking(bookingId))) return null;
+  const receipt = isLive()
+    ? liveOps.liveReceiptForBooking(bookingId)
+    : state.receipts.find((row) => row.bookingId === bookingId);
+  return receipt && (!retirementBoundaryActive() || !receiptIsRetired(receipt)) ? receipt : null;
 }
 
 function notify(userId, kind, body, link) {
@@ -1567,7 +1624,9 @@ function activeRsvpNotificationRecipients(sessionId) {
 
 export function notificationsFor(userId) {
   return state.notifications
-    .filter((n) => n.userId === userId)
+    .filter((notification) => notification.userId === userId
+      && (!retirementBoundaryActive()
+        || !isRetiredHyroxNotification(notification, retirementBooking)))
     .sort((a, b) => b.createdAt - a.createdAt);
 }
 
@@ -1613,6 +1672,7 @@ export function midtownOpenFor(sessionOrId) {
 // who said "wait for Midtown" — converts to reserved spots in join order;
 // anyone past capacity becomes the Midtown waitlist, order preserved.
 export function setMidtownOpen(sessionId, open, now = Date.now()) {
+  assertActiveSessionTarget(sessionId);
   if (isLive()) {
     return liveOps.liveSetMidtownOpen(sessionId, open);
   }
@@ -1657,6 +1717,7 @@ function snapshotFor(session) {
 // Reserve a spot without paying. The spot is held until the next payment
 // checkpoint (Thu 6 PM, then Fri 2 PM, then a 2-hour last-minute window).
 export function reserveSession(userId, sessionOrId, now = Date.now()) {
+  assertActiveSessionTarget(sessionOrId);
   if (isLive()) {
     const sessionId = typeof sessionOrId === "string" ? sessionOrId : sessionOrId?.id;
     return liveOps.liveReserveSession(sessionId);
@@ -1716,6 +1777,7 @@ function reserveApprovedSession(userId, sessionOrId, now = Date.now()) {
 // Member taps "I've paid" after sending PayMe/FPS. Lands in the on-duty
 // collector's pending list; the spot stays held until they confirm.
 export function markBookingPaid(bookingId, method, ref, now = Date.now()) {
+  assertActiveBookingTarget(bookingId);
   if (isLive()) {
     const normalized = method === "FPS" ? "fps" : "payme";
     return liveOps.liveMarkBookingPaid(bookingId, normalized, ref);
@@ -1751,6 +1813,7 @@ export function markBookingPaid(bookingId, method, ref, now = Date.now()) {
 // Collector confirms the money arrived. Payment = commitment: every other
 // HYROX venue hold the member had for the same Saturday is released.
 export function confirmBookingPayment(bookingId, now = Date.now()) {
+  assertActiveBookingTarget(bookingId);
   if (isLive()) {
     return liveOps.liveApproveBookingPayment(bookingId);
   }
@@ -1821,6 +1884,7 @@ export function confirmBookingPayment(bookingId, now = Date.now()) {
 // Releasing an unpaid reservation is member self-service; confirmed booking
 // cancellation/refund remains an Admin operation while policy is unresolved.
 export function releaseReservation(bookingId, now = Date.now()) {
+  assertActiveBookingTarget(bookingId);
   if (isLive()) {
     return liveOps.liveReleaseReservation(bookingId);
   }
@@ -1903,17 +1967,17 @@ function hyroxCycleForDateLocal(dateISO) {
 }
 
 export function hyroxCycles() {
-  if (isLive()) return liveOps.listLiveHyroxCycles();
+  if (retirementBoundaryActive()) return [];
   return Object.values(state.hyroxCycles || {}).sort((a, b) => a.dateISO.localeCompare(b.dateISO));
 }
 
 export function hyroxCycleForDate(dateISO) {
-  if (isLive()) return liveOps.listLiveHyroxCycles().find((cycle) => cycle.dateISO === dateISO) || null;
+  if (retirementBoundaryActive()) return null;
   return hyroxCycleForDateLocal(dateISO);
 }
 
 export function scheduleHyroxCycle(dateISO) {
-  if (isLive()) return liveOps.liveScheduleHyroxCycle(hyroxCycleId(dateISO));
+  if (isLive()) throw retiredTargetError();
   requirePaymentAdminActor();
   const id = hyroxCycleId(dateISO);
   const date = new Date(`${dateISO}T00:00:00Z`);
@@ -1972,7 +2036,7 @@ export function scheduleHyroxCycle(dateISO) {
 }
 
 export function reserveHyroxCycle(userId, cycleId, preference, fallbackAcknowledged, now = Date.now()) {
-  if (isLive()) return liveOps.liveReserveHyroxCycle(cycleId, preference, fallbackAcknowledged);
+  if (isLive()) throw retiredTargetError();
   requireAuthorizedPaymentOwner(userId);
   const cycle = hyroxCycleById(cycleId);
   if (!cycle) throw new Error("HYROX cycle not found.");
@@ -2051,7 +2115,7 @@ function promoteNextHyroxWaitlist(cycle, now) {
 }
 
 export function joinHyroxCycleWaitlist(userId, cycleId, preference, fallbackAcknowledged, now = Date.now()) {
-  if (isLive()) return liveOps.liveJoinHyroxCycleWaitlist(cycleId, preference, fallbackAcknowledged);
+  if (isLive()) throw retiredTargetError();
   requireAuthorizedPaymentOwner(userId);
   const cycle = hyroxCycleById(cycleId);
   if (!cycle) throw new Error("HYROX cycle not found.");
@@ -2083,7 +2147,7 @@ export function joinHyroxCycleWaitlist(userId, cycleId, preference, fallbackAckn
 }
 
 export function leaveHyroxCycleQueue(userId, entryId) {
-  if (isLive()) return liveOps.liveLeaveHyroxCycleQueue(entryId);
+  if (isLive()) throw retiredTargetError();
   const entry = Object.values(state.hyroxCycleQueues || {}).flat().find((item) => item.id === entryId);
   if (!entry || entry.userId !== userId || entry.status !== "active") return null;
   entry.status = "left";
@@ -2093,7 +2157,7 @@ export function leaveHyroxCycleQueue(userId, entryId) {
 }
 
 export function hyroxCycleQueues(cycleId) {
-  if (isLive()) return liveOps.liveHyroxQueuesForCycle(cycleId);
+  if (retirementBoundaryActive()) return { weeklyWaitlist: [], venueSwitches: [] };
   const rows = hyroxQueueEntries(cycleId);
   return {
     weeklyWaitlist: rows.filter((entry) => entry.kind === "weekly_waitlist" && entry.status === "active")
@@ -2325,7 +2389,7 @@ function fillHyroxSwitchVacancy(cycle, sessionId, now) {
 }
 
 export function rejectHyroxCyclePayment(bookingId, reason, now = Date.now()) {
-  if (isLive()) return liveOps.liveRejectHyroxPayment(bookingId, reason);
+  if (isLive()) throw retiredTargetError();
   const actor = requirePaymentAdminActor();
   const booking = getBooking(bookingId);
   const cleanReason = String(reason || "").trim();
@@ -2357,7 +2421,7 @@ export function rejectHyroxCyclePayment(bookingId, reason, now = Date.now()) {
 }
 
 export function finalizeHyroxVenuePlan(cycleId, now = Date.now()) {
-  if (isLive()) return liveOps.liveFinalizeHyroxVenuePlan(cycleId);
+  if (isLive()) throw retiredTargetError();
   const actor = requirePaymentAdminActor();
   const cycle = hyroxCycleById(cycleId);
   if (!cycle) throw new Error("HYROX cycle not found.");
@@ -2401,7 +2465,7 @@ export function finalizeHyroxVenuePlan(cycleId, now = Date.now()) {
 }
 
 export function selectHyroxCycleVenue(bookingId, sessionId, now = Date.now()) {
-  if (isLive()) return liveOps.liveSelectHyroxVenue(bookingId, sessionId);
+  if (isLive()) throw retiredTargetError();
   const booking = getBooking(bookingId);
   if (!booking?.cycleId) throw new Error("Pooled HYROX booking not found.");
   requireAuthorizedPaymentOwner(booking.userId);
@@ -2422,7 +2486,7 @@ export function selectHyroxCycleVenue(bookingId, sessionId, now = Date.now()) {
 }
 
 export function joinHyroxVenueSwitchQueue(bookingId, sessionId, now = Date.now()) {
-  if (isLive()) return liveOps.liveJoinHyroxVenueSwitchQueue(bookingId, sessionId);
+  if (isLive()) throw retiredTargetError();
   const booking = getBooking(bookingId);
   if (!booking?.cycleId) throw new Error("Pooled HYROX booking not found.");
   requireAuthorizedPaymentOwner(booking.userId);
@@ -2487,7 +2551,7 @@ export function joinHyroxVenueSwitchQueue(bookingId, sessionId, now = Date.now()
 }
 
 export function leaveHyroxVenueSwitchQueue(entryId) {
-  if (isLive()) return liveOps.liveLeaveHyroxVenueSwitchQueue(entryId);
+  if (isLive()) throw retiredTargetError();
   const entry = Object.values(state.hyroxCycleQueues || {}).flat().find((item) => item.id === entryId);
   if (!entry || entry.kind !== "venue_switch" || entry.status !== "active") return null;
   requireAuthorizedPaymentOwner(entry.userId);
@@ -2498,7 +2562,7 @@ export function leaveHyroxVenueSwitchQueue(entryId) {
 }
 
 export function closeHyroxVenueAllocation(cycleId, now = Date.now()) {
-  if (isLive()) return liveOps.liveCloseHyroxVenueAllocation(cycleId);
+  if (isLive()) throw retiredTargetError();
   requirePaymentAdminActor();
   const cycle = hyroxCycleById(cycleId);
   if (!cycle) throw new Error("HYROX cycle not found.");
@@ -2515,7 +2579,7 @@ export function closeHyroxVenueAllocation(cycleId, now = Date.now()) {
 }
 
 export function cancelHyroxCycle(cycleId, reason, now = Date.now()) {
-  if (isLive()) return liveOps.liveCancelHyroxCycle(cycleId, reason);
+  if (isLive()) throw retiredTargetError();
   const actor = requirePaymentAdminActor();
   const cycle = hyroxCycleById(cycleId);
   const cleanReason = String(reason || "").trim();
@@ -2661,12 +2725,14 @@ function queuePosition(userId, sessionId, kind) {
 }
 
 export function joinWaitlist(userId, sessionId) {
+  assertActiveSessionTarget(sessionId);
   if (isLive()) {
     return liveOps.liveJoinQueue(sessionId, "waitlist");
   }
   return joinQueue(userId, sessionId, "waitlist");
 }
 export function leaveWaitlist(userId, sessionId) {
+  assertActiveSessionTarget(sessionId);
   if (isLive()) {
     const session = liveOps.getLiveSession(sessionId);
     const entry = (session && liveOps.liveQueueForSession(sessionId).waitlist.find((q) => q.userId === userId))
@@ -2685,12 +2751,14 @@ export function waitlistPosition(userId, sessionId) {
   return queuePosition(userId, sessionId, "waitlist");
 }
 export function joinInterest(userId, sessionId) {
+  assertActiveSessionTarget(sessionId);
   if (isLive()) {
     return liveOps.liveJoinQueue(sessionId, "interest");
   }
   return joinQueue(userId, sessionId, "interest");
 }
 export function leaveInterest(userId, sessionId) {
+  assertActiveSessionTarget(sessionId);
   if (isLive()) {
     const entry = liveOps.liveQueueForSession(sessionId).interest.find((q) => q.userId === userId);
     if (entry) return liveOps.liveLeaveQueue(entry.id);
@@ -2711,9 +2779,10 @@ export function interestPosition(userId, sessionId) {
 export function getSession(sessionId) {
   if (isLive()) {
     const live = liveOps.getLiveSession(sessionId);
-    return live ? applyWntLeaderNote({ ...live }) : null;
+    return live && !isRetiredHyroxSession(live) ? applyWntLeaderNote({ ...live }) : null;
   }
   const s = findSession(state.activities, sessionId);
+  if (retirementBoundaryActive() && isRetiredHyroxSession(s)) return null;
   if (!s) {
     const event = state.oneOffEvents.find((e) => `${e.id}-${e.dateISO}` === sessionId);
     if (!event) return null;
@@ -2796,7 +2865,8 @@ export function upcomingSessions(days = 14) {
     end.setDate(end.getDate() + days - 1);
     const endISO = isoDate(end);
     return liveOps.listLiveSessions()
-      .filter((s) => s.dateISO >= todayISO && s.dateISO <= endISO)
+      .filter((s) => !isRetiredHyroxSession(s)
+        && s.dateISO >= todayISO && s.dateISO <= endISO)
       .map((s) => {
         const decorated = applyWntLeaderNote(s);
         return {
@@ -2818,7 +2888,9 @@ export function upcomingSessions(days = 14) {
       const decorated = decorateSession(s);
       return { ...decorated, spots: spotsLeft(decorated), past: false };
     });
-  return [...sessionsInRange(state.activities, today, days).map((s) => {
+  return [...sessionsInRange(state.activities, today, days)
+    .filter((session) => !retirementBoundaryActive() || !isRetiredHyroxSession(session))
+    .map((s) => {
     const decorated = decorateSession(s);
     return {
       ...decorated,
@@ -3278,6 +3350,8 @@ export function deferTargetsFor(booking) {
 }
 
 export function deferBooking(bookingId, targetSessionId, now = Date.now()) {
+  assertActiveBookingTarget(bookingId);
+  assertActiveSessionTarget(targetSessionId);
   if (isLive()) {
     return liveOps.liveDeferBooking(bookingId, targetSessionId);
   }
@@ -3401,6 +3475,7 @@ export async function rsvpSession(userId, sessionOrId, now = Date.now()) {
 // Withdrawing an RSVP is member self-service: no money ever moved, so no
 // admin involvement is needed (unlike paid confirmed bookings).
 export async function withdrawRsvp(bookingId, now = Date.now()) {
+  assertActiveBookingTarget(bookingId);
   if (isLive()) {
     return liveOps.liveWithdrawRsvp(bookingId);
   }
@@ -3470,6 +3545,7 @@ export async function createOneOffEvent(fields) {
 }
 
 export async function repostRsvpEvent(sessionId) {
+  assertActiveSessionTarget(sessionId);
   requirePaymentAdminActor();
   const source = getSession(sessionId);
   if (!source || !sessionRequiresRsvp(source) || Number(source.price ?? 0) > 0 || !source.cancelled) {
@@ -3501,6 +3577,7 @@ export async function repostRsvpEvent(sessionId) {
 }
 
 export async function deleteOneOffEvent(sessionId) {
+  assertActiveSessionTarget(sessionId);
   if (isLive()) {
     return liveOps.liveDeleteEvent(sessionId);
   }
@@ -3518,6 +3595,7 @@ export async function deleteOneOffEvent(sessionId) {
 }
 
 export function cancelSessionWeek(sessionId, reason, now = Date.now()) {
+  assertActiveSessionTarget(sessionId);
   if (isLive()) {
     return liveOps.liveCancelSession(sessionId, reason);
   }
@@ -3606,6 +3684,7 @@ export function cancelSessionWeek(sessionId, reason, now = Date.now()) {
 }
 
 export function setSessionTime(sessionId, time) {
+  assertActiveSessionTarget(sessionId);
   if (isLive()) {
     return liveOps.liveSetSessionTime(sessionId, time);
   }
@@ -3628,6 +3707,7 @@ export function setSessionTime(sessionId, time) {
 }
 
 export function setVenueTBC(sessionId, on) {
+  assertActiveSessionTarget(sessionId);
   if (isLive()) {
     return liveOps.liveSetVenueTBC(sessionId, !!on);
   }
@@ -3637,6 +3717,7 @@ export function setVenueTBC(sessionId, on) {
 }
 
 export function setSessionNotice(sessionId, text) {
+  assertActiveSessionTarget(sessionId);
   if (isLive()) {
     return liveOps.liveSetSessionNotice(sessionId, text);
   }
@@ -3646,6 +3727,7 @@ export function setSessionNotice(sessionId, text) {
 }
 
 export function confirmGymBooking(sessionId, note, now = Date.now()) {
+  assertActiveSessionTarget(sessionId);
   if (isLive()) {
     return liveOps.liveFinalizeGym(sessionId, note);
   }
@@ -3667,6 +3749,7 @@ export function confirmGymBooking(sessionId, note, now = Date.now()) {
 export function setWeekVenue(sessionId, {
   location, mapsQuery, meetingLat = null, meetingLng = null,
 } = {}) {
+  assertActiveSessionTarget(sessionId);
   const before = getSession(sessionId);
   const fallbackActivityId = String(sessionId).replace(/-\d{4}-\d{2}-\d{2}$/, "");
   const overrideActivityId = before?.activityId || fallbackActivityId;
@@ -4945,7 +5028,8 @@ export async function listMyNotifications() {
     .select("*")
     .order("created_at", { ascending: false });
   if (error) throw error;
-  return data || [];
+  return (data || []).filter((notification) =>
+    !isRetiredHyroxNotification(notification, retirementBooking));
 }
 
 export async function markNotificationRead(id) {

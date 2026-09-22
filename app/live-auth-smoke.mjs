@@ -233,6 +233,7 @@ const prayerRpcResult = (name) => {
 };
 const operationalPayoutDirectReads = [];
 const operationalSessionQueries = [];
+const operationalTableQueries = [];
 const operationalSubscriptions = [];
 const fixtureMember = { id: "approved-member" };
 const operationalTableRows = {
@@ -321,7 +322,19 @@ const operationalTableRows = {
     updated_at: "2098-12-29T10:03:00.000Z",
   }],
   operational_queue_entries: [],
-  operational_receipts: [],
+  operational_receipts: [{
+    id: "pooled-receipt",
+    receipt_number: "ITC-2099-POOL",
+    booking_id: "pooled-booking",
+    profile_id: fixtureMember.id,
+    session_id: null,
+    hyrox_cycle_id: "hyrox-pool-2099-01-03",
+    amount_hkd: 180,
+    currency: "HKD",
+    payment_method: "fps",
+    status: "paid",
+    issued_at: "2098-12-29T10:04:00.000Z",
+  }],
   collector_assignments: [],
   collector_payout_profiles: [],
   operational_session_venue_overrides: [{
@@ -718,6 +731,7 @@ const fakeSupabase = {
       };
     }
     if (table in operationalTableRows) {
+      operationalTableQueries.push(table);
       const rows = operationalTableRows[table];
       const sessionFilters = { since: null, ids: null };
       const result = () => {
@@ -1042,6 +1056,89 @@ assert.equal(
   new Set(operationalSessionIds).size,
   operationalSessionIds.length,
   "live operational fixture IDs must be unique",
+);
+
+const islandEccSessionId = `hyrox-quarry-bay-${normalWeeklyFixtureDates[0]}`;
+const retiredBftSessionId = `hyrox-bft-${normalWeeklyFixtureDates[0]}`;
+const paidBookingFields = {
+  status: "confirmed",
+  reserved_at: fixedIso,
+  pay_deadline_at: fixedIso,
+  payment_marked_at: fixedIso,
+  payment_method: "fps",
+  payment_reference: "fixture",
+  paid_at: fixedIso,
+  confirmed_by: "approved-admin",
+  deferred_from_booking_id: null,
+  deferred_to_booking_id: null,
+  created_at: fixedIso,
+  updated_at: fixedIso,
+};
+operationalTableRows.operational_bookings.push(
+  {
+    ...paidBookingFields,
+    id: "retired-bft-booking",
+    profile_id: fixtureMember.id,
+    session_id: retiredBftSessionId,
+    hyrox_cycle_id: null,
+    snapshot: { name: "ITC HYROX", activity_id: "hyrox-bft", session_date: normalWeeklyFixtureDates[0], price_hkd: 180 },
+  },
+  {
+    ...paidBookingFields,
+    id: "island-ecc-booking",
+    profile_id: fixtureMember.id,
+    session_id: islandEccSessionId,
+    hyrox_cycle_id: null,
+    snapshot: { name: "ITC HYROX", activity_id: "hyrox-quarry-bay", session_date: normalWeeklyFixtureDates[0], price_hkd: 180 },
+  },
+);
+operationalTableRows.operational_queue_entries.push(
+  {
+    id: "retired-bft-queue",
+    session_id: retiredBftSessionId,
+    profile_id: fixtureMember.id,
+    kind: "waitlist",
+    status: "active",
+    joined_at: fixedIso,
+    resolved_at: null,
+  },
+  {
+    id: "island-ecc-queue",
+    session_id: islandEccSessionId,
+    profile_id: fixtureMember.id,
+    kind: "waitlist",
+    status: "active",
+    joined_at: fixedIso,
+    resolved_at: null,
+  },
+);
+operationalTableRows.operational_receipts.push(
+  {
+    id: "retired-bft-receipt",
+    receipt_number: "ITC-2026-BFT",
+    booking_id: "retired-bft-booking",
+    profile_id: fixtureMember.id,
+    session_id: retiredBftSessionId,
+    hyrox_cycle_id: null,
+    amount_hkd: 180,
+    currency: "HKD",
+    payment_method: "fps",
+    status: "paid",
+    issued_at: fixedIso,
+  },
+  {
+    id: "island-ecc-receipt",
+    receipt_number: "ITC-2026-ECC",
+    booking_id: "island-ecc-booking",
+    profile_id: fixtureMember.id,
+    session_id: islandEccSessionId,
+    hyrox_cycle_id: null,
+    amount_hkd: 180,
+    currency: "HKD",
+    payment_method: "fps",
+    status: "paid",
+    issued_at: fixedIso,
+  },
 );
 
 const seededRsvpLunchId = `lunch-${normalWeeklyFixtureDates[0]}`;
@@ -1555,46 +1652,116 @@ assert.match(hydratedRun.blurb, /nobody gets left behind/i);
 assert.equal(hydratedRun.memberNote, "Bag drop with a leader at the start point.");
 assert.equal(store.getSession("wnt-2026-08-19"), null,
   "an unmaterialized local recurrence must not exist in live mode");
-assert.equal(store.getHyroxCycle("hyrox-pool-2099-01-03")?.venuePlan, "pending");
-assert.equal(
-  store.hyroxCycleQueues("hyrox-pool-2099-01-03").weeklyWaitlist[0].userId,
-  fixtureMember.id,
+assert.deepEqual(
+  [...new Set(store.upcomingSessions(21)
+    .filter((row) => row.category === "HYROX")
+    .map((row) => row.activityId))],
+  ["hyrox-quarry-bay"],
+  "Island ECC must be the only HYROX activity admitted to the live session cache",
 );
-assert.equal(store.getBooking("pooled-booking")?.venuePreference, "midtown");
+assert.equal(store.getSession(retiredBftSessionId), null);
+assert.ok(store.getSession(islandEccSessionId), "Island ECC sessions must remain available");
+assert.equal(store.getBooking("pooled-booking"), null);
+assert.equal(store.getBooking("retired-bft-booking"), null);
+assert.ok(store.getBooking("island-ecc-booking"), "Island ECC bookings must remain available");
+assert.equal(store.getReceipt("pooled-receipt"), null);
+assert.equal(store.getReceipt("retired-bft-receipt"), null);
+assert.ok(store.getReceipt("island-ecc-receipt"), "Island ECC receipts must remain available");
+assert.equal(store.listHyroxCycles().length, 0);
+assert.deepEqual(store.hyroxCycleQueues("hyrox-pool-2099-01-03"), {
+  weeklyWaitlist: [], venueSwitches: [],
+});
+assert.equal(operationalTableQueries.includes("operational_hyrox_cycles"), false,
+  "hydration must not query retired pool cycles");
+assert.equal(operationalTableQueries.includes("operational_hyrox_queue_entries"), false,
+  "hydration must not query retired pool queues");
+
+const retirementNotificationRows = [
+  {
+    id: "retired-pool-notification",
+    kind: "operational_hyrox_reserved",
+    title: "Old pool reservation",
+    body: "Retained pool fixture",
+    destination: "#/booking/pooled-booking",
+    created_at: fixedIso,
+    read_at: null,
+  },
+  {
+    id: "retired-booking-notification",
+    kind: "operational_payment_confirmed",
+    title: "Old BFT payment",
+    body: "Retained BFT fixture",
+    destination: "#/booking/retired-bft-booking",
+    created_at: fixedIso,
+    read_at: null,
+  },
+  {
+    id: "island-ecc-payment-notification",
+    kind: "operational_payment_confirmed",
+    title: "Island ECC payment",
+    body: "Active Island ECC fixture",
+    destination: "#/booking/island-ecc-booking",
+    created_at: fixedIso,
+    read_at: null,
+  },
+];
+notificationRows.push(...retirementNotificationRows);
+const filteredLiveNotifications = await store.listMyNotifications();
+assert.equal(filteredLiveNotifications.some((row) => row.id === "retired-pool-notification"), false);
+assert.equal(filteredLiveNotifications.some((row) => row.id === "retired-booking-notification"), false);
+assert.equal(filteredLiveNotifications.some((row) => row.id === "island-ecc-payment-notification"), true,
+  "Island ECC payment notifications must remain visible");
+notificationRows.splice(-retirementNotificationRows.length);
+
+assert.equal(store.getHyroxCycle("hyrox-pool-2099-01-03"), null);
+const retiredMutationCallCount = operationalRpcCalls.length;
+for (const mutate of [
+  () => store.reserveSession(fixtureMember.id, retiredBftSessionId),
+  () => store.markBookingPaid("pooled-booking", "FPS", "retired"),
+  () => store.confirmBookingPayment("retired-bft-booking"),
+  () => store.releaseReservation("pooled-booking"),
+  () => store.setBookingAttendance("retired-bft-booking", true),
+  () => store.reserveHyroxCycle(fixtureMember.id, "hyrox-pool-2099-01-03", "either", true),
+]) {
+  await assert.rejects(async () => mutate(), /This session is no longer available\./);
+}
+assert.equal(operationalRpcCalls.length, retiredMutationCallCount,
+  "retired session and booking targets must be rejected before any live RPC");
+
 const attendanceRow = operationalTableRows.operational_bookings
-  .find((booking) => booking.id === "pooled-booking");
+  .find((booking) => booking.id === "island-ecc-booking");
 attendanceRow.status = "attended";
 attendanceRow.attended_at = "2026-08-05T02:01:00.000Z";
 attendanceRow.attended_by = "approved-admin";
 await operations.hydrateOperationalState({ force: true, authenticated: true });
-assert.equal(store.getBooking("pooled-booking")?.status, "attended");
-assert.equal(store.getBooking("pooled-booking")?.attendedAt, RealDate.parse("2026-08-05T02:01:00.000Z"));
-assert.equal(store.getBooking("pooled-booking")?.attendedBy, "approved-admin");
+assert.equal(store.getBooking("island-ecc-booking")?.status, "attended");
+assert.equal(store.getBooking("island-ecc-booking")?.attendedAt, RealDate.parse("2026-08-05T02:01:00.000Z"));
+assert.equal(store.getBooking("island-ecc-booking")?.attendedBy, "approved-admin");
 attendanceRow.status = "confirmed";
 attendanceRow.attended_at = null;
 attendanceRow.attended_by = null;
 await operations.hydrateOperationalState({ force: true, authenticated: true });
 const attendanceCallsBefore = operationalRpcCalls.length;
-await operations.liveSetOperationalAttendance("pooled-booking", true);
+await operations.liveSetOperationalAttendance("island-ecc-booking", true);
 assert.deepEqual(operationalRpcCalls[attendanceCallsBefore], {
   name: "set_operational_attendance",
-  args: { p_booking_id: "pooled-booking", p_arrived: true },
+  args: { p_booking_id: "island-ecc-booking", p_arrived: true },
 });
-assert.equal(store.getBooking("pooled-booking")?.status, "attended",
-  "successful attendance RPC must refresh the authoritative booking cache");
-assert.equal(store.getBooking("pooled-booking")?.attendedBy, authUser.id);
+assert.equal(store.getBooking("island-ecc-booking")?.status, "attended",
+  "successful Island ECC attendance RPC must refresh the authoritative booking cache");
+assert.equal(store.getBooking("island-ecc-booking")?.attendedBy, authUser.id);
 operationalAttendanceError = { message: "Attendance is outside the check-in window." };
 await assert.rejects(
-  () => operations.liveSetOperationalAttendance("pooled-booking", false),
+  () => operations.liveSetOperationalAttendance("island-ecc-booking", false),
   /Attendance is outside the check-in window/,
 );
-assert.equal(store.getBooking("pooled-booking")?.status, "attended",
-  "a rejected attendance RPC must leave the authoritative cache unchanged");
+assert.equal(store.getBooking("island-ecc-booking")?.status, "attended",
+  "a rejected Island ECC attendance RPC must leave the authoritative cache unchanged");
 operationalAttendanceError = null;
-await operations.liveSetOperationalAttendance("pooled-booking", false);
-assert.equal(store.getBooking("pooled-booking")?.status, "confirmed");
-assert.equal(store.getBooking("pooled-booking")?.attendedAt, null);
-assert.equal(store.getBooking("pooled-booking")?.attendedBy, null);
+await operations.liveSetOperationalAttendance("island-ecc-booking", false);
+assert.equal(store.getBooking("island-ecc-booking")?.status, "confirmed");
+assert.equal(store.getBooking("island-ecc-booking")?.attendedAt, null);
+assert.equal(store.getBooking("island-ecc-booking")?.attendedBy, null);
 console.log("ok  live attendance rows map and RPC mutations refresh authoritative state");
 assert.equal(
   operationalRpcCalls.filter((call) => call.name === "sweep_hyrox_cycle_deadlines").length,
@@ -1666,18 +1833,13 @@ await store.hydrateLiveOperations({ force: true });
 const pooledBookingBeforeReject = structuredClone(store.getBooking("pooled-booking"));
 const pooledCycleBeforeReject = structuredClone(store.getHyroxCycle("hyrox-pool-2099-01-03"));
 const pooledQueueBeforeReject = structuredClone(store.hyroxCycleQueues("hyrox-pool-2099-01-03"));
-operationalRpcHandler = (name, args) => {
-  if (name === "reserve_hyrox_cycle") {
-    operationalRpcCalls.push({ name, args: structuredClone(args) });
-    return Promise.resolve({ data: null, error: { message: "HYROX registration is closed." } });
-  }
-  return successfulHyroxRpcHandler(name, args);
-};
+const retiredPoolRpcCount = operationalRpcCalls.length;
 await assert.rejects(
-  () => store.reserveHyroxCycle("approved-member", "hyrox-pool-2099-01-03", "midtown", true),
-  /HYROX registration is closed/,
-  "live pooled reserve failures must surface without local fallback",
+  async () => store.reserveHyroxCycle("approved-member", "hyrox-pool-2099-01-03", "midtown", true),
+  /This session is no longer available\./,
+  "retired pooled reservations must stop before the live RPC boundary",
 );
+assert.equal(operationalRpcCalls.length, retiredPoolRpcCount);
 assert.deepEqual(store.getBooking("pooled-booking"), pooledBookingBeforeReject);
 assert.deepEqual(store.getHyroxCycle("hyrox-pool-2099-01-03"), pooledCycleBeforeReject);
 assert.deepEqual(store.hyroxCycleQueues("hyrox-pool-2099-01-03"), pooledQueueBeforeReject);
@@ -1703,13 +1865,13 @@ liveSession = {
 const initialRealtimeHandlers = operationalSubscriptions.flatMap((channel) => channel.handlers);
 assert.equal(
   initialRealtimeHandlers.filter(({ filter }) => filter.table === "operational_hyrox_cycles").length,
-  1,
-  "live operations must subscribe to pooled HYROX cycles exactly once",
+  0,
+  "live operations must not subscribe to retired pool cycles",
 );
 assert.equal(
   initialRealtimeHandlers.filter(({ filter }) => filter.table === "operational_hyrox_queue_entries").length,
-  1,
-  "live operations must subscribe to pooled HYROX queues exactly once",
+  0,
+  "live operations must not subscribe to retired pool queues",
 );
 
 // Assigned collector payout enrichment is optional. Missing, forbidden, or
@@ -1988,12 +2150,12 @@ const horizonDay15Iso = "2026-08-19";
 const temporaryHorizonRows = [
   {
     id: "hyrox-horizon-day-14",
-    activity_id: "hyrox-bft",
+    activity_id: "hyrox-quarry-bay",
     session_date: horizonDay14Iso,
-    start_time: "11:15:00",
+    start_time: "11:00:00",
     duration_minutes: 60,
-    venue: "BFT Causeway Bay",
-    capacity: 20,
+    venue: "10/F, Island ECC, Quarry Bay",
+    capacity: 30,
     price_hkd: 180,
     is_open: true,
     venue_tbc: false,
@@ -2010,12 +2172,12 @@ const temporaryHorizonRows = [
   },
   {
     id: "hyrox-horizon-day-15",
-    activity_id: "hyrox-bft",
+    activity_id: "hyrox-quarry-bay",
     session_date: horizonDay15Iso,
-    start_time: "11:15:00",
+    start_time: "11:00:00",
     duration_minutes: 60,
-    venue: "BFT Causeway Bay",
-    capacity: 20,
+    venue: "10/F, Island ECC, Quarry Bay",
+    capacity: 30,
     price_hkd: 180,
     is_open: true,
     venue_tbc: false,
@@ -2080,8 +2242,9 @@ const hydratedMidtown = store.upcomingSessions(21)
   .find((session) => session.activityId === "hyrox-midtown");
 const hydratedQuarryBay = store.upcomingSessions(21)
   .find((session) => session.activityId === "hyrox-quarry-bay");
-assert.ok(hydratedBft, "live BFT HYROX must use the canonical hyrox-bft id");
-assert.ok(hydratedQuarryBay, "live operations must hydrate the Quarry Bay HYROX session");
+assert.equal(hydratedBft, undefined, "retired BFT HYROX must not hydrate");
+assert.equal(hydratedMidtown, undefined, "retired Midtown HYROX must not hydrate");
+assert.ok(hydratedQuarryBay, "live operations must hydrate the Island ECC HYROX session");
 assert.ok(
   operationalTableRows.operational_sessions
     .filter((row) => row.activity_id === "hyrox-quarry-bay")
@@ -2105,34 +2268,9 @@ assert.deepEqual({
   capacity: 30,
   isOpen: true,
 });
-assert.equal(hydratedBft.photo, "../assets/itc/hyrox.webp");
-assert.equal(hydratedMidtown.photo, "../assets/itc/hyrox.webp");
-assert.equal(hydratedMidtown.location, "Midtown28 Fitness");
-assert.equal(hydratedMidtown.venue, "Midtown28 Fitness");
-assert.equal(hydratedMidtown.mapsQuery, "Midtown28 Fitness, Hong Kong");
-for (const html of [
-  views.viewActivity(hydratedBft.id),
-  views.viewActivity(hydratedMidtown.id),
-]) {
-  assert.match(html, /class="detail-photo" src="\.\.\/assets\/itc\/hyrox\.webp"/);
-}
-
-const customMidtownFixture = operationalTableRows.operational_sessions
-  .find((row) => row.id === hydratedMidtown.id);
-assert.ok(customMidtownFixture, "live smoke needs a Midtown fixture to mutate");
-customMidtownFixture.venue = "Custom Midtown Venue";
-try {
-  await operations.refreshOperationalState();
-  const customMidtown = store.upcomingSessions(21)
-    .find((session) => session.id === hydratedMidtown.id);
-  assert.equal(customMidtown.location, "Custom Midtown Venue");
-  assert.equal(customMidtown.venue, "Custom Midtown Venue");
-  assert.equal(customMidtown.mapsQuery, "Custom Midtown Venue");
-  assert.equal(customMidtown.photo, "../assets/itc/hyrox.webp");
-} finally {
-  customMidtownFixture.venue = "Midtown 28";
-  await operations.refreshOperationalState();
-}
+assert.equal(hydratedQuarryBay.photo, "../assets/itc/hyrox.webp");
+assert.match(views.viewActivity(hydratedQuarryBay.id),
+  /class="detail-photo" src="\.\.\/assets\/itc\/hyrox\.webp"/);
 
 const appSource = readFileSync(resolve(__dirnameSmoke, "js/app.js"), "utf8");
 assert.match(appSource, /form\.dataset\.form === "apply"/);
@@ -2317,7 +2455,7 @@ await store.hydrateLiveOperations({ force: true });
 assert.equal(operations.operationalStateStatus().payoutError, null,
   "successful Admin hydration must clear payout degradation");
 const liveRosterHtml = await views.viewAdmin("payments");
-const liveRosterStart = liveRosterHtml.indexOf('data-payment-roster="hyrox-pool-2099-01-03"');
+const liveRosterStart = liveRosterHtml.indexOf(`data-payment-roster="${islandEccSessionId}"`);
 const liveRoster = liveRosterStart < 0 ? "" : liveRosterHtml.slice(liveRosterStart);
 assert.match(liveRoster, /Payment roster[\s\S]*Micah Member[\s\S]*Paid/);
 assert.doesNotMatch(liveRoster, /micah\.member@example\.com/i,
@@ -3122,7 +3260,7 @@ console.log("ok  live booking history renders snapshot start_time without crashi
 // History must hydrate omitted booking snapshot fields from the authoritative
 // operational session, and must collapse repeated RSVP join/withdraw rows.
 const liveHistoryPaidSessionRow = operationalTableRows.operational_sessions.find(
-  (row) => row.activity_id === "hyrox-bft" && row.id !== uuidBooking.sessionId
+  (row) => row.activity_id === "hyrox-quarry-bay" && row.id !== uuidBooking.sessionId
 );
 const liveHistoryRsvpSessionRow = operationalTableRows.operational_sessions.find(
   (row) => row.activity_id === "lunch" && row.id !== seededRsvpLunchId
@@ -3192,9 +3330,9 @@ const liveGapHistoryHtml = await views.viewAccount("history");
 const liveGapPaidCard = liveGapHistoryHtml
   .split('<div class="card booking-card">')
   .find((card) => card.includes(`href="#/booking/${liveHistoryGapBooking.id}"`)) || "";
-if (!liveGapPaidCard.includes("11:15 AM")
+if (!liveGapPaidCard.includes("11 AM")
     || !liveGapPaidCard.includes("ITC HYROX")
-    || !liveGapPaidCard.includes("BFT Causeway Bay")
+    || !liveGapPaidCard.includes("10/F, Island ECC, Quarry Bay")
     || !liveGapPaidCard.includes("60 min")
     || !liveGapPaidCard.includes("HK$180 to be paid")
     || liveGapPaidCard.includes("null min")
@@ -3212,12 +3350,12 @@ console.log("ok  live History hydrates gaps and omits cancelled RSVP records");
 const historicalSessionRows = [
   {
     id: "history-old-session",
-    activity_id: "hyrox-bft",
+    activity_id: "hyrox-quarry-bay",
     session_date: "2026-07-01",
     start_time: "10:30:00",
     duration_minutes: 55,
-    venue: "BFT Causeway Bay",
-    capacity: 20,
+    venue: "10/F, Island ECC, Quarry Bay",
+    capacity: 30,
     price_hkd: 180,
     is_open: true,
     venue_tbc: false,
@@ -3234,12 +3372,12 @@ const historicalSessionRows = [
   },
   {
     id: "history-tie-session-a",
-    activity_id: "hyrox-bft",
+    activity_id: "hyrox-quarry-bay",
     session_date: "2026-07-02",
     start_time: "09:00:00",
     duration_minutes: 60,
-    venue: "BFT Causeway Bay",
-    capacity: 20,
+    venue: "10/F, Island ECC, Quarry Bay",
+    capacity: 30,
     price_hkd: 180,
     is_open: true,
     venue_tbc: false,
@@ -3256,12 +3394,12 @@ const historicalSessionRows = [
   },
   {
     id: "history-tie-session-z",
-    activity_id: "hyrox-bft",
+    activity_id: "hyrox-quarry-bay",
     session_date: "2026-07-02",
     start_time: "09:00:00",
     duration_minutes: 60,
-    venue: "BFT Causeway Bay",
-    capacity: 20,
+    venue: "10/F, Island ECC, Quarry Bay",
+    capacity: 30,
     price_hkd: 180,
     is_open: true,
     venue_tbc: false,
@@ -3305,7 +3443,7 @@ const historicalCard = historicalHistoryHtml
 if (!historicalCard.includes("10:30 AM")
     || !historicalCard.includes("55 min")
     || !historicalCard.includes("ITC HYROX")
-    || !historicalCard.includes("BFT Causeway Bay")
+    || !historicalCard.includes("10/F, Island ECC, Quarry Bay")
     || !historicalCard.includes("HK$180 to be paid")
     || historicalCard.includes("null min")
     || historicalCard.includes("paid HK$180")) {
@@ -5526,12 +5664,12 @@ const delayedClickMutation = async ({
 
 const attendanceActionSessionRow = {
   id: "attendance-action-session",
-  activity_id: "hyrox-bft",
+  activity_id: "hyrox-quarry-bay",
   session_date: "2026-08-05",
   start_time: "10:10:00",
   duration_minutes: 60,
-  venue: "BFT Causeway Bay",
-  capacity: 20,
+  venue: "10/F, Island ECC, Quarry Bay",
+  capacity: 30,
   price_hkd: 180,
   is_open: true,
   venue_tbc: false,
@@ -5564,7 +5702,7 @@ const attendanceActionBookingRow = {
   deferred_to_booking_id: null,
   snapshot: {
     name: "ITC HYROX", session_date: "2026-08-05", start_time: "10:10:00",
-    venue: "BFT Causeway Bay", price_hkd: 180,
+    venue: "10/F, Island ECC, Quarry Bay", price_hkd: 180,
   },
   created_at: fixedIso,
   updated_at: fixedIso,
@@ -5641,30 +5779,6 @@ assert.deepEqual(toastStack.children.map((item) => [item.textContent, item.getAt
 operationalRpcHandler = delegatedBaseOperationalRpcHandler;
 console.log("ok  delegated attendance controls await, dedupe, rerender, undo, and recover errors");
 
-const queueMidtown = store.upcomingSessions(28).find((session) => store.isMidtown(session) && !session.cancelled);
-assert.ok(queueMidtown, "adjacent async audit needs a Midtown session");
-const interestRow = {
-  id: "queue-interest-async", session_id: queueMidtown.id, profile_id: authUser.id,
-  kind: "interest", status: "active", joined_at: fixedIso, resolved_at: null,
-};
-await delayedClickMutation({
-  action: "join-interest",
-  dataset: { session: queueMidtown.id },
-  rpcName: "join_operational_queue",
-  expectedArgs: { p_session_id: queueMidtown.id, p_kind: "interest" },
-  result: interestRow,
-  beforeResolve: () => operationalTableRows.operational_queue_entries.push(interestRow),
-  successToast: "You're #1 in line for Midtown",
-});
-await delayedClickMutation({
-  action: "leave-interest",
-  dataset: { session: queueMidtown.id },
-  rpcName: "leave_operational_queue",
-  expectedArgs: { p_entry_id: interestRow.id },
-  result: { ...interestRow, status: "left", resolved_at: fixedIso },
-  beforeResolve: () => Object.assign(interestRow, { status: "left", resolved_at: fixedIso }),
-  successToast: "Left the Midtown list",
-});
 const waitlistRow = {
   id: "queue-waitlist-async", session_id: routingSessions[1].id, profile_id: authUser.id,
   kind: "waitlist", status: "active", joined_at: fixedIso, resolved_at: null,
@@ -5715,16 +5829,6 @@ await delayedClickMutation({
   result: confirmedServerRow,
   beforeResolve: () => Object.assign(routedDeferServerRow, confirmedServerRow),
   successToast: "Payment confirmed — member notified",
-});
-const midtownServerRow = operationalTableRows.operational_sessions.find((row) => row.id === queueMidtown.id);
-await delayedClickMutation({
-  action: "midtown-toggle",
-  dataset: { session: queueMidtown.id, open: "1" },
-  rpcName: "set_operational_midtown_open",
-  expectedArgs: { p_session_id: queueMidtown.id, p_enabled: true },
-  result: { ...midtownServerRow, is_open: true },
-  beforeResolve: () => { midtownServerRow.is_open = true; },
-  successToast: "Midtown opened — interest list converting",
 });
 const paidControlServerRow = operationalTableRows.operational_sessions
   .find((row) => row.id === routingSessions[0].id);
@@ -5904,28 +6008,8 @@ assert.equal(rejectedCancellationControls.submit.hasAttribute("aria-busy"), fals
 assert.ok(rejectedCancellationControls.controls.every((control) => !control.disabled));
 assert.ok(toastStack.children.some((item) => item.textContent === "Cancellation transport unavailable"));
 
-const rejectedMidtownGate = deferred();
-operationalRpcHandler = (name, args) => {
-  if (name === "set_operational_midtown_open") {
-    operationalRpcCalls.push({ name, args: structuredClone(args) });
-    return rejectedMidtownGate.promise;
-  }
-  return delegatedBaseOperationalRpcHandler(name, args);
-};
-const rejectedMidtownControl = operationControl("BUTTON", "", "Close Midtown");
-rejectedMidtownControl.dataset = { action: "midtown-toggle", session: queueMidtown.id, open: "0" };
-rejectedMidtownControl.closest = () => rejectedMidtownControl;
-toastStack.children.length = 0;
-const rejectedMidtownClick = click({ target: rejectedMidtownControl, preventDefault() {} });
-await new Promise(setImmediate);
-rejectedMidtownGate.reject(new Error("Midtown controls unavailable"));
-await rejectedMidtownClick;
-assert.deepEqual(toastStack.children.map((item) => item.textContent), ["Midtown controls unavailable"]);
-assert.equal(toastStack.children[0].getAttribute("role"), "alert");
-assert.equal(rejectedMidtownControl.disabled, false);
-assert.equal(rejectedMidtownControl.hasAttribute("aria-busy"), false);
 assert.equal(escapedRejections.length, 0);
-console.log("ok  adjacent live queue, duty, confirmation, Midtown, session, and cancellation controls await RPCs");
+console.log("ok  adjacent live queue, duty, confirmation, session, and cancellation controls await RPCs");
 
 // Unpaid booking cancellation is authoritative in live mode: the cache and
 // backend stay reserved while pending, success survives forced hydration, and
@@ -6136,15 +6220,15 @@ assert.match(viewEl.innerHTML, new RegExp(`form-gym-note[^>]*data-session="${gym
 const gymForm = new HTMLFormElement();
 gymForm.id = "form-gym-note";
 gymForm.dataset = { session: gymSession.id };
-gymForm.fields = { note: "Confirmed 18 with BFT" };
+gymForm.fields = { note: "Confirmed 18 with Island ECC" };
 gymForm.reportValidity = () => true;
 await domListeners.get("submit")({ target: gymForm, preventDefault() {} });
 await new Promise(setImmediate);
 const confirmedGymSession = store.getSession(gymSession.id);
 assert.ok(confirmedGymSession.gymConfirmedAt, "delegated gym submit must persist confirmation");
-assert.equal(confirmedGymSession.gymNote, "Confirmed 18 with BFT");
-assert.match(viewEl.innerHTML, /Confirmed with BFT/);
-assert.match(viewEl.innerHTML, /Confirmed 18 with BFT/);
+assert.equal(confirmedGymSession.gymNote, "Confirmed 18 with Island ECC");
+assert.match(viewEl.innerHTML, /Confirmed with Island ECC/);
+assert.match(viewEl.innerHTML, /Confirmed 18 with Island ECC/);
 console.log("ok  delegated gym confirmation persists and rerenders confirmed state");
 
 const swimmingSession = store.upcomingSessions(21)
@@ -7038,41 +7122,9 @@ if (typeof store.updateMyDonorId !== "function" || typeof store.getActiveGivingC
 }
 console.log("ok  live Giving database and profile APIs coexist with Payment/Auth and Notifications");
 
-// Cancellation copy must read exactly 'Session cancelled by ITC — <reason>'
-// across schedule, activity, and admin ops surfaces.
-const seededCancellation = await store.getSession("hyrox-bft-2026-08-15");
-if (!seededCancellation || !seededCancellation.cancelled) {
-  throw new Error("15 August 2026 session should be server-cancelled on hydration");
-}
-if (seededCancellation.cancelReason !== "HYROX race weekend") {
-  throw new Error("15 August 2026 cancel reason must be 'HYROX race weekend'");
-}
-const copy = operations.sessionCancellationCopy(seededCancellation);
-if (copy !== "Session cancelled by ITC — HYROX race weekend") {
-  throw new Error(`Cancellation copy must be canonical: ${copy}`);
-}
-// Check the schedule by navigating to the week containing 15 August 2026 and
-// selecting that day so the cancelled session renders through the schedule row.
-let scheduleHtml = "";
-for (let offset = 0; offset < 4; offset += 1) {
-  views.scheduleState.weekOffset = offset;
-  views.scheduleState.selected = null;
-  scheduleHtml += views.viewSchedule();
-}
-views.scheduleState.weekOffset = 1;
-views.scheduleState.selected = "2026-08-15";
-scheduleHtml += views.viewSchedule();
-if (!scheduleHtml.includes("Session cancelled by ITC — HYROX race weekend")) {
-  throw new Error("Schedule must render the canonical cancellation copy");
-}
-const activityHtml = views.viewActivity("hyrox-bft-2026-08-15");
-if (!activityHtml.includes("Session cancelled by ITC — HYROX race weekend")) {
-  throw new Error("Activity view must render the canonical cancellation copy");
-}
-if (!activityHtml.includes("Paid bookings were moved to the next available session — check your account.")
-    || activityHtml.includes("Stay tuned for the next available social.")) {
-  throw new Error("live paid cancellation Activity Details must render only the paid follow-up copy");
-}
+// Retained BFT/Midtown cancellations never re-enter active session selectors.
+assert.equal(await store.getSession("hyrox-bft-2026-08-15"), null);
+assert.equal(await store.getSession("hyrox-midtown-2026-08-15"), null);
 const liveCancelledRsvpRow = {
   ...structuredClone(operationalTableRows.operational_sessions.find((row) => row.id === lunchSession.id)),
   id: "lunch-cancelled-render",
@@ -7125,8 +7177,7 @@ console.log("ok  live cancellation copy renders exact paid and social follow-up 
 // Location-map surface: a non-cancelled paid HYROX exposes Get directions
 // without the inline map host.
 const liveNonCancelledHyrox = store.upcomingSessions(21)
-  .filter((s) => s.activityId === "hyrox-bft" && !data.sessionStarted(s))
-  .find((s) => s.id !== "hyrox-bft-2026-08-15");
+  .find((s) => s.activityId === "hyrox-quarry-bay" && !data.sessionStarted(s));
 if (!liveNonCancelledHyrox) throw new Error("live smoke needs an upcoming non-cancelled hyrox session");
 const liveHyroxDetail = views.viewActivity(liveNonCancelledHyrox.id);
 if (!liveHyroxDetail.includes("Get directions") || liveHyroxDetail.includes('id="activity-map"')) {
@@ -7348,12 +7399,12 @@ const replacementBaseHandler = operationalRpcHandler;
 const replacementCalls = [];
 let replacementRow = {
   requestId: "replacement-request-1",
-  bookingId: "booking-replacement-1",
+  bookingId: "island-ecc-booking",
   status: "pending",
   originalDisplayName: "Payer Member",
   replacementDisplayName: null,
-  sessionId: "hyrox-bft-2099-01-03",
-  snapshot: { name: "ITC HYROX", kind: "paid", dateISO: "2099-01-03", time: "11:15" },
+  sessionId: islandEccSessionId,
+  snapshot: { name: "ITC HYROX", kind: "paid", dateISO: normalWeeklyFixtureDates[0], time: "11:00" },
   createdAt: "2098-12-31T00:00:00.000Z",
   expiresAt: "2099-01-01T00:00:00.000Z",
 };
@@ -7364,7 +7415,12 @@ operationalRpcHandler = (name, args) => {
     return Promise.resolve({ data: null, error: { message: "replacement decision unavailable" } });
   }
   if (name === "list_operational_replacement_requests") {
-    return Promise.resolve({ data: [replacementRow], error: null });
+    return Promise.resolve({ data: [{
+      ...replacementRow,
+      requestId: "retired-replacement-request",
+      bookingId: "retired-bft-booking",
+      sessionId: retiredBftSessionId,
+    }, replacementRow], error: null });
   }
   if (name === "accept_operational_replacement_request") {
     replacementRow = { ...replacementRow, status: "accepted", replacementDisplayName: "Friend Member" };
@@ -7379,13 +7435,13 @@ assert.equal(
 );
 const replacementExpiry = Date.parse("2099-01-01T00:00:00.000Z");
 const createdReplacement = await operations.liveCreateReplacementRequest(
-  "booking-replacement-1", replacementHash, replacementExpiry
+  "island-ecc-booking", replacementHash, replacementExpiry
 );
 assert.equal(createdReplacement.status, "pending");
 assert.deepEqual(replacementCalls.at(-1), {
   name: "create_operational_replacement_request",
   args: {
-    p_booking_id: "booking-replacement-1",
+    p_booking_id: "island-ecc-booking",
     p_token_hash: replacementHash,
     p_expires_at: "2099-01-01T00:00:00.000Z",
   },
@@ -7396,6 +7452,7 @@ assert.equal(invite.tokenHash, undefined, "live invite mapping must omit token h
 const acceptedReplacement = await operations.liveAcceptReplacement(replacementHash);
 assert.equal(acceptedReplacement.status, "accepted");
 const listedReplacements = await operations.liveListReplacementRequests();
+assert.equal(listedReplacements.length, 1, "retired replacement requests must not enter the live cache");
 assert.equal(listedReplacements[0].status, "accepted");
 assert.equal("tokenHash" in listedReplacements[0], false, "Admin replacement rows must not expose token hashes");
 assert.equal("email" in listedReplacements[0], false, "Admin replacement rows must not expose contact fields");
@@ -7406,7 +7463,7 @@ await assert.rejects(
   /replacement decision unavailable/,
 );
 assert.equal(
-  operations.liveReplacementRequestForBooking("booking-replacement-1").status,
+  operations.liveReplacementRequestForBooking("island-ecc-booking").status,
   "accepted",
   "failed live replacement mutations must not overwrite the cache",
 );

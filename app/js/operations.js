@@ -13,6 +13,12 @@
 
 import { SEED_ACTIVITIES } from "./data.js";
 import { isLive, supabase } from "./config.js";
+import {
+  isRetiredHyroxActivityId,
+  isRetiredHyroxSession,
+  isRetiredHyroxBooking,
+  isRetiredHyroxReceipt,
+} from "./hyrox-retirement.js";
 import { normalizeMeetingPoint } from "./venue.js";
 
 const LIVE_TABLES = [
@@ -24,8 +30,6 @@ const LIVE_TABLES = [
   "collector_payout_profiles",
   "operational_session_venue_overrides",
   "operational_rsvp_counts",
-  "operational_hyrox_cycles",
-  "operational_hyrox_queue_entries",
   "operational_booking_replacement_requests",
   "operational_booking_replacement_audit",
 ];
@@ -51,9 +55,9 @@ const liveCache = {
   payout: new Map(),
   venueOverrides: new Map(),
   rsvpCounts: new Map(),
-  hyroxCycles: new Map(),
-  hyroxQueues: [],
   replacementRequests: [],
+  retiredSessionIds: new Set(),
+  retiredBookingIds: new Set(),
   rsvpCountError: null,
   loaded: false,
   loading: null,
@@ -86,53 +90,6 @@ function buildTemplateRow(row) {
     category: row.category || null,
     maps_query: row.maps_query || null,
     requires_rsvp: !!row.requires_rsvp,
-  };
-}
-
-function buildHyroxCycleRow(row) {
-  return {
-    id: row.id,
-    dateISO: String(row.session_date).slice(0, 10),
-    bftSessionId: row.bft_session_id,
-    midtownSessionId: row.midtown_session_id,
-    registrationState: row.registration_state,
-    venuePlan: row.venue_plan,
-    capacity: row.registration_capacity,
-    paymentDeadlineAt: parseTimestamp(row.payment_deadline_at),
-    venueChoiceDeadlineAt: parseTimestamp(row.venue_choice_deadline_at),
-    registrationOpensAt: parseTimestamp(row.registration_opens_at),
-    holderGraceDeadlineAt: parseTimestamp(row.holder_grace_deadline_at),
-    promotedPaymentDeadlineAt: parseTimestamp(row.promoted_payment_deadline_at),
-    capacityWarningSentAt: parseTimestamp(row.capacity_warning_sent_at),
-    paymentReminderSentAt: parseTimestamp(row.payment_reminder_sent_at),
-    collectorPaymentReminderSentAt: parseTimestamp(row.collector_payment_reminder_sent_at),
-    venueChoiceReminderSentAt: parseTimestamp(row.venue_choice_reminder_sent_at),
-    venueFinalizationReminderSentAt: parseTimestamp(row.venue_finalization_reminder_sent_at),
-    holderGraceStartedAt: parseTimestamp(row.holder_grace_started_at),
-    waitlistPromotedAt: parseTimestamp(row.waitlist_promoted_at),
-    reconciliationStartedAt: parseTimestamp(row.reconciliation_started_at),
-    openedAt: parseTimestamp(row.opened_at),
-    planConfirmedAt: parseTimestamp(row.plan_confirmed_at),
-    planConfirmedBy: row.plan_confirmed_by,
-    planConfirmedSource: row.plan_confirmed_source || null,
-    allocationClosedAt: parseTimestamp(row.allocation_closed_at),
-    cancelledAt: parseTimestamp(row.cancelled_at),
-    cancelReason: row.cancel_reason || null,
-  };
-}
-
-function buildHyroxQueueRow(row) {
-  return {
-    id: row.id,
-    cycleId: row.cycle_id,
-    userId: row.profile_id,
-    kind: row.kind,
-    targetSessionId: row.target_session_id || null,
-    venuePreference: row.venue_preference || null,
-    fallbackAcknowledgedAt: parseTimestamp(row.fallback_acknowledged_at),
-    status: row.status,
-    joinedAt: parseTimestamp(row.joined_at),
-    resolvedAt: parseTimestamp(row.resolved_at),
   };
 }
 
@@ -235,9 +192,16 @@ function buildReplacementRequestRow(row) {
   };
 }
 
+function replacementRequestIsRetired(request) {
+  if (!request) return false;
+  const getSession = (id) => liveCache.sessions.get(id) || liveRetiredSessionStub(id);
+  return isRetiredHyroxBooking(request, getSession)
+    || liveCache.retiredBookingIds.has(request.bookingId);
+}
+
 function cacheReplacementRequest(row) {
   const request = buildReplacementRequestRow(row);
-  if (!request?.requestId) return request;
+  if (!request?.requestId || replacementRequestIsRetired(request)) return null;
   const index = liveCache.replacementRequests.findIndex((item) => item.requestId === request.requestId);
   if (index >= 0) liveCache.replacementRequests[index] = request;
   else liveCache.replacementRequests.push(request);
@@ -364,27 +328,44 @@ function buildVenueOverrideRow(row) {
 }
 
 function replaceState(payload) {
-  liveCache.sessions = new Map(payload.sessions.map((row) => [row.id, row]));
-  liveCache.hyroxCycles = new Map(
-    (payload.hyroxCycles || []).map((row) => [row.id, row])
-  );
-  liveCache.hyroxQueues = payload.hyroxQueues || [];
+  const allSessions = new Map(payload.sessions.map((row) => [row.id, row]));
+  const getSession = (id) => allSessions.get(id) || null;
+  const allBookings = new Map(payload.bookings.map((row) => [row.id, row]));
+  const getBooking = (id) => {
+    const booking = allBookings.get(id);
+    const session = getSession(booking?.sessionId ?? booking?.session_id);
+    return session ? { ...booking, activityId: session.activityId ?? session.activity_id } : booking;
+  };
+  liveCache.retiredSessionIds = new Set(payload.sessions
+    .filter(isRetiredHyroxSession).map((row) => row.id));
+  liveCache.retiredBookingIds = new Set(payload.bookings
+    .filter((row) => isRetiredHyroxBooking(row, getSession)).map((row) => row.id));
+  liveCache.sessions = new Map(payload.sessions
+    .filter((row) => !isRetiredHyroxSession(row)).map((row) => [row.id, row]));
   if (payload.replacementRequests) {
     liveCache.replacementRequests = payload.replacementRequests
-      .map(buildReplacementRequestRow).filter(Boolean);
+      .map(buildReplacementRequestRow)
+      .filter((row) => row && !isRetiredHyroxBooking(row, getSession)
+        && !isRetiredHyroxBooking(getBooking(row.bookingId), getSession));
   }
-  liveCache.templates = payload.templates || [];
-  liveCache.bookings = payload.bookings;
-  liveCache.queues = payload.queues;
-  liveCache.receipts = payload.receipts;
+  liveCache.templates = (payload.templates || [])
+    .filter((row) => !isRetiredHyroxActivityId(row.activity_id ?? row.activityId));
+  liveCache.bookings = payload.bookings
+    .filter((row) => !isRetiredHyroxBooking(row, getSession));
+  liveCache.queues = payload.queues
+    .filter((row) => !isRetiredHyroxSession(getSession(row.sessionId ?? row.session_id)));
+  liveCache.receipts = payload.receipts
+    .filter((row) => !isRetiredHyroxReceipt(row, getBooking));
   liveCache.assignments = new Map(
-    payload.assignments.map((row) => [row.saturdayISO, row])
+    payload.assignments.filter((row) => !isRetiredHyroxSession(row))
+      .map((row) => [row.saturdayISO, row])
   );
   liveCache.payout = new Map(
     payload.payouts.map((row) => [row.profileId, row])
   );
   liveCache.venueOverrides = new Map(
-    (payload.venueOverrides || []).map((row) => [row.sessionId, row])
+    (payload.venueOverrides || []).filter((row) => !isRetiredHyroxSession(row))
+      .map((row) => [row.sessionId, row])
   );
   liveCache.rsvpCounts = new Map();
   liveCache.rsvpCountError = payload.rsvpCountError || null;
@@ -394,7 +375,8 @@ function replaceState(payload) {
     }
     for (const row of payload.rsvpCounts || []) {
       const count = Number(row.going_count);
-      if (row.session_id && Number.isInteger(count) && count >= 0) {
+      if (row.session_id && !liveCache.retiredSessionIds.has(row.session_id)
+          && Number.isInteger(count) && count >= 0) {
         liveCache.rsvpCounts.set(row.session_id, count);
       }
     }
@@ -523,8 +505,6 @@ async function fetchOperationalState({ authenticated } = {}) {
     templates,
     venueOverrides,
     rsvpCounts,
-    hyroxCycles,
-    hyroxQueues,
   ] = await Promise.all([
     supabase.from("operational_sessions").select("*").gte("session_date", since).order("session_date"),
     supabase.from("operational_bookings").select("*"),
@@ -538,10 +518,6 @@ async function fetchOperationalState({ authenticated } = {}) {
     supabase.from("operational_activity_templates").select("*").order("activity_id"),
     supabase.from("operational_session_venue_overrides").select("*"),
     fetchRsvpCounts(),
-    supabase.from("operational_hyrox_cycles").select("*").order("session_date"),
-    authenticated
-      ? supabase.from("operational_hyrox_queue_entries").select("*").order("joined_at")
-      : Promise.resolve({ data: [], error: null }),
   ]);
   for (const result of [
     sessions,
@@ -552,8 +528,6 @@ async function fetchOperationalState({ authenticated } = {}) {
     payouts,
     templates,
     venueOverrides,
-    hyroxCycles,
-    hyroxQueues,
   ]) {
     if (result.error) throw operationalProblem(result.error);
   }
@@ -593,12 +567,11 @@ async function fetchOperationalState({ authenticated } = {}) {
   return {
     sessions: sessionRows,
     templates: templateRows,
-    hyroxCycles: (hyroxCycles.data || []).map(buildHyroxCycleRow),
-    hyroxQueues: (hyroxQueues.data || []).map(buildHyroxQueueRow),
     bookings: (bookings.data || []).map((row) => buildBookingRow(row, sessionsById)),
     queues: (queues.data || []).map(buildQueueRow),
     receipts: (receipts.data || []).map(buildReceiptRow),
-    assignments: (assignments.data || []).map(buildAssignmentRow),
+    assignments: (assignments.data || [])
+      .filter((row) => !isRetiredHyroxSession(row)).map(buildAssignmentRow),
     payouts: [...payoutRowsByProfile.values()].map(buildPayoutRow),
     payoutError: assignedPayouts.error,
     venueOverrides: (venueOverrides.data || []).map(buildVenueOverrideRow),
@@ -715,12 +688,6 @@ export async function startOperationalRealtime() {
       { event: "*", schema: "public", table: "operational_rsvp_counts" },
       () => scheduleRealtimeRefresh())
     .on("postgres_changes",
-      { event: "*", schema: "public", table: "operational_hyrox_cycles" },
-      () => scheduleRealtimeRefresh())
-    .on("postgres_changes",
-      { event: "*", schema: "public", table: "operational_hyrox_queue_entries" },
-      () => scheduleRealtimeRefresh())
-    .on("postgres_changes",
       { event: "*", schema: "public", table: "operational_booking_replacement_requests" },
       () => scheduleRealtimeRefresh())
     .on("postgres_changes",
@@ -790,23 +757,23 @@ export function listLiveSessions() {
 }
 
 export function listLiveHyroxCycles() {
-  return [...liveCache.hyroxCycles.values()];
+  return [];
 }
 
-export function getLiveHyroxCycle(id) {
-  return liveCache.hyroxCycles.get(id) || null;
+export function getLiveHyroxCycle() {
+  return null;
 }
 
-export function liveHyroxQueuesForCycle(id) {
-  const rows = liveCache.hyroxQueues.filter((row) => row.cycleId === id);
-  return {
-    weeklyWaitlist: rows
-      .filter((row) => row.kind === "weekly_waitlist")
-      .sort((a, b) => (a.joinedAt - b.joinedAt) || a.id.localeCompare(b.id)),
-    venueSwitches: rows
-      .filter((row) => row.kind === "venue_switch")
-      .sort((a, b) => (a.joinedAt - b.joinedAt) || a.id.localeCompare(b.id)),
-  };
+export function liveHyroxQueuesForCycle() {
+  return { weeklyWaitlist: [], venueSwitches: [] };
+}
+
+export function liveRetiredSessionStub(id) {
+  return liveCache.retiredSessionIds.has(id) ? { id, activityId: "hyrox-bft" } : null;
+}
+
+export function liveRetiredBookingStub(id) {
+  return liveCache.retiredBookingIds.has(id) ? { id, cycleId: "retired" } : null;
 }
 
 export function liveActivityTemplates() {
@@ -945,7 +912,8 @@ export async function liveReplacementInvite(tokenHash) {
   const row = await runOperationalRpc("get_operational_replacement_invite", {
     p_token_hash: tokenHash,
   }, { skipRefresh: true });
-  return buildReplacementRequestRow(row);
+  const request = buildReplacementRequestRow(row);
+  return replacementRequestIsRetired(request) ? null : request;
 }
 
 export async function liveAcceptReplacement(tokenHash) {
@@ -971,7 +939,8 @@ export async function liveCancelReplacement(requestId) {
 
 export async function liveListReplacementRequests() {
   const rows = await runOperationalRpc("list_operational_replacement_requests", {}, { skipRefresh: true });
-  const requests = (rows || []).map(buildReplacementRequestRow).filter(Boolean);
+  const requests = (rows || []).map(buildReplacementRequestRow)
+    .filter((request) => request && !replacementRequestIsRetired(request));
   liveCache.replacementRequests = requests;
   return requests;
 }
