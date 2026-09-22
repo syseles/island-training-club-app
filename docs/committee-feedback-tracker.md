@@ -4,7 +4,7 @@ How to build and run the committee feedback tracker as a Google Sheet. The sheet
 
 **Who this is for:** the person maintaining the sheet on behalf of the app team. Committee members only need the share link and the "How to use" tab.
 
-**Time to set up:** about 15 minutes.
+**Time to set up:** about 2 minutes with the Apps Script fast path, or about 15 minutes by hand.
 
 ## What You Will Build
 
@@ -15,6 +15,20 @@ A Google Sheet with three tabs:
 | How to use | Plain-language instructions for committee members | App team only |
 | Feedback tracker | The main sheet — one row per piece of feedback | Committees fill columns A–I; app team fills columns J–N |
 | Lists | Dropdown values (committees, screens, feedback types, statuses) | App team only |
+
+## Fast Path: Run The Builder Script
+
+`docs/feedback-tracker-builder.js` is an Apps Script that performs Steps 2–6 for you — tabs, headers, self-numbering IDs, all six dropdowns, status colours, and protection over the app-team columns and the Lists tab.
+
+1. Go to [sheets.new](https://sheets.new), then **Extensions → Apps Script**.
+2. Delete the placeholder code, paste the entire contents of `docs/feedback-tracker-builder.js`, and save (Ctrl+S / ⌘S).
+3. Select **buildFeedbackTracker** in the toolbar, click **Run**, and approve the one-time permission prompt.
+
+The sheet is then ready except for Step 7 (share + notifications) and adding your committee names on the Lists tab. The script announces both when it finishes.
+
+> **Re-running the script rebuilds every tab from scratch and wipes any feedback rows.** Run it once before go-live; afterwards, edit the Lists tab directly for small value changes. If the app gains or renames a screen, update the `SCREENS` list in the script (and the Lists tab) so the dropdown keeps matching reality.
+
+The steps below remain the manual fallback if you'd rather build by hand.
 
 ## Step 1: Create The Sheet And Import The Tracker Tab
 
