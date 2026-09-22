@@ -28,9 +28,9 @@ identity, notifications, Giving, Admin, and approval workflows.
   Dated controls appear under **Activities → Weekly Event Controls**, split
   into Free & RSVP Events and Paid Sessions. Each Admin route exposes exactly
   one active tab.
-- **State compatibility:** the current local state is v23; v9 through v22
+- **State compatibility:** the current local state is v24; v9 through v23
   persisted snapshots are accepted and migrated while preserving genuine
-  records.
+  non-pool records.
 
 Pending and declined profiles can browse public surfaces but cannot render or
 invoke Payment reservation, queue, or pay controls, and cannot use Giving
@@ -219,6 +219,65 @@ To use live mode locally, edit `app/index.html`'s inline `<script>` block to set
 project's values. Refresh the page after changes. Manage live identities in
 Supabase Admin; this cleanup does not change the schema or delete live users.
 
+## HYROX pool retirement: backend-first deployment
+
+Island ECC is the only active HYROX session. It keeps the direct paid-session
+reservation, waitlist, payment, receipt, attendance, replacement, collector,
+and venue-confirmation behavior. Retained BFT/Midtown pool test records are
+hidden from browser roles, not deleted. Retirement sends no cancellation or
+member notification.
+
+Known retired HYROX deep links render `This session is no longer available.`;
+unknown IDs keep the existing safe not-found behavior; neither redirects to
+Island ECC.
+
+The reviewed backend artifact is
+`supabase/migrations/20260922000001_retire_bft_midtown_hyrox_pool.sql`. Its
+exact migration order is after `20260921000001_prayer_requests.sql` and
+`20260921000002_declined_profile_decisions.sql`; on a clean disposable stack it
+is the final source-tip migration after the complete filename-ordered chain.
+Production has known history drift, so do not replay that chain, run `db push`
+or `--include-all`, or repair an older version. Apply only the retirement
+migration after confirming its hash, the linked project, prerequisite schema,
+and remote history.
+
+Follow the complete [operational backend retirement
+procedure](operational-backend.md#hyrox-pool-retirement-backend-first-deployment).
+Its required order is:
+
+1. Run the static safety test plus a clean disposable migration replay and the
+   rollback-scoped retirement integration.
+2. Collect the trusted SQL production inventory and retain count-only evidence.
+   Do not log member names, emails, profile IDs, payment references,
+   replacement tokens, notification bodies, or screenshots of row content.
+   Confirm future pool rows are the acknowledged test records.
+3. Apply and verify only
+   `20260922000001_retire_bft_midtown_hyrox_pool.sql`. Confirm BFT/Midtown are
+   inactive, Island ECC remains active, browser reads and pool RPCs are denied,
+   shared RPC guards reject retired targets before side effects, retained row
+   counts/statuses are unchanged, and no retirement notification was inserted.
+4. Record only version `20260922000001` after every backend check passes. Then
+   deploy the Testing/preview frontend against that migrated project; never
+   deploy the dependent frontend first.
+5. In separate disposable member/Admin sessions, prove retired cycles, queues,
+   bookings, receipts, replacements, and notifications do not hydrate. Verify
+   known retired and unknown deep links use the exact behavior above. Complete
+   Island ECC reserve → mark paid → Admin confirm → receipt → attendance,
+   waitlist, and replacement acceptance without changing payer/receipt owner.
+6. Promote the exact accepted Testing snapshot, repeat minimal production
+   acceptance, compare the count-only evidence again, and remove fixtures.
+
+A failed or unexecuted backend, privacy, retained-count, denial, or Island ECC
+check blocks frontend deployment. Do not treat a successful SQL command alone
+as acceptance.
+
+Rollback is a **forward-only rollback**. Preserve retained rows and add a new,
+reviewed migration for any intentional restoration of template state, grants,
+policies, functions, or provisioning, followed by a compatible frontend
+revision in backend-first order. Never edit/replay the applied retirement or
+historical migrations, drop retained tables, or expose the old pool UI while
+the retirement backend remains active.
+
 ## Private prayer requests: deployment, acceptance, and rollback
 
 Private prayer requests are Supabase-authoritative whenever live mode is
@@ -264,15 +323,19 @@ shell output, CI logs, deployment notes, or tickets.
 ### Clean local migration and rollback-scoped integration gate
 
 From the repository root, first prove that migration versions are unique and
-that the reviewed migration is the source tip. A non-empty duplicate-version
-result or any other final filename blocks rollout:
+that the current source tip is the reviewed HYROX retirement migration. The
+prayer and decision migrations must remain immediately ordered before that
+later source tip; a non-empty duplicate-version result or any other final
+filename blocks rollout:
 
 ```bash
 test -z "$(find supabase/migrations -maxdepth 1 -type f -name '*.sql' \
   -exec basename {} \; | cut -d_ -f1 | sort | uniq -d)"
 test "$(find supabase/migrations -maxdepth 1 -type f -name '*.sql' \
   -exec basename {} \; | sort | tail -1)" = \
-  "20260921000002_declined_profile_decisions.sql"
+  "20260922000001_retire_bft_midtown_hyrox_pool.sql"
+test -f supabase/migrations/20260921000001_prayer_requests.sql
+test -f supabase/migrations/20260921000002_declined_profile_decisions.sql
 ```
 
 Start from a clean disposable local Supabase database and replay the unmodified
@@ -285,8 +348,9 @@ supabase start --yes \
 ```
 
 The startup output must list each migration version once, apply
-`20260921000001_prayer_requests.sql`, and then apply
-`20260921000002_declined_profile_decisions.sql` last. Run both integration files
+`20260921000001_prayer_requests.sql`, then
+`20260921000002_declined_profile_decisions.sql`, and finally
+`20260922000001_retire_bft_midtown_hyrox_pool.sql`. Run both integration files
 inside the disposable database container with stop-on-error enabled:
 
 ```bash
@@ -1433,12 +1497,13 @@ Browser-level acceptance on the deployed environment:
 5. Block `unpkg.com` and `nominatim.openstreetmap.org` separately. Both
    failure paths must settle on the fallback copy without breaking the
    external Get directions link.
-6. Open both HYROX activity pages. Get directions must appear without a
-   weekly venue form.
+6. Open the Island ECC HYROX activity page. Get directions must appear without
+   a weekly venue form. Retired HYROX activity links must use the neutral state
+   documented above.
 
-Applying the migrations to the real remote target remains a manual deployment
-operation; confirm the selected project and backups before running
-`supabase db push`.
+Applying migrations to the real remote target remains a manual deployment
+operation. Confirm the selected project and backups, then follow each feature's
+reviewed source-tip procedure. Do not run an unqualified `supabase db push`.
 
 ## Initial Super Admin bootstrap
 

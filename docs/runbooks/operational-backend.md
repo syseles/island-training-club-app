@@ -1,341 +1,312 @@
 # Operational Backend Deployment Runbook
 
-This runbook covers applying the shared-pool HYROX operational backend
-migrations to the disposable/staging or production Supabase project,
-verifying the result, and executing the Admin two-browser acceptance test
-before merging to `testing`. Live Supabase remains the source of truth;
-the local v22 engine is prototype parity only. Manual HYROX replacements are
-recorded and confirmed in-app; they never move payment or receipt ownership.
+This is the current runbook for the live Supabase operational backend. Island ECC is the sole active HYROX session and keeps the direct paid-session reservation, waitlist, payment, receipt, attendance, replacement, collector, and venue-confirmation paths.
 
-## What lives in Supabase
+The former BFT Causeway Bay/Midtown28 shared pool is retired. Retained BFT/Midtown pool test records are hidden from browser roles, not deleted. They remain available only to trusted database operators for audit. Retirement does not cancel bookings, move members to Island ECC, delete rows, or send notifications.
 
-From this branch onward, the Supabase project owns the full HYROX
-operational workflow:
+Known retired HYROX deep links render `This session is no longer available.`; unknown IDs keep the existing safe not-found behavior; neither redirects to Island ECC.
 
-- `operational_activity_templates` — `hyrox-bft`, `hyrox-midtown`, and
-  `hyrox-quarry-bay` recurring definitions.
-- `operational_sessions` — one row per venue per scheduled Saturday.
-- `operational_bookings` — reservation, confirmation, payment approval,
-  cancellation, and deferral records.
-- `operational_queue_entries` — legacy waitlist/interest lists.
-- `operational_hyrox_cycles` — one weekly 32-place BFT/Midtown pool with
-  HKT checkpoints and derived venue plan.
-- `operational_hyrox_queue_entries` — weekly waitlist and venue-switch
-  queues.
-- `operational_receipts` — payment-confirmation receipts with sequence
-  numbers `ITC-YYYY-NNNN`.
-- `collector_assignments` — one row per Saturday.
-- `collector_payout_profiles` — collector PayMe/FPS destinations.
-- `operational_booking_replacement_requests` — single-use, expiring HYROX
-  replacement requests with redacted Admin list access.
-- `operational_booking_replacement_audit` — immutable lifecycle history for
-  create, claim, decline, cancel, reject, expire, and confirm actions.
-- `operational_bookings.replacement_profile_id` and confirmation fields — the
-  effective attendee only; `profile_id` remains the payer/receipt owner.
+## Current ownership and safety boundary
 
-All mutations are routed through `SECURITY DEFINER` RPCs:
+Supabase is authoritative in configured live mode. Browser reads are constrained by RLS and browser mutations use scoped security-definer RPCs. The retirement migration:
 
-- Member RPCs: `reserve_operational_session`, `join_operational_queue`,
-  `leave_operational_queue`, `mark_operational_payment`,
-  `defer_operational_booking`.
-- Admin RPCs: `approve_operational_payment`, `cancel_operational_session`,
-  `set_operational_session_time`, `set_operational_venue_tbc`,
-  `set_operational_notice`, `set_operational_midtown_open`,
-  `finalize_operational_gym`, `set_collector_assignment`,
-  `update_collector_payout_profile`, `sweep_operational_deadlines`, plus
-  `admin_decide_operational_replacement`, `list_operational_replacement_requests`,
-  `schedule_hyrox_cycle`, `sweep_hyrox_cycle_deadlines`,
-  `finalize_hyrox_venue_plan`, `reject_hyrox_cycle_payment`,
-  `close_hyrox_venue_allocation`, and `cancel_hyrox_cycle`.
-- Pooled member RPCs: `reserve_hyrox_cycle`,
-  `join_hyrox_cycle_waitlist`, `leave_hyrox_cycle_queue`,
-  `select_hyrox_cycle_venue`, `join_hyrox_venue_switch_queue`, and
-  `leave_hyrox_venue_switch_queue`. Replacement member RPCs are
-  `create_operational_replacement_request`, `get_operational_replacement_invite`,
-  `accept_operational_replacement_request`, `decline_operational_replacement_request`,
-  and `cancel_operational_replacement_request`.
-- Both: `ensure_operational_sessions` (idempotent rolling window) and
-  `ensure_hyrox_cycles` (idempotent parent-cycle provisioning for clean future
-  BFT + Midtown Saturdays).
+- deactivates exactly `hyrox-bft` and `hyrox-midtown` while preserving `hyrox-quarry-bay`;
+- removes browser access to pool cycles and cycle queues;
+- filters retired sessions, bookings, queues, receipts, replacements, and notifications;
+- revokes pool-only RPCs and guards shared direct-session RPCs before side effects;
+- disables cycle provisioning and pool reminders;
+- leaves retained domain rows and their statuses unchanged.
 
-## Apply the migrations
+The historical pool tables and migrations remain because they define the retained schema. Their presence does not make the pool an active product.
 
-The deployment is intentionally manual. First apply the repository’s
-pre-existing migrations through `20260902000001_hyrox_bft_quarry_bay.sql`.
-Then apply the pooled-HYROX, attendee-name, replacement, and Admin operations migrations in this exact order, in the
-Supabase SQL Editor (or via `supabase db push` from a trusted workstation):
+## Migration order
 
-1. Apply the pre-existing operational migrations in filename order:
-   `20260808000001_operational_schema.sql`,
-   `20260808000002_operational_member_rpcs.sql`,
-   `20260808000003_operational_admin_rpcs.sql`, and
-   `20260808000004_operational_realtime_seed.sql`.
-2. Apply the later operational migrations in filename order, including
-   `20260902000001_hyrox_bft_quarry_bay.sql` and
-   `20260902000002_quarry_bay_island_ecc.sql` for the canonical BFT and
-   separate Quarry Bay session.
-3. Apply the pooled-HYROX migrations in this exact order:
-   `20260903000001_hyrox_cycle_schema.sql` — cycle/queue columns, RLS and
-   pooled constraints;
-   `20260903000002_hyrox_cycle_member_rpcs.sql` — pooled member actions;
-   `20260903000003_hyrox_cycle_reconciliation.sql` — payment checkpoints,
-   automatic allocation and receipts;
-   `20260903000004_hyrox_cycle_allocation.sql` — venue switches, closure
-   and cancellation carry-forward;
-   `20260904000001_hyrox_cycle_auto_provision.sql` — automatic recurring
-   parent-cycle provisioning; and
-   `20260904000002_hyrox_quarry_bay_capacity.sql` — Quarry Bay’s 30-place
-   capacity.
-4. Apply the later Admin operations migrations in filename order, ending with:
-   `20260905000000_operational_attendee_names.sql` — approved-member,
-   names-only operational roster access;
-   `20260908000001_collector_payment_reminders.sql` — Thursday payment reminders;
-   `20260908000002_hyrox_venue_reminders.sql` — Friday allocation reminders; and
-   `20260909000001_operational_attendance.sql` — paid-session attendance state
-   and the time-gated Admin mutation RPC.
-5. Apply `20260910000001_operational_replacement_requests.sql` for replacement
-   requests, audit history, locked RPCs, effective-attendee mapping, and
-   Realtime publication entries.
-6. Apply the replacement follow-ups in filename order:
-   `20260910000002_operational_attendee_names_rsvp.sql` — names-only RSVP
-   rosters;
-   `20260910000003_replacement_authoritative_eligibility.sql` — paid HYROX
-   eligibility from authoritative session/template metadata for legacy booking
-   snapshots that do not contain `kind`; and
-   `20260910000004_replacement_hyrox_conflict_scope.sql` — same-day replacement
-   conflict checks limited to authoritative HYROX sessions and cycles; and
-   `20260910000005_replacement_admin_notification_roles.sql` — Admin review
-   notifications selected through the authoritative profile role; and
-   `20260910000006_replacement_admin_hyrox_conflict_scope.sql` — HYROX-only
-   conflict checks during final Admin confirmation.
+For a **clean disposable database only**, replay every repository migration once in filename/version order. The operational sequence is:
 
-Apply each migration on its own. Resolve any error before moving to the
-next migration. The verified `feature/shared-operations` branch uses
-`origin/testing` as its base; the same migrations must be applied to
-the same database that the App's anon key reaches.
+1. `20260808000001_operational_schema.sql`
+2. `20260808000002_operational_member_rpcs.sql`
+3. `20260808000003_operational_admin_rpcs.sql`
+4. `20260808000004_operational_realtime_seed.sql`
+5. all later migrations in filename order, including the historical pool schema/RPC migrations `20260903000001`–`20260904000002`, attendance `20260909000001`, replacement migrations `20260910000001`–`20260910000006`, free-event migration `20260920000001`, prayer migration `20260921000001`, and decision repair `20260921000002`;
+6. `20260922000001_retire_bft_midtown_hyrox_pool.sql` last.
 
-## Automatic recurring provisioning
+Do not skip or rewrite historical files in a clean replay: the final retirement migration depends on the schema they created and then closes its browser boundary.
 
-The app calls `ensure_operational_sessions` and `ensure_hyrox_cycles` during
-live boot. Clean future Saturdays receive a draft parent cycle automatically;
-the parent card is visible immediately and registration opens at Monday 6 PM
-HKT. No collector scheduling click is required.
+Production has known migration-history drift. Do **not** replay the chain, use unqualified `supabase db push`, use `--include-all`, or repair an older migration as part of this rollout. Confirm the linked project and remote history first. Apply only the reviewed source-tip file `supabase/migrations/20260922000001_retire_bft_midtown_hyrox_pool.sql` after its prerequisites and production inventory are verified.
 
-A week with active legacy BFT/Midtown bookings or queues is intentionally
-skipped. It remains on the legacy presentation until those records are resolved
-or explicitly migrated; this prevents orphaning member reservations.
+## HYROX pool retirement: backend-first deployment
 
-## Post-deployment verification
+This rollout is strictly backend-first deployment. A frontend containing retirement behavior must not target an unmigrated project.
 
-Run the following read-only checks in the SQL Editor to confirm a clean
-deployment. Compare the output of each query against the expected shape.
+### 1. Local gates
 
-Verify the operational tables exist with RLS enabled, including the pooled
-HYROX and replacement tables:
+From the reviewed checkout, prove migration-version uniqueness and run the complete local safety suite:
 
-```sql
-select c.relname, c.relrowsecurity
-  from pg_class c
-  join pg_namespace n on n.oid = c.relnamespace
- where n.nspname = 'public'
-   and c.relname in (
-     'operational_activity_templates',
-     'operational_sessions',
-     'operational_bookings',
-     'operational_queue_entries',
-     'operational_receipts',
-     'collector_assignments',
-     'collector_payout_profiles',
-     'operational_hyrox_cycles',
-     'operational_hyrox_queue_entries',
-     'operational_booking_replacement_requests',
-     'operational_booking_replacement_audit'
-   )
- order by c.relname;
+```bash
+test -z "$(find supabase/migrations -maxdepth 1 -type f -name '*.sql' \
+  -exec basename {} \; | cut -d_ -f1 | sort | uniq -d)"
+test "$(find supabase/migrations -maxdepth 1 -type f -name '*.sql' \
+  -exec basename {} \; | sort | tail -1)" = \
+  "20260922000001_retire_bft_midtown_hyrox_pool.sql"
+shasum -a 256 supabase/migrations/20260922000001_retire_bft_midtown_hyrox_pool.sql
+bash supabase/tests/retire_hyrox_pool_safety.sh
 ```
 
-Expected: every row has `relrowsecurity = true`.
+Reset a disposable local Supabase stack, replay the unmodified chain, and run the rollback-scoped integration:
 
-Verify the operational live tables are in the Realtime publication:
-
-```sql
-select tablename
-  from pg_publication_tables
- where pubname = 'supabase_realtime'
-   and schemaname = 'public'
-   and tablename in (
-     'operational_sessions',
-     'operational_bookings',
-     'operational_queue_entries',
-     'operational_receipts',
-     'collector_assignments',
-     'collector_payout_profiles',
-     'operational_hyrox_cycles',
-     'operational_hyrox_queue_entries',
-     'operational_booking_replacement_requests',
-     'operational_booking_replacement_audit'
-   )
- order by tablename;
+```bash
+supabase stop --no-backup || true
+supabase start -x studio,imgproxy,edge-runtime,logflare,vector,supavisor
+supabase db reset --local --no-seed
+docker exec -i supabase_db_island-training-club-app \
+  psql -U postgres -d postgres -X -P pager=off -v ON_ERROR_STOP=1 \
+  < supabase/tests/retire_hyrox_pool_integration.sql
 ```
 
-Expected: ten rows, including `operational_hyrox_cycles`,
-`operational_hyrox_queue_entries`, and the two replacement tables.
+Expected: the integration emits `OK: retired HYROX pool boundary`, ends with `ROLLBACK`, and exits zero. Never run this reset or integration against production, Testing, staging, a shared database, or a database containing real user data.
 
-Verify the pooled RPCs are executable only through their intended role grants:
+### 2. Read-only production inventory
 
-```sql
-select routine_name, grantee, privilege_type
-  from information_schema.routine_privileges
- where routine_schema = 'public'
-   and routine_name in (
-     'reserve_hyrox_cycle', 'join_hyrox_cycle_waitlist',
-     'finalize_hyrox_venue_plan', 'reject_hyrox_cycle_payment',
-     'select_hyrox_cycle_venue', 'join_hyrox_venue_switch_queue',
-     'cancel_hyrox_cycle'
-   )
- order by routine_name, grantee;
+Before any shared mutation, confirm the target project, backup/PITR status, reviewed commit, migration SHA-256, and remote history:
+
+```bash
+export SUPABASE_PROJECT_REF="<confirmed-project-ref>"
+supabase link --project-ref "$SUPABASE_PROJECT_REF"
+supabase migration list --linked
 ```
 
-Expected: only the documented authenticated role grants appear; internal
-locked helpers are not executable by `public`, `anon`, or `authenticated`.
+Stop if the target or history is unexpected, if `20260922000001` is already present without matching reviewed evidence, or if Island ECC is absent/inactive.
 
-Verify the 15 August 2026 sessions are seeded as cancelled with the
-required reason:
+Run the following in trusted read-only SQL. It deliberately emits canonical activity/status labels and counts only—never member names, emails, profile IDs, payment references, replacement tokens, notification bodies, or screenshots of row content.
 
 ```sql
-select id, cancelled_source, cancelled_by, cancel_reason
-  from public.operational_sessions
- where id in ('hyrox-bft-2026-08-15', 'hyrox-midtown-2026-08-15');
-```
-
-Expected: both rows have `cancel_reason = 'HYROX race weekend'`,
-`cancelled_source = 'system'`, and `cancelled_by is null`.
-
-Verify the activity templates match the configured venues:
-
-```sql
-select activity_id, venue, capacity, price_hkd
+-- Canonical templates: these IDs are product identifiers, not member data.
+select activity_id, active, count(*) as row_count
   from public.operational_activity_templates
+ where activity_id in ('hyrox-bft', 'hyrox-midtown', 'hyrox-quarry-bay')
+ group by activity_id, active
+ order by activity_id;
+
+-- Retained-domain count-only evidence. Save this output for post-apply comparison.
+with retired_sessions as (
+  select id
+    from public.operational_sessions
+   where activity_id in ('hyrox-bft', 'hyrox-midtown')
+), retired_bookings as (
+  select b.id
+    from public.operational_bookings b
+   where b.hyrox_cycle_id is not null
+      or b.session_id in (select id from retired_sessions)
+), retired_replacements as (
+  select r.id
+    from public.operational_booking_replacement_requests r
+   where r.booking_id in (select id from retired_bookings)
+), metrics(metric, bucket, row_count) as (
+  select 'sessions',
+         case when s.session_date >= (now() at time zone 'Asia/Hong_Kong')::date
+              then 'future_or_today' else 'past' end,
+         count(*)
+    from public.operational_sessions s
+   where s.id in (select id from retired_sessions)
+   group by 2
+  union all
+  select 'cycles', coalesce(c.registration_state, 'unknown'), count(*)
+    from public.operational_hyrox_cycles c group by 2
+  union all
+  select 'bookings', coalesce(b.status, 'unknown'), count(*)
+    from public.operational_bookings b
+   where b.id in (select id from retired_bookings) group by 2
+  union all
+  select 'receipts', coalesce(r.status, 'unknown'), count(*)
+    from public.operational_receipts r
+   where r.booking_id in (select id from retired_bookings) group by 2
+  union all
+  select 'direct_queues', coalesce(q.kind, 'unknown') || ':' || coalesce(q.status, 'unknown'), count(*)
+    from public.operational_queue_entries q
+   where q.session_id in (select id from retired_sessions) group by 2
+  union all
+  select 'cycle_queues', coalesce(q.kind, 'unknown') || ':' || coalesce(q.status, 'unknown'), count(*)
+    from public.operational_hyrox_queue_entries q group by 2
+  union all
+  select 'replacements', coalesce(r.status, 'unknown'), count(*)
+    from public.operational_booking_replacement_requests r
+   where r.id in (select id from retired_replacements) group by 2
+  union all
+  select 'replacement_audit', coalesce(a.action, 'unknown'), count(*)
+    from public.operational_booking_replacement_audit a
+   where a.request_id in (select id from retired_replacements) group by 2
+  union all
+  select 'notifications', 'retired_pool_related', count(*)
+    from public.notifications n
+   where n.kind like 'operational_hyrox\_%' escape '\'
+      or n.destination in (
+           select '#/activity/' || id from retired_sessions
+           union all select '#/booking/' || id::text from retired_bookings
+           union all select '#/pay/' || id::text from retired_bookings
+         )
+)
+select metric, bucket, row_count
+  from metrics
+ order by metric, bucket;
+```
+
+Record the UTC query time and count-only evidence. Confirm with the data owner that future BFT/Midtown/pool rows are the acknowledged test records. A mismatch or evidence of genuine future member activity blocks deployment; do not infer consent, cancel it, migrate it, or inspect personal fields.
+
+### 3. Apply only the retirement migration
+
+Reconfirm that the production templates are still in the expected pre-retirement state and the remote migration list does not contain `20260922000001`. With explicit production authorization, apply the reviewed file unchanged to the confirmed project using the trusted Supabase SQL Editor or the separately approved linked CLI command:
+
+```bash
+supabase db query --linked \
+  --file supabase/migrations/20260922000001_retire_bft_midtown_hyrox_pool.sql
+```
+
+Command success is not acceptance. Do not deploy the dependent frontend yet. Do not run cancellation RPCs or any cleanup statement.
+
+### 4. Verify backend state before history repair or frontend deployment
+
+The template query must return BFT and Midtown inactive and Island ECC active:
+
+```sql
+select activity_id, active
+  from public.operational_activity_templates
+ where activity_id in ('hyrox-bft', 'hyrox-midtown', 'hyrox-quarry-bay')
  order by activity_id;
 ```
 
-Expected: `hyrox-bft` (BFT Causeway Bay, 20, 180), `hyrox-midtown`
-(Midtown28 Fitness, 12, 180), and `hyrox-quarry-bay` (10/F, Island ECC,
-Quarry Bay; Saturday 11:00; 60 minutes; capacity 30; HK$180; open by
-default; directions query `Island ECC, Quarry Bay, Hong Kong`).
+Expected:
 
-Confirm the rejected registrations, gym confirmation, and cancellation
-gates are enforced:
+```text
+hyrox-bft         false
+hyrox-midtown     false
+hyrox-quarry-bay  true
+```
+
+Verify the canonical helpers and pool RPC privilege boundary. All three helpers must deny `anon` and `authenticated`; every listed pool RPC must deny both browser roles:
 
 ```sql
--- Anonymous reservation must be rejected.
-select reserve_operational_session('hyrox-bft-2026-08-22');
--- Error: "Authentication required."
+with expected(signature) as (
+  values
+    ('public.operational_is_retired_hyrox_activity(text)'),
+    ('public.operational_is_retired_hyrox_session(text)'),
+    ('public.operational_is_retired_hyrox_booking(uuid)'),
+    ('public.ensure_hyrox_cycles(date,integer)'),
+    ('public.reserve_hyrox_cycle(text,text,boolean)'),
+    ('public.join_hyrox_cycle_waitlist(text,text,boolean)'),
+    ('public.select_hyrox_cycle_venue(uuid,text)'),
+    ('public.join_hyrox_venue_switch_queue(uuid,text)'),
+    ('public.cancel_hyrox_cycle(text,text)'),
+    ('public.send_hyrox_member_payment_reminders(timestamp with time zone)'),
+    ('public.send_hyrox_collector_payment_reminder(timestamp with time zone)'),
+    ('public.send_hyrox_venue_reminders(timestamp with time zone)')
+)
+select signature,
+       to_regprocedure(signature) is not null as exists,
+       coalesce(has_function_privilege('anon', to_regprocedure(signature), 'EXECUTE'), false)
+         as anon_execute,
+       coalesce(has_function_privilege('authenticated', to_regprocedure(signature), 'EXECUTE'), false)
+         as authenticated_execute
+  from expected
+ order by signature;
 ```
 
-The anon key in the browser will not reach this RPC; the call is only
-useful inside the SQL editor while impersonating.
+Verify pool tables enforce RLS, expose no browser-readable policy, and grant no browser mutation privilege. Historical `SELECT` grants on the two cycle tables are harmless only while RLS is enabled and no applicable policy exists; the authenticated acceptance below must also prove those queries return zero rows:
 
-If the post-deployment checks fail, **do not deploy the application
-update**. Re-run the migrations in a disposable database (see below) and
-compare the schema. Reapply any missing migration and re-verify before
-proceeding.
+```sql
+with checked(table_name) as (
+  values
+    ('operational_hyrox_cycles'),
+    ('operational_hyrox_queue_entries'),
+    ('operational_booking_replacement_requests'),
+    ('operational_booking_replacement_audit')
+)
+select x.table_name,
+       c.relrowsecurity as rls_enabled,
+       count(p.policyname) as browser_read_policies,
+       has_table_privilege('anon', format('public.%I', x.table_name), 'INSERT,UPDATE,DELETE')
+         as anon_can_mutate,
+       has_table_privilege('authenticated', format('public.%I', x.table_name), 'INSERT,UPDATE,DELETE')
+         as authenticated_can_mutate
+  from checked x
+  join pg_class c on c.oid = format('public.%I', x.table_name)::regclass
+  left join pg_policies p
+    on p.schemaname = 'public'
+   and p.tablename = x.table_name
+   and p.cmd = 'SELECT'
+ group by x.table_name, c.relrowsecurity
+ order by x.table_name;
+```
 
-## Disposable database verification
+Every row must have `rls_enabled = true`, `browser_read_policies = 0`, and both mutation values false. Then rerun the exact inventory query from step 2. Every retained-domain count and status bucket must equal the pre-apply evidence; only the BFT/Midtown template `active` flags may change. The pool-related notification count must also be unchanged.
 
-Run the destructive verifier against a fresh, empty Supabase-compatible
-database before every production apply. The verifier replays every
-migration and runs the SQL integration suite (RLS, atomic cancellation,
-seed assertions, RPC refusal messages).
+Finally verify Island ECC remains present and future direct sessions remain available:
+
+```sql
+select t.activity_id, t.active, t.venue, t.capacity, t.price_hkd,
+       count(s.id) filter (
+         where s.session_date >= (now() at time zone 'Asia/Hong_Kong')::date
+       ) as current_and_future_sessions
+  from public.operational_activity_templates t
+  left join public.operational_sessions s using (activity_id)
+ where t.activity_id = 'hyrox-quarry-bay'
+ group by t.activity_id, t.active, t.venue, t.capacity, t.price_hkd;
+```
+
+Expected: one active `hyrox-quarry-bay` template at Island ECC, capacity 30, HK$180, with the expected current/future session window. Any failed check blocks history repair and frontend deployment.
+
+After every backend check and retained-count comparison passes, record only the new version and immediately re-list history:
 
 ```bash
-export ITC_OPERATIONS_TEST_DATABASE_URL='postgresql://...disposable database...'
-export ITC_ALLOW_DATABASE_RESET=1
-bash supabase/tests/verify_operational_backend.sh
+supabase migration repair 20260922000001 --status applied --linked --yes
+supabase migration list --linked
 ```
 
-Expected: every migration applies cleanly, every integration test passes.
+Never repair a historical pool version as part of this rollout.
 
-The safety gate refuses any database that already contains user data.
-Exercise the gate without applying migrations with:
+### 5. Browser denial and Island ECC acceptance
 
-```bash
-bash supabase/tests/verify_operational_backend.sh --safety-check-only
-bash supabase/tests/verify_operational_backend_safety.sh
-```
+Use separate disposable approved-member and Admin fixtures against the migrated backend.
 
-The safety scripts check that the destructive gate refuses missing
-environment variables, missing confirmation, and use of the database
-URL without resetting.
+1. As member and Admin browser sessions, attempts to select pool cycles/queues must fail or return no rows; retired templates, sessions, bookings, receipts, replacements, and notifications must not hydrate.
+2. Pool reservation, waitlist, venue choice/switch, allocation, cancellation, reminder, payment, attendance, and replacement attempts must be denied before any row, audit, queue, or notification side effect.
+3. Re-run count-only evidence and confirm all retained counts remain unchanged and no retirement notification was added.
+4. Complete Island ECC reserve → mark paid → Admin confirmation → receipt → attendance. Exercise waitlist behavior with disposable capacity fixtures where applicable.
+5. Create and accept a disposable Island ECC replacement invite; Admin confirmation changes only the effective attendee. The original payer, payment, receipt owner, amount, and direct session remain unchanged.
+6. Verify visitor, pending, member, Admin, and Super Admin Home/Schedule/Admin surfaces show Island ECC once and no active pool controls or indirect pool counts.
+7. Verify exact deep-link behavior without RPC or avatar calls: known retired Activity, pool, booking, payment, checkout, and receipt references show `This session is no longer available.` and keep their original URL; an unknown identifier shows the existing safe not-found state. Neither case redirects to Island ECC.
+8. Remove all disposable fixtures and prove cleanup with count-only queries.
 
-## Two-browser acceptance test
+Record fixture UUIDs and bounded UTC timestamps only. Never retain names, emails, tokens, payment references, notification bodies, or screenshots containing personal data.
 
-Before approving the merge to `testing`, verify the shared workflow on
-two separate browsers signed in as different administrators.
+### 6. Frontend order
 
-1. Open the Vercel preview or the local server with the new branch
-   deployed. Two admins in two browsers / two profiles. Use the same
-   Supabase project that just received the migrations.
-2. Navigate to **Schedule**. Both browsers show the 15 August 2026 row
-   labelled `Session cancelled by ITC — HYROX race weekend`. The Midtown
-   variant shows the same cancellation.
-3. Navigate to **Activity** for `hyrox-bft-2026-08-15`. Both admins see the
-   canonical cancellation banner; no `Reserve`, `Mark paid`,
-   `Confirm received`, or `Mark confirmed with gym` controls appear.
-4. As **Admin A**, open the next active HYROX session (e.g. the
-   following Saturday). As a member signed in on a third browser, tap
-   **Reserve**, **Mark paid**, and notify Admin A.
-5. As **Admin A**, confirm the payment. Verify the booking moves to
-   `confirmed` and a receipt appears in **Admin → HYROX**.
-6. **Admin B** sees the same confirmed status without reloading. The
-   booking's snapshot is preserved.
-7. As **Admin A**, record the gym confirmation. **Admin B** sees the
-   confirmation timestamp and the optional note.
-8. Move the browser tab for Admin B to the background for sixty
-   seconds. Switch back to the foreground. Verify the live state
-   matches Admin A's view (Realtime refresh).
-9. As **Admin A**, cancel the session with a custom reason. **Admin B**
-   sees the cancellation immediately; the receipts and bookings
-   disappear from the HYROX queue.
-10. Confirm a paid booking was deferred to the next available session
-    and the corresponding queued notification appeared for the member.
-11. For a paid HYROX booking, have the original member create a replacement
-    invite and share it through the user-initiated WhatsApp link. An approved
-    member accepts it; verify the booking still shows the original member as
-    attendee until Admin → Payments confirmation.
-12. Confirm the replacement in Admin → Payments. Verify the effective roster
-    shows the replacement, while the original `profile_id`, payment reference,
-    receipt owner, amount, and allocation remain unchanged. Reject a separate
-    accepted request and verify the original roster remains unchanged.
+Only after steps 1–5 pass:
 
-If any of the above fail, do not merge. The likely causes are:
+1. deploy the Testing/preview frontend from the reviewed commit against the migrated project;
+2. repeat browser denial, exact deep-link, and full Island ECC acceptance in current Chrome and Safari at 375 px;
+3. promote the exact accepted Testing snapshot to production;
+4. repeat minimal canonical-route and Island ECC acceptance, then compare retained counts once more.
 
-- A missing migration; reapply the post-deployment checks.
-- A missing `supabase_realtime` publication entry; reapply migration 4.
-- A missing anon key in `app/index.html`; re-deploy the new branch
-  after fixing the inline script.
+A failed or unexecuted backend gate blocks frontend promotion. Frontend rollback alone does not restore pool access and must never point old pool UI at the migrated backend.
 
-## Rollback
+## Forward-only rollback
 
-Database migrations are forward-only. Do not attempt to drop the
-operational or pooled HYROX tables in production. If a schema fix is
-required, write a new migration that adjusts the table. Before the first
-pooled reservation, a code rollback may return to the legacy child-session
-flow only if no pooled live data exists. After the first pooled reservation,
-rollback must remain pooled-booking compatible and must continue reading
-live Supabase; never fall back to local state.
+Rollback is a forward-only rollback: preserve all retained rows and write a new, separately reviewed migration that explicitly restores any intended template activation, policies, grants, functions, and provisioning. Pair it with a compatible frontend deployment in backend-first order.
 
-## Pre-deployment checklist
+Never edit, delete, replay, or mark down `20260922000001_retire_bft_midtown_hyrox_pool.sql`; never alter historical pool migrations; never drop/truncate retained tables; and never reconstruct state from browser caches. If only the retirement frontend is defective, redeploy a reviewed frontend that keeps pool entry points unavailable while the backend boundary remains in force.
 
-- [ ] Disposable database verifier passes on an explicitly acknowledged disposable database.
-- [ ] Pooled-HYROX, attendee-name, Admin operations, and replacement migrations applied in order after the pre-existing operational migrations.
-- [ ] `20260909000001_operational_attendance.sql` applied after both reminder migrations.
-- [ ] Replacement tables are RLS-protected and present in the Realtime publication.
-- [ ] Post-deployment SQL checks executed and match the expected output.
-- [ ] Replacement acceptance/rejection test passes without payment or receipt transfer.
-- [ ] SQL integration verification was run only against an explicitly disposable database, or explicitly marked not run.
-- [ ] 15 August 2026 sessions render with the canonical cancellation copy
-      in two separate browsers.
-- [ ] Two-browser cross-admin acceptance test passes.
-- [ ] Application preview verified with the same anon key the deployed
-      build will use.
+## Release checklist
+
+- [ ] Reviewed commit and migration SHA-256 recorded.
+- [ ] Migration versions unique; retirement migration is source tip.
+- [ ] Disposable clean replay and rollback-scoped retirement integration pass.
+- [ ] Correct linked project, backups, and remote migration history confirmed.
+- [ ] Pre-apply count-only evidence recorded without personal or payment data.
+- [ ] Future pool records confirmed as acknowledged test data.
+- [ ] Only `20260922000001_retire_bft_midtown_hyrox_pool.sql` applied.
+- [ ] Template, helper, grant, RLS, shared-RPC guard, and Island ECC checks pass.
+- [ ] Retained counts/statuses and notification count equal the baseline.
+- [ ] Browser denial and full Island ECC direct-session acceptance pass.
+- [ ] Migration history records `20260922000001` exactly once.
+- [ ] Testing frontend acceptance precedes exact-snapshot production promotion.
+- [ ] Disposable fixtures removed and final count-only evidence recorded.

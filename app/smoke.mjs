@@ -532,6 +532,51 @@ for (const [name, expectedHash] of protectedPoolMigrationHashes) {
   );
 }
 console.log("ok  HYROX retirement migration version and historical pool migrations are protected");
+
+const currentHyroxDocPaths = [
+  "../README.md",
+  "../docs/runbooks/operational-backend.md",
+  "../docs/runbooks/live-auth.md",
+];
+const currentHyroxDocs = currentHyroxDocPaths.map((relativePath) => [
+  relativePath,
+  readFileSync(resolve(__dirnameSmoke, relativePath), "utf8"),
+]);
+for (const [relativePath, source] of currentHyroxDocs) {
+  assert.match(source, /20260922000001_retire_bft_midtown_hyrox_pool\.sql/,
+    `${relativePath} must name the pool-retirement migration`);
+  assert.match(source, /Island ECC is the (?:sole|only) active HYROX session/i,
+    `${relativePath} must state the sole active HYROX contract`);
+  assert.match(source, /Retained BFT\/Midtown pool test records are\s+hidden from browser roles, not deleted\./i,
+    `${relativePath} must state the retained-record contract`);
+  assert.match(source, /backend-first deployment/i,
+    `${relativePath} must state backend-first deployment discipline`);
+  assert.match(source, /forward-only rollback/i,
+    `${relativePath} must state forward-only rollback discipline`);
+  assert.match(source,
+    /Known retired (?:HYROX )?deep links render `This session is no longer available\.`;\s+unknown IDs keep the existing safe not-found behavior; neither redirects to\s+Island ECC\./i,
+    `${relativePath} must document the exact retired deep-link behavior`);
+}
+const currentHyroxDocSource = currentHyroxDocs.map(([, source]) => source).join("\n");
+for (const staleCurrentContract of [
+  /Weekly HYROX uses one shared 32-place BFT\/Midtown pool/i,
+  /HYROX registration is one weekly shared-pool booking for BFT\/Midtown/i,
+  /Clean future Saturdays receive a draft parent cycle automatically/i,
+  /verify the shared workflow on two separate browsers/i,
+]) {
+  assert.doesNotMatch(currentHyroxDocSource, staleCurrentContract,
+    `current documentation must not retain active-pool guidance: ${staleCurrentContract}`);
+}
+for (const [relativePath, source] of currentHyroxDocs.slice(1)) {
+  assert.match(source, /count-only evidence/i,
+    `${relativePath} must require privacy-safe production inventory evidence`);
+  const migrationAt = source.indexOf("20260922000001_retire_bft_midtown_hyrox_pool.sql");
+  const frontendAt = source.search(/deploy (?:the )?(?:Testing\/preview |dependent )?frontend/i);
+  assert.ok(migrationAt >= 0 && frontendAt > migrationAt,
+    `${relativePath} must put the retirement migration before frontend deployment`);
+}
+console.log("ok  current HYROX documentation enforces ECC-only rollout, deep-link, retention, and rollback contracts");
+
 const storeSource = readFileSync(resolve(__dirnameSmoke, "js/store.js"), "utf8");
 const weekVenueSource = storeSource.match(
   /export function setWeekVenue[\s\S]*?\/\/ --- Giving/

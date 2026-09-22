@@ -1962,8 +1962,8 @@ export function markBookingPaid(bookingId, method, ref, now = Date.now()) {
   return b;
 }
 
-// Collector confirms the money arrived. Payment = commitment: every other
-// HYROX venue hold the member had for the same Saturday is released.
+// Collector confirms the direct-session payment, preserving payer ownership
+// while issuing the receipt and enabling the remaining booking lifecycle.
 export function confirmBookingPayment(bookingId, now = Date.now()) {
   assertActiveBookingTarget(bookingId);
   if (isLive()) {
