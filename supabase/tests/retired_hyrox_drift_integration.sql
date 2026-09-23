@@ -39,13 +39,20 @@ insert into public.operational_hyrox_cycles(id,session_date,bft_session_id,midto
 create temporary table drift_before as select pg_temp.drift_rows() rows,pg_temp.drift_catalog() catalog;
 
 -- Exact private diagnostic drift: no PUBLIC ACL, two PUBLIC policies, browser
--- EXECUTE only on the reviewed empty generator (not reserve/join).
+-- EXECUTE on the reviewed empty generator and three no-op reminders.
 create policy "public read HYROX cycles" on public.operational_hyrox_cycles for select to public using (true);
 create policy "member read own HYROX cycle queues" on public.operational_hyrox_queue_entries
  for select to public using ((profile_id = (select auth.uid())) or public.operational_is_admin());
 grant select on public.operational_hyrox_cycles to anon,authenticated;
 grant select on public.operational_hyrox_queue_entries to authenticated;
 grant execute on function public.ensure_hyrox_cycles(date,integer) to anon,authenticated;
+grant execute on function public.send_hyrox_member_payment_reminders(timestamptz),
+ public.send_hyrox_collector_payment_reminder(timestamptz),
+ public.send_hyrox_venue_reminders(timestamptz) to authenticated;
+select pg_temp.drift_assert(bool_and(has_function_privilege('authenticated',f,'EXECUTE')))
+ from unnest(array['public.send_hyrox_member_payment_reminders(timestamptz)',
+ 'public.send_hyrox_collector_payment_reminder(timestamptz)',
+ 'public.send_hyrox_venue_reminders(timestamptz)']) f;
 set local role authenticated;
 select set_config('request.jwt.claim.sub','a2230000-0000-0000-0000-000000000001',true);
 select pg_temp.drift_assert(exists(select 1 from public.operational_hyrox_cycles where id='hyrox-pool-2098-01-04'));
@@ -66,12 +73,28 @@ begin
   end loop;
   perform pg_temp.drift_assert(not has_function_privilege(r,'public.ensure_hyrox_cycles(date,integer)','EXECUTE'));
  end loop;
- perform pg_temp.drift_assert(has_function_privilege('service_role','public.ensure_hyrox_cycles(date,integer)','EXECUTE'));
+ foreach t in array array['public.ensure_hyrox_cycles(date,integer)',
+  'public.send_hyrox_member_payment_reminders(timestamptz)',
+  'public.send_hyrox_collector_payment_reminder(timestamptz)',
+  'public.send_hyrox_venue_reminders(timestamptz)'] loop
+  foreach r in array array['anon','authenticated'] loop
+   perform pg_temp.drift_assert(not has_function_privilege(r,t,'EXECUTE'));
+  end loop;
+  perform pg_temp.drift_assert(not exists(select 1 from pg_proc p,
+   lateral aclexplode(coalesce(p.proacl,acldefault('f',p.proowner))) a
+   where p.oid=t::regprocedure and a.grantee=0 and a.privilege_type='EXECUTE'));
+  foreach r in array array['postgres','service_role'] loop
+   perform pg_temp.drift_assert(has_function_privilege(r,t,'EXECUTE'));
+  end loop;
+ end loop;
  perform pg_temp.drift_assert(has_table_privilege('service_role','public.operational_hyrox_cycles','SELECT'));
 end; $$;
 -- Actual SQL permission denials, not an empty retained-cohort success.
 set local role anon;
 do $$ begin
+ begin perform public.send_hyrox_member_payment_reminders(now()); raise exception 'unexpected reminder execute'; exception when insufficient_privilege then null; end;
+ begin perform public.send_hyrox_collector_payment_reminder(now()); raise exception 'unexpected reminder execute'; exception when insufficient_privilege then null; end;
+ begin perform public.send_hyrox_venue_reminders(now()); raise exception 'unexpected reminder execute'; exception when insufficient_privilege then null; end;
  begin perform 1 from public.operational_hyrox_cycles; raise exception 'unexpected read'; exception when insufficient_privilege then null; end;
  begin perform 1 from public.operational_hyrox_queue_entries; raise exception 'unexpected read'; exception when insufficient_privilege then null; end;
  begin perform public.ensure_hyrox_cycles(current_date,1); raise exception 'unexpected execute'; exception when insufficient_privilege then null; end;
@@ -79,6 +102,9 @@ end; $$;
 reset role;
 set local role authenticated;
 do $$ begin
+ begin perform public.send_hyrox_member_payment_reminders(now()); raise exception 'unexpected reminder execute'; exception when insufficient_privilege then null; end;
+ begin perform public.send_hyrox_collector_payment_reminder(now()); raise exception 'unexpected reminder execute'; exception when insufficient_privilege then null; end;
+ begin perform public.send_hyrox_venue_reminders(now()); raise exception 'unexpected reminder execute'; exception when insufficient_privilege then null; end;
  begin perform 1 from public.operational_hyrox_cycles; raise exception 'unexpected read'; exception when insufficient_privilege then null; end;
  begin perform 1 from public.operational_hyrox_queue_entries; raise exception 'unexpected read'; exception when insufficient_privilege then null; end;
  begin perform public.ensure_hyrox_cycles(current_date,1); raise exception 'unexpected execute'; exception when insufficient_privilege then null; end;
@@ -88,7 +114,10 @@ select pg_temp.drift_assert((public.reserve_operational_session('hyrox-quarry-ba
 reset role;
 -- Independent inherited PUBLIC grants must also be closed; no default ACL fix.
 grant select on public.operational_hyrox_cycles,public.operational_hyrox_queue_entries to public;
-grant execute on function public.ensure_hyrox_cycles(date,integer) to public;
+grant execute on function public.ensure_hyrox_cycles(date,integer),
+ public.send_hyrox_member_payment_reminders(timestamptz),
+ public.send_hyrox_collector_payment_reminder(timestamptz),
+ public.send_hyrox_venue_reminders(timestamptz) to public,anon;
 -- APPLY 00003
 select pg_temp.drift_assert(catalog=pg_temp.drift_catalog()) from drift_before;
 select 'OK: exact drift, browser denial, preservation, idempotence, PUBLIC and Island ECC';

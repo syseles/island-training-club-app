@@ -240,7 +240,15 @@ Production has known history drift: never replay that chain, run `db push` or `-
 Never edit, replay, reapply, or repair `00001` or `00002`.
 Apply only 00003 after hash/preflight: confirmed project, approved commit/SHA-256,
 backup/PITR, both earlier versions exactly once and 00003 absent, exact observed
-policy/ACL drift only, and count-only evidence. Unexpected findings mean STOP.
+policy/ACL drift only, and count-only evidence. 00003 was never applied to a shared
+database; review the amended nine-statement artifact, not its superseded local bytes.
+Its exact EXECUTE revocations cover `ensure_hyrox_cycles(date,integer)`,
+`send_hyrox_member_payment_reminders(timestamptz)`,
+`send_hyrox_collector_payment_reminder(timestamptz)` and
+`send_hyrox_venue_reminders(timestamptz)` for PUBLIC/anon/authenticated only;
+service/operator access and all reviewed no-op bodies remain unchanged.
+The repaired catalog must equal pinned `5a0ecdeb48872f4ec2aacebc1d037c14`.
+Unexpected findings mean STOP.
 
 For the stopped Task 7 journal, follow the operational runbook's 00003 recovery
 order: preserve the mode-0600 v5 journal; never clear uncertainty or use ordinary
@@ -249,7 +257,19 @@ use only separately reviewed one-off recovery with durable lock/receipt, a fresh
 short-lived journal/hash/count-bound acknowledgement, exact provenance/FK closure,
 and locked SERIALIZABLE exact-ID/xmin/full-row-digest cleanup. Recheck the original
 fixture-excluded baseline and retained digests, post-00003 catalog/history/source/ACL
-contracts, and zero fixtures before journal removal. Any mismatch preserves evidence.
+contracts, and zero fixtures before journal removal. Strict organic-session normalization
+may account only for additional canonical, open, uncancelled, future sessions of active
+non-retired templates, with matching weekday/time/duration/venue/capacity/price and
+untouched generator defaults. Candidates must be absent from baseline and journal:
+creation after journal creation is only a conservative bound; subtraction must reproduce
+the saved count and whole-row digest exactly. All other domains, retained cohorts,
+notifications and counts remain exact. Bind the organic-ID hash to review/acknowledgement;
+record IDs only in the private mode-0600 receipt, never adopt or delete these rows.
+Preserve their complete unnormalized snapshot before and after commit. Sessions/templates
+receive SHARE locks during cleanup; independently review blocking impact. The deployed
+generator remains active for non-retired templates while the old frontend is live;
+new writes after review invalidate the snapshot rather than expanding authorization.
+Any mismatch preserves evidence.
 Resolver version 8 is already deployed on this stopped target; do not redeploy it
 for this ACL-only repair. No remote action or promotion is authorized here.
 

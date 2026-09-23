@@ -652,6 +652,16 @@ function assertHyroxRunbookContract(source, relativePath) {
   assert.match(rollout, /Never edit, replay, reapply, or repair `00001` or `00002`/);
   assert.match(rollout, /separately reviewed one-off recovery/);
   assert.match(rollout, /never clear uncertainty/i);
+  for (const reminder of ["send_hyrox_member_payment_reminders", "send_hyrox_collector_payment_reminder", "send_hyrox_venue_reminders"]) {
+    assert.ok(rollout.includes(`${reminder}(timestamptz)`), `${relativePath} must name each exact reminder overload`);
+  }
+  assert.match(rollout, /5a0ecdeb48872f4ec2aacebc1d037c14/);
+  assert.match(rollout, /never applied to a shared\s+database/);
+  assert.match(rollout, /organic-session normalization/i);
+  assert.match(rollout, /never adopt or delete/i);
+  assert.match(rollout, /mode-0600 receipt/);
+  assert.match(rollout, /subtraction must reproduce|subtracting candidates must reproduce/i);
+  assert.match(rollout, /generator remains active for non-retired templates/);
   assert.doesNotMatch(rollout,
     /(?:--file\s+supabase\/migrations\/2026092200000[12]|migration repair 2026092200000[12]|apply only\s+`(?:supabase\/migrations\/)?2026092200000[12])/i,
     `${relativePath} must never instruct replay or repair of 00001/00002`);

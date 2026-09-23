@@ -14,13 +14,16 @@ EXPECTED = [
     'revoke select on table public.operational_hyrox_cycles from public, anon, authenticated',
     'revoke select on table public.operational_hyrox_queue_entries from public, anon, authenticated',
     'revoke execute on function public.ensure_hyrox_cycles(date, integer) from public, anon, authenticated',
+    'revoke execute on function public.send_hyrox_member_payment_reminders(timestamptz) from public, anon, authenticated',
+    'revoke execute on function public.send_hyrox_collector_payment_reminder(timestamptz) from public, anon, authenticated',
+    'revoke execute on function public.send_hyrox_venue_reminders(timestamptz) from public, anon, authenticated',
     "notify pgrst, 'reload schema'",
 ]
 
 
 def check(source):
     statements = [' '.join(s.split()) for s in re.sub(r'--[^\n]*', '', source).split(';') if s.strip()]
-    assert statements == EXPECTED, '00003 must contain only the six reviewed statements, in order'
+    assert statements == EXPECTED, '00003 must contain only the nine reviewed statements, in order'
 
 
 def safety():
@@ -36,6 +39,12 @@ def safety():
     check(source)
     negatives = [source.replace('from public, anon, authenticated', 'from anon, authenticated', 1),
                  source.replace('if exists', '', 1), source.replace('revoke execute', 'grant execute')]
+    # Every reminder overload, role and order is part of the complete contract.
+    for statement in EXPECTED[5:8]:
+        negatives += [source.replace(statement + ';', ''),
+                      source.replace(statement, statement.replace('timestamptz', 'timestamp')),
+                      source.replace(statement, statement.replace('public, anon, authenticated', 'public, anon')),
+                      source.replace(statement, statement.replace('public, anon, authenticated', 'public, anon, authenticated, service_role'))]
     negatives += [source + '\n' + s + ';' for s in [
         'delete from public.notifications', 'alter default privileges revoke execute on functions from public',
         'alter table public.operational_hyrox_cycles disable row level security',
