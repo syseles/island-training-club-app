@@ -71,42 +71,6 @@ export const SEED_ACTIVITIES = [
     published: true,
   },
   {
-    id: "hyrox-midtown",
-    name: "ITC HYROX",
-    kind: "paid",
-    category: "HYROX",
-    weekday: 6, // Saturday
-    time: "11:00",
-    durationMin: 75,
-    location: "Midtown28 Fitness",
-    mapsQuery: "Midtown28 Fitness, Hong Kong",
-    photo: PH + "hyrox.webp",
-    blurb:
-      "Weekly hybrid race training: ski, sled, burpees and running intervals. Every session is purchased separately at one fixed price.",
-    memberNote: "Gym entry fee is included in the session price.",
-    price: 180, // HKD
-    capacity: 12,
-    published: true,
-  },
-  {
-    id: "hyrox-bft",
-    name: "ITC HYROX",
-    kind: "paid",
-    category: "HYROX",
-    weekday: 6, // Saturday
-    time: "11:15",
-    durationMin: 75,
-    location: "BFT Causeway Bay",
-    mapsQuery: "BFT Causeway Bay, Hong Kong",
-    photo: PH + "hyrox.webp",
-    blurb:
-      "Weekly hybrid race training: ski, sled, burpees and running intervals. Every session is purchased separately at one fixed price.",
-    memberNote: "Gym entry fee is included in the session price.",
-    price: 180, // HKD
-    capacity: 20,
-    published: true,
-  },
-  {
     id: "hyrox-quarry-bay",
     name: "ITC HYROX",
     kind: "paid",

@@ -99,6 +99,7 @@ function testHarness(options: {
       });
       return Promise.resolve({ avatar: current, replacedObjectPaths });
     },
+    isRetiredHyroxSession: () => Promise.resolve(false),
     listSessionAttendees: () => Promise.resolve([]),
     listAdminMembers: () => Promise.resolve([]),
     hideAvatar: () => Promise.reject(new Error('unused')),

@@ -8,8 +8,8 @@ let request = {
   status: "pending",
   originalDisplayName: "Payer Member",
   replacementDisplayName: null,
-  sessionId: "hyrox-bft-2099-01-03",
-  snapshot: { name: "ITC HYROX", kind: "paid", dateISO: "2099-01-03", time: "11:15" },
+  sessionId: "hyrox-quarry-bay-2099-01-03",
+  snapshot: { name: "ITC HYROX", kind: "paid", dateISO: "2099-01-03", time: "11:00" },
   createdAt: "2098-12-31T00:00:00.000Z",
   expiresAt: "2099-01-01T00:00:00.000Z",
 };
@@ -17,8 +17,23 @@ let request = {
 const fakeSupabase = {
   createClient() { return this; },
   auth: { getSession: async () => ({ data: { session: null }, error: null }) },
-  from() {
-    const result = { data: [], error: null };
+  from(table) {
+    const result = {
+      data: table === "operational_sessions"
+        ? [{
+          id: "hyrox-quarry-bay-2099-01-03",
+          activity_id: "hyrox-quarry-bay",
+          session_date: "2099-01-03",
+          start_time: "11:00:00",
+          duration_minutes: 60,
+          venue: "10/F, Island ECC, Quarry Bay",
+          capacity: 30,
+          price_hkd: 180,
+          is_open: true,
+        }]
+        : [],
+      error: null,
+    };
     const chain = {
       select() { return chain; },
       gte() { return chain; },

@@ -26,19 +26,17 @@ import {
 import { config, supabase, isLive } from "./config.js";
 import { INDEMNITY_VERSION } from "./documents.js";
 import { normalizeAvatarPresentation } from "./avatar.js";
+import {
+  isRetiredHyroxActivityId,
+  isRetiredHyroxCycleId,
+  isRetiredHyroxSession,
+  isRetiredHyroxBooking,
+  isRetiredHyroxReceipt,
+  isRetiredHyroxNotification,
+  isRetiredHyroxLegacyRouteId,
+} from "./hyrox-retirement.js";
 import { normalizeMeetingPoint, normalizeVenueLocation } from "./venue.js";
 import * as liveOps from "./operations.js";
-import {
-  hyroxCycleId,
-  hyroxRegistrationOpensAt,
-  hyroxPaymentReminderAt,
-  hyroxPaymentDeadline,
-  hyroxHolderGraceDeadline,
-  hyroxPromotedPaymentDeadline,
-  hyroxChoiceDeadline,
-  allocateHyroxVenues,
-  HYROX_POOL_CAPACITY,
-} from "./hyrox-cycle.js";
 
 const STORAGE_KEY = "itc.prototype.v1";
 const APPLY_DEVICE_KEY = "itc.device.id";
@@ -46,7 +44,7 @@ const APPLY_DRAFT_KEY = "itc.apply.draft.v1";
 const APPLY_DRAFT_VERSION = 1;
 const LAST_ROUTE_KEY = "itc.last-route.v1";
 const LAST_ROUTE_VERSION = 1;
-const STATE_VERSION = 23;
+const STATE_VERSION = 24;
 
 const ROUTE_ID = "[A-Za-z0-9._~-]+";
 const RESTORABLE_ROUTE_PATTERNS = [
@@ -71,6 +69,7 @@ let liveGivingCampaign = null;
 // in memory only; device-local persistence stores UUID-keyed operations.
 let livePaymentDirectory = new Map();
 const liveReplacementTokens = new Map();
+const livePendingReplacementStates = new Map();
 const LIVE_PROFILE_TTL_MS = 30_000;
 const AVATAR_CACHE_EXPIRY_SKEW_MS = 30_000;
 const AVATAR_APPROVED_ROLES = new Set(["member", "admin", "superadmin", "super_admin"]);
@@ -81,6 +80,72 @@ const sessionAvatarCache = new Map();
 let adminAvatarCache = null;
 
 let state = null;
+
+function retirementSession(id) {
+  if (!id) return null;
+  if (isLive()) return liveOps.getLiveSession(id) || liveOps.liveRetiredSessionStub?.(id) || null;
+  return findSession(state?.activities || [], id)
+    || state?.oneOffEvents?.find((event) => `${event.id}-${event.dateISO}` === id)
+    || null;
+}
+
+function retirementBooking(id) {
+  if (!id) return null;
+  if (isLive()) return liveOps.liveBookingById(id) || liveOps.liveRetiredBookingStub?.(id) || null;
+  return state?.bookings?.find((booking) => booking.id === id) || null;
+}
+
+const bookingIsRetired = (booking) =>
+  isRetiredHyroxBooking(booking, retirementSession);
+const receiptIsRetired = (receipt) =>
+  isRetiredHyroxReceipt(receipt, retirementBooking);
+const retiredTargetError = () => new Error("This session is no longer available.");
+const retirementBoundaryActive = () => isLive() || Number(state?.version || 0) >= 24;
+
+function assertActiveSessionTarget(sessionOrId) {
+  if (!retirementBoundaryActive()) return;
+  const canonicalSession = typeof sessionOrId === "object"
+    ? sessionOrId
+    : retirementSession(sessionOrId);
+  const unloadedLegacyRoute = typeof sessionOrId === "string"
+    && !canonicalSession
+    && isRetiredHyroxLegacyRouteId(sessionOrId);
+  if (isRetiredHyroxSession(canonicalSession) || unloadedLegacyRoute) {
+    throw retiredTargetError();
+  }
+}
+
+function assertActiveBookingTarget(bookingOrId) {
+  if (!retirementBoundaryActive()) return;
+  const booking = typeof bookingOrId === "object"
+    ? bookingOrId
+    : retirementBooking(bookingOrId);
+  if (bookingIsRetired(booking)) throw retiredTargetError();
+}
+
+export function isRetiredHyroxMemberRoute(kind, id) {
+  if (!retirementBoundaryActive()) return false;
+  if (isRetiredHyroxLegacyRouteId(id)) return true;
+  const routeKind = String(kind || "");
+  const routeId = String(id || "");
+  if (["booking", "pay"].includes(routeKind)) return bookingIsRetired(retirementBooking(routeId));
+  if (routeKind === "receipt") {
+    if (isLive() && liveOps.isLiveRetiredReceiptId(routeId)) return true;
+    const receipt = isLive()
+      ? liveOps.liveReceiptById(routeId)
+      : state?.receipts?.find((row) => row.id === routeId);
+    return receiptIsRetired(receipt);
+  }
+  return false;
+}
+
+export function isRetiredHyroxHashRoute(route) {
+  const value = String(route || "");
+  const direct = value.match(/^#\/(activity|checkout|pay|booking|receipt)\/([^/?#]+)$/);
+  if (direct) return isRetiredHyroxMemberRoute(direct[1], direct[2]);
+  const cycle = value.match(/^#\/hyrox\/([^/?#]+)(?:\/register)?$/);
+  return Boolean(cycle && isRetiredHyroxMemberRoute("hyrox", cycle[1]));
+}
 
 export function isRestorableRoute(route) {
   return typeof route === "string"
@@ -134,7 +199,8 @@ export function startupRoute(currentHash, userId = null) {
 export function shouldRedirectPendingApplicant({ role, hasApplication, route } = {}) {
   return role === "pending"
     && !hasApplication
-    && !["#/apply", "#/community/prayers"].includes(route);
+    && !["#/apply", "#/community/prayers"].includes(route)
+    && !isRetiredHyroxHashRoute(route);
 }
 
 function freshState() {
@@ -191,7 +257,6 @@ export async function hydrateLiveOperations({ ensureWindow = false, force = fals
   } catch {
     authenticated = false;
   }
-  if (authenticated) await liveOps.liveSweepHyroxDeadlines({ refresh: false });
   await liveOps.hydrateOperationalState({ force, authenticated });
   await liveOps.startOperationalRealtime();
   return liveOps.operationalStateStatus();
@@ -209,6 +274,152 @@ function normalizeReceiptCounter() {
 // One-time, versioned migrations for persisted state that predates a
 // seed-data revision. Each step runs once per version so admin edits made
 // afterwards are not reverted on the next load.
+function retireLocalHyroxPool() {
+  const sessionForId = (id) => findSession(state.activities, String(id || ""));
+  const retiredSessionIds = new Set();
+  const retiredCycleIds = new Set();
+  const collectSessionId = (id) => {
+    const value = String(id || "");
+    if (isRetiredHyroxLegacyRouteId(value)) retiredSessionIds.add(value);
+  };
+  const collectRecordSession = (record) => {
+    if (!record || typeof record !== "object") return;
+    const sessionId = record.sessionId ?? record.session_id;
+    if (isRetiredHyroxSession(record) && sessionId) {
+      retiredSessionIds.add(String(sessionId));
+    }
+    collectSessionId(sessionId);
+  };
+
+  const collectCycleId = (id) => {
+    const value = String(id || "");
+    if (isRetiredHyroxCycleId(value)) retiredCycleIds.add(value);
+  };
+  const cycleIdFor = (record) => record?.cycleId ?? record?.hyrox_cycle_id;
+
+  for (const id of Object.keys(state.queues)) collectSessionId(id);
+  for (const id of Object.keys(state.sessionOverrides)) collectSessionId(id);
+  for (const [key, cycle] of Object.entries(state.hyroxCycles)) {
+    const childSessionIds = [
+      cycle?.bftSessionId ?? cycle?.bft_session_id,
+      cycle?.midtownSessionId ?? cycle?.midtown_session_id,
+    ].filter(Boolean);
+    for (const id of childSessionIds) collectSessionId(id);
+    if (isRetiredHyroxCycleId(key)
+        || isRetiredHyroxCycleId(cycle?.id)
+        || isRetiredHyroxSession(cycle)
+        || childSessionIds.some((id) => isRetiredHyroxLegacyRouteId(id))) {
+      retiredCycleIds.add(String(key));
+      if (cycle?.id) retiredCycleIds.add(String(cycle.id));
+    }
+  }
+  for (const collection of [
+    state.bookings,
+    state.receipts,
+    state.replacementRequests,
+    state.replacementAudit,
+    state.notifications,
+    Object.values(state.duty),
+  ]) {
+    for (const record of collection) {
+      collectRecordSession(record);
+      collectCycleId(cycleIdFor(record));
+    }
+  }
+
+  const bookingById = new Map(state.bookings.map((booking) => [booking.id, booking]));
+  const bookingTargetsPool = (booking) => Boolean(booking) && (
+    isRetiredHyroxBooking(booking, sessionForId)
+    || retiredCycleIds.has(String(cycleIdFor(booking) || ""))
+    || retiredSessionIds.has(String(booking.sessionId ?? booking.session_id ?? ""))
+  );
+  const retiredBookingIds = new Set(
+    state.bookings.filter(bookingTargetsPool).map((booking) => booking.id)
+  );
+  const requestTargetsPool = (request) => Boolean(request) && (
+    retiredCycleIds.has(String(cycleIdFor(request) || ""))
+    || isRetiredHyroxSession(request)
+    || retiredSessionIds.has(String(request.sessionId ?? request.session_id ?? ""))
+    || retiredBookingIds.has(request.bookingId ?? request.booking_id)
+  );
+  const retiredRequests = state.replacementRequests.filter(requestTargetsPool);
+  const retiredRequestIds = new Set(retiredRequests.map((request) => request.id));
+  const retiredInviteTokens = new Set(
+    retiredRequests.map((request) => request.inviteToken).filter(Boolean)
+  );
+  const bookingForId = (id) => bookingById.get(id) || null;
+  const recordTargetsPool = (record) => Boolean(record) && (
+    retiredCycleIds.has(String(cycleIdFor(record) || ""))
+    || isRetiredHyroxActivityId(record.activityId ?? record.activity_id)
+    || retiredSessionIds.has(String(record.sessionId ?? record.session_id ?? ""))
+    || retiredBookingIds.has(record.bookingId ?? record.booking_id)
+    || retiredRequestIds.has(record.requestId ?? record.request_id)
+  );
+  const receiptTargetsPool = (receipt) =>
+    isRetiredHyroxReceipt(receipt, bookingForId) || recordTargetsPool(receipt);
+  const retiredReceiptIds = new Set(
+    state.receipts.filter(receiptTargetsPool).map((receipt) => receipt.id)
+  );
+  const routeTargetsPool = (value) => {
+    const match = String(value || "").match(
+      /^#\/(activity|checkout|hyrox|booking|pay|receipt|replacement)\/([^/?#]+)(?:\/register)?$/
+    );
+    if (!match) return false;
+    const [, route, id] = match;
+    if (["activity", "checkout", "hyrox"].includes(route)) {
+      return isRetiredHyroxLegacyRouteId(id);
+    }
+    if (["booking", "pay"].includes(route)) return retiredBookingIds.has(id);
+    if (route === "receipt") return retiredReceiptIds.has(id);
+    return retiredInviteTokens.has(id);
+  };
+
+  // The local acceptance producer used only a generic Admin link. Classify
+  // before pruning requests/bookings; an unmatched HYROX-only review is not
+  // proof of active provenance. Retired evidence wins timestamp ambiguity.
+  const retiredReviewNoticeIds = new Set(state.notifications.filter((notice) => {
+    if (notice.kind !== "hyrox-replacement-review") return false;
+    const matches = state.replacementRequests.filter((request) =>
+      request.acceptedAt != null && request.acceptedAt === notice.createdAt);
+    if (matches.some(requestTargetsPool)) return true;
+    return !matches.length || matches.some((request) => {
+      const booking = bookingForId(request.bookingId);
+      const session = sessionForId(booking?.sessionId);
+      return !session || isRetiredHyroxSession(session);
+    });
+  }).map((notice) => notice.id));
+
+  state.activities = state.activities.filter(
+    (activity) => !isRetiredHyroxActivityId(activity.id)
+  );
+  for (const collection of [state.queues, state.sessionOverrides]) {
+    for (const id of Object.keys(collection)) {
+      if (retiredSessionIds.has(id)) delete collection[id];
+    }
+  }
+  state.receipts = state.receipts.filter((receipt) => !receiptTargetsPool(receipt));
+  state.replacementRequests = state.replacementRequests.filter(
+    (request) => !requestTargetsPool(request)
+  );
+  state.replacementAudit = state.replacementAudit.filter(
+    (entry) => !recordTargetsPool(entry)
+  );
+  state.notifications = state.notifications.filter((notification) =>
+    !retiredReviewNoticeIds.has(notification.id)
+    && !isRetiredHyroxNotification(notification, bookingForId)
+    && !recordTargetsPool(notification)
+    && !retiredReceiptIds.has(notification.receiptId ?? notification.receipt_id)
+    && !routeTargetsPool(notification.destination)
+    && !routeTargetsPool(notification.link)
+  );
+  for (const [key, assignment] of Object.entries(state.duty)) {
+    if (recordTargetsPool(assignment)) delete state.duty[key];
+  }
+  state.bookings = state.bookings.filter((booking) => !retiredBookingIds.has(booking.id));
+  state.hyroxCycles = {};
+  state.hyroxCycleQueues = {};
+}
+
 function migrate() {
   // Persisted prototypes may predate individual collections or contain null
   // values. Normalize every collection before a legacy step or early return.
@@ -659,6 +870,12 @@ function migrate() {
       }
     }
   }
+  if (v < 24) {
+    // v24: retire the device-local BFT/Midtown shared pool after every older
+    // migration has run. Relationship fields and exact legacy route IDs are
+    // authoritative; arbitrary BFT/Midtown substrings are never classified.
+    retireLocalHyroxPool();
+  }
   state.version = STATE_VERSION;
 }
 
@@ -1027,6 +1244,9 @@ export function getActivity(id) {
 
 export function saveActivity(draft) {
   requirePaymentAdminActor();
+  if (retirementBoundaryActive() && isRetiredHyroxActivityId(draft?.id)) {
+    throw retiredTargetError();
+  }
   const existing = state.activities.find((a) => a.id === draft.id);
   const record = {
     ...draft,
@@ -1099,6 +1319,7 @@ export function attendanceBookingsForSession(sessionId) {
 }
 
 export async function setBookingAttendance(bookingId, arrived, now = Date.now()) {
+  assertActiveBookingTarget(bookingId);
   const actor = requirePaymentAdminActor();
   if (typeof arrived !== "boolean") throw new Error("Attendance state is required.");
   const booking = getBooking(bookingId);
@@ -1172,6 +1393,7 @@ export function attendeesFor(session) {
 
 export async function attendeeNamesFor(sessionId) {
   if (!sessionId) return [];
+  assertActiveSessionTarget(sessionId);
   if (isLive()) return liveOps.liveAttendeeNamesForSession(sessionId);
   const session = getSession(sessionId);
   return session ? attendeesFor(session) : [];
@@ -1201,34 +1423,77 @@ export function userBookingFor(userId, sessionId) {
 
 export function bookingsForUser(userId) {
   if (isLive()) {
-    return liveOps.liveBookingsForUser(userId).slice().sort(
-      (a, b) => (b.dateISO || "").localeCompare(a.dateISO || "")
-    );
+    return liveOps.liveBookingsForUser(userId)
+      .filter((booking) => !bookingIsRetired(booking)).slice().sort(
+        (a, b) => (b.dateISO || "").localeCompare(a.dateISO || "")
+      );
   }
   return state.bookings
-    .filter((b) => b.userId === userId)
+    .filter((booking) => booking.userId === userId
+      && (!retirementBoundaryActive() || !bookingIsRetired(booking)))
     .sort((a, b) => b.snapshot.dateISO.localeCompare(a.snapshot.dateISO));
 }
 
 export function receiptsForUser(userId) {
   if (isLive()) {
-    return liveOps.liveReceiptsForUser(userId);
+    return liveOps.liveReceiptsForUser(userId).filter((receipt) => !receiptIsRetired(receipt));
   }
   return state.receipts
-    .filter((r) => r.userId === userId)
+    .filter((receipt) => receipt.userId === userId
+      && (!retirementBoundaryActive() || !receiptIsRetired(receipt)))
     .sort((a, b) => b.issuedAt - a.issuedAt);
 }
 
 export function getBooking(id) {
-  if (isLive()) return liveOps.liveBookingById(id);
-  return state.bookings.find((b) => b.id === id) ?? null;
+  const booking = retirementBooking(id);
+  return booking && (!retirementBoundaryActive() || !bookingIsRetired(booking)) ? booking : null;
 }
 
 export function replacementRequestForBooking(bookingId) {
-  if (isLive()) return liveOps.liveReplacementRequestForBooking?.(bookingId) ?? null;
+  if (isLive()) {
+    if (bookingIsRetired(retirementBooking(bookingId))) {
+      livePendingReplacementStates.delete(bookingId);
+      liveReplacementTokens.delete(bookingId);
+      return null;
+    }
+    const request = liveOps.liveReplacementRequestForBooking?.(bookingId) ?? null;
+    const pending = livePendingReplacementStates.get(bookingId) || null;
+    if (pending && request?.requestId !== pending.requestId) return pending;
+    if (request && !bookingIsRetired(request)) {
+      livePendingReplacementStates.delete(bookingId);
+      return request;
+    }
+    return pending;
+  }
   return state.replacementRequests
-    .filter((request) => request.bookingId === bookingId)
+    .filter((request) => request.bookingId === bookingId
+      && (!retirementBoundaryActive()
+        || (!bookingIsRetired(request) && !bookingIsRetired(retirementBooking(request.bookingId)))))
     .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0))[0] ?? null;
+}
+
+// One authoritative read per attempt: never retry a successful create RPC.
+// A failed/missing invite result leaves the memory-only overlay in place so the
+// owner can explicitly retry without minting another invite or token.
+export async function refreshReplacementRequest(bookingId) {
+  const booking = getBooking(bookingId);
+  if (!booking) replacementRequestError("Booking not found.");
+  requireAuthorizedPaymentOwner(booking.userId);
+  if (isLive()) {
+    try {
+      const token = liveReplacementTokens.get(bookingId);
+      if (!token) throw new Error("Private invite unavailable.");
+      const hash = await liveOps.hashReplacementToken(token);
+      await liveOps.liveRefreshReplacementRequest(
+        bookingId, livePendingReplacementStates.get(bookingId)?.requestId, hash,
+      );
+    } catch {
+      if (!livePendingReplacementStates.has(bookingId)) {
+        throw new Error("Replacement details unavailable. Please retry refresh.");
+      }
+    }
+  }
+  return replacementRequestForBooking(bookingId);
 }
 
 export function replacementInviteTokenForBooking(bookingId) {
@@ -1360,10 +1625,29 @@ export async function createReplacementRequest(bookingId, now = Date.now()) {
   if (!eligibility.ok) replacementRequestError("This booking cannot arrange a replacement.");
   if (isLive()) {
     requireAuthorizedPaymentOwner(booking.userId);
+    const active = replacementRequestForBooking(bookingId);
+    if (active?.cachePending || ["pending", "accepted"].includes(active?.status)) {
+      replacementRequestError("A replacement invite is already active for this booking.");
+    }
     const token = globalThis.crypto?.randomUUID?.() || uid("replacement-invite");
     const hash = await liveOps.hashReplacementToken(token);
     const request = await liveOps.liveCreateReplacementRequest(bookingId, hash, eligibility.expiresAt);
+    if (request?.retired) throw retiredTargetError();
     liveReplacementTokens.set(bookingId, token);
+    if (request?.cachePending) {
+      const pending = {
+        requestId: request.requestId || null,
+        bookingId,
+        status: "pending",
+        createdAt: now,
+        expiresAt: eligibility.expiresAt,
+        cachePending: true,
+      };
+      livePendingReplacementStates.set(bookingId, pending);
+      const reconciled = await refreshReplacementRequest(bookingId);
+      return { ...reconciled, inviteToken: token };
+    }
+    livePendingReplacementStates.delete(bookingId);
     return { ...request, inviteToken: token };
   }
   requireAuthorizedPaymentOwner(booking.userId);
@@ -1402,7 +1686,9 @@ export async function createReplacementRequest(bookingId, now = Date.now()) {
 export async function acceptReplacement(token, now = Date.now()) {
   if (isLive()) {
     const hash = await liveOps.hashReplacementToken(token);
-    return liveOps.liveAcceptReplacement(hash);
+    const request = await liveOps.liveAcceptReplacement(hash);
+    if (request?.retired) throw retiredTargetError();
+    return request;
   }
   const actor = replacementActor();
   const request = replacementRequestByToken(token);
@@ -1438,7 +1724,9 @@ export async function acceptReplacement(token, now = Date.now()) {
 export async function declineReplacement(token, now = Date.now()) {
   if (isLive()) {
     const hash = await liveOps.hashReplacementToken(token);
-    return liveOps.liveDeclineReplacement(hash);
+    const request = await liveOps.liveDeclineReplacement(hash);
+    if (request?.retired) throw retiredTargetError();
+    return request;
   }
   const actor = replacementActor();
   const request = replacementRequestByToken(token);
@@ -1455,7 +1743,16 @@ export async function declineReplacement(token, now = Date.now()) {
 }
 
 export async function cancelReplacement(requestId, now = Date.now()) {
-  if (isLive()) return liveOps.liveCancelReplacement(requestId);
+  if (isLive()) {
+    const request = await liveOps.liveCancelReplacement(requestId);
+    if (request?.retired) throw retiredTargetError();
+    for (const [bookingId, pending] of livePendingReplacementStates) {
+      if (pending.requestId !== requestId) continue;
+      livePendingReplacementStates.delete(bookingId);
+      liveReplacementTokens.delete(bookingId);
+    }
+    return request;
+  }
   const request = state.replacementRequests.find((item) => item.id === requestId);
   if (!request) return null;
   requireAuthorizedPaymentOwner(request.originalUserId);
@@ -1472,7 +1769,9 @@ export async function cancelReplacement(requestId, now = Date.now()) {
 export async function decideReplacement(requestId, confirm, reason = null, now = Date.now()) {
   if (isLive()) {
     requirePaymentAdminActor();
-    return liveOps.liveDecideReplacement(requestId, confirm, reason);
+    const request = await liveOps.liveDecideReplacement(requestId, confirm, reason);
+    if (request?.retired) throw retiredTargetError();
+    return request;
   }
   const actor = requirePaymentAdminActor();
   const request = state.replacementRequests.find((item) => item.id === requestId);
@@ -1523,29 +1822,19 @@ export function effectiveAttendeeForBooking(booking) {
   return state.users.find((user) => user.id === effectiveAttendeeId(booking)) || null;
 }
 
-export function listHyroxCycles() {
-  if (isLive()) return liveOps.listLiveHyroxCycles();
-  return [];
-}
-
-export function getHyroxCycle(id) {
-  if (isLive()) return liveOps.getLiveHyroxCycle(id);
-  return hyroxCycleById(id);
-}
-
-export function hyroxCycleBookings(cycleId) {
-  if (isLive()) return liveOps.listLiveBookings((booking) => booking.cycleId === cycleId);
-  return state.bookings.filter((booking) => booking.cycleId === cycleId);
-}
-
 export function getReceipt(id) {
-  if (isLive()) return liveOps.liveReceiptById(id);
-  return state.receipts.find((r) => r.id === id) ?? null;
+  const receipt = isLive()
+    ? liveOps.liveReceiptById(id)
+    : state.receipts.find((row) => row.id === id);
+  return receipt && (!retirementBoundaryActive() || !receiptIsRetired(receipt)) ? receipt : null;
 }
 
 export function receiptForBooking(bookingId) {
-  if (isLive()) return liveOps.liveReceiptForBooking(bookingId);
-  return state.receipts.find((r) => r.bookingId === bookingId) ?? null;
+  if (retirementBoundaryActive() && bookingIsRetired(retirementBooking(bookingId))) return null;
+  const receipt = isLive()
+    ? liveOps.liveReceiptForBooking(bookingId)
+    : state.receipts.find((row) => row.bookingId === bookingId);
+  return receipt && (!retirementBoundaryActive() || !receiptIsRetired(receipt)) ? receipt : null;
 }
 
 function notify(userId, kind, body, link) {
@@ -1567,7 +1856,9 @@ function activeRsvpNotificationRecipients(sessionId) {
 
 export function notificationsFor(userId) {
   return state.notifications
-    .filter((n) => n.userId === userId)
+    .filter((notification) => notification.userId === userId
+      && (!retirementBoundaryActive()
+        || !isRetiredHyroxNotification(notification, retirementBooking)))
     .sort((a, b) => b.createdAt - a.createdAt);
 }
 
@@ -1595,49 +1886,6 @@ export function sessionDateOf(sessionId) {
   return m ? m[1] : null;
 }
 
-export function isMidtown(sessionOrId) {
-  const id = typeof sessionOrId === "string" ? sessionOrId : sessionOrId.id;
-  return id.startsWith("hyrox-midtown");
-}
-
-export function midtownOpenFor(sessionOrId) {
-  const id = typeof sessionOrId === "string" ? sessionOrId : sessionOrId.id;
-  if (isLive()) {
-    const live = liveOps.getLiveSession(id);
-    if (live) return !!live.isOpen;
-  }
-  return !!state.sessionOverrides[id]?.midtownOpen;
-}
-
-// Midtown opens manually (collector decision). The interest list — members
-// who said "wait for Midtown" — converts to reserved spots in join order;
-// anyone past capacity becomes the Midtown waitlist, order preserved.
-export function setMidtownOpen(sessionId, open, now = Date.now()) {
-  if (isLive()) {
-    return liveOps.liveSetMidtownOpen(sessionId, open);
-  }
-  requirePaymentAdminActor();
-  const o = (state.sessionOverrides[sessionId] ||= {});
-  o.midtownOpen = open;
-  if (open) {
-    const session = getSession(sessionId);
-    const q = paymentQueueFor(sessionId);
-    while (session && spotsLeft(session) > 0 && q.interest.length) {
-      const { userId } = q.interest.shift();
-      try {
-        const booking = reserveApprovedSession(userId, session, now);
-        notify(userId, "midtown-open",
-          `Midtown is open and you're in for ${session.name} · ${fmtDate(session.date)}! Pay by the checkpoint to keep your spot.`,
-          `#/pay/${booking.id}`);
-      } catch {
-        // already booked — skip
-      }
-    }
-    q.waitlist = [...q.waitlist, ...q.interest.splice(0)];
-  }
-  save();
-}
-
 function receiptNumber() {
   normalizeReceiptCounter();
   const counter = state.receiptCounter;
@@ -1657,6 +1905,7 @@ function snapshotFor(session) {
 // Reserve a spot without paying. The spot is held until the next payment
 // checkpoint (Thu 6 PM, then Fri 2 PM, then a 2-hour last-minute window).
 export function reserveSession(userId, sessionOrId, now = Date.now()) {
+  assertActiveSessionTarget(sessionOrId);
   if (isLive()) {
     const sessionId = typeof sessionOrId === "string" ? sessionOrId : sessionOrId?.id;
     return liveOps.liveReserveSession(sessionId);
@@ -1675,14 +1924,7 @@ function reserveApprovedSession(userId, sessionOrId, now = Date.now()) {
   if (!session) throw new Error("Unknown session");
   if (session.kind !== "paid") throw new Error("Session is not paid");
   if (session.cancelled) throw new Error("Session is cancelled");
-  if (session.activityId === "hyrox-quarry-bay") {
-    const cycle = hyroxCycleForDateLocal(session.dateISO);
-    if (cycle && hyroxActiveBookings(cycle.id).some((booking) => booking.userId === userId)) {
-      throw new Error("You already have a HYROX booking for this Saturday.");
-    }
-  }
   if (sessionStarted(session)) throw new Error("Session has already started");
-  if (isMidtown(session) && !midtownOpenFor(session)) throw new Error("Session is not open");
   if (spotsLeft(session) <= 0) throw new Error("Session is full");
   if (
     userBookingFor(userId, session.id) || userReservationFor(userId, session.id)
@@ -1716,6 +1958,7 @@ function reserveApprovedSession(userId, sessionOrId, now = Date.now()) {
 // Member taps "I've paid" after sending PayMe/FPS. Lands in the on-duty
 // collector's pending list; the spot stays held until they confirm.
 export function markBookingPaid(bookingId, method, ref, now = Date.now()) {
+  assertActiveBookingTarget(bookingId);
   if (isLive()) {
     const normalized = method === "FPS" ? "fps" : "payme";
     return liveOps.liveMarkBookingPaid(bookingId, normalized, ref);
@@ -1726,7 +1969,7 @@ export function markBookingPaid(bookingId, method, ref, now = Date.now()) {
   b.paymentMarkedAt = now;
   b.paidMethod = method === "FPS" ? "FPS" : "PayMe";
   b.paymentRef = String(ref ?? "").trim() || null;
-  const collector = b.cycleId ? null : collectorFor(b.sessionId);
+  const collector = collectorFor(b.sessionId);
   if (collector) {
     const who = state.users.find((u) => u.id === b.userId);
     notify(
@@ -1736,21 +1979,14 @@ export function markBookingPaid(bookingId, method, ref, now = Date.now()) {
       "#/admin/ops"
     );
   }
-  if (b.cycleId) {
-    state.users.filter((user) => ["admin", "super_admin"].includes(user.role)
-      && user.status === "approved").forEach((user) => notify(
-        user.id, "payment-marked",
-        `A member marked a ${b.paidMethod} HYROX pool payment for ${fmtDate(b.snapshot.dateISO)}.`,
-        "#/admin/ops",
-      ));
-  }
   save();
   return b;
 }
 
-// Collector confirms the money arrived. Payment = commitment: every other
-// HYROX venue hold the member had for the same Saturday is released.
+// Collector confirms the direct-session payment, preserving payer ownership
+// while issuing the receipt and enabling the remaining booking lifecycle.
 export function confirmBookingPayment(bookingId, now = Date.now()) {
+  assertActiveBookingTarget(bookingId);
   if (isLive()) {
     return liveOps.liveApproveBookingPayment(bookingId);
   }
@@ -1772,70 +2008,27 @@ export function confirmBookingPayment(bookingId, now = Date.now()) {
     status: "paid",
     issuedAt: now,
     sessionId: b.sessionId || null,
-    cycleId: b.cycleId || null,
-    line: b.cycleId
-      ? `${b.snapshot.name} — ${fmtDate(b.snapshot.dateISO)}`
-      : `${b.snapshot.name} — ${fmtDate(b.snapshot.dateISO)} ${fmtTime(b.snapshot.time)}`,
+    cycleId: null,
+    line: `${b.snapshot.name} — ${fmtDate(b.snapshot.dateISO)} ${fmtTime(b.snapshot.time)}`,
   };
   state.receipts.push(receipt);
-  // Payment = commitment for legacy venue holds. Pooled bookings have no
-  // child-session hold to release; venue assignment happens in Task 8.
-  const siblingSessionIds = b.cycleId ? [] : state.activities
-    .filter((activity) => activity.category === "HYROX")
-    .map((activity) => `${activity.id}-${b.snapshot.dateISO}`)
-    .filter((sessionId) => sessionId !== b.sessionId);
-  for (const siblingSessionId of siblingSessionIds) {
-    const other = state.bookings.find(
-      (x) => x.userId === b.userId && x.sessionId === siblingSessionId && x.status === "reserved"
-    );
-    if (other) {
-      other.status = "cancelled";
-      notify(b.userId, "hold-released",
-        `You're booked for ${b.snapshot.location} — your unpaid ${other.snapshot.location} spot was released to the waitlist.`,
-        `#/booking/${b.id}`);
-      cascadeSession(other.sessionId, now);
-    }
-    const q = paymentQueueFor(siblingSessionId);
-    const wasQueued =
-      q.waitlist.some((e) => e.userId === b.userId) || q.interest.some((e) => e.userId === b.userId);
-    q.waitlist = q.waitlist.filter((e) => e.userId !== b.userId);
-    q.interest = q.interest.filter((e) => e.userId !== b.userId);
-    if (wasQueued && !other) {
-      notify(b.userId, "hold-released",
-        `You're booked for ${b.snapshot.location} — your spot in another HYROX venue queue was released.`,
-        `#/booking/${b.id}`);
-    }
-  }
   notify(b.userId, "payment-confirmed",
     `Payment confirmed — you're booked for ${b.snapshot.name} · ${fmtDate(b.snapshot.dateISO)}.`,
     `#/booking/${b.id}`);
   save();
-  if (b.cycleId && now >= hyroxCycleById(b.cycleId).paymentDeadlineAt
-      && state.bookings.every((item) => item.cycleId !== b.cycleId
-        || item.status !== "reserved" || !item.paymentMarkedAt)) {
-    finalizeHyroxVenuePlan(b.cycleId, now);
-  }
   return { booking: b, receipt };
 }
 
 // Releasing an unpaid reservation is member self-service; confirmed booking
 // cancellation/refund remains an Admin operation while policy is unresolved.
 export function releaseReservation(bookingId, now = Date.now()) {
+  assertActiveBookingTarget(bookingId);
   if (isLive()) {
     return liveOps.liveReleaseReservation(bookingId);
   }
   const booking = getBooking(bookingId);
   if (!booking || booking.status !== "reserved" || booking.paymentMarkedAt) return null;
   requireAuthorizedPaymentOwner(booking.userId);
-  if (booking.cycleId) {
-    const cycle = hyroxCycleById(booking.cycleId);
-    booking.status = "cancelled";
-    if (cycle && now < cycle.paymentDeadlineAt && cycle.registrationState === "open") {
-      promoteNextHyroxWaitlist(cycle, now);
-    }
-    save();
-    return booking;
-  }
   booking.status = "cancelled";
   cascadeSession(booking.sessionId, now);
   save();
@@ -1849,721 +2042,12 @@ export function cancelBooking(bookingId) {
   booking.status = "cancelled";
   const receipt = receiptForBooking(bookingId);
   if (receipt) receipt.status = "refunded";
-  if (booking.cycleId) fillHyroxSwitchVacancy(hyroxCycleById(booking.cycleId), booking.sessionId, Date.now());
   save();
   return booking;
 }
 
 // --- Checkpoint sweep & cascade --------------------------------------------
 // Deterministic: called internally on load with now = Date.now(). No timers.
-
-function hyroxCycleById(cycleId) {
-  return state.hyroxCycles?.[cycleId] || null;
-}
-
-function hyroxActiveBookings(cycleId) {
-  return state.bookings.filter((booking) => booking.cycleId === cycleId
-    && ["reserved", "confirmed"].includes(booking.status));
-}
-
-function hyroxQueueEntries(cycleId) {
-  return state.hyroxCycleQueues?.[cycleId] || [];
-}
-
-function hyroxQueueEntryForUser(cycleId, userId, kind = null) {
-  return hyroxQueueEntries(cycleId).find((entry) => entry.userId === userId
-    && (!kind || entry.kind === kind) && entry.status === "active") || null;
-}
-
-function hyroxCycleSnapshot(cycle) {
-  const bft = getSession(cycle.bftSessionId);
-  const midtown = getSession(cycle.midtownSessionId);
-  return {
-    venues: [bft, midtown].filter(Boolean).map((session) => ({
-      sessionId: session.id,
-      venue: session.location,
-      startTime: session.time,
-      capacity: session.capacity,
-    })),
-    name: "ITC HYROX",
-    kind: "paid",
-    bookingMode: "weekly_pool",
-    sessionDate: cycle.dateISO,
-    dateISO: cycle.dateISO,
-    time: null,
-    durationMin: null,
-    location: null,
-    price: bft?.price ?? 0,
-    priceHkd: bft?.price ?? 0,
-  };
-}
-
-function hyroxCycleForDateLocal(dateISO) {
-  return Object.values(state.hyroxCycles || {}).find((cycle) => cycle.dateISO === dateISO) || null;
-}
-
-export function hyroxCycles() {
-  if (isLive()) return liveOps.listLiveHyroxCycles();
-  return Object.values(state.hyroxCycles || {}).sort((a, b) => a.dateISO.localeCompare(b.dateISO));
-}
-
-export function hyroxCycleForDate(dateISO) {
-  if (isLive()) return liveOps.listLiveHyroxCycles().find((cycle) => cycle.dateISO === dateISO) || null;
-  return hyroxCycleForDateLocal(dateISO);
-}
-
-export function scheduleHyroxCycle(dateISO) {
-  if (isLive()) return liveOps.liveScheduleHyroxCycle(hyroxCycleId(dateISO));
-  requirePaymentAdminActor();
-  const id = hyroxCycleId(dateISO);
-  const date = new Date(`${dateISO}T00:00:00Z`);
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(dateISO) || date.getUTCDay() !== 6) {
-    throw new Error("HYROX cycle date must be a Saturday.");
-  }
-  const existing = hyroxCycleById(id);
-  if (existing) return existing;
-  const bftSession = getSession(`hyrox-bft-${dateISO}`);
-  const midtownSession = getSession(`hyrox-midtown-${dateISO}`);
-  if (!bftSession || !midtownSession) throw new Error("HYROX cycle sessions are unavailable.");
-  for (const sessionId of [bftSession.id, midtownSession.id]) {
-    if (state.bookings.some((booking) => booking.sessionId === sessionId
-      && ["reserved", "confirmed"].includes(booking.status))) {
-      throw new Error("Active venue-specific bookings must be resolved before scheduling.");
-    }
-    const queue = state.queues?.[sessionId];
-    if (queue?.waitlist?.length || queue?.interest?.length) {
-      throw new Error("Active venue-specific queues must be resolved before scheduling.");
-    }
-  }
-  const cycle = {
-    id,
-    dateISO,
-    bftSessionId: bftSession.id,
-    midtownSessionId: midtownSession.id,
-    registrationState: "draft",
-    venuePlan: "pending",
-    capacity: HYROX_POOL_CAPACITY,
-    registrationOpensAt: hyroxRegistrationOpensAt(dateISO),
-    paymentDeadlineAt: hyroxPaymentDeadline(dateISO),
-    holderGraceDeadlineAt: hyroxHolderGraceDeadline(dateISO),
-    promotedPaymentDeadlineAt: hyroxPromotedPaymentDeadline(dateISO),
-    venueChoiceDeadlineAt: hyroxChoiceDeadline(dateISO),
-    capacityWarningSentAt: null,
-    paymentReminderSentAt: null,
-    collectorPaymentReminderSentAt: null,
-    venueChoiceReminderSentAt: null,
-    venueFinalizationReminderSentAt: null,
-    holderGraceStartedAt: null,
-    waitlistPromotedAt: null,
-    reconciliationStartedAt: null,
-    openedAt: null,
-    planConfirmedAt: null,
-    planConfirmedBy: null,
-    planConfirmedSource: null,
-    allocationClosedAt: null,
-    cancelledAt: null,
-    cancelReason: null,
-    createdAt: Date.now(),
-  };
-  state.hyroxCycles[id] = cycle;
-  state.hyroxCycleQueues[id] = [];
-  save();
-  return cycle;
-}
-
-export function reserveHyroxCycle(userId, cycleId, preference, fallbackAcknowledged, now = Date.now()) {
-  if (isLive()) return liveOps.liveReserveHyroxCycle(cycleId, preference, fallbackAcknowledged);
-  requireAuthorizedPaymentOwner(userId);
-  const cycle = hyroxCycleById(cycleId);
-  if (!cycle) throw new Error("HYROX cycle not found.");
-  if (!["bft", "midtown", "either"].includes(preference)) {
-    throw new Error("Choose BFT, Midtown, or Either.");
-  }
-  if (!fallbackAcknowledged) throw new Error("Fallback acknowledgement is required.");
-  if (cycle.registrationState === "cancelled") throw new Error("This HYROX cycle is cancelled.");
-  if (now < cycle.registrationOpensAt) throw new Error("HYROX registration opens Monday at 6 PM HKT.");
-  if (now >= cycle.paymentDeadlineAt) throw new Error("HYROX registration is closed.");
-  if (cycle.registrationState === "draft") {
-    cycle.registrationState = "open";
-    cycle.openedAt ||= now;
-  } else if (cycle.registrationState !== "open") {
-    throw new Error("HYROX registration is closed.");
-  }
-  if (hyroxActiveBookings(cycleId).some((booking) => booking.userId === userId)
-      || hyroxQueueEntryForUser(cycleId, userId)) {
-    throw new Error("You already joined this HYROX registration.");
-  }
-  const quarryBooking = state.bookings.find((booking) => booking.userId === userId
-    && ["reserved", "confirmed"].includes(booking.status)
-    && booking.sessionId === `hyrox-quarry-bay-${cycle.dateISO}`);
-  if (quarryBooking) throw new Error("You already have a HYROX booking for this Saturday.");
-  if (hyroxActiveBookings(cycleId).length >= cycle.capacity) {
-    throw new Error("HYROX registration is full. Join the weekly waitlist.");
-  }
-  const booking = {
-    id: uid("b"), userId, sessionId: null, cycleId, status: "reserved",
-    createdAt: now, reservedAt: now, payDeadlineAt: cycle.holderGraceDeadlineAt,
-    paymentMarkedAt: null, paidAt: null, paidMethod: null, paymentRef: null,
-    confirmedBy: null, deferredTo: null, deferredFrom: null,
-    attendedAt: null, attendedBy: null,
-    venuePreference: preference, fallbackAcknowledgedAt: now,
-    promotedFromWaitlistAt: null, allocationState: null, allocationSource: null,
-    allocatedAt: null, allocationSnapshot: null, paymentRejectedAt: null,
-    paymentRejectedBy: null, paymentRejectionReason: null,
-    snapshot: hyroxCycleSnapshot(cycle),
-  };
-  state.bookings.push(booking);
-  notify(userId, "hyrox-reserved", "HYROX place reserved — mark payment by Thursday at 6 PM HKT.", `#/pay/${booking.id}`);
-  save();
-  return booking;
-}
-
-function createHyroxWaitlistBooking(cycle, entry, now, deadline, promoted = false) {
-  const booking = {
-    id: uid("b"), userId: entry.userId, sessionId: null, cycleId: cycle.id,
-    status: "reserved", createdAt: now, reservedAt: now, payDeadlineAt: deadline,
-    paymentMarkedAt: null, paidAt: null, paidMethod: null, paymentRef: null,
-    confirmedBy: null, deferredTo: null, deferredFrom: null,
-    attendedAt: null, attendedBy: null,
-    venuePreference: entry.venuePreference, fallbackAcknowledgedAt: entry.fallbackAcknowledgedAt,
-    promotedFromWaitlistAt: promoted ? now : null, allocationState: null,
-    allocationSource: null, allocatedAt: null, allocationSnapshot: null,
-    paymentRejectedAt: null, paymentRejectedBy: null, paymentRejectionReason: null,
-    snapshot: hyroxCycleSnapshot(cycle),
-  };
-  state.bookings.push(booking);
-  entry.status = "promoted";
-  entry.resolvedAt = now;
-  notify(entry.userId, promoted ? "hyrox-promoted" : "hyrox-waitlist-promoted",
-    promoted
-      ? "A HYROX place opened — mark payment by the promoted deadline."
-      : "A HYROX place opened — mark payment by Thursday at 6 PM HKT.",
-    `#/pay/${booking.id}`);
-  return booking;
-}
-
-function promoteNextHyroxWaitlist(cycle, now) {
-  const entry = hyroxQueueEntries(cycle.id)
-    .filter((item) => item.kind === "weekly_waitlist" && item.status === "active")
-    .sort((a, b) => (a.joinedAt - b.joinedAt) || a.id.localeCompare(b.id))[0];
-  if (!entry) return null;
-  return createHyroxWaitlistBooking(cycle, entry, now, cycle.holderGraceDeadlineAt);
-}
-
-export function joinHyroxCycleWaitlist(userId, cycleId, preference, fallbackAcknowledged, now = Date.now()) {
-  if (isLive()) return liveOps.liveJoinHyroxCycleWaitlist(cycleId, preference, fallbackAcknowledged);
-  requireAuthorizedPaymentOwner(userId);
-  const cycle = hyroxCycleById(cycleId);
-  if (!cycle) throw new Error("HYROX cycle not found.");
-  if (!["bft", "midtown", "either"].includes(preference)) throw new Error("Choose BFT, Midtown, or Either.");
-  if (!fallbackAcknowledged) throw new Error("Fallback acknowledgement is required.");
-  if (cycle.registrationState === "cancelled") throw new Error("This HYROX cycle is cancelled.");
-  if (now < cycle.registrationOpensAt) throw new Error("HYROX registration opens Monday at 6 PM HKT.");
-  if (now >= cycle.paymentDeadlineAt) throw new Error("HYROX registration is closed.");
-  if (cycle.registrationState === "draft") {
-    cycle.registrationState = "open";
-    cycle.openedAt ||= now;
-  } else if (cycle.registrationState !== "open") {
-    throw new Error("HYROX registration is closed.");
-  }
-  if (hyroxActiveBookings(cycleId).some((booking) => booking.userId === userId)
-      || hyroxQueueEntryForUser(cycleId, userId)) {
-    throw new Error("You already joined this HYROX registration.");
-  }
-  if (hyroxActiveBookings(cycleId).length < cycle.capacity) throw new Error("HYROX places are still available.");
-  const entry = {
-    id: uid("hq"), cycleId, userId, kind: "weekly_waitlist", targetSessionId: null,
-    venuePreference: preference, fallbackAcknowledgedAt: now, status: "active",
-    joinedAt: now, resolvedAt: null,
-  };
-  (state.hyroxCycleQueues[cycleId] ||= []).push(entry);
-  notify(userId, "hyrox-waitlisted", "HYROX is full — you are on the weekly waitlist.", "#/schedule");
-  save();
-  return entry;
-}
-
-export function leaveHyroxCycleQueue(userId, entryId) {
-  if (isLive()) return liveOps.liveLeaveHyroxCycleQueue(entryId);
-  const entry = Object.values(state.hyroxCycleQueues || {}).flat().find((item) => item.id === entryId);
-  if (!entry || entry.userId !== userId || entry.status !== "active") return null;
-  entry.status = "left";
-  entry.resolvedAt = Date.now();
-  save();
-  return entry;
-}
-
-export function hyroxCycleQueues(cycleId) {
-  if (isLive()) return liveOps.liveHyroxQueuesForCycle(cycleId);
-  const rows = hyroxQueueEntries(cycleId);
-  return {
-    weeklyWaitlist: rows.filter((entry) => entry.kind === "weekly_waitlist" && entry.status === "active")
-      .sort((a, b) => (a.joinedAt - b.joinedAt) || a.id.localeCompare(b.id)),
-    venueSwitches: rows.filter((entry) => entry.kind === "venue_switch" && entry.status === "active")
-      .sort((a, b) => (a.joinedAt - b.joinedAt) || a.id.localeCompare(b.id)),
-  };
-}
-
-export function hyroxCycleQueuePosition(userId, cycleId, kind = "weekly_waitlist", targetSessionId = null) {
-  const queue = hyroxCycleQueues(cycleId)[kind === "venue_switch" ? "venueSwitches" : "weeklyWaitlist"]
-    .filter((entry) => targetSessionId == null || entry.targetSessionId === targetSessionId);
-  const index = queue.findIndex((entry) => entry.userId === userId);
-  return index < 0 ? null : index + 1;
-}
-
-export function sweepHyroxCycleDeadlines(now = Date.now()) {
-  if (isLive()) return liveOps.liveSweepHyroxDeadlines({ now });
-  let dirty = false;
-  for (const cycle of Object.values(state.hyroxCycles || {})) {
-    if (cycle.registrationState === "cancelled") continue;
-    if (cycle.registrationState === "draft" && now >= cycle.registrationOpensAt) {
-      cycle.registrationState = "open";
-      cycle.openedAt ||= now;
-      dirty = true;
-      for (const user of state.users.filter((item) => ["member", "admin", "super_admin"].includes(item.role)
-        && item.status === "approved")) {
-        notify(user.id, "hyrox-registration-opened",
-          `HYROX registration is open for Saturday ${cycle.dateISO}.`, "#/schedule");
-      }
-    }
-    if (now >= hyroxPaymentReminderAt(cycle.dateISO) && !cycle.paymentReminderSentAt) {
-      cycle.paymentReminderSentAt = now;
-      dirty = true;
-      state.bookings.filter((booking) => booking.cycleId === cycle.id
-        && booking.status === "reserved" && !booking.paymentMarkedAt
-        && !booking.promotedFromWaitlistAt)
-        .forEach((booking) => {
-          const user = state.users.find((candidate) => candidate.id === booking.userId);
-          if (user?.hyroxPaymentReminders !== false) {
-            notify(booking.userId, "hyrox-payment-reminder",
-              "HYROX payment reminder — mark payment by Thursday at 6 PM HKT.", `#/pay/${booking.id}`);
-          }
-        });
-    }
-    if (now >= hyroxPaymentReminderAt(cycle.dateISO) && !cycle.collectorPaymentReminderSentAt) {
-      const collector = collectorFor(cycle.bftSessionId || cycle.midtownSessionId);
-      if (collector?.id) {
-        const bookings = state.bookings.filter((booking) => booking.cycleId === cycle.id
-          && booking.status === "reserved" && !booking.promotedFromWaitlistAt);
-        const queues = hyroxQueueEntries(cycle.id).filter((entry) => entry.kind === "weekly_waitlist"
-          && entry.status === "active");
-        const marked = bookings.filter((booking) => booking.paymentMarkedAt).length;
-        const unmarked = bookings.length - marked;
-        notify(collector.id, "hyrox-collector-payment-reminder",
-          `HYROX payments due at 6 PM HKT — ${marked} payment claims, ${unmarked} unmarked holders, ${queues.length} weekly waitlist for ${cycle.dateISO}.`,
-          "#/admin/payments");
-        cycle.collectorPaymentReminderSentAt = now;
-        dirty = true;
-      }
-    }
-    if (now >= cycle.venueChoiceDeadlineAt - 2 * 3600 * 1000
-        && !cycle.venueChoiceReminderSentAt) {
-      cycle.venueChoiceReminderSentAt = now;
-      dirty = true;
-      state.bookings.filter((booking) => booking.cycleId === cycle.id
-        && booking.status === "confirmed"
-        && booking.allocationState === "provisional")
-        .forEach((booking) => notify(booking.userId, "hyrox-venue-choice-reminder",
-          "Venue changes close Friday at 9 PM HKT. Review your HYROX venue preference before then.",
-          `#/booking/${booking.id}`));
-    }
-    if (now >= cycle.venueChoiceDeadlineAt && !cycle.venueFinalizationReminderSentAt) {
-      const venueSessionIds = cycle.venuePlan === "bft_only"
-        ? [cycle.bftSessionId]
-        : [cycle.bftSessionId, cycle.midtownSessionId];
-      const incomplete = !cycle.allocationClosedAt
-        || venueSessionIds.filter(Boolean).some((sessionId) => !getSession(sessionId)?.gymConfirmedAt);
-      const collector = collectorFor(cycle.bftSessionId || cycle.midtownSessionId);
-      if (collector?.id) {
-        if (incomplete) {
-          notify(collector.id, "hyrox-venue-finalization-reminder",
-            `HYROX venue finalization is due — close the allocation and confirm each enabled venue for ${cycle.dateISO}.`,
-            "#/admin/payments");
-        }
-        cycle.venueFinalizationReminderSentAt = now;
-        dirty = true;
-      }
-    }
-    if (now >= cycle.paymentDeadlineAt && !cycle.holderGraceStartedAt) {
-      cycle.holderGraceStartedAt = now;
-      cycle.reconciliationStartedAt ||= now;
-      if (cycle.registrationState === "open") cycle.registrationState = "reconciling";
-      dirty = true;
-      state.bookings.filter((booking) => booking.cycleId === cycle.id
-        && booking.status === "reserved" && !booking.paymentMarkedAt)
-        .forEach((booking) => notify(booking.userId, "hyrox-holder-grace",
-          "Your HYROX place is held until Thursday at 7 PM HKT.", `#/pay/${booking.id}`));
-    }
-    if (now >= cycle.holderGraceDeadlineAt && !cycle.waitlistPromotedAt) {
-      const originalHolders = state.bookings.filter((booking) => booking.cycleId === cycle.id
-        && booking.status === "reserved" && !booking.paymentMarkedAt
-        && !booking.promotedFromWaitlistAt);
-      for (const booking of originalHolders) {
-        booking.status = "expired";
-        const entries = hyroxQueueEntries(cycle.id);
-        if (!entries.some((entry) => entry.userId === booking.userId && entry.status === "active")) {
-          entries.push({
-            id: uid("hq"), cycleId: cycle.id, userId: booking.userId,
-            kind: "weekly_waitlist", targetSessionId: null,
-            venuePreference: booking.venuePreference,
-            fallbackAcknowledgedAt: booking.fallbackAcknowledgedAt,
-            status: "active", joinedAt: now, resolvedAt: null,
-          });
-        }
-        notify(booking.userId, "hyrox-moved-to-waitlist",
-          "Your unpaid HYROX place moved to the back of the weekly waitlist.", "#/schedule");
-      }
-      const preExisting = hyroxQueueEntries(cycle.id)
-        .filter((entry) => entry.kind === "weekly_waitlist" && entry.status === "active"
-          && entry.joinedAt < cycle.holderGraceDeadlineAt)
-        .sort((a, b) => (a.joinedAt - b.joinedAt) || a.id.localeCompare(b.id));
-      for (const entry of preExisting) {
-        if (hyroxActiveBookings(cycle.id).length >= cycle.capacity) break;
-        createHyroxWaitlistBooking(cycle, entry, now, cycle.promotedPaymentDeadlineAt, true);
-      }
-      cycle.waitlistPromotedAt = now;
-      dirty = true;
-    }
-    if (now >= cycle.promotedPaymentDeadlineAt) {
-      state.bookings.filter((booking) => booking.cycleId === cycle.id
-        && booking.status === "reserved" && booking.promotedFromWaitlistAt
-        && !booking.paymentMarkedAt)
-        .forEach((booking) => {
-          booking.status = "expired";
-          notify(booking.userId, "hyrox-promotion-expired",
-            "Your promoted HYROX place expired at Thursday 8 PM HKT.", "#/schedule");
-          dirty = true;
-        });
-      const activeEntries = hyroxQueueEntries(cycle.id).filter((entry) => entry.status === "active");
-      for (const entry of activeEntries) {
-        entry.status = "dissolved";
-        entry.resolvedAt = now;
-        notify(entry.userId, "hyrox-waitlist-closed",
-          "The HYROX weekly waitlist is now closed for this week.", "#/schedule");
-        dirty = true;
-      }
-      if (cycle.registrationState !== "closed") {
-        cycle.registrationState = "closed";
-        dirty = true;
-      }
-    }
-  }
-  if (dirty) save();
-  return state.hyroxCycles;
-}
-
-function hyroxAllocationVenue(sessionId) {
-  const session = getSession(sessionId);
-  return session ? {
-    sessionId: session.id,
-    venue: session.location,
-    startTime: session.time,
-    capacity: session.capacity,
-  } : { sessionId, venue: null, startTime: null, capacity: null };
-}
-
-function appendHyroxAllocation(booking, sessionId, source, now) {
-  booking.allocationSnapshot = [
-    ...(Array.isArray(booking.allocationSnapshot) ? booking.allocationSnapshot : []),
-    { ...hyroxAllocationVenue(sessionId), source, assignedAt: now },
-  ];
-  booking.sessionId = sessionId;
-  booking.allocationState = "provisional";
-  booking.allocationSource = source;
-  booking.allocatedAt = now;
-}
-
-function hyroxCycleForSession(sessionId) {
-  return Object.values(state.hyroxCycles || {}).find((cycle) =>
-    cycle.bftSessionId === sessionId || cycle.midtownSessionId === sessionId) || null;
-}
-
-function hyroxAssertSwitchable(booking, cycle, now) {
-  if (!cycle || cycle.venuePlan !== "both") throw new Error("Venue changes are available only when both gyms open.");
-  if (booking.status !== "confirmed" || booking.allocationState !== "provisional") {
-    throw new Error("Booking allocation is not changeable.");
-  }
-  if (now >= cycle.venueChoiceDeadlineAt) throw new Error("Venue changes closed Friday at 9 PM HKT.");
-}
-
-function hyroxAssertTarget(cycle, sessionId) {
-  if (![cycle.bftSessionId, cycle.midtownSessionId].includes(sessionId)) {
-    throw new Error("Target venue is not part of this HYROX cycle.");
-  }
-  return getSession(sessionId);
-}
-
-function hyroxConfirmedCount(cycleId, sessionId = null) {
-  return state.bookings.filter((booking) => booking.cycleId === cycleId
-    && booking.status === "confirmed" && (sessionId == null || booking.sessionId === sessionId)).length;
-}
-
-function fillHyroxSwitchVacancy(cycle, sessionId, now) {
-  if (!cycle || !sessionId) return null;
-  const target = getSession(sessionId);
-  if (!target) return null;
-  if (hyroxConfirmedCount(cycle.id, sessionId) >= target.capacity) return null;
-  const entry = hyroxQueueEntries(cycle.id)
-    .filter((item) => item.kind === "venue_switch" && item.status === "active"
-      && item.targetSessionId === sessionId)
-    .sort((a, b) => (a.joinedAt - b.joinedAt) || a.id.localeCompare(b.id))[0];
-  if (!entry) return null;
-  const booking = state.bookings.find((item) => item.cycleId === cycle.id
-    && item.userId === entry.userId && item.status === "confirmed");
-  if (!booking) {
-    entry.status = "dissolved";
-    entry.resolvedAt = now;
-    return null;
-  }
-  appendHyroxAllocation(booking, sessionId, "member", now);
-  booking.allocationState = "provisional";
-  entry.status = "matched";
-  entry.resolvedAt = now;
-  const receipt = receiptForBooking(booking.id);
-  if (receipt) receipt.sessionId = sessionId;
-  notify(booking.userId, "hyrox-venue-switch-matched", "Your HYROX venue switch is confirmed.", `#/booking/${booking.id}`);
-  return booking;
-}
-
-export function rejectHyroxCyclePayment(bookingId, reason, now = Date.now()) {
-  if (isLive()) return liveOps.liveRejectHyroxPayment(bookingId, reason);
-  const actor = requirePaymentAdminActor();
-  const booking = getBooking(bookingId);
-  const cleanReason = String(reason || "").trim();
-  if (!cleanReason) throw new Error("Payment rejection reason is required.");
-  if (!booking?.cycleId) throw new Error("Pooled HYROX booking not found.");
-  if (booking.status !== "reserved" || !booking.paymentMarkedAt) {
-    throw new Error("Booking has no pending payment claim.");
-  }
-  if (now < booking.payDeadlineAt) {
-    booking.paymentMarkedAt = null;
-    booking.paidMethod = null;
-    booking.paymentRef = null;
-  } else {
-    booking.status = "expired";
-  }
-  booking.paymentRejectedAt = now;
-  booking.paymentRejectedBy = actor.id;
-  booking.paymentRejectionReason = cleanReason;
-  notify(booking.userId, "hyrox-payment-rejected", cleanReason,
-    booking.status === "reserved" ? `#/pay/${booking.id}` : "#/schedule");
-  save();
-  const cycle = hyroxCycleById(booking.cycleId);
-  if (cycle && now >= cycle.paymentDeadlineAt
-      && state.bookings.every((item) => item.cycleId !== cycle.id
-        || item.status !== "reserved" || !item.paymentMarkedAt)) {
-    finalizeHyroxVenuePlan(cycle.id, now);
-  }
-  return booking;
-}
-
-export function finalizeHyroxVenuePlan(cycleId, now = Date.now()) {
-  if (isLive()) return liveOps.liveFinalizeHyroxVenuePlan(cycleId);
-  const actor = requirePaymentAdminActor();
-  const cycle = hyroxCycleById(cycleId);
-  if (!cycle) throw new Error("HYROX cycle not found.");
-  if (cycle.venuePlan !== "pending") return cycle;
-  if (now < cycle.paymentDeadlineAt) throw new Error("Payment reconciliation has not started.");
-  if (state.bookings.some((booking) => booking.cycleId === cycleId
-      && booking.status === "reserved" && booking.paymentMarkedAt)) {
-    throw new Error("Unresolved marked HYROX payments remain.");
-  }
-  const confirmed = hyroxActiveBookings(cycleId).filter((booking) => booking.status === "confirmed");
-  if (confirmed.length > cycle.capacity) throw new Error("Confirmed HYROX payments exceed cycle capacity.");
-  const mode = confirmed.length <= 20 ? "bft_only" : "both";
-  const allocationState = mode === "bft_only" || now >= cycle.venueChoiceDeadlineAt ? "final" : "provisional";
-  const candidates = mode === "bft_only"
-    ? confirmed.map((booking) => ({ ...booking, venuePreference: "bft" }))
-    : confirmed;
-  const allocations = allocateHyroxVenues(candidates, {
-    bftSessionId: cycle.bftSessionId,
-    midtownSessionId: cycle.midtownSessionId,
-  });
-  for (const allocation of allocations) {
-    const booking = state.bookings.find((item) => item.id === allocation.bookingId);
-    appendHyroxAllocation(booking, allocation.sessionId, allocation.source, now);
-    booking.allocationState = allocationState;
-    const receipt = receiptForBooking(booking.id);
-    if (receipt) receipt.sessionId = allocation.sessionId;
-    notify(booking.userId, "hyrox-venue-allocated",
-      `Your HYROX venue is ${hyroxAllocationVenue(allocation.sessionId).venue}.`
-        + (allocationState === "provisional" ? " Venue changes close Friday at 9 PM HKT." : ""),
-      `#/booking/${booking.id}`);
-  }
-  cycle.registrationState = "closed";
-  cycle.venuePlan = mode;
-  cycle.reconciliationStartedAt ||= now;
-  cycle.planConfirmedAt = now;
-  cycle.planConfirmedBy = actor.id;
-  cycle.planConfirmedSource = "payment_reconciliation";
-  cycle.allocationClosedAt = allocationState === "final" ? now : null;
-  save();
-  return cycle;
-}
-
-export function selectHyroxCycleVenue(bookingId, sessionId, now = Date.now()) {
-  if (isLive()) return liveOps.liveSelectHyroxVenue(bookingId, sessionId);
-  const booking = getBooking(bookingId);
-  if (!booking?.cycleId) throw new Error("Pooled HYROX booking not found.");
-  requireAuthorizedPaymentOwner(booking.userId);
-  const cycle = hyroxCycleById(booking.cycleId);
-  hyroxAssertSwitchable(booking, cycle, now);
-  const target = hyroxAssertTarget(cycle, sessionId);
-  if (booking.sessionId === sessionId) return booking;
-  if (hyroxConfirmedCount(cycle.id, sessionId) >= target.capacity) throw new Error("Target venue is full.");
-  appendHyroxAllocation(booking, sessionId, "member", now);
-  const request = hyroxQueueEntries(cycle.id).find((entry) => entry.kind === "venue_switch"
-    && entry.userId === booking.userId && entry.status === "active");
-  if (request) { request.status = "matched"; request.resolvedAt = now; }
-  const receipt = receiptForBooking(booking.id);
-  if (receipt) receipt.sessionId = sessionId;
-  notify(booking.userId, "hyrox-venue-changed", `Your HYROX venue is now ${target.location}.`, `#/booking/${booking.id}`);
-  save();
-  return booking;
-}
-
-export function joinHyroxVenueSwitchQueue(bookingId, sessionId, now = Date.now()) {
-  if (isLive()) return liveOps.liveJoinHyroxVenueSwitchQueue(bookingId, sessionId);
-  const booking = getBooking(bookingId);
-  if (!booking?.cycleId) throw new Error("Pooled HYROX booking not found.");
-  requireAuthorizedPaymentOwner(booking.userId);
-  const cycle = hyroxCycleById(booking.cycleId);
-  hyroxAssertSwitchable(booking, cycle, now);
-  const target = hyroxAssertTarget(cycle, sessionId);
-  if (booking.sessionId === sessionId) throw new Error("Choose the other venue in this HYROX cycle.");
-  const entries = hyroxQueueEntries(cycle.id);
-  if (entries.some((entry) => entry.userId === booking.userId && entry.kind === "venue_switch" && entry.status === "active")) {
-    throw new Error("You already have an active HYROX queue request.");
-  }
-  const targetFull = hyroxConfirmedCount(cycle.id, sessionId) >= target.capacity;
-  if (!targetFull) {
-    appendHyroxAllocation(booking, sessionId, "member", now);
-    const entry = {
-      id: uid("hq"), cycleId: cycle.id, userId: booking.userId, kind: "venue_switch",
-      targetSessionId: sessionId, venuePreference: null, fallbackAcknowledgedAt: null,
-      status: "matched", joinedAt: now, resolvedAt: now,
-    };
-    entries.push(entry);
-    const receipt = receiptForBooking(booking.id);
-    if (receipt) receipt.sessionId = sessionId;
-    notify(booking.userId, "hyrox-venue-changed", `Your HYROX venue is now ${target.location}.`, `#/booking/${booking.id}`);
-    save();
-    return entry;
-  }
-  const opposite = entries
-    .filter((entry) => entry.kind === "venue_switch" && entry.status === "active"
-      && entry.targetSessionId === booking.sessionId)
-    .map((entry) => ({ entry, booking: state.bookings.find((item) => item.userId === entry.userId
-      && item.cycleId === cycle.id && item.status === "confirmed") }))
-    .find(({ booking: other }) => other?.sessionId === sessionId);
-  if (opposite) {
-    const currentSessionId = booking.sessionId;
-    appendHyroxAllocation(booking, sessionId, "switch_match", now);
-    appendHyroxAllocation(opposite.booking, currentSessionId, "switch_match", now);
-    opposite.entry.status = "matched";
-    opposite.entry.resolvedAt = now;
-    const entry = {
-      id: uid("hq"), cycleId: cycle.id, userId: booking.userId, kind: "venue_switch",
-      targetSessionId: sessionId, venuePreference: null, fallbackAcknowledgedAt: null,
-      status: "matched", joinedAt: now, resolvedAt: now,
-    };
-    entries.push(entry);
-    for (const item of [booking, opposite.booking]) {
-      const receipt = receiptForBooking(item.id);
-      if (receipt) receipt.sessionId = item.sessionId;
-      notify(item.userId, "hyrox-venue-switch-matched", "Your HYROX venue switch is confirmed.", `#/booking/${item.id}`);
-    }
-    save();
-    return entry;
-  }
-  const entry = {
-    id: uid("hq"), cycleId: cycle.id, userId: booking.userId, kind: "venue_switch",
-    targetSessionId: sessionId, venuePreference: null, fallbackAcknowledgedAt: null,
-    status: "active", joinedAt: now, resolvedAt: null,
-  };
-  entries.push(entry);
-  notify(booking.userId, "hyrox-switch-waitlisted", "Your current HYROX venue remains confirmed while you wait.", `#/booking/${booking.id}`);
-  save();
-  return entry;
-}
-
-export function leaveHyroxVenueSwitchQueue(entryId) {
-  if (isLive()) return liveOps.liveLeaveHyroxVenueSwitchQueue(entryId);
-  const entry = Object.values(state.hyroxCycleQueues || {}).flat().find((item) => item.id === entryId);
-  if (!entry || entry.kind !== "venue_switch" || entry.status !== "active") return null;
-  requireAuthorizedPaymentOwner(entry.userId);
-  entry.status = "left";
-  entry.resolvedAt = Date.now();
-  save();
-  return entry;
-}
-
-export function closeHyroxVenueAllocation(cycleId, now = Date.now()) {
-  if (isLive()) return liveOps.liveCloseHyroxVenueAllocation(cycleId);
-  requirePaymentAdminActor();
-  const cycle = hyroxCycleById(cycleId);
-  if (!cycle) throw new Error("HYROX cycle not found.");
-  if (cycle.allocationClosedAt) return cycle;
-  if (cycle.venuePlan === "pending" || cycle.registrationState !== "closed") throw new Error("HYROX venue plan is not ready.");
-  if (now < cycle.venueChoiceDeadlineAt) throw new Error("Venue changes close Friday at 9 PM HKT.");
-  state.bookings.filter((booking) => booking.cycleId === cycleId && booking.status === "confirmed"
-    && booking.allocationState === "provisional").forEach((booking) => { booking.allocationState = "final"; booking.allocatedAt = now; });
-  hyroxQueueEntries(cycleId).filter((entry) => entry.kind === "venue_switch" && entry.status === "active")
-    .forEach((entry) => { entry.status = "dissolved"; entry.resolvedAt = now; });
-  cycle.allocationClosedAt = now;
-  save();
-  return cycle;
-}
-
-export function cancelHyroxCycle(cycleId, reason, now = Date.now()) {
-  if (isLive()) return liveOps.liveCancelHyroxCycle(cycleId, reason);
-  const actor = requirePaymentAdminActor();
-  const cycle = hyroxCycleById(cycleId);
-  const cleanReason = String(reason || "").trim();
-  if (!cleanReason) throw new Error("Cancellation reason is required.");
-  if (!cycle) throw new Error("HYROX cycle not found.");
-  if (cycle.registrationState === "cancelled") throw new Error("HYROX cycle is already cancelled.");
-  cycle.registrationState = "cancelled";
-  cycle.cancelledAt = now;
-  cycle.cancelReason = cleanReason;
-  for (const sessionId of [cycle.bftSessionId, cycle.midtownSessionId]) {
-    (state.sessionOverrides[sessionId] ||= {}).cancelled = cleanReason;
-  }
-  for (const booking of state.bookings.filter((item) => item.cycleId === cycleId)) {
-    if (booking.status === "reserved") booking.status = "cancelled";
-  }
-  for (const entry of hyroxQueueEntries(cycleId).filter((item) => item.status === "active")) {
-    entry.status = "dissolved";
-    entry.resolvedAt = now;
-  }
-  const target = Object.values(state.hyroxCycles || {})
-    .filter((item) => item.dateISO > cycle.dateISO && item.registrationState === "open"
-      && now < item.paymentDeadlineAt && hyroxActiveBookings(item.id).length < item.capacity)
-    .sort((a, b) => a.dateISO.localeCompare(b.dateISO))[0];
-  for (const booking of state.bookings.filter((item) => item.cycleId === cycleId && item.status === "confirmed")) {
-    if (!target) {
-      notify(booking.userId, "hyrox-cycle-cancelled-no-deferral", "ITC cancelled this HYROX session. If you have paid and would like to apply it to a future ITC HYROX session, contact the collector.", "#/schedule");
-      continue;
-    }
-    const moved = {
-      ...structuredClone(booking), id: uid("b"), cycleId: target.id, sessionId: null,
-      status: "confirmed", createdAt: now, reservedAt: now, deferredFrom: booking.id,
-      deferredTo: null, snapshot: hyroxCycleSnapshot(target), allocationState: null,
-      allocationSource: null, allocatedAt: null, allocationSnapshot: null,
-    };
-    booking.status = "deferred";
-    booking.deferredTo = moved.id;
-    state.bookings.push(moved);
-    const receipt = receiptForBooking(booking.id);
-    if (receipt) { receipt.bookingId = moved.id; receipt.cycleId = target.id; receipt.sessionId = null; }
-    notify(booking.userId, "hyrox-cycle-deferred", `Your paid HYROX place was moved to ${target.dateISO}.`, `#/booking/${moved.id}`);
-  }
-  state.users.filter((user) => ["member", "admin", "super_admin"].includes(user.role)
-    && user.status === "approved").forEach((user) => notify(user.id, "hyrox-cycle-cancelled",
-      `The HYROX cycle on ${cycle.dateISO} was cancelled: ${cleanReason}.`, "#/schedule"));
-  cycle.planConfirmedBy ||= actor.id;
-  save();
-  return cycle;
-}
 
 function paymentQueueFor(sessionId) {
   if (isLive()) {
@@ -2617,7 +2101,6 @@ function sweepCheckpoints(now = Date.now()) {
 function cascadeSession(sessionId, now = Date.now()) {
   const session = getSession(sessionId);
   if (!session || session.cancelled) return;
-  if (isMidtown(session) && !midtownOpenFor(session)) return;
   const q = paymentQueueFor(sessionId);
   while (spotsLeft(session) > 0 && q.waitlist.length) {
     const { userId } = q.waitlist.shift();
@@ -2633,7 +2116,7 @@ function cascadeSession(sessionId, now = Date.now()) {
   save();
 }
 
-// --- Queues: waitlist (open sessions) & interest (closed Midtown) ----------
+// --- Direct-session waitlists ---------------------------------------------
 
 function joinQueue(userId, sessionId, kind) {
   requireAuthorizedPaymentOwner(userId);
@@ -2661,12 +2144,14 @@ function queuePosition(userId, sessionId, kind) {
 }
 
 export function joinWaitlist(userId, sessionId) {
+  assertActiveSessionTarget(sessionId);
   if (isLive()) {
     return liveOps.liveJoinQueue(sessionId, "waitlist");
   }
   return joinQueue(userId, sessionId, "waitlist");
 }
 export function leaveWaitlist(userId, sessionId) {
+  assertActiveSessionTarget(sessionId);
   if (isLive()) {
     const session = liveOps.getLiveSession(sessionId);
     const entry = (session && liveOps.liveQueueForSession(sessionId).waitlist.find((q) => q.userId === userId))
@@ -2684,36 +2169,14 @@ export function waitlistPosition(userId, sessionId) {
   }
   return queuePosition(userId, sessionId, "waitlist");
 }
-export function joinInterest(userId, sessionId) {
-  if (isLive()) {
-    return liveOps.liveJoinQueue(sessionId, "interest");
-  }
-  return joinQueue(userId, sessionId, "interest");
-}
-export function leaveInterest(userId, sessionId) {
-  if (isLive()) {
-    const entry = liveOps.liveQueueForSession(sessionId).interest.find((q) => q.userId === userId);
-    if (entry) return liveOps.liveLeaveQueue(entry.id);
-    return null;
-  }
-  return leaveQueue(userId, sessionId, "interest");
-}
-export function interestPosition(userId, sessionId) {
-  if (isLive()) {
-    const queue = liveOps.liveQueueForSession(sessionId).interest;
-    const idx = queue.findIndex((q) => q.userId === userId);
-    return idx === -1 ? null : idx + 1;
-  }
-  return queuePosition(userId, sessionId, "interest");
-}
-
 // Session template + per-week override (cancelled, time, venueTBC, notice...).
 export function getSession(sessionId) {
   if (isLive()) {
     const live = liveOps.getLiveSession(sessionId);
-    return live ? applyWntLeaderNote({ ...live }) : null;
+    return live && !isRetiredHyroxSession(live) ? applyWntLeaderNote({ ...live }) : null;
   }
   const s = findSession(state.activities, sessionId);
+  if (retirementBoundaryActive() && isRetiredHyroxSession(s)) return null;
   if (!s) {
     const event = state.oneOffEvents.find((e) => `${e.id}-${e.dateISO}` === sessionId);
     if (!event) return null;
@@ -2757,7 +2220,6 @@ function decorateSession(s) {
   if (o.cancelled) { out.cancelled = true; out.cancelReason = o.cancelled; }
   if (o.venueTBC) { out.venueTBC = true; out.location = "TBC"; }
   if (o.notice) out.notice = o.notice;
-  if (o.midtownOpen) out.midtownOpen = true;
   if (o.gymConfirmedAt) out.gymConfirmedAt = o.gymConfirmedAt;
   if (o.gymNote) out.gymNote = o.gymNote;
   if (o.location) out.location = o.location;
@@ -2796,7 +2258,8 @@ export function upcomingSessions(days = 14) {
     end.setDate(end.getDate() + days - 1);
     const endISO = isoDate(end);
     return liveOps.listLiveSessions()
-      .filter((s) => s.dateISO >= todayISO && s.dateISO <= endISO)
+      .filter((s) => !isRetiredHyroxSession(s)
+        && s.dateISO >= todayISO && s.dateISO <= endISO)
       .map((s) => {
         const decorated = applyWntLeaderNote(s);
         return {
@@ -2818,7 +2281,9 @@ export function upcomingSessions(days = 14) {
       const decorated = decorateSession(s);
       return { ...decorated, spots: spotsLeft(decorated), past: false };
     });
-  return [...sessionsInRange(state.activities, today, days).map((s) => {
+  return [...sessionsInRange(state.activities, today, days)
+    .filter((session) => !retirementBoundaryActive() || !isRetiredHyroxSession(session))
+    .map((s) => {
     const decorated = decorateSession(s);
     return {
       ...decorated,
@@ -3070,9 +2535,9 @@ export async function setAdminPrayerRequestStatus(requestId, status) {
 }
 
 // --- Duty roster --------------------------------------------------------------
-// One collector per week (Saturday date) covering both venues. The member's
-// payment screen shows this collector's PayMe/FPS details; mid-week switches
-// change the target for new payments.
+// One collector per week (Saturday date) handles paid-session reconciliation.
+// The member's payment screen shows this collector's PayMe/FPS details; duty
+// handoffs change the target for new payments.
 
 export function collectorFor(sessionId) {
   // Resolve identity from Supabase's in-memory directory in live mode and
@@ -3252,7 +2717,6 @@ export function updateCollectorPayouts(userId, { paymeLink, fpsPhone }) {
 // --- Deferral (defer-only policy; no member refunds) ------------------------
 
 export function deferTargetsFor(booking) {
-  if (booking?.cycleId) return [];
   const from = parseISO(booking.snapshot.dateISO);
   const sourceActivityId = getSession(booking.sessionId)?.activityId;
   if (!sourceActivityId) return [];
@@ -3262,7 +2726,6 @@ export function deferTargetsFor(booking) {
       .filter((s) => s.activityId === sourceActivityId)
       .filter((s) => s.dateISO > booking.snapshot.dateISO && !s.cancelled)
       .filter((s) => !sessionStarted(s))
-      .filter((s) => !(isMidtown(s) && !midtownOpenFor(s)))
       .filter((s) => spotsLeft(s) > 0);
   }
   const sourceSessions = state.activities;
@@ -3271,20 +2734,19 @@ export function deferTargetsFor(booking) {
     .filter(
       (s) =>
         s && s.activityId === sourceActivityId && s.kind === "paid" && s.id !== booking.sessionId &&
-        !s.cancelled && !sessionStarted(s) &&
-        (!isMidtown(s) || midtownOpenFor(s)) &&
-        spotsLeft(s) > 0
+        !s.cancelled && !sessionStarted(s) && spotsLeft(s) > 0
     );
 }
 
 export function deferBooking(bookingId, targetSessionId, now = Date.now()) {
+  assertActiveBookingTarget(bookingId);
+  assertActiveSessionTarget(targetSessionId);
   if (isLive()) {
     return liveOps.liveDeferBooking(bookingId, targetSessionId);
   }
   const b = getBooking(bookingId);
   if (!b || (b.status !== "reserved" && b.status !== "confirmed"))
     throw new Error("Booking cannot be deferred");
-  if (b.cycleId) throw new Error("Paid pooled HYROX bookings cannot be deferred.");
   requireAuthorizedPaymentOwner(b.userId);
   const src = getSession(b.sessionId);
   if (src && sessionStarted(src)) throw new Error("Session has already started");
@@ -3293,7 +2755,6 @@ export function deferBooking(bookingId, targetSessionId, now = Date.now()) {
     throw new Error("That session is not available");
   if (!src || target.activityId !== src.activityId)
     throw new Error("Target must be a session of the same activity");
-  if (isMidtown(target) && !midtownOpenFor(target)) throw new Error("Session is not open");
   if (spotsLeft(target) <= 0) throw new Error("Session is full");
 
   const wasPaid = b.status === "confirmed";
@@ -3401,6 +2862,7 @@ export async function rsvpSession(userId, sessionOrId, now = Date.now()) {
 // Withdrawing an RSVP is member self-service: no money ever moved, so no
 // admin involvement is needed (unlike paid confirmed bookings).
 export async function withdrawRsvp(bookingId, now = Date.now()) {
+  assertActiveBookingTarget(bookingId);
   if (isLive()) {
     return liveOps.liveWithdrawRsvp(bookingId);
   }
@@ -3470,6 +2932,7 @@ export async function createOneOffEvent(fields) {
 }
 
 export async function repostRsvpEvent(sessionId) {
+  assertActiveSessionTarget(sessionId);
   requirePaymentAdminActor();
   const source = getSession(sessionId);
   if (!source || !sessionRequiresRsvp(source) || Number(source.price ?? 0) > 0 || !source.cancelled) {
@@ -3501,6 +2964,7 @@ export async function repostRsvpEvent(sessionId) {
 }
 
 export async function deleteOneOffEvent(sessionId) {
+  assertActiveSessionTarget(sessionId);
   if (isLive()) {
     return liveOps.liveDeleteEvent(sessionId);
   }
@@ -3518,6 +2982,7 @@ export async function deleteOneOffEvent(sessionId) {
 }
 
 export function cancelSessionWeek(sessionId, reason, now = Date.now()) {
+  assertActiveSessionTarget(sessionId);
   if (isLive()) {
     return liveOps.liveCancelSession(sessionId, reason);
   }
@@ -3606,6 +3071,7 @@ export function cancelSessionWeek(sessionId, reason, now = Date.now()) {
 }
 
 export function setSessionTime(sessionId, time) {
+  assertActiveSessionTarget(sessionId);
   if (isLive()) {
     return liveOps.liveSetSessionTime(sessionId, time);
   }
@@ -3628,6 +3094,7 @@ export function setSessionTime(sessionId, time) {
 }
 
 export function setVenueTBC(sessionId, on) {
+  assertActiveSessionTarget(sessionId);
   if (isLive()) {
     return liveOps.liveSetVenueTBC(sessionId, !!on);
   }
@@ -3637,6 +3104,7 @@ export function setVenueTBC(sessionId, on) {
 }
 
 export function setSessionNotice(sessionId, text) {
+  assertActiveSessionTarget(sessionId);
   if (isLive()) {
     return liveOps.liveSetSessionNotice(sessionId, text);
   }
@@ -3646,14 +3114,11 @@ export function setSessionNotice(sessionId, text) {
 }
 
 export function confirmGymBooking(sessionId, note, now = Date.now()) {
+  assertActiveSessionTarget(sessionId);
   if (isLive()) {
     return liveOps.liveFinalizeGym(sessionId, note);
   }
   requirePaymentAdminActor();
-  const cycle = hyroxCycleForSession(sessionId);
-  if (cycle && !cycle.allocationClosedAt) {
-    throw new Error("Pooled HYROX child sessions cannot be finalized before venue allocation closes.");
-  }
   const override = (state.sessionOverrides[sessionId] ||= {});
   override.gymConfirmedAt = now;
   override.gymNote = String(note || "").trim() || undefined;
@@ -3667,6 +3132,7 @@ export function confirmGymBooking(sessionId, note, now = Date.now()) {
 export function setWeekVenue(sessionId, {
   location, mapsQuery, meetingLat = null, meetingLng = null,
 } = {}) {
+  assertActiveSessionTarget(sessionId);
   const before = getSession(sessionId);
   const fallbackActivityId = String(sessionId).replace(/-\d{4}-\d{2}-\d{2}$/, "");
   const overrideActivityId = before?.activityId || fallbackActivityId;
@@ -4945,7 +4411,8 @@ export async function listMyNotifications() {
     .select("*")
     .order("created_at", { ascending: false });
   if (error) throw error;
-  return data || [];
+  return (data || []).filter((notification) =>
+    !isRetiredHyroxNotification(notification, retirementBooking));
 }
 
 export async function markNotificationRead(id) {

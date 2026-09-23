@@ -28,9 +28,9 @@ identity, notifications, Giving, Admin, and approval workflows.
   Dated controls appear under **Activities → Weekly Event Controls**, split
   into Free & RSVP Events and Paid Sessions. Each Admin route exposes exactly
   one active tab.
-- **State compatibility:** the current local state is v23; v9 through v22
+- **State compatibility:** the current local state is v24; v9 through v23
   persisted snapshots are accepted and migrated while preserving genuine
-  records.
+  non-pool records.
 
 Pending and declined profiles can browse public surfaces but cannot render or
 invoke Payment reservation, queue, or pay controls, and cannot use Giving
@@ -219,6 +219,96 @@ To use live mode locally, edit `app/index.html`'s inline `<script>` block to set
 project's values. Refresh the page after changes. Manage live identities in
 Supabase Admin; this cleanup does not change the schema or delete live users.
 
+## HYROX pool retirement: backend-first deployment
+
+Island ECC is the only active HYROX session. It keeps the direct paid-session
+reservation, waitlist, payment, receipt, attendance, replacement, collector,
+and venue-confirmation behavior. Retained BFT/Midtown pool test records are
+hidden from browser roles, not deleted. Retirement sends no cancellation or
+member notification.
+
+Known retired HYROX deep links render `This session is no longer available.`;
+unknown IDs keep the existing safe not-found behavior; neither redirects to
+Island ECC.
+
+`00001` already applied once in production:
+`supabase/migrations/20260922000001_retire_bft_midtown_hyrox_pool.sql`.
+The forward correction
+`supabase/migrations/20260922000002_harden_retired_hyrox_boundary.sql` also already applied once.
+The new source tip is `supabase/migrations/20260922000003_reassert_retired_hyrox_pool_acls.sql`.
+Production has known history drift: never replay that chain, run `db push` or `--include-all`.
+Never edit, replay, reapply, or repair `00001` or `00002`.
+Apply only 00003 after hash/preflight: confirmed project, approved commit/SHA-256,
+backup/PITR, both earlier versions exactly once and 00003 absent, exact observed
+policy/ACL drift only, and count-only evidence. 00003 was never applied to a shared
+database; review its comprehensive artifact (23 statements), not either superseded
+local candidate. Its complete 18 pool-only functions are derived exactly from 00001:
+six retired-job revocations plus all twelve revocations in **Pool-only browser RPCs**.
+This includes `ensure_hyrox_cycles(date,integer)`, `schedule_hyrox_cycle(text)`,
+`sweep_hyrox_cycle_deadlines(timestamptz)`,
+`send_hyrox_member_payment_reminders(timestamptz)`,
+`send_hyrox_collector_payment_reminder(timestamptz)` and
+`send_hyrox_venue_reminders(timestamptz)`, plus the pool reservation/queue/payment
+rejection/venue/cancellation/Midtown-open RPCs listed in the operational runbook.
+It closes any subset of historical re-grants to PUBLIC/anon/authenticated, with both
+pool policy drops/table SELECT revocations and a final schema-cache notify.
+Service/operator access and all reviewed bodies remain unchanged. Already-absent
+grants are catalog no-ops; unrelated drift still means STOP.
+Do not revoke shared guarded authenticated RPCs: `get_operational_attendee_names`,
+`reserve_operational_session`, `mark_operational_payment`, `join_operational_queue`,
+`release_operational_reservation`, `approve_operational_payment`,
+`defer_operational_booking`, `set_operational_attendance`, or
+`suppress_opted_out_hyrox_payment_reminder`. There is no separate
+`approve_hyrox_cycle_payment` function; approval uses the shared guarded RPC.
+The repaired catalog must equal pinned `5a0ecdeb48872f4ec2aacebc1d037c14`.
+Unexpected findings mean STOP.
+
+For the stopped Task 7 journal, follow the operational runbook's 00003 recovery
+order: preserve the mode-0600 v5 journal; never clear uncertainty or use ordinary
+cleanup-only. After verified repair and all three history versions exactly once,
+use only separately reviewed one-off recovery with durable lock/receipt, a fresh
+short-lived journal/hash/count-bound acknowledgement, exact provenance/FK closure,
+and locked SERIALIZABLE exact-ID/xmin/full-row-digest cleanup. Recheck the original
+fixture-excluded baseline and retained digests, post-00003 catalog/history/source/ACL
+contracts, and zero fixtures before journal removal. Strict organic-session normalization
+may account only for additional canonical, open, uncancelled, future sessions of active
+non-retired templates, with matching weekday/time/duration/venue/capacity/price and
+untouched generator defaults. Candidates must be absent from baseline and journal:
+creation after journal creation is only a conservative bound; subtraction must reproduce
+the saved count and whole-row digest exactly. All other domains, retained cohorts,
+notifications and counts remain exact. Bind the organic-ID hash to review/acknowledgement;
+record IDs only in the private mode-0600 receipt, never adopt or delete these rows.
+Preserve their complete unnormalized snapshot before and after commit. Sessions/templates
+receive SHARE locks during cleanup; independently review blocking impact. The deployed
+generator remains active for non-retired templates while the old frontend is live;
+new writes after review invalidate the snapshot rather than expanding authorization.
+Any mismatch preserves evidence.
+Resolver version 8 is already deployed on this stopped target; do not redeploy it
+for this ACL-only repair. No remote action or promotion is authorized here.
+
+Follow the complete [operational backend retirement
+procedure](operational-backend.md#hyrox-pool-retirement-backend-first-deployment).
+
+### Executable release sequence
+
+Use this sequence without reordering or combining its gates:
+
+1. **Inventory, apply, and verify the backend and RPC boundary.** Complete local gates and hash/preflight; apply only `20260922000003_reassert_retired_hyrox_pool_acls.sql` with separate authorization; verify exact pool policy/ACL repair, unchanged bodies/domain rows/older history, existing helper/notification/roster contracts, and complete pool RPC denial and Island ECC active-RPC checks. Complete the separately reviewed one-off recovery before resuming acceptance. `00001` already applied once, as did `00002`; never replay, edit, or repair either. The notification inventory must count retired and unmatched `hyrox_replacement_review` notices while excluding a review notice proven to belong only to active Island ECC.
+2. **Deploy and verify the avatar boundary.** Deploy the reviewed `resolve-profile-avatars` Edge Function only after migration classifier/grant verification, with separate authorization. Record the artifact revision (commit, resolver/shared-adapter digests, deployment version and project). Follow the operational runbook's direct authenticated endpoint gates: BFT/Midtown neutral 404 denial without attendee payloads/signing, Island ECC 200 success, and classifier-failure fail-closed 500 with zero attendee reads/signing on a disposable replica. Do not inject failures in shared services. This upgrade is required before endpoint/browser acceptance; Vercel does not deploy Edge Functions.
+3. **Deploy the reviewed preview.** Deploy the reviewed preview revision—the exact tested commit—against the migrated and verified project; confirm the served revision and Supabase target without promoting it.
+4. **Run browser UI and Island ECC acceptance.** Against that preview, verify browser UI and the full Island ECC lifecycle in separate visitor/member/Admin sessions: retired data stays absent, deep-link behavior is exact, and Island ECC reserve/payment/confirmation/receipt/attendance/waitlist/replacement paths work without payer or receipt transfer.
+5. **Promote the exact accepted snapshot.** Promote only the exact preview commit accepted in step 4, then repeat bounded production route, denial, count-only, Island ECC, and fixture-cleanup checks.
+
+Before step 2, verify service_role has only the session classifier among retirement helpers; the restored attendee helper denies PUBLIC/anon/authenticated/service_role and matches the exact latest `20260910000002_operational_attendee_names_rsvp.sql` body with postgres owner, stable SECURITY DEFINER and fixed search_path. Leave the guarded public wrapper unchanged. Verify notifications: anon has no privileges; authenticated has only SELECT and UPDATE(read_at), never other column UPDATE or INSERT/DELETE/TRUNCATE/TRIGGER/REFERENCES. Keep both reviewed RLS policies unchanged. Check effective ACLs without executing destructive statements. Run local paid/replacement/free RSVP roster and own-active-notification read/mark-read tests with rollback; production read-only verification must not invoke mutating RPCs or create fixtures. Global defaults and unrelated legacy/job grants are not changed by this narrow correction. Confirm each new/applied version exactly once without changing older history, then proceed with resolver deployment.
+
+A failed or unexecuted local, inventory, backend, RPC, preview, privacy, retained-count, denial, or Island ECC gate blocks the next step. Do not treat a successful SQL command alone as acceptance, and do not run browser UI acceptance against the previous frontend.
+
+### Forward-only rollback
+
+Rollback is a **forward-only rollback**. Preserve retained rows and add a new, separately reviewed forward migration for any intentional restoration of template state, grants, policies, functions, or provisioning, followed by a compatible frontend deployment and compatible avatar Edge Function artifact in backend-first order. Preserve the fail-closed resolver while retirement remains intended; never redeploy the old service-role resolver. For intentional reopening, review all three artifacts, deploy SQL prerequisites then the compatible resolver, rerun direct endpoint gates, then accept the frontend.
+
+Never edit or replay applied migration history. Never delete or mark down the applied retirement migration, alter historical migrations, drop retained tables, or expose the old pool UI while the retirement backend remains active. A frontend-only rollback must remain compatible with the retirement backend and keep retired entry points unavailable.
+
 ## Private prayer requests: deployment, acceptance, and rollback
 
 Private prayer requests are Supabase-authoritative whenever live mode is
@@ -264,15 +354,19 @@ shell output, CI logs, deployment notes, or tickets.
 ### Clean local migration and rollback-scoped integration gate
 
 From the repository root, first prove that migration versions are unique and
-that the reviewed migration is the source tip. A non-empty duplicate-version
-result or any other final filename blocks rollout:
+that the current source tip is the reviewed HYROX forward correction. The
+prayer and decision migrations must remain ordered before retirement and its
+forward correction; a non-empty duplicate-version result or any other final
+filename blocks rollout:
 
 ```bash
 test -z "$(find supabase/migrations -maxdepth 1 -type f -name '*.sql' \
   -exec basename {} \; | cut -d_ -f1 | sort | uniq -d)"
 test "$(find supabase/migrations -maxdepth 1 -type f -name '*.sql' \
   -exec basename {} \; | sort | tail -1)" = \
-  "20260921000002_declined_profile_decisions.sql"
+  "20260922000003_reassert_retired_hyrox_pool_acls.sql"
+test -f supabase/migrations/20260921000001_prayer_requests.sql
+test -f supabase/migrations/20260921000002_declined_profile_decisions.sql
 ```
 
 Start from a clean disposable local Supabase database and replay the unmodified
@@ -285,8 +379,11 @@ supabase start --yes \
 ```
 
 The startup output must list each migration version once, apply
-`20260921000001_prayer_requests.sql`, and then apply
-`20260921000002_declined_profile_decisions.sql` last. Run both integration files
+`20260921000001_prayer_requests.sql`, then
+`20260921000002_declined_profile_decisions.sql`, then
+`20260922000001_retire_bft_midtown_hyrox_pool.sql`,
+`20260922000002_harden_retired_hyrox_boundary.sql`, and finally
+`20260922000003_reassert_retired_hyrox_pool_acls.sql`. Run both integration files
 inside the disposable database container with stop-on-error enabled:
 
 ```bash
@@ -1433,12 +1530,13 @@ Browser-level acceptance on the deployed environment:
 5. Block `unpkg.com` and `nominatim.openstreetmap.org` separately. Both
    failure paths must settle on the fallback copy without breaking the
    external Get directions link.
-6. Open both HYROX activity pages. Get directions must appear without a
-   weekly venue form.
+6. Open the Island ECC HYROX activity page. Get directions must appear without
+   a weekly venue form. Retired HYROX activity links must use the neutral state
+   documented above.
 
-Applying the migrations to the real remote target remains a manual deployment
-operation; confirm the selected project and backups before running
-`supabase db push`.
+Applying migrations to the real remote target remains a manual deployment
+operation. Confirm the selected project and backups, then follow each feature's
+reviewed source-tip procedure. Do not run an unqualified `supabase db push`.
 
 ## Initial Super Admin bootstrap
 
