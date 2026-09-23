@@ -2071,6 +2071,14 @@ assert.match(integratedViewSource, /function adminCapacityLine\(count, capacity\
 assert.match(readFileSync(resolve(__dirnameSmoke, "js/app.js"), "utf8"),
   /closest\("a\[href\^='#'\][^"]*"\)/,
   "App click delegate must intercept hash-only anchor links before the router runs");
+assert.match(
+  readFileSync(resolve(__dirnameSmoke, "js/app.js"), "utf8"),
+  /const isInPageAnchor = \/\^#\[A-Za-z\]\[A-Za-z0-9_-\]\*\$\/\.test\(href\);[\s\S]*?const target = isInPageAnchor \? document\.querySelector\(href\) : null;/,
+  "In-page anchor interception must exclude SPA route hashes like #/receipt/<id> so querySelector never throws on them");
+assert.doesNotMatch(
+  readFileSync(resolve(__dirnameSmoke, "js/app.js"), "utf8"),
+  /const target = document\.querySelector\(href\);/,
+  "Unguarded querySelector on arbitrary hash hrefs would throw SyntaxError for route links");
 assert.match(integratedAppSource, /form\.id === "form-privacy"[\s\S]*?updateMyPrivacyPreferences\(/,
   "Privacy & Notifications must persist reminder preferences through the form delegate");
 assert.equal(typeof store.attendeeCountFor, "function",

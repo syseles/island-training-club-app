@@ -802,7 +802,11 @@ document.addEventListener("click", async (e) => {
   const anchor = e.target.closest && e.target.closest("a[href^='#']:not([href='#'])");
   if (anchor && !anchor.dataset.action && !e.defaultPrevented) {
     const href = anchor.getAttribute("href") || "";
-    const target = document.querySelector(href);
+    // Only in-page element anchors are valid selectors. SPA route hashes like
+    // #/receipt/<id> must fall through to the router: querySelector would throw
+    // a SyntaxError on them, and they must never be intercepted as scroll targets.
+    const isInPageAnchor = /^#[A-Za-z][A-Za-z0-9_-]*$/.test(href);
+    const target = isInPageAnchor ? document.querySelector(href) : null;
     if (target && href.startsWith("#") && href.length > 1) {
       e.preventDefault();
       target.scrollIntoView({ behavior: "smooth", block: "start" });
