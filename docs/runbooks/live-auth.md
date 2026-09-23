@@ -241,12 +241,25 @@ Never edit, replay, reapply, or repair `00001` or `00002`.
 Apply only 00003 after hash/preflight: confirmed project, approved commit/SHA-256,
 backup/PITR, both earlier versions exactly once and 00003 absent, exact observed
 policy/ACL drift only, and count-only evidence. 00003 was never applied to a shared
-database; review the amended nine-statement artifact, not its superseded local bytes.
-Its exact EXECUTE revocations cover `ensure_hyrox_cycles(date,integer)`,
+database; review its comprehensive artifact (23 statements), not either superseded
+local candidate. Its complete 18 pool-only functions are derived exactly from 00001:
+six retired-job revocations plus all twelve revocations in **Pool-only browser RPCs**.
+This includes `ensure_hyrox_cycles(date,integer)`, `schedule_hyrox_cycle(text)`,
+`sweep_hyrox_cycle_deadlines(timestamptz)`,
 `send_hyrox_member_payment_reminders(timestamptz)`,
 `send_hyrox_collector_payment_reminder(timestamptz)` and
-`send_hyrox_venue_reminders(timestamptz)` for PUBLIC/anon/authenticated only;
-service/operator access and all reviewed no-op bodies remain unchanged.
+`send_hyrox_venue_reminders(timestamptz)`, plus the pool reservation/queue/payment
+rejection/venue/cancellation/Midtown-open RPCs listed in the operational runbook.
+It closes any subset of historical re-grants to PUBLIC/anon/authenticated, with both
+pool policy drops/table SELECT revocations and a final schema-cache notify.
+Service/operator access and all reviewed bodies remain unchanged. Already-absent
+grants are catalog no-ops; unrelated drift still means STOP.
+Do not revoke shared guarded authenticated RPCs: `get_operational_attendee_names`,
+`reserve_operational_session`, `mark_operational_payment`, `join_operational_queue`,
+`release_operational_reservation`, `approve_operational_payment`,
+`defer_operational_booking`, `set_operational_attendance`, or
+`suppress_opted_out_hyrox_payment_reminder`. There is no separate
+`approve_hyrox_cycle_payment` function; approval uses the shared guarded RPC.
 The repaired catalog must equal pinned `5a0ecdeb48872f4ec2aacebc1d037c14`.
 Unexpected findings mean STOP.
 

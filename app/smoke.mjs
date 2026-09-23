@@ -652,9 +652,14 @@ function assertHyroxRunbookContract(source, relativePath) {
   assert.match(rollout, /Never edit, replay, reapply, or repair `00001` or `00002`/);
   assert.match(rollout, /separately reviewed one-off recovery/);
   assert.match(rollout, /never clear uncertainty/i);
-  for (const reminder of ["send_hyrox_member_payment_reminders", "send_hyrox_collector_payment_reminder", "send_hyrox_venue_reminders"]) {
+  for (const reminder of ["send_hyrox_member_payment_reminders", "send_hyrox_collector_payment_reminder", "send_hyrox_venue_reminders", "sweep_hyrox_cycle_deadlines"]) {
     assert.ok(rollout.includes(`${reminder}(timestamptz)`), `${relativePath} must name each exact reminder overload`);
   }
+  assert.match(rollout, /23 statements/);
+  assert.match(rollout, /18 pool-only functions/);
+  assert.match(rollout, /any subset of historical re-grants/);
+  assert.match(rollout, /Do not revoke[\s\S]*shared guarded[\s\S]*approve_operational_payment/);
+  assert.match(rollout, /suppress_opted_out_hyrox_payment_reminder/);
   assert.match(rollout, /5a0ecdeb48872f4ec2aacebc1d037c14/);
   assert.match(rollout, /never applied to a shared\s+database/);
   assert.match(rollout, /organic-session normalization/i);
