@@ -32,7 +32,7 @@ const COMMITTEES = [];
 // Matches the app's screens and flows on main. Update when the app changes.
 const SCREENS = [
   'Home', 'Schedule', 'Activity details', 'Booking flow', 'Checkout & payment',
-  'Receipt', 'HYROX Cycle', 'HYROX Registration', 'Giving', 'Community',
+  'Receipt', 'Giving', 'Community',
   'Profile — overview', 'Profile — Bookings & History',
   'Profile — Membership Details', 'Profile — Indemnity / waiver',
   'Profile — Payments & Receipts', 'Profile — Privacy & Notifications',

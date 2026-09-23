@@ -197,6 +197,9 @@ export function createResolveProfileAvatarsHandler(
       }
 
       if (scope.kind === 'session') {
+        if (await dependencies.database.isRetiredHyroxSession(scope.sessionId)) {
+          throw new AvatarRequestError('Session not found', 404);
+        }
         const members = await dependencies.database.listSessionAttendees(scope.sessionId);
         const avatars = await Promise.all(
           members.map((member) => attendeePresentation(member, dependencies)),

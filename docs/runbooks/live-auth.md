@@ -28,9 +28,9 @@ identity, notifications, Giving, Admin, and approval workflows.
   Dated controls appear under **Activities → Weekly Event Controls**, split
   into Free & RSVP Events and Paid Sessions. Each Admin route exposes exactly
   one active tab.
-- **State compatibility:** the current local state is v23; v9 through v22
+- **State compatibility:** the current local state is v24; v9 through v23
   persisted snapshots are accepted and migrated while preserving genuine
-  records.
+  non-pool records.
 
 Pending and declined profiles can browse public surfaces but cannot render or
 invoke Payment reservation, queue, or pay controls, and cannot use Giving
@@ -219,6 +219,84 @@ To use live mode locally, edit `app/index.html`'s inline `<script>` block to set
 project's values. Refresh the page after changes. Manage live identities in
 Supabase Admin; this cleanup does not change the schema or delete live users.
 
+## HYROX pool retirement: backend-first deployment
+
+Island ECC is the only active HYROX session. It keeps the direct paid-session
+reservation, waitlist, payment, receipt, attendance, replacement, collector,
+and venue-confirmation behavior. Retained BFT/Midtown pool test records are
+hidden from browser roles, not deleted. Retirement sends no cancellation or
+member notification.
+
+Known retired HYROX deep links render `This session is no longer available.`;
+unknown IDs keep the existing safe not-found behavior; neither redirects to
+Island ECC.
+
+### Post-application promotion (authoritative)
+
+Controller-verified state on `krxbvgyolxvmzgysfjkj`, 2026-09-23: **POST-APPLICATION**. All three migrations are applied and recorded exactly once:
+
+| Applied migration | Verified SHA-256 |
+|---|---|
+| `20260922000001_retire_bft_midtown_hyrox_pool.sql` | `81f66371c360d9e6aed31f4130f38df891aad4100abdbddf2aa1c0d92e7aadb8` |
+| `20260922000002_harden_retired_hyrox_boundary.sql` | `1bb968bdbe435d4cad66a1fec993946c5b67692e8f1b25e53b1bde85e2edb6eb` |
+| `20260922000003_reassert_retired_hyrox_pool_acls.sql` | `48a8f4b5d9dc22f8002e69b2c19b4a736ee83584527d269d7bdd1793150a0857` |
+
+`resolve-profile-avatars` resolver v8 is already deployed with `verify_jwt = true`. `ITC_APP_ORIGINS` restoration and verification are complete; it contains exactly these two supported origins (no paths or wildcard):
+
+- `https://island-training-club.vercel.app`
+- `https://island-training-club-git-testing-island-training-club.vercel.app`
+
+Fixture recovery completed; baseline restored. Retained sessions/cycles/bookings/receipts/notifications are **46/18/14/1/45**, with unchanged retained digests; total notifications **131**. **Testing browser acceptance PASS** (Chrome/Safari, 375px). Catalog pin `5a0ecdeb48872f4ec2aacebc1d037c14`; pool ACLs closed.
+
+Never edit, replay, reapply, or repair `00001`, `00002`, or `00003`. Do not rerun completed recovery or acceptance fixtures, redeploy the resolver, or replace the verified origins for this promotion. Production history gaps are not permission to use `db push`, `--include-all` or history repair. Any discrepancy means STOP for separate review.
+
+Controller evidence: `promotion-review.md` and the final **FINAL Admin-only acceptance — controller CORS repair verified** section of `task-7-step5-browser-report.md`, retained in the private task evidence. Earlier failures are superseded. This documentation update did not re-query production. No secret values or private fixture identifiers belong in promotion evidence.
+
+### Applied pool boundary (verification only)
+
+00003's immutable artifact has 23 statements. Its complete 18 pool-only functions are derived exactly from 00001: six retired-job revocations plus all twelve revocations in **Pool-only browser RPCs**.
+This includes `ensure_hyrox_cycles(date,integer)`, `schedule_hyrox_cycle(text)`,
+`sweep_hyrox_cycle_deadlines(timestamptz)`,
+`send_hyrox_member_payment_reminders(timestamptz)`,
+`send_hyrox_collector_payment_reminder(timestamptz)` and
+`send_hyrox_venue_reminders(timestamptz)`, plus the pool reservation/queue/payment
+rejection/venue/cancellation/Midtown-open RPCs listed in the operational runbook.
+It closes any subset of historical re-grants to PUBLIC/anon/authenticated, with both
+pool policy drops/table SELECT revocations and a final schema-cache notify.
+Service/operator access and all reviewed bodies remain unchanged. Already-absent
+grants are catalog no-ops; unrelated drift still means STOP.
+Do not revoke shared guarded authenticated RPCs: `get_operational_attendee_names`,
+`reserve_operational_session`, `mark_operational_payment`, `join_operational_queue`,
+`release_operational_reservation`, `approve_operational_payment`,
+`defer_operational_booking`, `set_operational_attendance`, or
+`suppress_opted_out_hyrox_payment_reminder`. There is no separate
+`approve_hyrox_cycle_payment` function; approval uses the shared guarded RPC.
+The repaired catalog must equal pinned `5a0ecdeb48872f4ec2aacebc1d037c14`.
+Unexpected findings mean STOP.
+
+### HISTORICAL — certain-stop application/recovery (executed 2026-09-23)
+
+**Reviewed precedent/rollback reference only; not the next operation on this target. Do not rerun completed recovery.** The one-time 00003 application/recording and separately reviewed exact-fixture recovery completed under controller authorization. The reviewed process preserved the original certain journal, required fresh hash/count-bound acknowledgement, durable lock/receipt and provenance/FK closure, and used the unchanged SERIALIZABLE exact-ID/xmin/full-row-digest compiler. Its rule was to never clear uncertainty or retry an ambiguous commit.
+
+Organic-session normalization required exact baseline equality after subtracting only verified generator additions, preserving every organic row and recording IDs in a mode-0600 receipt. The rule was to never adopt or delete unrelated rows. The non-retired generator remained active outside the locked cleanup. Definitive postcommit checks preceded journal removal. Baseline restoration and subsequent Testing cleanup are complete, not pending promotion tasks. The detailed historical sequence and separate **clean disposable database only** replay instructions remain in the [operational runbook](operational-backend.md#hyrox-pool-retirement-backend-first-deployment).
+
+### Executable promotion sequence
+
+1. **Verify the applied backend boundary (read-only).** Verify applied versions/hashes and backend invariants: exact catalog pin, pool ACLs closed, template/helper/notification/shared-RPC contracts, retained counts/digests and notification baseline. Use count-only evidence; retain the approved pool RPC denial and Island ECC active-RPC checks without mutating RPCs or fixture creation. The notification inventory includes retired/unmatched `hyrox_replacement_review` notices but excludes a notice proven active-ECC-only. Any mismatch blocks promotion.
+2. **Verify the deployed resolver and origins (read-only).** Verify resolver v8 with `verify_jwt = true`, its approved artifact revision and exactly the two supported origins. Retain direct authenticated endpoint evidence: retired neutral 404, ECC success and classifier-failure fail-closed from the disposable replica. Do not redeploy, change secrets or inject failures in shared services.
+3. **Confirm completed Testing acceptance.** Verify the reviewed preview revision and controller's Testing browser acceptance PASS, including credited browser UI and Island ECC lifecycle, final CORS and selector probes. Bind the accepted runtime artifact; any runtime change needs new review. Do not rerun completed recovery or acceptance fixtures.
+4. **Promote the exact accepted snapshot.** With separate promotion authorization, promote only the accepted frontend artifact; confirm its served revision and repeat bounded read-only route/denial/configuration/count checks. Do not create fixtures or repeat lifecycle mutations.
+
+As part of read-only verification, confirm service_role has only the session classifier among retirement helpers; the restored attendee helper denies PUBLIC/anon/authenticated/service_role and matches the exact latest `20260910000002_operational_attendee_names_rsvp.sql` body with postgres owner, stable SECURITY DEFINER and fixed search_path. Leave the guarded public wrapper unchanged. Verify notifications: anon has no privileges; authenticated has only SELECT and UPDATE(read_at), never other column UPDATE or INSERT/DELETE/TRUNCATE/TRIGGER/REFERENCES. Keep both reviewed RLS policies unchanged. Check effective ACLs without executing destructive statements. Run local paid/replacement/free RSVP roster and own-active-notification read/mark-read tests with rollback; production read-only verification must not invoke mutating RPCs or create fixtures. Global defaults and unrelated legacy/job grants are not changed by this narrow correction. Confirm all three applied versions exactly once without changing older history; the resolver is already deployed and Testing acceptance is complete.
+
+A failed verification or missing approved evidence blocks promotion. A mismatch does not authorize reapplication, resolver redeployment or another recovery/fixture run.
+
+### Forward-only rollback
+
+Rollback is a **forward-only rollback**. Preserve retained rows and add a new, separately reviewed forward migration for any intentional restoration of template state, grants, policies, functions, or provisioning, followed by a compatible frontend deployment and compatible avatar Edge Function artifact in backend-first order. Preserve the fail-closed resolver while retirement remains intended; never redeploy the old service-role resolver. For intentional reopening, review all three artifacts, deploy SQL prerequisites then the compatible resolver, rerun direct endpoint gates, then accept the frontend.
+
+Never edit or replay applied migration history. Never delete or mark down the applied retirement migration, alter historical migrations, drop retained tables, or expose the old pool UI while the retirement backend remains active. A frontend-only rollback must remain compatible with the retirement backend and keep retired entry points unavailable.
+
 ## Private prayer requests: deployment, acceptance, and rollback
 
 Private prayer requests are Supabase-authoritative whenever live mode is
@@ -264,15 +342,19 @@ shell output, CI logs, deployment notes, or tickets.
 ### Clean local migration and rollback-scoped integration gate
 
 From the repository root, first prove that migration versions are unique and
-that the reviewed migration is the source tip. A non-empty duplicate-version
-result or any other final filename blocks rollout:
+that the current source tip is the reviewed HYROX forward correction. The
+prayer and decision migrations must remain ordered before retirement and its
+forward correction; a non-empty duplicate-version result or any other final
+filename blocks rollout:
 
 ```bash
 test -z "$(find supabase/migrations -maxdepth 1 -type f -name '*.sql' \
   -exec basename {} \; | cut -d_ -f1 | sort | uniq -d)"
 test "$(find supabase/migrations -maxdepth 1 -type f -name '*.sql' \
   -exec basename {} \; | sort | tail -1)" = \
-  "20260921000002_declined_profile_decisions.sql"
+  "20260922000003_reassert_retired_hyrox_pool_acls.sql"
+test -f supabase/migrations/20260921000001_prayer_requests.sql
+test -f supabase/migrations/20260921000002_declined_profile_decisions.sql
 ```
 
 Start from a clean disposable local Supabase database and replay the unmodified
@@ -285,8 +367,11 @@ supabase start --yes \
 ```
 
 The startup output must list each migration version once, apply
-`20260921000001_prayer_requests.sql`, and then apply
-`20260921000002_declined_profile_decisions.sql` last. Run both integration files
+`20260921000001_prayer_requests.sql`, then
+`20260921000002_declined_profile_decisions.sql`, then
+`20260922000001_retire_bft_midtown_hyrox_pool.sql`,
+`20260922000002_harden_retired_hyrox_boundary.sql`, and finally
+`20260922000003_reassert_retired_hyrox_pool_acls.sql`. Run both integration files
 inside the disposable database container with stop-on-error enabled:
 
 ```bash
@@ -1135,6 +1220,8 @@ and declined viewers cannot resolve other members' photos.
 
 ### Pre-deployment checks and secrets
 
+**New-installation reference only.** For `krxbvgyolxvmzgysfjkj`, the authoritative post-application promotion path above takes precedence: resolver v8/JWT and the exact two-origin allowlist are already verified. Do not repeat deployment, migration application/history repair or secret configuration for this promotion.
+
 1. Select the intended Supabase project and confirm its backup/point-in-time
    recovery status. Do not use a production database for the destructive test
    harness. Set and visibly verify the public project reference, then inspect
@@ -1155,24 +1242,22 @@ and declined viewers cannot resolve other members' photos.
    `SUPABASE_SERVICE_ROLE_KEY` is available to functions. Never copy its value
    into the browser, Vercel, logs, screenshots, this runbook, or any repository
    file.
-3. Configure `ITC_APP_ORIGINS` as a comma-separated list of exact allowed
-   origins, with no paths and no wildcard. It must include the canonical
-   production origin `https://island-training-club.vercel.app` plus each
-   deployed preview/test origin that is intentionally supported and, only when
-   needed, the exact local origin such as `http://127.0.0.1:4173`. Use the
-   Dashboard secret editor or a placeholder command locally; never commit the
-   deployed list:
-
-   ```bash
-   supabase secrets set ITC_APP_ORIGINS="<exact-origin-1>,<exact-origin-2>"
-   supabase secrets list
-   ```
+3. For a separately authorized new installation, configure `ITC_APP_ORIGINS`
+   from that installation's approved exact-origin inventory: no paths or wildcard.
+   For this existing target, restoration/verification is already complete and the
+   list is exactly `https://island-training-club.vercel.app` and
+   `https://island-training-club-git-testing-island-training-club.vercel.app`.
+   Do not replace that list with placeholders, add a localhost/preview origin,
+   or issue a secret update during promotion. Public supported origins are not
+   credentials; never publish API keys, tokens or other secret values.
 
 4. Confirm the deployed frontend contains only the browser-safe Supabase URL
    and anon/publishable key. Search the deployment output for service-role and
    database credentials before continuing.
 
-### Deploy in order
+### Deploy in order — new installations only
+
+These commands are not the next operation on the already-applied target. The September 18 application/history example below is historical precedent, not permission to repeat it.
 
 The migration `20260917000001_profile_avatars.sql` creates the private
 `profile-avatars` bucket, metadata and immutable audit tables, upload-attempt
@@ -1433,12 +1518,13 @@ Browser-level acceptance on the deployed environment:
 5. Block `unpkg.com` and `nominatim.openstreetmap.org` separately. Both
    failure paths must settle on the fallback copy without breaking the
    external Get directions link.
-6. Open both HYROX activity pages. Get directions must appear without a
-   weekly venue form.
+6. Open the Island ECC HYROX activity page. Get directions must appear without
+   a weekly venue form. Retired HYROX activity links must use the neutral state
+   documented above.
 
-Applying the migrations to the real remote target remains a manual deployment
-operation; confirm the selected project and backups before running
-`supabase db push`.
+Applying migrations to the real remote target remains a manual deployment
+operation. Confirm the selected project and backups, then follow each feature's
+reviewed source-tip procedure. Do not run an unqualified `supabase db push`.
 
 ## Initial Super Admin bootstrap
 

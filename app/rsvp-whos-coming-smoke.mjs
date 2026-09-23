@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { SEED_ACTIVITIES } from "./js/data.js";
+import { SEED_ACTIVITIES, sessionStarted } from "./js/data.js";
 import * as store from "./js/store.js";
 import * as views from "./js/views.js";
 
@@ -47,7 +47,10 @@ memory.set("itc.prototype.v1", JSON.stringify({
   replacementRequests: [], replacementAudit: [], notifications: [], duty: {},
 }));
 store.load();
-const freeEvent = store.upcomingSessions(21).find((session) => session.kind === "free");
+// The schedule includes today's occurrences even after their HK start time.
+// Participation assertions need a genuinely future occurrence, not just a date.
+const upcoming = store.upcomingSessions(21).filter((session) => !sessionStarted(session));
+const freeEvent = upcoming.find((session) => session.kind === "free");
 assert.ok(freeEvent, "focused RSVP smoke needs an upcoming free event");
 assert.equal(freeEvent.requiresRsvp, true);
 assert.equal(freeEvent.capacity, null);
@@ -55,10 +58,10 @@ assert.equal(store.sessionRequiresRsvp(freeEvent), true);
 
 const rsvpAction = /data-action="rsvp-(?:join|withdraw)"/;
 store.signIn("taylor@test");
-const capabilityRsvp = store.upcomingSessions(21).find(
+const capabilityRsvp = upcoming.find(
   (session) => session.activityId === "capability-rsvp"
 );
-const paidNonRsvp = store.upcomingSessions(21).find(
+const paidNonRsvp = upcoming.find(
   (session) => session.activityId === "paid-non-rsvp"
 );
 assert.ok(capabilityRsvp && paidNonRsvp, "participation contract needs both synthetic sessions");
@@ -132,7 +135,7 @@ const startedId = `${freeEvent.activityId}-${startedDate.getFullYear()}-${String
 assert.doesNotMatch(views.viewActivity(startedId), rsvpAction);
 assert.ok(freeRsvp.id);
 
-const event = store.upcomingSessions(21).find((session) => session.kind === "rsvp");
+const event = upcoming.find((session) => session.kind === "rsvp");
 assert.ok(event, "focused RSVP smoke needs an upcoming RSVP event");
 store.signIn("taylor@test");
 await store.rsvpSession("rsvp-member", event.id);

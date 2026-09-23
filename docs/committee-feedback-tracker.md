@@ -58,8 +58,8 @@ Add a new tab named **Lists**. Enter these values, one list per column, starting
 | | Booking flow | Confusing flow | In progress | Low | |
 | | Checkout & payment | Feature suggestion | Shipped | | |
 | | Receipt | Question | Declined | | |
-| | HYROX Cycle | | Deferred | | |
-| | HYROX Registration | | | | |
+| | | | Deferred | | |
+| | | | | | |
 | | Giving | | | | |
 | | Community | | | | |
 | | Profile — overview | | | | |

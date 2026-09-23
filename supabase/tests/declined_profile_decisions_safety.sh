@@ -14,11 +14,6 @@ fail() {
 
 [[ -f "$migration" ]] || fail "missing forward migration: $migration"
 
-source_tip="$(find "$repo_root/supabase/migrations" -maxdepth 1 -type f -name '*.sql' \
-  -exec basename {} \; | sort | tail -1)"
-[[ "$source_tip" == "$migration_name" ]] \
-  || fail "expected $migration_name to be the exact source tip, found $source_tip"
-
 version_count="$(find "$repo_root/supabase/migrations" -maxdepth 1 -type f \
   -name '20260921000002_*.sql' | wc -l | tr -d '[:space:]')"
 [[ "$version_count" == "1" ]] || fail "migration version 20260921000002 must occur exactly once"
