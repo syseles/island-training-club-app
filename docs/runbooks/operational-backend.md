@@ -19,7 +19,7 @@ Supabase is authoritative in configured live mode. Browser reads are constrained
 
 The historical pool tables and migrations remain because they define the retained schema. Their presence does not make the pool an active product.
 
-## Migration order
+## Clean disposable migration order (not promotion)
 
 For a **clean disposable database only**, replay every repository migration once in filename/version order. The operational sequence is:
 
@@ -34,23 +34,41 @@ For a **clean disposable database only**, replay every repository migration once
 
 Do not skip or rewrite historical files in a clean replay: the final retirement migration depends on the schema they created and then closes its browser boundary.
 
-Production has known migration-history drift. Do **not** replay the chain, use unqualified `supabase db push`, use `--include-all`, or repair an older migration as part of this rollout. Confirm the linked project and remote history first. `00001` already applied once in production; `00002` also already applied once. Apply only the reviewed source-tip file `supabase/migrations/20260922000003_reassert_retired_hyrox_pool_acls.sql` after its hash/preflight and inventory are verified under separate authorization. Never edit, replay, reapply, or repair `00001` or `00002`.
+The shared target is already migrated, recovered and accepted on Testing. Do **not** replay this clean-disposable chain, use unqualified `supabase db push`, use `--include-all`, or repair applied history on that target. Never edit, replay, reapply, or repair `00001`, `00002`, or `00003`. Use the authoritative post-application path below.
 
 ## HYROX pool retirement: backend-first deployment
 
 This rollout is strictly backend-first deployment. A frontend containing retirement behavior must not target an unmigrated project.
 
-### Executable release sequence
+### Post-application promotion (authoritative)
 
-Use this sequence without reordering or combining its gates:
+Controller-verified state on `krxbvgyolxvmzgysfjkj`, 2026-09-23: **POST-APPLICATION**. All three migrations are applied and recorded exactly once:
 
-1. **Inventory, apply, and verify the backend and RPC boundary.** Complete hash/preflight and count-only inventory; apply only `20260922000003_reassert_retired_hyrox_pool_acls.sql`; verify the exact restored pool policy/ACL boundary, unchanged function bodies/domain rows/older history, and complete pool RPC denial and Island ECC active-RPC checks. Both previous migrations already applied once. Complete the separately reviewed one-off recovery below before resuming acceptance.
-2. **Deploy and verify the avatar boundary.** Deploy the reviewed `resolve-profile-avatars` Edge Function only after SQL classifier/grant verification; record its artifact revision and pass the direct authenticated endpoint gates below before any browser acceptance.
-3. **Deploy the reviewed preview.** Deploy the reviewed preview revision against that verified migrated backend; do not promote it yet.
-4. **Run browser UI and Island ECC acceptance.** Against the deployed preview, verify browser UI and the full Island ECC lifecycle, exact deep-link behavior, and absence of retired data.
-5. **Promote the exact accepted snapshot.** Promote only the exact preview commit accepted in step 4, then repeat bounded production checks.
+| Applied migration | Verified SHA-256 |
+|---|---|
+| `20260922000001_retire_bft_midtown_hyrox_pool.sql` | `81f66371c360d9e6aed31f4130f38df891aad4100abdbddf2aa1c0d92e7aadb8` |
+| `20260922000002_harden_retired_hyrox_boundary.sql` | `1bb968bdbe435d4cad66a1fec993946c5b67692e8f1b25e53b1bde85e2edb6eb` |
+| `20260922000003_reassert_retired_hyrox_pool_acls.sql` | `48a8f4b5d9dc22f8002e69b2c19b4a736ee83584527d269d7bdd1793150a0857` |
 
-The local gates below precede this release sequence and never replace any production or preview gate. The stopped Task 7 target already has resolver version 8; this ACL repair does not require redeployment or authorize preview/promotion.
+`resolve-profile-avatars` resolver v8 is already deployed with `verify_jwt = true`. `ITC_APP_ORIGINS` restoration and verification are complete; it contains exactly these two supported origins (no paths or wildcard):
+
+- `https://island-training-club.vercel.app`
+- `https://island-training-club-git-testing-island-training-club.vercel.app`
+
+Fixture recovery completed; baseline restored. Retained sessions/cycles/bookings/receipts/notifications are **46/18/14/1/45**, with unchanged retained digests; total notifications **131**. **Testing browser acceptance PASS** (Chrome/Safari, 375px). Catalog pin `5a0ecdeb48872f4ec2aacebc1d037c14`; pool ACLs closed.
+
+Never edit, replay, reapply, or repair `00001`, `00002`, or `00003`. Do not rerun completed recovery or acceptance fixtures, redeploy the resolver, or replace the verified origins for this promotion. A mismatch means STOP for separate review, not a repeated mutation.
+
+Controller evidence: `promotion-review.md` and the final **FINAL Admin-only acceptance — controller CORS repair verified** section of `task-7-step5-browser-report.md`, retained in the private task evidence. Earlier failures are superseded. This documentation update did not re-query production; no secrets or private fixture identifiers belong in promotion evidence.
+
+### Executable promotion sequence
+
+1. **Verify the applied backend boundary (read-only).** Verify applied versions/hashes against the table above and existing backend invariants: exact catalog pin, pool ACLs closed, template/helper/notification/shared-RPC contracts, retained counts/digests and notification baseline. Use count-only evidence. Retain the approved pool RPC denial and Island ECC active-RPC checks; do not invoke mutating RPCs or create fixtures. Any mismatch blocks promotion.
+2. **Verify the deployed resolver and origins (read-only).** Verify resolver v8 with `verify_jwt = true`, its approved artifact revision and exactly the two supported origins. Retain direct authenticated endpoint evidence (retired 404, ECC success, classifier-failure fail-closed from the disposable replica). Do not redeploy or change secrets.
+3. **Confirm completed Testing acceptance.** Verify the reviewed preview revision and the controller's Testing browser acceptance PASS, including credited browser UI and Island ECC lifecycle, final CORS and selector probes. Bind the accepted runtime artifact; a runtime change requires new review, not a silent substitution. Do not rerun completed recovery or acceptance fixtures.
+4. **Promote the exact accepted snapshot.** Under separate promotion authorization, promote only that accepted frontend artifact. Confirm the served revision and repeat bounded read-only route/denial/configuration/count checks without creating fixtures or moving money.
+
+The application/recovery and fixture-acceptance records below are historical precedent only. Local clean replay is separately scoped to disposable databases and does not authorize replay on this target.
 
 ### Complete pool-only reassertion scope (00003)
 
@@ -81,18 +99,20 @@ There is no separate `approve_hyrox_cycle_payment` function to revoke: that stri
 
 This is a one-shot, idempotent reassertion robust against any subset of historical re-grants within that boundary, not permission to accept broader drift. Revoking already-absent grants must be a catalog no-op. The final statement remains the PostgREST schema-cache notify; no dispatch, history edit or generator invocation belongs in the migration.
 
-### Stopped Task 7 recovery order (00003)
+### HISTORICAL — certain-stop application/recovery (executed 2026-09-23)
 
-1. STOP the original process and independently establish quiescence. Preserve its mode-0600 v5 journal unchanged. Ordinary cleanup-only calls crash restoration and would latch uncertainty: do not use it and never clear uncertainty.
-2. Independently review exact current drift, migration bytes, original baseline and retained digests. `00001` and `00002` must each exist exactly once; `00003` must be absent before its one-time application. Only the two historical pool policies, cycle/queue SELECT grants and any subset of browser EXECUTE re-grants on the complete 18 pool-only functions listed below may differ. Bodies must remain exactly reviewed, including the no-op `sweep_hyrox_cycle_deadlines(timestamptz)` and three reminders. Any other catalog drift blocks this procedure. 00003 was never applied to a shared database; its comprehensive artifact has 23 statements and supersedes both earlier local-only candidates. Obtain review of its new complete hash; never use superseded bytes.
-3. Under separate explicit authorization, apply only 00003 atomically via the trusted migration procedure. Its SQL changes no rows, bodies, defaults, roles, notification boundary or history. Record only the new version through that procedure; preserve every older history row. Verify all three versions exactly once, policy absence, effective PUBLIC/anon/authenticated denial and preserved service/operator access and unchanged bodies for all 18 pool-only functions. Shared guarded authenticated RPCs must remain accessible. The repaired catalog must equal pinned `5a0ecdeb48872f4ec2aacebc1d037c14`; never replace this pin with observed drift.
-4. Obtain independent review of the ignored one-off tool, its exact authority hashes and post-00003 catalog/history/source/ACL hashes. Obtain a short-lived one-use acknowledgement bound to journal SHA-256, current fixture-inclusive counts for all 21 domains and Auth, original baseline/normalized excluded snapshot equality, the exact normalized organic-ID hash, originalProcessStopped and exactDriftRepaired. An acknowledgement is not permission to adopt a new catalog or fixture row.
-5. The separately reviewed one-off recovery must durably lock/receipt before deletion, validate exact capture/provenance/FK closure and unsupported rows, and compare the fixture-excluded snapshot to the saved baseline (with only the reviewed new history row and strictly verified organic-session additions accounted for). Organic-session normalization applies ONLY to additional `operational_sessions` rows absent from both baseline and journal: canonical activity/date ID, active non-retired template, open/uncancelled/future in Hong Kong, matching weekday/time/duration/venue/capacity/price/default-open and untouched generator-default metadata. Creation after journal creation is a conservative candidate bound, not proof of baseline absence: subtracting candidates must reproduce the saved count and whole-row digest exactly. All other domains, retained cohorts, notifications and counts must still match exactly. Record normalized IDs only in the private mode-0600 receipt; never adopt or delete them. Preserve their full unnormalized snapshot before commit and after confirmed commit. The deployed generator remains active for non-retired templates while the old frontend is live; fresh additions during recovery invalidate the reviewed snapshot, not authorize dynamic adoption. Execute only the original locked SERIALIZABLE exact-ID/xmin/full-row-digest compiler transaction, including marker/activity/date/created_at and managed Auth child checks. No API keys, Auth HTTP, broad deletes or assumed cascades. The one-off transaction's extra locks on the two pool tables (ACCESS EXCLUSIVE), migration history (SHARE), and sessions/templates (SHARE to block generator/session writes during the transaction), plus its repeated catalog/Auth/snapshot guards, require explicit review for operational impact; they prevent concurrent observed-policy drift from slipping between checks and deletion. On mismatch preserve journal and receipt; never clear uncertainty, adopt rows, or retry an ambiguous commit.
-6. Recheck baseline, counts, history, catalog and zero fixture rows both before commit and after confirmed commit. Remove the private journal only after definitive success. The original harness remains bound to its six-version history and must not resume unchanged after 00003; acceptance needs a newly reviewed contract and fresh authorization. No Task 7 completion or frontend promotion is implied.
+**Reviewed precedent/rollback reference only; not the next operation on this target. Do not rerun completed recovery.** The controller verified application, exact fixture cleanup and restored baseline. The historical sequence was:
 
-Never edit, replay, reapply, or repair `00001` or `00002`. The historical 00002 verification queries below remain useful invariants, not instructions to apply it again.
+1. The original process was stopped and quiescence established; the mode-0600 v5 journal was preserved. The rule was to never clear uncertainty or use ordinary cleanup-only crash restoration.
+2. Independent review pinned the complete 23 statements and 18 pool-only functions. At that pre-application checkpoint only 00001/00002 were recorded; the separately authorized one-time 00003 application and history recording then completed. All three are now applied exactly once. No migration replay or history repair is part of current promotion.
+3. Post-application catalog/source/ACL/history checks established the fixed repaired pin, pool denial, shared guarded access, preserved bodies/service/operator grants and unchanged retained rows.
+4. The separately reviewed one-off recovery required a fresh one-use journal/hash/count-bound acknowledgement, exact provenance/FK closure and unsupported-row checks, durable lock and mode-0600 receipt. Organic-session normalization was limited to canonical, open, uncancelled future additions matching active non-retired templates and generator defaults. Candidate subtraction had to reproduce saved baseline counts/digests exactly; all other domains and retained cohorts stayed exact. The rule was to never adopt or delete organic rows.
+5. The unchanged SERIALIZABLE exact-ID/xmin/full-row-digest compiler ran with its reviewed locks and predelete/precommit/postcommit guards. Complete unnormalized organic rows were preserved; fixture IDs reached zero. The original journal was removed only after definitive success; durable evidence remained. Ambiguous commits were never authorization to retry.
+6. Baseline restoration and later Testing fixture cleanup were verified: retained **46/18/14/1/45**, total notifications **131**, unchanged retained digests. The non-retired generator was not disabled by recovery. This record is not a new recovery authorization.
 
-### 1. Local gates
+The invariant queries below remain useful for read-only promotion verification, not for reapplying any migration.
+
+### 1. Local gates — clean disposable replay only
 
 From the reviewed checkout, prove migration-version uniqueness and run the complete local safety suite:
 
@@ -130,17 +150,17 @@ Expected: the integration emits `OK: retired HYROX pool boundary`, ends with `RO
 
 ### 2. Read-only production inventory
 
-Before any shared mutation, confirm the target project, backup/PITR status, reviewed commit, migration SHA-256, and remote history:
+For read-only promotion verification, confirm the controller-verified target, backup/PITR status, reviewed commit, all three applied SHA-256 values, and recorded history. No shared mutation is part of this inventory:
 
 ```bash
-export SUPABASE_PROJECT_REF="<confirmed-project-ref>"
+export SUPABASE_PROJECT_REF="krxbvgyolxvmzgysfjkj"
 supabase link --project-ref "$SUPABASE_PROJECT_REF"
 supabase migration list --linked
 ```
 
-Stop unless `20260922000001` and `20260922000002` are each present exactly once with reviewed evidence, `20260922000003` is absent, BFT/Midtown are inactive, and Island ECC is active. Known older history gaps are not permission to replay or repair anything. Stop on duplicate/unexpected versions or artifact mismatch.
+Stop unless `20260922000001`, `20260922000002` and `20260922000003` are each present exactly once with the verified hashes above, BFT/Midtown are inactive, and Island ECC is active. Known older history gaps are not permission to replay or repair anything. Stop on missing/duplicate/unexpected versions or artifact mismatch; do not fix the discrepancy by repeating an applied operation.
 
-The SHA-256 identifies the complete reviewed SQL; the version alone is not artifact identity. Keep the applied `00001` digest `81f66371c360d9e6aed31f4130f38df891aad4100abdbddf2aa1c0d92e7aadb8` unchanged. Keep `00002` digest `1bb968bdbe435d4cad66a1fec993946c5b67692e8f1b25e53b1bde85e2edb6eb` unchanged. Recompute the new `00003` digest against its independently approved report before application. The following 00002-era invariants must still pass; they do not authorize another correction. Retain reviewed commit/hash, target, prerequisites, backup/PITR evidence and count-only baseline. Preflight the three reported differences: postgres/public default EXECUTE grants, notification table/column ACL drift, and the preserved attendee body. Confirm the wrapper/policies still match reviewed `00001`; unexpected divergence blocks this narrow correction.
+The SHA-256 identifies the complete reviewed SQL; the version alone is not artifact identity. Keep the applied `00001` digest `81f66371c360d9e6aed31f4130f38df891aad4100abdbddf2aa1c0d92e7aadb8` unchanged. Keep `00002` digest `1bb968bdbe435d4cad66a1fec993946c5b67692e8f1b25e53b1bde85e2edb6eb` unchanged. Keep applied `00003` digest `48a8f4b5d9dc22f8002e69b2c19b4a736ee83584527d269d7bdd1793150a0857` unchanged. The following 00002-era invariants must still pass; they do not authorize another correction. Retain reviewed commit/hash, target, backup/PITR evidence and count-only baseline. Verify the already-corrected helper, notification table/column ACL and preserved attendee-body boundaries. Confirm the wrapper/policies still match reviewed `00001`; unexpected divergence blocks promotion.
 
 Run the following in trusted read-only SQL. It deliberately emits canonical activity/status labels and counts only—never member names, emails, profile IDs, payment references, replacement tokens, notification bodies, or screenshots of row content.
 
@@ -152,7 +172,7 @@ select activity_id, active, count(*) as row_count
  group by activity_id, active
  order by activity_id;
 
--- Retained-domain count-only evidence. Save this output for post-apply comparison.
+-- Retained-domain count-only evidence. Compare with the restored baseline.
 with retired_sessions as (
   select id
     from public.operational_sessions
@@ -265,13 +285,11 @@ The policy adapter and revoked public classifier now take `(text, text, timestam
 
 Record the UTC query time and count-only evidence. Confirm with the data owner that future BFT/Midtown/pool rows are the acknowledged test records. A mismatch or evidence of genuine future member activity blocks deployment; do not infer consent, cancel it, migrate it, or inspect personal fields.
 
-### 3. Apply only the forward drift repair
+### 3. Verify completed application and recovery (read-only)
 
-`00001` already applied once, as did `00002`. After hash/preflight and separate explicit production authorization, apply only the complete reviewed `supabase/migrations/20260922000003_reassert_retired_hyrox_pool_acls.sql` atomically using the trusted migration application procedure. Do not use broad chain push, or edit/reapply either previous migration or repair its history. This local implementation does not authorize any remote action.
+All three applied versions/hashes and the restored baseline must match the authoritative state above. Verify catalog `5a0ecdeb48872f4ec2aacebc1d037c14`, retained **46/18/14/1/45** and total notifications **131** against the approved controller evidence. The certain-stop application/recovery is historical and complete; do not rerun it. Do not run cancellation RPCs, cleanup statements or migration application/repair commands. Any discrepancy requires separate review.
 
-Command success is not acceptance. Do not deploy the resolver or dependent frontend yet. Do not run cancellation RPCs or any cleanup statement.
-
-### 4. Verify backend state before resolver deployment
+### 4. Verify existing backend invariants (read-only)
 
 The template query must return BFT and Midtown inactive and Island ECC active:
 
@@ -299,6 +317,15 @@ with expected(signature) as (
     ('public.operational_is_retired_hyrox_session(text)'),
     ('public.operational_is_retired_hyrox_booking(uuid)'),
     ('public.ensure_hyrox_cycles(date,integer)'),
+    ('public.schedule_hyrox_cycle(text)'),
+    ('public.sweep_hyrox_cycle_deadlines(timestamptz)'),
+    ('public.leave_hyrox_cycle_queue(uuid)'),
+    ('public.reject_hyrox_cycle_payment(uuid,text)'),
+    ('public.finalize_hyrox_venue_plan(text)'),
+    ('public.finalize_hyrox_venue_plan_locked(text,timestamptz,text,uuid)'),
+    ('public.leave_hyrox_venue_switch_queue(uuid)'),
+    ('public.close_hyrox_venue_allocation(text)'),
+    ('public.set_operational_midtown_open(text,boolean)'),
     ('public.reserve_hyrox_cycle(text,text,boolean)'),
     ('public.join_hyrox_cycle_waitlist(text,text,boolean)'),
     ('public.select_hyrox_cycle_venue(uuid,text)'),
@@ -318,7 +345,7 @@ select signature,
  order by signature;
 ```
 
-Verify pool tables enforce RLS, expose no browser-readable policy, and grant no browser mutation privilege. Historical `SELECT` grants on the two cycle tables are harmless only while RLS is enabled and no applicable policy exists; the authenticated acceptance below must also prove those queries return zero rows:
+Verify pool tables enforce RLS, expose no browser-readable policy, and grant no browser SELECT or mutation privilege, including inherited PUBLIC access. A re-granted SELECT is drift, even if RLS currently hides rows. For the two pool tables also verify no column-level SELECT grant; do not treat an empty query result as ACL proof:
 
 ```sql
 with checked(table_name) as (
@@ -330,6 +357,8 @@ with checked(table_name) as (
 )
 select x.table_name,
        c.relrowsecurity as rls_enabled,
+       has_any_column_privilege('anon', format('public.%I', x.table_name), 'SELECT') as anon_can_select,
+       has_any_column_privilege('authenticated', format('public.%I', x.table_name), 'SELECT') as authenticated_can_select,
        count(p.policyname) as browser_read_policies,
        has_table_privilege('anon', format('public.%I', x.table_name), 'INSERT,UPDATE,DELETE')
          as anon_can_mutate,
@@ -345,7 +374,7 @@ select x.table_name,
  order by x.table_name;
 ```
 
-Every row must have `rls_enabled = true`, `browser_read_policies = 0`, and both mutation values false. Then rerun the exact inventory query from step 2. Every retained-domain count and status bucket must equal the pre-correction evidence; no template flags, domain rows, or notification rows may change in `00002`. The pool-related notification count must also be unchanged.
+Every row must have `rls_enabled = true`, `browser_read_policies = 0`, and both SELECT and mutation values false. Then rerun the read-only inventory query from step 2. Every retained-domain count, status bucket and digest must equal the restored baseline: retained sessions/cycles/bookings/receipts/notifications **46/18/14/1/45**, total notifications **131**. Unexpected organic activity requires review, not fixture cleanup or baseline rewriting.
 
 Finally verify Island ECC remains present and future direct sessions remain available:
 
@@ -360,7 +389,7 @@ select t.activity_id, t.active, t.venue, t.capacity, t.price_hkd,
  group by t.activity_id, t.active, t.venue, t.capacity, t.price_hkd;
 ```
 
-Expected: one active `hyrox-quarry-bay` template at Island ECC, capacity 30, HK$180, with the expected current/future session window. Any failed check blocks resolver and frontend deployment.
+Expected: one active `hyrox-quarry-bay` template at Island ECC, capacity 30, HK$180, with the expected current/future session window. Any failed check blocks frontend promotion; it does not authorize resolver redeployment.
 
 Verify effective ACLs, not merely explicit migration statements: `service_role` may execute the session classifier only among retirement classifiers/adapters; activity, booking, notification classifiers and all three private policy adapters must deny it. All public classifiers deny PUBLIC/anon/authenticated. The preserved attendee implementation denies PUBLIC/anon/authenticated/service_role, is owned by postgres, stable SECURITY DEFINER with `search_path=public`, and its body must exactly match `20260910000002_operational_attendee_names_rsvp.sql` (body MD5 `64c519f7652df631b654191575a51680`, compare full reviewed source too). The public guarded wrapper and its authenticated grant remain unchanged. Prove BFT/Midtown empty rosters, ECC paid/replacement names without payer transfer, and free RSVP names in disposable local acceptance; use no fixture creation or mutating RPCs for read-only production verification.
 
@@ -368,7 +397,7 @@ For notifications, verify RLS and both complete reviewed policy predicates uncha
 
 Production defaults remain unchanged: object-specific revokes close this boundary, not all service/legacy/job privileges. Other preserved implementations and generic sweep grants observed in Step 2 remain a separate review item, not claimed owner-only here. No reviewed runtime requires direct service access to the restored attendee helper or notification classifier; the definer wrapper/policy adapters call internally as postgres. The resolver calls only the public session classifier.
 
-After all checks pass, confirm the trusted application procedure recorded only new version `20260922000003`. Confirm `00001`, `00002` and `00003` each occur exactly once and no older history row changed. Never repair historical versions. Complete the stopped-run recovery gates before resuming acceptance; any STOP blocks further deployment.
+After all checks pass, confirm `00001`, `00002` and `00003` remain recorded exactly once with approved hashes and no older history changed. Recovery and Testing acceptance are complete; verify their evidence rather than repeating them. Any STOP blocks promotion. Never repair historical versions.
 
 #### Read-only correction ACL/source gate
 
@@ -421,9 +450,9 @@ from pg_proc where oid = 'public.get_operational_attendee_names_pre_pool_retirem
 rollback;
 ```
 
-### 5. Deploy and verify the avatar service-role boundary
+### 5. Verify the already-deployed avatar service-role boundary
 
-This is a separate, explicitly authorized Edge Function deployment, not part of Vercel deployment. Do not deploy now as part of local implementation. After step 4, verify as a trusted operator that `operational_is_retired_hyrox_session(text)` exists, is security-definer with `search_path=public`, denies `PUBLIC`/`anon`/`authenticated`, and grants `service_role` EXECUTE:
+Resolver v8 is already deployed with `verify_jwt = true`; no redeployment or secret update is needed for this promotion. After step 4, verify read-only as a trusted operator that `operational_is_retired_hyrox_session(text)` exists, is security-definer with `search_path=public`, denies `PUBLIC`/`anon`/`authenticated`, and grants `service_role` EXECUTE:
 
 ```sql
 select p.prosecdef, p.proconfig,
@@ -432,16 +461,19 @@ select p.prosecdef, p.proconfig,
  where p.oid = 'public.operational_is_retired_hyrox_session(text)'::regprocedure;
 ```
 
-From the reviewed checkout only, and with separate deployment authorization:
+Compare the reviewed checkout with the approved deployed artifact revision; these local commands do not deploy anything:
 
 ```bash
 git rev-parse HEAD
 shasum -a 256 supabase/functions/resolve-profile-avatars/index.ts \
   supabase/functions/_shared/avatar-service.ts
-supabase functions deploy resolve-profile-avatars --project-ref "$SUPABASE_PROJECT_REF"
 ```
 
-Record the deployed artifact revision (commit plus function/shared-adapter digests and deployment version), target project, and UTC time. Retain the reviewed shared adapter in the bundle. An old resolver bypasses RLS through service-role reads: SQL success alone never closes this boundary.
+Verify the recorded deployed artifact revision (commit plus function/shared-adapter digests and deployment version), target project, JWT enforcement and exact two-origin allowlist above. Do not replace it with placeholders or wildcard origins. An old resolver bypasses RLS through service-role reads: SQL success alone never closes this boundary.
+
+### HISTORICAL — direct endpoint acceptance (completed)
+
+The following reviewed acceptance gates are retained as precedent, not instructions to create fixtures or redeploy on this target. Current promotion verifies the completed evidence and uses only separately authorized bounded read-only probes.
 
 **Direct authenticated endpoint gates**, independent of frontend routing: use disposable approved-member and Admin access tokens (never log tokens or avatar response payloads). Send GET requests directly to `/functions/v1/resolve-profile-avatars?scope=session&sessionId=<URL-encoded-canonical-session-id>` with `Authorization: Bearer <access-token>` and the project's public API key.
 
@@ -451,9 +483,9 @@ Record the deployed artifact revision (commit plus function/shared-adapter diges
 
 Record status, count-only assertions, revision and target, not private payloads. Every gate must pass before endpoint/browser acceptance is declared complete or a preview is accepted. Unit mocks do not substitute for direct HTTP acceptance of the deployed artifact. Recheck BFT/Midtown denial and ECC success on the authorized target after deployment; failure-injection evidence comes from the disposable replica.
 
-### 6. Pre-preview backend and RPC denial/active checks
+### HISTORICAL — pre-preview backend and RPC acceptance
 
-Use separate disposable approved-member and Admin API sessions against the migrated backend. This is an RPC/data-boundary gate, not browser UI acceptance.
+Archived reviewed acceptance requirements, not another fixture run for promotion. This RPC/data-boundary matrix used separately authorized disposable member/Admin sessions; completed evidence and cleanup are now verified read-only.
 
 1. As member and Admin API clients, attempts to select pool cycles/queues must fail or return no rows; retired templates, sessions, bookings, receipts, replacements, and notifications must not hydrate.
 2. Pool reservation, waitlist, venue choice/switch, allocation, cancellation, reminder, payment, attendance, and replacement RPCs must be denied before any row, audit, queue, or notification side effect.
@@ -463,13 +495,13 @@ Use separate disposable approved-member and Admin API sessions against the migra
 
 Any failure blocks preview deployment.
 
-### 7. Deploy the reviewed preview
+### HISTORICAL — reviewed Testing preview deployment
 
-Deploy the reviewed preview revision—the exact tested commit—against the migrated and verified backend. Confirm the served revision and target Supabase project. Do not merge or promote it yet.
+The reviewed preview revision was deployed against the verified backend. The controller confirmed its served selector fix and target project before the final accepted browser run. Promotion uses that accepted artifact, not a new unreviewed preview deployment.
 
-### 8. Browser UI and Island ECC acceptance
+### HISTORICAL — Testing browser acceptance
 
-Against that deployed preview, use separate visitor, pending, approved-member, Admin, and Super Admin browser sessions in current Chrome and Safari at 375 px.
+The archived acceptance matrix below defined the reviewed surfaces and lifecycle requirements. Testing browser acceptance is now PASS; consult credited checks in the final controller-CORS-repaired report, not superseded failures or an assumed rerun. This matrix is retained as precedent, not an instruction to create more fixtures during promotion.
 
 1. Verify Home, Schedule, Profile/history/notifications, Admin Activities, and Admin Payments show Island ECC once, expose no active pool controls or indirect pool counts, and do not clip horizontally.
 2. Verify known retired Activity, pool, booking, payment, checkout, and receipt deep links show `This session is no longer available.` and keep the original URL without RPC/avatar calls. Unknown identifiers keep the safe not-found state. Neither redirects to Island ECC.
@@ -479,9 +511,9 @@ Against that deployed preview, use separate visitor, pending, approved-member, A
 
 Record fixture UUIDs and bounded UTC timestamps only. Never retain names, emails, tokens, payment references, notification bodies, or screenshots containing personal data. Any failure blocks production promotion.
 
-### 9. Promote the exact accepted snapshot
+### 6. Promote the exact accepted snapshot
 
-Promote only the exact preview commit accepted in step 8. Wait for the production deployment, confirm its served revision, repeat minimal canonical-route/browser-denial and Island ECC lifecycle checks, compare retained counts once more, and remove all disposable fixtures.
+Follow the authoritative executable promotion sequence above: verify the accepted artifact, obtain promotion authorization, confirm its served revision, and perform bounded read-only canonical-route/browser-denial/configuration/count checks. Recovery and fixture cleanup are complete; do not repeat lifecycle mutations or create new fixtures.
 
 A failed or unexecuted backend or preview gate blocks promotion. Frontend rollback alone does not restore pool access and must never point old pool UI at the migrated backend.
 
@@ -491,19 +523,13 @@ Rollback is a forward-only rollback: preserve all retained rows and write a new,
 
 Never edit or replay applied migration history. Never delete or mark down `20260922000001_retire_bft_midtown_hyrox_pool.sql`, alter historical pool migrations, drop/truncate retained tables, or reconstruct state from browser caches. If only the retirement frontend is defective, redeploy a reviewed compatible frontend that keeps pool entry points unavailable while the backend boundary remains in force.
 
-## Release checklist
+## Post-application promotion checklist
 
-- [ ] Reviewed commit and migration SHA-256 recorded.
-- [ ] Migration versions unique; forward drift repair `00003` is source tip; `00001`/`00002` hashes unchanged.
-- [ ] Disposable clean replay and rollback-scoped retirement integration pass.
-- [ ] Correct linked project, backups, and remote migration history confirmed.
-- [ ] Pre-apply count-only evidence recorded without personal or payment data.
-- [ ] Future pool records confirmed as acknowledged test data.
-- [ ] `00001`/`00002` already applied once; only reviewed `20260922000003_reassert_retired_hyrox_pool_acls.sql` applied after hash/preflight.
-- [ ] Template, helper, grant, RLS, shared-RPC guard, and Island ECC checks pass.
-- [ ] Retained counts/statuses and notification count equal the baseline.
-- [ ] Reviewed avatar artifact revision deployed after classifier/grant verification; direct BFT/Midtown denial, ECC success and disposable classifier-failure fail-closed gates pass.
-- [ ] Browser denial and full Island ECC direct-session acceptance pass.
-- [ ] Migration history records `20260922000001`, `20260922000002`, `20260922000003` exactly once each; older history unchanged.
-- [ ] Testing frontend acceptance precedes exact-snapshot production promotion.
-- [ ] Disposable fixtures removed and final count-only evidence recorded.
+- [ ] Accepted frontend artifact revision and all three applied migration hashes verified.
+- [ ] `00001`, `00002`, `00003` each recorded exactly once on `krxbvgyolxvmzgysfjkj`; older history unchanged; no replay/reapply/repair.
+- [ ] Catalog pin, pool ACL denial, template/helper/notification/shared-RPC invariants and Island ECC availability verified read-only.
+- [ ] Completed recovery/cleanup evidence verified: baseline restored, retained **46/18/14/1/45** and notifications **131**; no recovery rerun.
+- [ ] Resolver v8/JWT, approved artifact revision, exact two-origin allowlist and completed direct endpoint evidence verified; no redeployment or secret rewrite.
+- [ ] Final Testing Chrome/Safari acceptance PASS and selector/CORS completion evidence bound to the accepted runtime artifact.
+- [ ] Historical application/recovery precedent and clean disposable replay kept distinct from current operations.
+- [ ] Separate promotion authorization obtained; exact accepted snapshot served; bounded read-only production checks recorded without personal data or new fixtures.

@@ -593,8 +593,8 @@ for (const [relativePath, source] of currentHyroxDocs) {
     `${relativePath} must name the forward correction`);
   assert.match(source, /20260922000003_reassert_retired_hyrox_pool_acls\.sql/,
     `${relativePath} must name the forward drift repair`);
-  assert.match(source, /00001`? (?:is |was )?already applied once/i,
-    `${relativePath} must acknowledge the applied production boundary`);
+  assert.match(source, /All three migrations are applied and recorded exactly once/,
+    `${relativePath} must acknowledge all three applied production migrations`);
   assert.match(source, /Island ECC is the (?:sole|only) active HYROX session/i,
     `${relativePath} must state the sole active HYROX contract`);
   assert.match(source, /Retained BFT\/Midtown pool test records are\s+hidden from browser roles, not deleted\./i,
@@ -627,12 +627,77 @@ const markdownSection = (source, heading, headingLevel) => {
   const next = candidates.length ? Math.min(...candidates) : source.length;
   return source.slice(start, next);
 };
+const promotionHeading = "### Post-application promotion (authoritative)";
+const appliedHistoryProtection = "Never edit, replay, reapply, or repair `00001`, `00002`, or `00003`.";
+const appliedHyroxArtifacts = [
+  ["20260922000001_retire_bft_midtown_hyrox_pool.sql", "81f66371c360d9e6aed31f4130f38df891aad4100abdbddf2aa1c0d92e7aadb8"],
+  ["20260922000002_harden_retired_hyrox_boundary.sql", "1bb968bdbe435d4cad66a1fec993946c5b67692e8f1b25e53b1bde85e2edb6eb"],
+  ["20260922000003_reassert_retired_hyrox_pool_acls.sql", "48a8f4b5d9dc22f8002e69b2c19b4a736ee83584527d269d7bdd1793150a0857"],
+];
+function assertPostApplicationContract(source, relativePath) {
+  const post = markdownSection(source, promotionHeading, "###");
+  assert.match(post, /Controller-verified state on `krxbvgyolxvmzgysfjkj`, 2026-09-23: \*\*POST-APPLICATION\*\*/);
+  assert.match(post, /All three migrations are applied and recorded exactly once/);
+  for (const [file, digest] of appliedHyroxArtifacts) {
+    assert.ok(post.includes(`\`${file}\` | \`${digest}\``),
+      `${relativePath} must pin each applied artifact identity`);
+  }
+  assert.match(post, /resolver v8 is already deployed with `verify_jwt = true`/);
+  assert.match(post, /`ITC_APP_ORIGINS` restoration and verification are complete/);
+  assert.match(post, /exactly these two supported origins/);
+  assert.deepEqual([...post.matchAll(/^- `([^`]+)`$/gm)].map(match => match[1]), [
+    "https://island-training-club.vercel.app",
+    "https://island-training-club-git-testing-island-training-club.vercel.app",
+  ], `${relativePath} must preserve exactly the two supported origins`);
+  assert.match(post, /Fixture recovery completed; baseline restored/);
+  assert.match(post, /46\/18\/14\/1\/45/);
+  assert.match(post, /(?:total )?notifications \*\*131\*\*/);
+  assert.match(post, /Testing browser acceptance PASS/);
+  assert.match(post, /5a0ecdeb48872f4ec2aacebc1d037c14/);
+  assert.match(post, /pool ACLs closed/);
+  assert.ok(post.includes(appliedHistoryProtection), `${relativePath} must protect all three applied migrations`);
+  assert.match(post, /Do not rerun completed recovery/);
+  assert.match(post, /promotion-review\.md/);
+  assert.match(post, /controller CORS repair verified/);
+  assert.match(source, /HISTORICAL[^\n]*executed 2026-09-23/,
+    `${relativePath} must label the completed procedure HISTORICAL with its execution date`);
+  assert.match(source, /reviewed precedent\/rollback reference/i);
+  assert.match(source, /clean disposable/i);
+
+  // Historical precedent is not the authoritative current path. Keep the local
+  // clean-replay instructions, but reject shared-target reapplication commands.
+  const rollout = source.includes("## HYROX pool retirement: backend-first deployment")
+    ? markdownSection(source, "## HYROX pool retirement: backend-first deployment", "##") : post;
+  const current = rollout.split(/(?=^### )/m)
+    .filter(section => !section.startsWith("### HISTORICAL"))
+    .join("").replaceAll(appliedHistoryProtection, "")
+    .replaceAll("Never edit or replay applied migration history.", "");
+  // Even historical headings must not smuggle instructions to replay applied
+  // versions. The preserved precedent uses past-tense records, not such commands.
+  const noReplay = rollout.replaceAll(appliedHistoryProtection, "")
+    .replaceAll("Never edit or replay applied migration history.", "");
+  assert.doesNotMatch(noReplay,
+    /supabase\s+migration\s+repair|\b(?:replay|reapply|repair)\s+(?:(?:all(?: three)?|the)\s+)?applied\s+migrations?/i,
+    `${relativePath} must never instruct replay or repair of applied migrations`);
+  for (const unsafe of [
+    /migration\s+repair\s+2026092200000[123]\b/i,
+    /--file\s+(?:supabase\/migrations\/)?2026092200000[123]/i,
+    /\b(?:apply|replay|reapply|repair)\s+(?:only\s+)?(?:the\s+)?(?:complete\s+reviewed\s+)?`?(?:supabase\/migrations\/)?(?:2026092200000[123]|0000[123])/i,
+    /(?:00003|20260922000003)`?\s+(?:must be|is)\s+absent/i,
+    /(?:00003|20260922000003)[^\n]*never applied/i,
+    /(?:complete|run|rerun|resume|use)\s+(?:the\s+)?(?:completed\s+|stopped-run\s+|certain-stop\s+|separately reviewed one-off\s+)?recovery\s+(?:below\s+)?(?:before|now|again|for promotion)/i,
+    /Deploy the reviewed `resolve-profile-avatars` Edge Function/i,
+    /supabase\s+(?:db push|functions deploy resolve-profile-avatars|secrets set ITC_APP_ORIGINS)/i,
+  ]) {
+    assert.doesNotMatch(current, unsafe,
+      `${relativePath} must reject stale pre-application instructions and never instruct replay or repair of applied migrations`);
+  }
+}
 const releaseSequenceMarkers = [
-  "1. **Inventory, apply, and verify the backend and RPC boundary.**",
-  "2. **Deploy and verify the avatar boundary.**",
-  "3. **Deploy the reviewed preview.**",
-  "4. **Run browser UI and Island ECC acceptance.**",
-  "5. **Promote the exact accepted snapshot.**",
+  "1. **Verify the applied backend boundary (read-only).**",
+  "2. **Verify the deployed resolver and origins (read-only).**",
+  "3. **Confirm completed Testing acceptance.**",
+  "4. **Promote the exact accepted snapshot.**",
 ];
 function assertHyroxRunbookContract(source, relativePath) {
   const rollout = markdownSection(
@@ -640,17 +705,17 @@ function assertHyroxRunbookContract(source, relativePath) {
     "## HYROX pool retirement: backend-first deployment",
     "##",
   );
-  const sequence = markdownSection(rollout, "### Executable release sequence", "###");
+  assertPostApplicationContract(source, relativePath);
+  const sequence = markdownSection(rollout, "### Executable promotion sequence", "###");
   const markerPositions = releaseSequenceMarkers.map((marker) => sequence.indexOf(marker));
   assert.ok(markerPositions.every((position) => position >= 0),
     `${relativePath} must contain every executable release step`);
   assert.deepEqual(markerPositions, [...markerPositions].sort((a, b) => a - b),
-    `${relativePath} must order backend, preview, browser acceptance, then promotion`);
-  assert.match(sequence,
-    /hash\/preflight[\s\S]*apply only[^\n]*20260922000003_reassert_retired_hyrox_pool_acls\.sql[\s\S]*verify/i,
-    `${relativePath} must order hash/preflight, only 00003, then verification`);
-  assert.match(rollout, /Never edit, replay, reapply, or repair `00001` or `00002`/);
-  assert.match(rollout, /separately reviewed one-off recovery/);
+    `${relativePath} must order backend, resolver, completed acceptance, then promotion`);
+  assert.match(sequence, /Verify applied versions\/hashes/);
+  assert.match(sequence, /backend invariants/);
+  assert.match(sequence, /Do not rerun completed recovery/);
+  assert.match(sequence, /read-only route\/denial\/configuration\/count checks/);
   assert.match(rollout, /never clear uncertainty/i);
   for (const reminder of ["send_hyrox_member_payment_reminders", "send_hyrox_collector_payment_reminder", "send_hyrox_venue_reminders", "sweep_hyrox_cycle_deadlines"]) {
     assert.ok(rollout.includes(`${reminder}(timestamptz)`), `${relativePath} must name each exact reminder overload`);
@@ -661,27 +726,23 @@ function assertHyroxRunbookContract(source, relativePath) {
   assert.match(rollout, /Do not revoke[\s\S]*shared guarded[\s\S]*approve_operational_payment/);
   assert.match(rollout, /suppress_opted_out_hyrox_payment_reminder/);
   assert.match(rollout, /5a0ecdeb48872f4ec2aacebc1d037c14/);
-  assert.match(rollout, /never applied to a shared\s+database/);
   assert.match(rollout, /organic-session normalization/i);
   assert.match(rollout, /never adopt or delete/i);
   assert.match(rollout, /mode-0600 receipt/);
-  assert.match(rollout, /subtraction must reproduce|subtracting candidates must reproduce/i);
-  assert.match(rollout, /generator remains active for non-retired templates/);
-  assert.doesNotMatch(rollout,
-    /(?:--file\s+supabase\/migrations\/2026092200000[12]|migration repair 2026092200000[12]|apply only\s+`(?:supabase\/migrations\/)?2026092200000[12])/i,
-    `${relativePath} must never instruct replay or repair of 00001/00002`);
+  assert.match(rollout, /subtraction had to reproduce|exact baseline equality after subtracting/i);
+  assert.match(rollout, /non-retired generator (?:remained active|was not disabled)/i);
   assert.match(sequence, /pool RPC denial and Island ECC active-RPC checks/i,
-    `${relativePath} must verify the RPC boundary before preview deployment`);
-  assert.match(sequence, /Deploy the reviewed `resolve-profile-avatars` Edge Function/,
-    `${relativePath} must explicitly deploy the service-role boundary upgrade`);
+    `${relativePath} must verify the applied RPC boundary before promotion`);
+  assert.match(sequence, /Verify resolver v8 with `verify_jwt = true`/,
+    `${relativePath} must verify the existing resolver, not redeploy it`);
   assert.match(rollout, /classifier-failure fail-closed/,
     `${relativePath} requires direct endpoint failure acceptance`);
   assert.match(rollout, /direct authenticated endpoint/i);
   assert.match(rollout, /artifact revision/i);
   assert.match(sequence, /reviewed preview revision/i,
-    `${relativePath} must deploy the reviewed preview before UI acceptance`);
-  assert.match(sequence, /browser UI and the full Island ECC lifecycle/i,
-    `${relativePath} must run UI acceptance against the preview`);
+    `${relativePath} must bind the already accepted preview revision`);
+  assert.match(sequence, /browser UI and Island ECC lifecycle/i,
+    `${relativePath} must verify completed browser acceptance evidence`);
 
   const rollbackHeading = source.includes("\n## Forward-only rollback")
     ? "## Forward-only rollback"
@@ -702,6 +763,9 @@ function assertHyroxRunbookContract(source, relativePath) {
     `${relativePath} must require privacy-safe production inventory evidence`);
 }
 
+for (const [relativePath, source] of currentHyroxDocs) {
+  assertPostApplicationContract(source, relativePath);
+}
 for (const [relativePath, source] of currentHyroxDocs.slice(1)) {
   assertHyroxRunbookContract(source, relativePath);
 }
@@ -731,20 +795,49 @@ assert.match(operationalRunbookSource,
   /query emits only the aggregate bucket—never notification IDs or content/i,
   "production replacement-review inventory must remain count-only");
 
+// Mutation controls cover README and both runbooks, all three applied versions,
+// stale pre-application/recovery/deployment instructions, and verified state.
+for (const [relativePath, source] of currentHyroxDocs) {
+  const inject = text => source.replace(promotionHeading, `${promotionHeading}\n\n${text}`);
+  for (const [file] of appliedHyroxArtifacts) {
+    const version = file.split("_")[0];
+    for (const instruction of [
+      `supabase migration repair ${version} --status applied`,
+      `supabase migration repair --status applied ${version}`,
+      `supabase db query --linked --file supabase/migrations/${file}`,
+      `Apply only \`${file}\` now.`, `Replay \`${version}\` now.`,
+      `Reapply \`${version}\` now.`, `Repair \`${version}\` now.`,
+    ]) assert.throws(() => assertPostApplicationContract(inject(instruction), relativePath),
+      /never instruct replay or repair/);
+    assert.throws(() => assertPostApplicationContract(source.replaceAll(file, "unreviewed.sql"), relativePath),
+      /applied artifact identity/);
+  }
+  for (const instruction of [
+    "00003 must be absent before application.", "00003 was never applied to a shared database.",
+    "Complete stopped-run recovery before resuming acceptance.", "Rerun completed recovery for promotion.",
+    "Deploy the reviewed `resolve-profile-avatars` Edge Function now.",
+    "supabase secrets set ITC_APP_ORIGINS=\"<exact-origin-1>,<exact-origin-2>\"",
+    "supabase db push --include-all",
+  ]) assert.throws(() => assertPostApplicationContract(inject(instruction), relativePath),
+    /stale pre-application instructions/);
+  for (const instruction of ["Replay all three applied migrations.", "Repair applied migrations.", "Reapply the applied migrations."]) {
+    assert.throws(() => assertPostApplicationContract(inject(instruction), relativePath), /never instruct replay or repair/);
+  }
+  for (const [from, to] of [
+    ["applied and recorded exactly once", "awaiting application"],
+    [appliedHistoryProtection, "Never edit, replay, reapply, or repair `00001` or `00002`."],
+    ["verify_jwt = true", "verify_jwt = false"],
+    ["46/18/14/1/45", "46/18/14/1/44"], ["notifications **131**", "notifications **132**"],
+    ["Testing browser acceptance PASS", "Testing browser acceptance pending"],
+    ["Fixture recovery completed; baseline restored", "Fixture recovery pending"],
+    ["5a0ecdeb48872f4ec2aacebc1d037c14", "unreviewed-catalog"],
+    ["- `https://island-training-club.vercel.app`", "- `https://*.vercel.app`"],
+    ["- `https://island-training-club.vercel.app`", "- `https://island-training-club.vercel.app`\n- `https://extra.example.invalid`"],
+    ["- `https://island-training-club.vercel.app`", "- `https://island-training-club.vercel.app`\n- `http://127.0.0.1:4173`"],
+    ["HISTORICAL", "NEXT OPERATION"],
+  ]) assert.throws(() => assertPostApplicationContract(source.replaceAll(from, to), relativePath));
+}
 for (const [relativePath, source] of currentHyroxDocs.slice(1)) {
-  const replayApplied = source.replace(
-    "### Executable release sequence",
-    "### Executable release sequence\n\nsupabase migration repair 20260922000001 --status applied",
-  );
-  assert.throws(() => assertHyroxRunbookContract(replayApplied, `${relativePath} replay fixture`),
-    /never instruct replay or repair/);
-  assert.throws(() => assertHyroxRunbookContract(
-    replayApplied.replace("migration repair 20260922000001", "migration repair 20260922000002"),
-    `${relativePath} 00002 replay fixture`), /never instruct replay or repair/);
-  const missingCorrection = source.replaceAll(
-    "20260922000003_reassert_retired_hyrox_pool_acls.sql", "unreviewed.sql");
-  assert.throws(() => assertHyroxRunbookContract(missingCorrection, `${relativePath} correction fixture`),
-    /hash\/preflight, only 00003/);
   const unsafeRollback = source.replace(
     /(?:###|##) Forward-only rollback[\s\S]*?(?=\n## |\n### |$)/,
     `${source.includes("\n## Forward-only rollback") ? "##" : "###"} Forward-only rollback\n\nForward-only rollback. Edit and replay the applied retirement migration to restore pool access.\n`,
@@ -758,12 +851,12 @@ for (const [relativePath, source] of currentHyroxDocs.slice(1)) {
     .replace(releaseSequenceMarkers[2], releaseSequenceMarkers[1])
     .replace("__PREVIEW_STEP__", releaseSequenceMarkers[2]);
   assert.throws(() => assertHyroxRunbookContract(invertedRollout, `${relativePath} inverted fixture`),
-    /order backend, preview, browser acceptance, then promotion/,
-    `${relativePath} contract must reject inverted preview/acceptance order`);
+    /order backend, resolver, completed acceptance, then promotion/,
+    `${relativePath} contract must reject inverted verification/acceptance order`);
   const missingRollout = source.replace(releaseSequenceMarkers[1], "");
   assert.throws(() => assertHyroxRunbookContract(missingRollout, `${relativePath} missing fixture`),
     /every executable release step/,
-    `${relativePath} contract must reject a missing preview deployment step`);
+    `${relativePath} contract must reject a missing deployed-boundary verification step`);
 }
 
 const retirementIntegrationContractSource = readFileSync(
@@ -780,7 +873,7 @@ for (const marker of [
 assert.match(retirementIntegrationContractSource,
   /select count\(\*\) filter \(where retired\),\s*count\(\*\) filter \(where not retired\)\s*into v_inventory_retired_review_count, v_inventory_active_review_count/i,
   "replacement-review inventory fixtures must expose only aggregate retired/active counts");
-console.log("ok  current HYROX documentation enforces executable rollout, inventory, deep-link, retention, and rollback contracts");
+console.log("ok  current HYROX documentation enforces post-application promotion, no replay/recovery rerun, inventory, deep-link, retention, and rollback contracts");
 
 const storeSource = readFileSync(resolve(__dirnameSmoke, "js/store.js"), "utf8");
 const weekVenueSource = storeSource.match(
