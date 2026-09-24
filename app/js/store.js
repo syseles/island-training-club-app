@@ -36,7 +36,7 @@ import {
   isRetiredHyroxLegacyRouteId,
 } from "./hyrox-retirement.js";
 import { normalizeMeetingPoint, normalizeVenueLocation } from "./venue.js";
-import { announcementPlainText } from "./announcement-markdown.js";
+import { announcementPlainText, assertSafeAnnouncementMarkdown } from "./announcement-markdown.js";
 import * as liveOps from "./operations.js";
 
 const STORAGE_KEY = "itc.prototype.v1";
@@ -3326,6 +3326,14 @@ export async function publishAnnouncement({ title, body, photoUrl } = {}) {
   if (cleanPhoto && !/^https:\/\//i.test(cleanPhoto)) {
     throw new Error("Photo URL must be https");
   }
+  try {
+    assertSafeAnnouncementMarkdown(cleanBody);
+  } catch (err) {
+    if (String(err?.message || "") === "unsafe announcement markdown") {
+      throw new Error("Body cannot include HTML tags");
+    }
+    throw err;
+  }
   if (isLive() && supabase) {
     const { data, error } = await supabase.rpc("publish_community_announcement", {
       p_title: cleanTitle,
@@ -3384,16 +3392,21 @@ export async function publishAnnouncement({ title, body, photoUrl } = {}) {
   }
   shareAnnouncement(actor.id);
   const actorLabel = actor.preferredName || actor.fullName || actor.email || "Admin";
+  const auditBody = `${actorLabel} published “${cleanTitle}”.`;
   for (const user of state.users) {
     if (user?.status !== "approved") continue;
     if (!["admin", "super_admin", "superadmin"].includes(user.role)) continue;
     if (user.id === actor.id) continue;
-    notify(
-      user.id,
-      "community_announcement_audit",
-      `${actorLabel} published “${cleanTitle}”.`,
+    state.notifications.push({
+      id: uid("n"),
+      userId: user.id,
+      kind: "community_announcement_audit",
+      title: "Announcement published",
+      body: auditBody,
       link,
-    );
+      read: false,
+      createdAt: Date.now(),
+    });
   }
   save();
   return row;

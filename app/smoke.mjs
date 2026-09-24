@@ -2401,7 +2401,18 @@ if (annActorNotes.length !== 1) throw new Error("acting admin must get shared");
 if (annAuditNotes.length !== 1) throw new Error("other admin must get audit");
 if (annOptedOutNotes.length !== 0) throw new Error("opted-out member must not get shared");
 if (annMemberNotes[0].link !== "#/community/announcements") throw new Error("shared destination");
+if (annAuditNotes[0].title !== "Announcement published") throw new Error("audit notification title must match live trigger");
 if (!data.ANNOUNCEMENTS.some((a) => a.id === "ann-itc-turns-2")) throw new Error("anniversary seed intact");
+let unsafeBodyRejected = false;
+try {
+  await store.publishAnnouncement({ title: "Unsafe", body: "<script>alert(1)</script>" });
+} catch (err) {
+  unsafeBodyRejected = true;
+  if (!/HTML tags/i.test(String(err?.message || ""))) {
+    throw new Error("unsafe announcement body must reject HTML with clear error");
+  }
+}
+if (!unsafeBodyRejected) throw new Error("publishAnnouncement must reject unsafe markdown");
 console.log("ok  announcement publish fan-out");
 
 store.signIn("admin@example.test");
