@@ -2404,6 +2404,27 @@ if (annMemberNotes[0].link !== "#/community/announcements") throw new Error("sha
 if (!data.ANNOUNCEMENTS.some((a) => a.id === "ann-itc-turns-2")) throw new Error("anniversary seed intact");
 console.log("ok  announcement publish fan-out");
 
+store.signIn("admin@example.test");
+{
+  const compose = await views.viewAdminAnnouncementCompose();
+  for (const marker of [
+    'data-form="announcement-publish"',
+    'name="title"',
+    'name="body"',
+    'name="photo_url"',
+    "announcement-preview",
+  ]) {
+    if (!compose.includes(marker)) throw new Error(`compose missing ${marker}`);
+  }
+}
+console.log("ok  admin announcement compose markers");
+{
+  const raw = JSON.parse(mem.get("itc.prototype.v1"));
+  raw.announcements = [];
+  mem.set("itc.prototype.v1", JSON.stringify(raw));
+  store.load();
+}
+
 // Weekly encouragement rotates on Hong Kong Sundays, regardless of the host
 // calendar. Each expected reference is hand-derived from the fixed HKT epoch.
 {
@@ -2754,6 +2775,13 @@ for (const required of [
 }
 const savedAnnouncements = [...data.ANNOUNCEMENTS];
 data.ANNOUNCEMENTS.splice(0);
+const rawEmptyAnnouncements = JSON.parse(mem.get("itc.prototype.v1"));
+const savedStoreAnnouncements = Array.isArray(rawEmptyAnnouncements.announcements)
+  ? [...rawEmptyAnnouncements.announcements]
+  : [];
+rawEmptyAnnouncements.announcements = [];
+mem.set("itc.prototype.v1", JSON.stringify(rawEmptyAnnouncements));
+store.load();
 let emptyCommunity = "";
 let emptyAnnouncements = "";
 try {
@@ -2761,6 +2789,9 @@ try {
   emptyAnnouncements = await views.viewCommunity("announcements");
 } finally {
   data.ANNOUNCEMENTS.splice(0, data.ANNOUNCEMENTS.length, ...savedAnnouncements);
+  rawEmptyAnnouncements.announcements = savedStoreAnnouncements;
+  mem.set("itc.prototype.v1", JSON.stringify(rawEmptyAnnouncements));
+  store.load();
 }
 if (!emptyCommunity.includes("No announcements yet") || !emptyAnnouncements.includes("No announcements yet")) {
   failures++;

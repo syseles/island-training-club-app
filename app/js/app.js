@@ -587,9 +587,11 @@ async function render(generation = renderGeneration) {
         ? await views.viewAdminActivity(arg2)
         : arg === "campaign"
           ? await views.viewAdminCampaign(arg2)
-          : arg === "users"
-            ? { redirect: "#/admin/members" }
-            : await views.viewAdmin(arg || "members");
+          : arg === "announcements" && arg2 === "new"
+            ? await views.viewAdminAnnouncementCompose()
+            : arg === "users"
+              ? { redirect: "#/admin/members" }
+              : await views.viewAdmin(arg || "members");
       break;
     default:
       out = views.viewNotFound();
@@ -1885,6 +1887,27 @@ document.addEventListener("submit", async (e) => {
           location.hash = `#/admin/campaign/${campaign.id}`;
           await renderWithFeedback();
         } catch (err) { showCampaignError(control, err.message); toast(err.message || "Unable to save campaign", true); }
+      });
+      break;
+    }
+
+    case "form-announcement-publish": {
+      e.preventDefault();
+      if (!form.reportValidity()) return;
+      const fd = new FormData(form);
+      const control = form.querySelector('[type="submit"]');
+      await withBusyControl(control, "Publishing…", async () => {
+        try {
+          const title = fd.get("title");
+          const body = fd.get("body");
+          const photoUrl = fd.get("photo_url");
+          await store.publishAnnouncement({ title, body, photoUrl });
+          toast("Announcement published");
+          location.hash = "#/community/announcements";
+          await renderWithFeedback();
+        } catch (err) {
+          toast(err.message || "Unable to publish announcement", true);
+        }
       });
       break;
     }
