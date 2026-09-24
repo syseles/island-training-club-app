@@ -2386,7 +2386,7 @@ installLocalFixtures();
   store.load();
 }
 store.signIn("admin@example.test");
-const published = store.publishAnnouncement({
+const published = await store.publishAnnouncement({
   title: "Saturday social",
   body: "Bring **shoes**\n\n- water\n- smile",
   photoUrl: "https://example.test/photo.webp",

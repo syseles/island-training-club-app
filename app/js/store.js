@@ -66,6 +66,7 @@ let liveProfile = null;
 let liveUser = null;
 let liveProfileFetchedAt = 0;
 let liveGivingCampaign = null;
+let livePublishedAnnouncements = [];
 // Supabase remains the identity directory. Payment Ops caches live profiles
 // in memory only; device-local persistence stores UUID-keyed operations.
 let livePaymentDirectory = new Map();
@@ -261,6 +262,15 @@ export async function hydrateLiveOperations({ ensureWindow = false, force = fals
   }
   await liveOps.hydrateOperationalState({ force, authenticated });
   await liveOps.startOperationalRealtime();
+  if (authenticated) {
+    try {
+      await refreshLivePublishedAnnouncements();
+    } catch (err) {
+      console.warn("refreshLivePublishedAnnouncements failed", err);
+    }
+  } else {
+    livePublishedAnnouncements = [];
+  }
   return liveOps.operationalStateStatus();
 }
 
@@ -3260,13 +3270,52 @@ export function setWeekVenue(sessionId, {
 
 // --- Community announcements (local publish + inbox fan-out) -----------------
 
+const ANNOUNCEMENT_ADMIN_ROLES = new Set(["admin", "super_admin", "superadmin"]);
+const communityAnnouncementColumns =
+  "id, title, body, photo_url, status, creator_profile_id, published_at, created_at";
+
+function normalizeCommunityAnnouncement(row) {
+  if (!row) return null;
+  const publishedAt = row.published_at ?? row.publishedAt ?? row.created_at ?? row.createdAt;
+  const postedAt = publishedAt ? Date.parse(publishedAt) : NaN;
+  return {
+    id: row.id,
+    title: row.title,
+    body: row.body,
+    photoUrl: row.photo_url ?? row.photoUrl ?? null,
+    postedAt: Number.isFinite(postedAt) ? postedAt : Date.now(),
+    createdBy: row.creator_profile_id ?? row.createdBy ?? null,
+    status: String(row.status || "published").toLowerCase(),
+  };
+}
+
+async function refreshLivePublishedAnnouncements() {
+  if (!isLive() || !supabase) {
+    livePublishedAnnouncements = [];
+    return livePublishedAnnouncements;
+  }
+  const { data, error } = await supabase
+    .from("community_announcements")
+    .select(communityAnnouncementColumns)
+    .eq("status", "published")
+    .order("published_at", { ascending: false });
+  if (error) throw error;
+  livePublishedAnnouncements = (data || []).map(normalizeCommunityAnnouncement).filter(Boolean);
+  return livePublishedAnnouncements;
+}
+
+export async function refreshPublishedAnnouncements() {
+  return refreshLivePublishedAnnouncements();
+}
+
 export function listPublishedAnnouncements() {
+  if (isLive()) return [...livePublishedAnnouncements];
   return [...(state.announcements || [])].sort((a, b) => b.postedAt - a.postedAt);
 }
 
-export function publishAnnouncement({ title, body, photoUrl } = {}) {
-  const actor = currentUser();
-  if (!actor || !["admin", "super_admin", "superadmin"].includes(actor.role)) {
+export async function publishAnnouncement({ title, body, photoUrl } = {}) {
+  const actor = isLive() ? await getCurrentUser() : currentUser();
+  if (!actor || !ANNOUNCEMENT_ADMIN_ROLES.has(actor.role)) {
     throw new Error("Admin only.");
   }
   const cleanTitle = String(title || "").trim();
@@ -3276,6 +3325,27 @@ export function publishAnnouncement({ title, body, photoUrl } = {}) {
   let cleanPhoto = String(photoUrl || "").trim() || null;
   if (cleanPhoto && !/^https:\/\//i.test(cleanPhoto)) {
     throw new Error("Photo URL must be https");
+  }
+  if (isLive() && supabase) {
+    const { data, error } = await supabase.rpc("publish_community_announcement", {
+      p_title: cleanTitle,
+      p_body: cleanBody,
+      p_photo_url: cleanPhoto,
+    });
+    if (error) {
+      const message = String(error.message || "");
+      if (/Enter a title/i.test(message)) throw new Error("Enter a title");
+      if (/Enter announcement body/i.test(message)) throw new Error("Enter announcement body");
+      if (/Photo URL must be https/i.test(message)) throw new Error("Photo URL must be https");
+      if (/Administrator access required/i.test(message)) throw new Error("Admin only.");
+      throw new Error("Unable to publish announcement.");
+    }
+    const row = normalizeCommunityAnnouncement(data);
+    if (!row?.id || row.status !== "published") {
+      throw new Error("Unable to publish announcement.");
+    }
+    await refreshLivePublishedAnnouncements();
+    return row;
   }
   const row = {
     id: uid("ann"),
@@ -4012,6 +4082,7 @@ export async function signOutLive() {
   liveUser = null;
   liveProfileFetchedAt = 0;
   livePaymentDirectory = new Map();
+  livePublishedAnnouncements = [];
   const { error } = await supabase.auth.signOut();
   if (error) throw error;
 }
