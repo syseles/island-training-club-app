@@ -7149,6 +7149,18 @@ const tbcDetail = views.viewActivity(noMapsSession.id);
 if (tbcDetail.includes('id="activity-map"')) {
   throw new Error("free events without mapsQuery must not render the inline map");
 }
+{
+  views.scheduleState.weekOffset = 0;
+  views.scheduleState.selected = noMapsSession.dateISO;
+  views.scheduleState.filter = "all";
+  const tbcSchedule = views.viewSchedule();
+  if (tbcSchedule.includes("TBC · Venue TBC") || tbcSchedule.includes("Venue TBC · TBC")) {
+    throw new Error("TBC schedule rows must not duplicate venue TBC labels");
+  }
+  if (!tbcSchedule.includes(`href="#/activity/${noMapsSession.id}"`)) {
+    throw new Error("expected TBC session row on its schedule day");
+  }
+}
 store.setWeekVenue(noMapsSession.id, {
   location: "TBC",
   mapsQuery: "Causeway Bay Promenade, Hong Kong",

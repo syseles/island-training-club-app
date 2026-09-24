@@ -149,10 +149,15 @@ function sessionRow(s, { past, showDate = true, highlight } = {}) {
   } else {
     end = `${store.spotsLeft(s) > 0 ? `<span class="badge paid">${fmtMoney(s.price)}</span>` : ""}${spotsLabel(s)}`;
   }
+  const locationLabel = String(s.location || "").trim();
+  const locationIsTbc = !locationLabel || locationLabel.toUpperCase() === "TBC";
   const sub = [
-    showDate ? `${esc(fmtDate(s.date))} · ${esc(s.location)}` : esc(s.location),
+    showDate
+      ? `${esc(fmtDate(s.date))} · ${esc(locationLabel || "TBC")}`
+      : esc(locationLabel || "TBC"),
     s.cancelled ? esc(sessionCancellationCopy(s)) : "",
-    s.venueTBC && !s.cancelled ? "Venue TBC" : "",
+    // Avoid "TBC · Venue TBC" when location is already TBC.
+    s.venueTBC && !s.cancelled && !locationIsTbc ? "Venue TBC" : "",
     s.notice ? esc(s.notice) : "",
   ].filter(Boolean).join(" · ");
   return `
