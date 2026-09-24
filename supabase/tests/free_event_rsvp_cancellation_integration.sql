@@ -478,10 +478,9 @@ begin
    where destination = '#/activity/' || v_session_id
      and kind in ('operational_session_venue_updated', 'operational_session_time_updated');
 
-  -- A location-only unconfirmed change is publicly visible and targets active,
-  -- currently approved RSVPs exactly once. Exact repeats create no new rows.
-  -- Non-actor RSVP Admins retain audit semantics instead of receiving a second
-  -- attendee notification for the same effective change.
+  -- Location-only saves (maps missing) remain audit-only for admins; shared
+  -- fan-out requires usable stored location and maps. Time changes still
+  -- notify active approved RSVPs exactly once; exact repeats create no rows.
   perform set_config('request.jwt.claim.sub', v_admin::text, true);
   set local role authenticated;
   perform public.set_session_venue(
@@ -496,18 +495,14 @@ begin
   perform set_config('request.jwt.claim.sub', '', true);
 
   perform pg_temp.rsvp_assert(
-    (select count(*) = 2
-       from public.notifications
-      where kind = 'operational_session_venue_updated'
-        and destination = '#/activity/' || v_session_id
-        and profile_id in (v_member_a, v_member_b))
-    and not exists (
+    not exists (
       select 1 from public.notifications
        where kind = 'operational_session_venue_updated'
          and destination = '#/activity/' || v_session_id
-         and profile_id in (v_member_c, v_pending, v_declined, v_unrelated)
+         and profile_id in (v_member_a, v_member_b, v_member_c, v_pending, v_declined, v_unrelated)
+         and title in ('Venue confirmed', 'Venue updated')
     ),
-    'partial venue changes notify ordinary active approved RSVPs exactly once'
+    'partial venue saves do not shared-notify members without usable stored maps'
   );
   perform pg_temp.rsvp_assert(
     (select count(*) = 1

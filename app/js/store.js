@@ -3181,6 +3181,7 @@ export function setWeekVenue(sessionId, {
   const effectiveLocation = cleanLocation || recurring?.location || "";
   const effectiveMapsQuery = cleanMapsQuery || recurring?.mapsQuery || "";
   const confirmed = hasConfirmedVenue(effectiveLocation, effectiveMapsQuery);
+  const savedUsable = hasConfirmedVenue(cleanLocation, cleanMapsQuery);
   const effectiveVenueChanged = before.location !== effectiveLocation
     || before.mapsQuery !== effectiveMapsQuery
     || (before.meetingLat ?? null) !== (meetingPoint?.lat ?? null)
@@ -3207,29 +3208,43 @@ export function setWeekVenue(sessionId, {
   override.venueTBC = nextVenueTBC;
   override.setAt = Date.now();
   override.setBy = actor?.id || null;
-  override.venueMemberNotifiedAt = previousNotified;
   const destination = `#/activity/${sessionId}`;
   const sessionLabel = `${before.name || recurring?.name || overrideActivityId} on ${before.dateISO}`;
-  if (effectiveVenueChanged) {
-    override.venueMemberNotifiedAt = Date.now();
-    const body = confirmed
-      ? `${sessionLabel} is at ${effectiveLocation}. Check the activity page for details.`
-      : `${sessionLabel} has a venue update. Check the activity page for details.`;
-    for (const userId of activeRsvpNotificationRecipients(sessionId)) {
-      const recipient = state.users.find((user) => user.id === userId);
-      if (PAYMENT_ADMIN_ROLES.has(recipient?.role) && userId !== actor?.id) continue;
+  const usableShared = !cleared && savedUsable;
+  const locationMapsChanged = previousLocation !== cleanLocation
+    || previousMapsQuery !== cleanMapsQuery;
+  // Shared when usable venue text changed (not coordinate-only, not reset).
+  const shouldShared = usableShared && locationMapsChanged;
+  const firstShared = shouldShared && !previousNotified;
+  const sharedTitle = firstShared ? "Venue confirmed" : "Venue updated";
+
+  if (shouldShared) {
+    if (!previousNotified) override.venueMemberNotifiedAt = Date.now();
+    const sharedBody =
+      `${sessionLabel} is at ${cleanLocation}. Check the activity page for details.`;
+    const sharedRecipients = new Set();
+    for (const user of state.users) {
+      if (user?.status !== "approved") continue;
+      if (user.role === "member" || (actor && user.id === actor.id)) {
+        sharedRecipients.add(user.id);
+      }
+    }
+    for (const userId of sharedRecipients) {
       state.notifications.push({
         id: uid("n"),
         userId,
         kind: "operational_session_venue_updated",
-        title: confirmed ? "Venue confirmed" : "Venue updated",
-        body,
+        title: sharedTitle,
+        body: sharedBody,
         link: destination,
         read: false,
         createdAt: Date.now(),
       });
     }
+  } else {
+    override.venueMemberNotifiedAt = previousNotified;
   }
+
   const actorLabel = actor?.fullName || actor?.preferredName || actor?.email || "Admin";
   for (const user of state.users) {
     if (user?.status !== "approved") continue;
