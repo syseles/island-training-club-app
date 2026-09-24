@@ -436,6 +436,8 @@ const NOTIFICATION_CATEGORIES = new Map([
   ["admin_role_changed", "role"],
   ["giving_campaign_published", "club"],
   ["operational_session_venue_updated", "club"],
+  ["community_announcement_published", "club"],
+  ["community_announcement_audit", "club"],
 ]);
 
 export function notificationCategory(kind) {
@@ -490,6 +492,8 @@ const NOTIFICATION_DESTINATIONS = new Map([
   ["admin_membership_revoked", "#/admin/members"],
   ["admin_role_changed", "#/admin/members"],
   ["giving_campaign_published", "#/giving"],
+  ["community_announcement_published", "#/community/announcements"],
+  ["community_announcement_audit", "#/community/announcements"],
   ["welcome", "#/account"],
 ]);
 

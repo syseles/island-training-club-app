@@ -36,6 +36,7 @@ import {
   isRetiredHyroxLegacyRouteId,
 } from "./hyrox-retirement.js";
 import { normalizeMeetingPoint, normalizeVenueLocation } from "./venue.js";
+import { announcementPlainText } from "./announcement-markdown.js";
 import * as liveOps from "./operations.js";
 
 const STORAGE_KEY = "itc.prototype.v1";
@@ -44,7 +45,7 @@ const APPLY_DRAFT_KEY = "itc.apply.draft.v1";
 const APPLY_DRAFT_VERSION = 1;
 const LAST_ROUTE_KEY = "itc.last-route.v1";
 const LAST_ROUTE_VERSION = 1;
-const STATE_VERSION = 24;
+const STATE_VERSION = 25;
 
 const ROUTE_ID = "[A-Za-z0-9._~-]+";
 const RESTORABLE_ROUTE_PATTERNS = [
@@ -224,6 +225,7 @@ function freshState() {
     replacementRequests: [],
     replacementAudit: [],
     notifications: [],
+    announcements: [],
     duty: {},
   };
 }
@@ -875,6 +877,9 @@ function migrate() {
     // migration has run. Relationship fields and exact legacy route IDs are
     // authoritative; arbitrary BFT/Midtown substrings are never classified.
     retireLocalHyroxPool();
+  }
+  if (v < 25) {
+    if (!Array.isArray(state.announcements)) state.announcements = [];
   }
   state.version = STATE_VERSION;
 }
@@ -3251,6 +3256,77 @@ export function setWeekVenue(sessionId, {
   }
   save();
   return { sessionId, activityId: overrideActivityId, ...override };
+}
+
+// --- Community announcements (local publish + inbox fan-out) -----------------
+
+export function listPublishedAnnouncements() {
+  return [...(state.announcements || [])].sort((a, b) => b.postedAt - a.postedAt);
+}
+
+export function publishAnnouncement({ title, body, photoUrl } = {}) {
+  const actor = currentUser();
+  if (!actor || !["admin", "super_admin", "superadmin"].includes(actor.role)) {
+    throw new Error("Admin only.");
+  }
+  const cleanTitle = String(title || "").trim();
+  const cleanBody = String(body || "").trim();
+  if (!cleanTitle) throw new Error("Enter a title");
+  if (!cleanBody) throw new Error("Enter announcement body");
+  let cleanPhoto = String(photoUrl || "").trim() || null;
+  if (cleanPhoto && !/^https:\/\//i.test(cleanPhoto)) {
+    throw new Error("Photo URL must be https");
+  }
+  const row = {
+    id: uid("ann"),
+    title: cleanTitle,
+    body: cleanBody,
+    photoUrl: cleanPhoto,
+    postedAt: Date.now(),
+    createdBy: actor.id,
+    status: "published",
+  };
+  state.announcements.push(row);
+  const plain = announcementPlainText(cleanBody);
+  const preview = plain.length > 140 ? `${plain.slice(0, 137)}…` : plain;
+  const link = "#/community/announcements";
+  const sharedBody = `${cleanTitle} — ${preview}`;
+  const sharedNotified = new Set();
+  const shareAnnouncement = (userId) => {
+    if (sharedNotified.has(userId)) return;
+    sharedNotified.add(userId);
+    state.notifications.push({
+      id: uid("n"),
+      userId,
+      kind: "community_announcement_published",
+      title: cleanTitle,
+      body: sharedBody,
+      link,
+      read: false,
+      createdAt: Date.now(),
+    });
+  };
+  for (const user of state.users) {
+    if (user?.status !== "approved") continue;
+    if (user.role === "member" && user.communityNews) {
+      shareAnnouncement(user.id);
+    }
+  }
+  shareAnnouncement(actor.id);
+  const actorLabel = actor.preferredName || actor.fullName || actor.email || "Admin";
+  for (const user of state.users) {
+    if (user?.status !== "approved") continue;
+    if (!["admin", "super_admin", "superadmin"].includes(user.role)) continue;
+    if (user.id === actor.id) continue;
+    notify(
+      user.id,
+      "community_announcement_audit",
+      `${actorLabel} published “${cleanTitle}”.`,
+      link,
+    );
+  }
+  save();
+  return row;
 }
 
 // --- Giving (FPS donations) -----------------------------------------------------

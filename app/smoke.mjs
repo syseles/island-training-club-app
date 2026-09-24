@@ -207,7 +207,7 @@ function assertPrimaryNav(user, expected, label) {
 }
 
 const freshV24State = store.load();
-assert.equal(freshV24State.version, 24, "fresh local state must use the v24 schema");
+assert.equal(freshV24State.version, 25, "fresh local state must use the v25 schema");
 assert.equal(data.SEED_ACTIVITIES.some(
   (activity) => ["hyrox-bft", "hyrox-midtown"].includes(activity.id)
 ), false, "fresh activity seeds must not contain the retired BFT/Midtown pool");
@@ -289,7 +289,7 @@ localStorage.setItem("itc.prototype.v1", JSON.stringify({
   duty: {},
 }));
 const renamedState = store.load();
-assert.equal(renamedState.version, 24, "legacy state must advance through the HYROX, attendance, prayer, and retirement migrations");
+assert.equal(renamedState.version, 25, "legacy state must advance through the HYROX, attendance, prayer, and retirement migrations");
 assert.equal(renamedState.users.find((user) => user.id === "legacy-member").hyroxPaymentReminders, true);
 assert.equal(renamedState.hyroxCycles["legacy-cycle"]?.collectorPaymentReminderSentAt ?? null, null);
 assert.equal(renamedState.activities.some((activity) => activity.id === "hyrox-bft"), false);
@@ -431,7 +431,7 @@ store.resetLocalData();
   localStorage.setItem("itc.prototype.v1", JSON.stringify(v23PoolFixture));
   const migrated = store.load();
 
-  assert.equal(migrated.version, 24);
+  assert.equal(migrated.version, 25);
   assert.deepEqual(store.notificationsFor("review-admin"), [expectedEccReview],
     "generic local review notices must retain only proven active ECC provenance");
   assert.equal(store.notificationsFor("review-admin").filter((row) => !row.read).length, 1,
@@ -503,7 +503,7 @@ for (const booking of v19ReplacementFixture.bookings) {
 delete v19ReplacementFixture.replacementRequests;
 localStorage.setItem("itc.prototype.v1", JSON.stringify(v19ReplacementFixture));
 const migratedReplacement = store.load();
-assert.equal(migratedReplacement.version, 24, "replacement migration must preserve data through the current v24 state version");
+assert.equal(migratedReplacement.version, 25, "replacement migration must preserve data through the current v25 state version");
 assert.ok(Array.isArray(migratedReplacement.replacementRequests));
 assert.ok(Array.isArray(migratedReplacement.replacementAudit));
 assert.ok(migratedReplacement.bookings.every((booking) =>
@@ -2356,6 +2356,53 @@ if (
   }
   console.log("ok  announcement markdown subset");
 }
+
+// --- Community announcement publish fan-out (Task 2) ---
+store.resetLocalData();
+installLocalFixtures();
+{
+  const raw = JSON.parse(mem.get("itc.prototype.v1"));
+  const member = raw.users.find((u) => u.id === "fixture-member");
+  if (member) member.communityNews = true;
+  raw.users.push({
+    id: "fixture-other-admin", role: "superadmin", status: "approved",
+    fullName: "Test Other Admin", preferredName: "Other",
+    email: "other-admin@example.test",
+    isMinor: false, appliedAt: Date.now() - 86400000,
+    indemnityAcceptedAt: Date.now() - 86400000,
+    privacyAcceptedAt: Date.now() - 86400000,
+    whatsappReminders: false, emailReceipts: false, communityNews: false,
+  });
+  raw.users.push({
+    id: "fixture-member-off", role: "member", status: "approved",
+    fullName: "Test Member Off", preferredName: "Off",
+    email: "member-off@example.test",
+    isMinor: false, appliedAt: Date.now() - 7200000,
+    indemnityAcceptedAt: Date.now() - 7200000,
+    privacyAcceptedAt: Date.now() - 7200000,
+    whatsappReminders: false, emailReceipts: false, communityNews: false,
+  });
+  mem.set("itc.prototype.v1", JSON.stringify(raw));
+  store.load();
+}
+store.signIn("admin@example.test");
+const published = store.publishAnnouncement({
+  title: "Saturday social",
+  body: "Bring **shoes**\n\n- water\n- smile",
+  photoUrl: "https://example.test/photo.webp",
+});
+if (!published?.id || published.status !== "published") throw new Error("publish must return published row");
+const annMemberNotes = store.notificationsFor("fixture-member").filter((n) => n.kind === "community_announcement_published");
+const annActorNotes = store.notificationsFor("fixture-admin").filter((n) => n.kind === "community_announcement_published");
+const annAuditNotes = store.notificationsFor("fixture-other-admin").filter((n) => n.kind === "community_announcement_audit");
+const annOptedOutNotes = store.notificationsFor("fixture-member-off").filter((n) => n.kind === "community_announcement_published");
+if (annMemberNotes.length !== 1) throw new Error("opted-in member must get shared");
+if (annActorNotes.length !== 1) throw new Error("acting admin must get shared");
+if (annAuditNotes.length !== 1) throw new Error("other admin must get audit");
+if (annOptedOutNotes.length !== 0) throw new Error("opted-out member must not get shared");
+if (annMemberNotes[0].link !== "#/community/announcements") throw new Error("shared destination");
+if (!data.ANNOUNCEMENTS.some((a) => a.id === "ann-itc-turns-2")) throw new Error("anniversary seed intact");
+console.log("ok  announcement publish fan-out");
 
 // Weekly encouragement rotates on Hong Kong Sundays, regardless of the host
 // calendar. Each expected reference is hand-derived from the fixed HKT epoch.
@@ -4219,7 +4266,7 @@ v22PrayerSnapshot.prayers = [
 ];
 mem.set("itc.prototype.v1", JSON.stringify(v22PrayerSnapshot));
 const migratedPrayerState = store.load();
-assert.equal(migratedPrayerState.version, 24);
+assert.equal(migratedPrayerState.version, 25);
 assert.deepEqual(migratedPrayerState.prayers.map((row) => row.id), [
   "legacy-prayer-a",
   "legacy-prayer-b",
@@ -4580,12 +4627,12 @@ for (let version = 9; version <= 23; version++) {
   });
   localStorage.setItem("itc.prototype.v1", JSON.stringify(fixture));
   const migrated = store.load();
-  assert.equal(migrated.version, 24, `v${version} fixture must reach v24`);
+  assert.equal(migrated.version, 25, `v${version} fixture must reach v25`);
   assert.equal(migrated.bookings.some((row) => row.id === `retired-${version}`), false);
   assert.ok(migrated.bookings.some((row) => row.id === `ecc-${version}`));
   assert.ok(migrated.bookings.some((row) => row.id === `unrelated-${version}`));
 }
-console.log("ok  every v9-v23 fixture reaches v24 with Island ECC and unrelated records intact");
+console.log("ok  every v9-v23 fixture reaches v25 with Island ECC and unrelated records intact");
 
 // v14 Swimming migration remains part of the accepted v13-to-v24 chain.
 // Repair only exact historical defaults; preserve every Admin customization.
@@ -4602,7 +4649,7 @@ console.log("ok  every v9-v23 fixture reaches v24 with Island ECC and unrelated 
   });
   localStorage.setItem("itc.prototype.v1", JSON.stringify(historicalSwimmingV13));
   const repaired = store.load();
-  assert.equal(repaired.version, 24, "the historical Swimming fixture must reach v24");
+  assert.equal(repaired.version, 25, "the historical Swimming fixture must reach v25");
   assert.deepEqual(
     Object.fromEntries(["location", "mapsQuery", "photo"].map((field) => [
       field,
@@ -4628,7 +4675,7 @@ console.log("ok  every v9-v23 fixture reaches v24 with Island ECC and unrelated 
   });
   localStorage.setItem("itc.prototype.v1", JSON.stringify(customizedSwimmingV13));
   const preserved = store.load();
-  assert.equal(preserved.version, 24, "the customized Swimming fixture must reach v24");
+  assert.equal(preserved.version, 25, "the customized Swimming fixture must reach v25");
   assert.deepEqual(
     Object.fromEntries(["location", "mapsQuery", "photo"].map((field) => [
       field,
@@ -5698,10 +5745,10 @@ console.log("ok  reset");
     failures++;
     console.error("FAIL v10 migration must clear session tied to a removed demo user");
   } else console.log("ok  v10 migration clears removed session");
-  if (migrated.version !== 24) {
+  if (migrated.version !== 25) {
     failures++;
-    console.error(`FAIL integrated migration must advance version to 24, got ${migrated.version}`);
-  } else console.log("ok  integrated migration advances genuine v9 state to v24");
+    console.error(`FAIL integrated migration must advance version to 25, got ${migrated.version}`);
+  } else console.log("ok  integrated migration advances genuine v9 state to v25");
 }
 
 {
@@ -5720,7 +5767,7 @@ console.log("ok  reset");
   store.load();
   const v14 = JSON.parse(mem.get("itc.prototype.v1"));
   const migratedUser = v14.users.find((user) => user.id === "real-v13-member");
-  if (v14.version !== 24 || !migratedUser) throw new Error("v24 migration lost the genuine member");
+  if (v14.version !== 25 || !migratedUser) throw new Error("v25 migration lost the genuine member");
   for (const field of ["indemnitySignature", "indemnitySignedAt", "indemnityFormVersion", "emergencyRelationship"]) {
     if (!(field in migratedUser) || migratedUser[field] !== null) {
       throw new Error(`v14 migration should initialize ${field} to null`);
@@ -5749,10 +5796,10 @@ console.log("ok  reset");
   v21.bookings = [structuredClone(preservedBooking)];
   localStorage.setItem("itc.prototype.v1", JSON.stringify(v21));
   const migrated = store.load();
-  assert.equal(migrated.version, 24);
+  assert.equal(migrated.version, 25);
   assert.equal(migrated.bookings.some((booking) => booking.id === preservedBooking.id), false,
     "v22 attendance compatibility must run before v24 removes the pooled booking");
-  console.log("ok  v21 pooled booking reaches and is retired by v24");
+  console.log("ok  v21 pooled booking reaches and is retired by v25");
 }
 
 // --- Admin payment/attendance state seam -----------------------------------
@@ -6477,11 +6524,11 @@ for (const fixture of sourceSnapshots) {
     && !Array.isArray(migrated.paymentPayouts);
   const suppliedPayoutsPreserved = fixture.version !== 12
     || migrated.paymentPayouts["real-admin"]?.fpsPhone === "+852 6000 0000";
-  if (migrated.version !== 24 || suppliedIds.some((id) => !serialized.includes(id))
+  if (migrated.version !== 25 || suppliedIds.some((id) => !serialized.includes(id))
       || !payoutMapValid || !suppliedPayoutsPreserved) {
     failures++;
-    console.error(`FAIL genuine v${fixture.version} fixture must reach v24 intact`);
-  } else console.log(`ok  genuine v${fixture.version} fixture reaches v24 intact`);
+    console.error(`FAIL genuine v${fixture.version} fixture must reach v25 intact`);
+  } else console.log(`ok  genuine v${fixture.version} fixture reaches v25 intact`);
 }
 
 for (const invalidCounter of [null, -1, 1.5, "broken"]) {
