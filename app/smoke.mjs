@@ -3633,7 +3633,7 @@ for (const key of ["indemnity", "privacy", "guidelines"]) {
   }
 }
 console.log("ok  documents registry exposes indemnity + privacy + guidelines");
-for (const [key, expected] of [["indemnity", false], ["privacy", true], ["guidelines", true]]) {
+for (const [key, expected] of [["indemnity", false], ["privacy", false], ["guidelines", false]]) {
   if (!!DOCS[key]?.provisional !== expected) {
     failures++;
     console.error(`FAIL ${key} provisional watermark flag expected ${expected}, got ${!!DOCS[key]?.provisional}`);

@@ -7,12 +7,12 @@ export const DOCUMENTS = {
   },
   privacy: {
     title: "Privacy Policy",
-    provisional: true,
+    provisional: false,
     renderBody: renderPrivacyDocument,
   },
   guidelines: {
     title: "Community Guidelines",
-    provisional: true,
+    provisional: false,
     renderBody: renderGuidelinesDocument,
   },
 };
