@@ -30,15 +30,22 @@ supabase secrets set \
 
 `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` are normally provided to functions by the platform.
 
-Configure the DB hook secret (required or the trigger no-ops):
+Configure the DB hook secret (required or the trigger no-ops).  
+Hosted Supabase **cannot** use `alter database … set app.web_push_hook_secret` (permission denied). Use the private settings row instead:
 
 ```sql
-alter database postgres set app.web_push_hook_secret = 'same-as-WEB_PUSH_HOOK_SECRET';
--- optional override:
--- alter database postgres set app.web_push_hook_url = 'https://krxbvgyolxvmzgysfjkj.supabase.co/functions/v1/send-web-push';
+-- After applying 20260927000002_web_push_settings_table.sql (or the SQL below):
+insert into private.web_push_settings (id, hook_secret, hook_url)
+values (
+  1,
+  'same-as-WEB_PUSH_HOOK_SECRET',
+  'https://krxbvgyolxvmzgysfjkj.supabase.co/functions/v1/send-web-push'
+)
+on conflict (id) do update
+  set hook_secret = excluded.hook_secret,
+      hook_url = excluded.hook_url,
+      updated_at = now();
 ```
-
-Reload settings if needed (`select pg_reload_conf();`) per your Supabase plan.
 
 ## Deploy function
 

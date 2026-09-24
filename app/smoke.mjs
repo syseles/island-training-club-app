@@ -1085,12 +1085,30 @@ console.log("ok  web push ops preference migration is phase-1 column only");
       `web push delivery migration missing ${marker}`,
     );
   }
+  const webPushSettingsMigration = readFileSync(
+    resolve(__dirnameSmoke, "../supabase/migrations/20260927000002_web_push_settings_table.sql"),
+    "utf8",
+  );
+  for (const marker of [
+    "private.web_push_settings",
+    "hook_secret",
+    "request_web_push_delivery",
+  ]) {
+    assert.ok(
+      webPushSettingsMigration.includes(marker),
+      `web push settings migration missing ${marker}`,
+    );
+  }
+  assert.equal(
+    /alter database/i.test(webPushSettingsMigration),
+    false,
+    "settings migration must not use ALTER DATABASE (denied on hosted Supabase)",
+  );
   assert.equal(
     /caches\.|cache\.add/i.test(webPushDeliveryMigration),
     false,
     "delivery migration must not introduce caching APIs",
-  );
-  const pushSw = readFileSync(resolve(__dirnameSmoke, "push-sw.js"), "utf8");
+  );  const pushSw = readFileSync(resolve(__dirnameSmoke, "push-sw.js"), "utf8");
   assert.ok(pushSw.includes('addEventListener("push"'), "push-sw must handle push");
   assert.ok(pushSw.includes("notificationclick"), "push-sw must handle notificationclick");
   assert.equal(/caches\.|cache\.addAll/i.test(pushSw), false, "push-sw must not use Cache API");
