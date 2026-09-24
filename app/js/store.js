@@ -3181,6 +3181,7 @@ export function setWeekVenue(sessionId, {
   const effectiveLocation = cleanLocation || recurring?.location || "";
   const effectiveMapsQuery = cleanMapsQuery || recurring?.mapsQuery || "";
   const confirmed = hasConfirmedVenue(effectiveLocation, effectiveMapsQuery);
+  const savedUsable = hasConfirmedVenue(cleanLocation, cleanMapsQuery);
   const effectiveVenueChanged = before.location !== effectiveLocation
     || before.mapsQuery !== effectiveMapsQuery
     || (before.meetingLat ?? null) !== (meetingPoint?.lat ?? null)
@@ -3209,7 +3210,7 @@ export function setWeekVenue(sessionId, {
   override.setBy = actor?.id || null;
   const destination = `#/activity/${sessionId}`;
   const sessionLabel = `${before.name || recurring?.name || overrideActivityId} on ${before.dateISO}`;
-  const usableShared = !cleared && confirmed;
+  const usableShared = !cleared && savedUsable;
   const locationMapsChanged = previousLocation !== cleanLocation
     || previousMapsQuery !== cleanMapsQuery;
   // Shared when usable venue text changed (not coordinate-only, not reset).
@@ -3220,7 +3221,7 @@ export function setWeekVenue(sessionId, {
   if (shouldShared) {
     if (!previousNotified) override.venueMemberNotifiedAt = Date.now();
     const sharedBody =
-      `${sessionLabel} is at ${effectiveLocation}. Check the activity page for details.`;
+      `${sessionLabel} is at ${cleanLocation}. Check the activity page for details.`;
     const sharedRecipients = new Set();
     for (const user of state.users) {
       if (user?.status !== "approved") continue;

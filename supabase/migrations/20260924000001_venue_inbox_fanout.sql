@@ -1,10 +1,10 @@
 -- Island Training Club — venue inbox shared/audit fan-out
 --
--- Shared Venue confirmed/updated goes to all members plus the acting admin.
--- Audit Session venue updated goes to other admins only. Later usable edits
--- re-notify; identical location/maps skips shared; blank reset is audit-only.
+-- Replaces member fan-out inside set_session_venue_pre_pool_retirement_20260922:
+-- shared Venue confirmed/updated to all members plus the acting admin when stored
+-- location+maps are usable and changed; audit Session venue updated to other admins.
 
-create or replace function public.set_session_venue(
+create or replace function public.set_session_venue_pre_pool_retirement_20260922(
   p_session_id text,
   p_location text,
   p_maps_query text,
@@ -20,7 +20,10 @@ as $$
 declare
   v_session_id text;
   v_actor uuid := auth.uid();
+  v_session public.operational_sessions;
   v_activity_id text;
+  v_template_name text;
+  v_template_maps text;
   v_location text;
   v_maps_query text;
   v_meeting_lat double precision;
@@ -30,10 +33,10 @@ declare
   v_existing public.operational_session_venue_overrides;
   v_saved public.operational_session_venue_overrides;
   v_changed boolean := false;
-  v_should_notify_members boolean := false;
   v_destination text;
   v_session_label text;
   v_actor_label text;
+  v_should_notify_members boolean := false;
 begin
   perform public.operational_assert_admin('set_session_venue');
 
@@ -42,10 +45,23 @@ begin
     raise exception 'Session id is required.' using errcode = '22023';
   end if;
 
-  v_activity_id := regexp_replace(v_session_id, '-[0-9]{4}-[0-9]{2}-[0-9]{2}$', '');
+  select s.* into v_session
+    from public.operational_sessions s
+   where s.id = v_session_id
+   for update;
+  if not found then
+    raise exception 'Session not found.' using errcode = 'P0002';
+  end if;
+
+  v_activity_id := v_session.activity_id;
   if v_activity_id not in ('wnt', 'run', 'water', 'lunch') then
     raise exception 'Activity venue is fixed.' using errcode = '42501';
   end if;
+
+  select t.name, t.maps_query
+    into v_template_name, v_template_maps
+    from public.operational_activity_templates t
+   where t.activity_id = v_activity_id;
 
   v_location := nullif(trim(p_location), '');
   v_maps_query := nullif(trim(p_maps_query), '');
@@ -119,14 +135,9 @@ begin
   returning * into v_saved;
 
   v_destination := '#/activity/' || v_session_id;
-  v_session_label := case v_activity_id
-    when 'wnt' then 'Wednesday Night Training'
-    when 'run' then 'ITC Run Club'
-    when 'water' then 'ITC Swimming'
-    when 'lunch' then 'Post-Training Lunch'
-  end || ' on ' || substring(v_session_id from '([0-9]{4}-[0-9]{2}-[0-9]{2})$');
+  v_session_label := coalesce(v_template_name, v_activity_id)
+    || ' on ' || v_session.session_date::text;
 
-  -- Shared when usable location+maps changed (not identical re-save; not reset).
   v_should_notify_members :=
     v_location is not null
     and upper(v_location) <> 'TBC'
@@ -165,12 +176,10 @@ begin
          'Session venue updated',
          case
            when v_location is null and v_maps_query is null then
-             format('%s reset the venue for %s to the activity default.',
-                    v_actor_label, v_session_id)
+             format('%s reset the venue for %s to the activity default.', v_actor_label, v_session_id)
            else
              format('%s set the venue for %s to %s.',
-                    v_actor_label, v_session_id,
-                    coalesce(v_location, 'the activity default'))
+                    v_actor_label, v_session_id, coalesce(v_location, 'the activity default'))
          end,
          v_destination
     from public.profiles p
@@ -178,6 +187,30 @@ begin
      and p.id <> v_actor;
 
   return v_saved;
+end;
+$$;
+
+create or replace function public.set_session_venue(
+  p_session_id text,
+  p_location text,
+  p_maps_query text,
+  p_was_tbc boolean,
+  p_meeting_lat double precision,
+  p_meeting_lng double precision
+)
+returns public.operational_session_venue_overrides
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  if public.operational_is_retired_hyrox_session(p_session_id) then
+    raise exception 'Session not found.' using errcode = 'P0002';
+  end if;
+  return public.set_session_venue_pre_pool_retirement_20260922(
+    p_session_id, p_location, p_maps_query, p_was_tbc,
+    p_meeting_lat, p_meeting_lng
+  );
 end;
 $$;
 
