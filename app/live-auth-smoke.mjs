@@ -59,6 +59,7 @@ const applicationRows = new Map([
       whatsapp_reminders: false,
       email_receipts: true,
       community_news: true,
+      web_push_ops: false,
     },
   ],
 ]);
@@ -4171,7 +4172,7 @@ if (!privacyEdit.includes('href="#/account/privacy"')) {
 if (!privacyEdit.includes("Privacy policy accepted") || !privacyEdit.includes(confirmedDay)) {
   throw new Error("Live privacy edit route should show privacy acceptance read-only");
 }
-for (const name of ["photo_consent", "whatsapp_reminders", "hyrox_payment_reminders", "email_receipts", "community_news"]) {
+for (const name of ["photo_consent", "whatsapp_reminders", "hyrox_payment_reminders", "email_receipts", "community_news", "web_push_ops"]) {
   if (!privacyEdit.includes(`name="${name}"`)) {
     throw new Error(`Live privacy edit route missing ${name}`);
   }
@@ -4256,13 +4257,14 @@ await store.updateMyPrivacyPreferences({
   hyrox_payment_reminders: false,
   email_receipts: false,
   community_news: false,
+  web_push_ops: true,
 });
 const privacyPatch = applicationUpdates.at(-1);
 if (!privacyPatch) throw new Error("privacy update missing");
 const privacyKeys = Object.keys(privacyPatch).sort().join(",");
 if (
   privacyKeys !==
-  ["community_news", "email_receipts", "hyrox_payment_reminders", "photo_consent", "whatsapp_reminders"].join(",")
+  ["community_news", "email_receipts", "hyrox_payment_reminders", "photo_consent", "web_push_ops", "whatsapp_reminders"].join(",")
 ) {
   throw new Error(`privacy patch leaked fields: ${privacyKeys}`);
 }

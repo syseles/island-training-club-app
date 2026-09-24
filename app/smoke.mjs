@@ -206,14 +206,14 @@ function assertPrimaryNav(user, expected, label) {
   }
 }
 
-const freshV24State = store.load();
-assert.equal(freshV24State.version, 25, "fresh local state must use the v25 schema");
+const freshV26State = store.load();
+assert.equal(freshV26State.version, 26, "fresh local state must use the v26 schema");
 assert.equal(data.SEED_ACTIVITIES.some(
   (activity) => ["hyrox-bft", "hyrox-midtown"].includes(activity.id)
 ), false, "fresh activity seeds must not contain the retired BFT/Midtown pool");
-assert.equal(freshV24State.activities.some(
+assert.equal(freshV26State.activities.some(
   (activity) => ["hyrox-bft", "hyrox-midtown"].includes(activity.id)
-), false, "fresh v24 state must not activate retired BFT/Midtown templates");
+), false, "fresh v26 state must not activate retired BFT/Midtown templates");
 const quarryBaySeed = data.SEED_ACTIVITIES.find((activity) => activity.id === "hyrox-quarry-bay");
 for (const activityId of ["wnt", "run", "water"]) {
   const freeSeed = data.SEED_ACTIVITIES.find((activity) => activity.id === activityId);
@@ -289,8 +289,9 @@ localStorage.setItem("itc.prototype.v1", JSON.stringify({
   duty: {},
 }));
 const renamedState = store.load();
-assert.equal(renamedState.version, 25, "legacy state must advance through the HYROX, attendance, prayer, and retirement migrations");
+assert.equal(renamedState.version, 26, "legacy state must advance through the HYROX, attendance, prayer, and retirement migrations");
 assert.equal(renamedState.users.find((user) => user.id === "legacy-member").hyroxPaymentReminders, true);
+assert.equal(renamedState.users.find((user) => user.id === "legacy-member").webPushOps, false);
 assert.equal(renamedState.hyroxCycles["legacy-cycle"]?.collectorPaymentReminderSentAt ?? null, null);
 assert.equal(renamedState.activities.some((activity) => activity.id === "hyrox-bft"), false);
 assert.ok(renamedState.activities.some((activity) => activity.id === "hyrox-quarry-bay"));
@@ -431,7 +432,7 @@ store.resetLocalData();
   localStorage.setItem("itc.prototype.v1", JSON.stringify(v23PoolFixture));
   const migrated = store.load();
 
-  assert.equal(migrated.version, 25);
+  assert.equal(migrated.version, 26);
   assert.deepEqual(store.notificationsFor("review-admin"), [expectedEccReview],
     "generic local review notices must retain only proven active ECC provenance");
   assert.equal(store.notificationsFor("review-admin").filter((row) => !row.read).length, 1,
@@ -503,7 +504,7 @@ for (const booking of v19ReplacementFixture.bookings) {
 delete v19ReplacementFixture.replacementRequests;
 localStorage.setItem("itc.prototype.v1", JSON.stringify(v19ReplacementFixture));
 const migratedReplacement = store.load();
-assert.equal(migratedReplacement.version, 25, "replacement migration must preserve data through the current v25 state version");
+assert.equal(migratedReplacement.version, 26, "replacement migration must preserve data through the current v26 state version");
 assert.ok(Array.isArray(migratedReplacement.replacementRequests));
 assert.ok(Array.isArray(migratedReplacement.replacementAudit));
 assert.ok(migratedReplacement.bookings.every((booking) =>
@@ -1044,6 +1045,28 @@ for (const marker of [
   );
 }
 console.log("ok  collector payment reminder migration preserves opt-out and least-privilege delivery");
+{
+  const webPushOpsMigration = readFileSync(
+    resolve(__dirnameSmoke, "../supabase/migrations/20260926000001_web_push_ops_pref.sql"),
+    "utf8",
+  );
+  for (const marker of [
+    "web_push_ops",
+    "boolean not null default false",
+    "applications",
+  ]) {
+    assert.ok(
+      webPushOpsMigration.toLowerCase().includes(marker.toLowerCase()),
+      `web push ops migration missing ${marker}`,
+    );
+  }
+  assert.equal(
+    /vapid|push_subscriptions|edge function/i.test(webPushOpsMigration),
+    false,
+    "phase 1 web push migration must not add sender infrastructure",
+  );
+}
+console.log("ok  web push ops preference migration is phase-1 column only");
 for (const marker of [
   "10/F, Island ECC, Quarry Bay",
   "Island ECC, Quarry Bay, Hong Kong",
@@ -3570,19 +3593,52 @@ if (!privacyEditHtml.includes('name="hyrox_payment_reminders"')
   failures++;
   console.error("FAIL Privacy & Notifications edit missing HYROX reminder preference");
 } else console.log("ok  Privacy & Notifications exposes HYROX reminder preference");
+if (!privacyEditHtml.includes('name="web_push_ops"')
+    || !privacyEditHtml.includes("Web push for bookings &amp; venue")) {
+  failures++;
+  console.error("FAIL Privacy & Notifications edit missing web push ops preference");
+} else console.log("ok  Privacy & Notifications exposes web push ops preference");
 const privacyUser = store.currentUser();
+if (privacyUser?.webPushOps) {
+  failures++;
+  console.error("FAIL web push ops must default off");
+} else console.log("ok  web push ops defaults off");
 const privacyPreferenceBase = {
   photo_consent: !!privacyUser?.mediaConsent,
   whatsapp_reminders: !!privacyUser?.whatsappReminders,
   email_receipts: !!privacyUser?.emailReceipts,
   community_news: !!privacyUser?.communityNews,
+  web_push_ops: false,
 };
 await store.updateMyPrivacyPreferences({ ...privacyPreferenceBase, hyrox_payment_reminders: false });
 if (store.currentUser()?.hyroxPaymentReminders !== false) {
   failures++;
   console.error("FAIL local Privacy & Notifications update did not persist HYROX opt-out");
 } else console.log("ok  local Privacy & Notifications update persists HYROX opt-out");
-await store.updateMyPrivacyPreferences({ ...privacyPreferenceBase, hyrox_payment_reminders: true });
+await store.updateMyPrivacyPreferences({
+  ...privacyPreferenceBase,
+  hyrox_payment_reminders: true,
+  web_push_ops: true,
+});
+if (store.currentUser()?.webPushOps !== true) {
+  failures++;
+  console.error("FAIL local Privacy & Notifications update did not persist web push ops opt-in");
+} else console.log("ok  local Privacy & Notifications update persists web push ops opt-in");
+await store.updateMyPrivacyPreferences({
+  ...privacyPreferenceBase,
+  hyrox_payment_reminders: true,
+  web_push_ops: false,
+});
+if (store.currentUser()?.webPushOps !== false) {
+  failures++;
+  console.error("FAIL local Privacy & Notifications update did not clear web push ops");
+} else console.log("ok  local Privacy & Notifications update clears web push ops");
+if (!data.WEB_PUSH_OPS_KINDS.includes("operational_session_venue_updated")
+    || data.WEB_PUSH_OPS_KINDS.includes("operational_payment_marked")
+    || data.WEB_PUSH_OPS_KINDS.includes("community_announcement_published")) {
+  failures++;
+  console.error("FAIL WEB_PUSH_OPS_KINDS allowlist is wrong");
+} else console.log("ok  WEB_PUSH_OPS_KINDS allowlist covers booking/payment/venue only");
 const membershipDetailsHtml = await views.viewAccount("details");
 const membershipDetailsEditHtml = await views.viewAccount("details", "edit");
 for (const marker of ["Emergency contact relationship", "Donor ID"]) {
@@ -4308,7 +4364,7 @@ v22PrayerSnapshot.prayers = [
 ];
 mem.set("itc.prototype.v1", JSON.stringify(v22PrayerSnapshot));
 const migratedPrayerState = store.load();
-assert.equal(migratedPrayerState.version, 25);
+assert.equal(migratedPrayerState.version, 26);
 assert.deepEqual(migratedPrayerState.prayers.map((row) => row.id), [
   "legacy-prayer-a",
   "legacy-prayer-b",
@@ -4649,7 +4705,7 @@ store.resetLocalData();
 // Every accepted historical schema version must run its original migration
 // chain before the exact v24 retirement step, preserving non-pool state.
 for (let version = 9; version <= 23; version++) {
-  const fixture = structuredClone(freshV24State);
+  const fixture = structuredClone(freshV26State);
   fixture.version = version;
   fixture.activities.push(structuredClone(historicalBftActivity), {
     ...structuredClone(historicalBftActivity), id: "hyrox-midtown", location: "Midtown28 Fitness",
@@ -4669,17 +4725,17 @@ for (let version = 9; version <= 23; version++) {
   });
   localStorage.setItem("itc.prototype.v1", JSON.stringify(fixture));
   const migrated = store.load();
-  assert.equal(migrated.version, 25, `v${version} fixture must reach v25`);
+  assert.equal(migrated.version, 26, `v${version} fixture must reach v26`);
   assert.equal(migrated.bookings.some((row) => row.id === `retired-${version}`), false);
   assert.ok(migrated.bookings.some((row) => row.id === `ecc-${version}`));
   assert.ok(migrated.bookings.some((row) => row.id === `unrelated-${version}`));
 }
-console.log("ok  every v9-v23 fixture reaches v25 with Island ECC and unrelated records intact");
+console.log("ok  every v9-v23 fixture reaches v26 with Island ECC and unrelated records intact");
 
-// v14 Swimming migration remains part of the accepted v13-to-v24 chain.
+// v14 Swimming migration remains part of the accepted v13-to-v26 chain.
 // Repair only exact historical defaults; preserve every Admin customization.
 {
-  const historicalSwimmingV13 = structuredClone(freshV24State);
+  const historicalSwimmingV13 = structuredClone(freshV26State);
   historicalSwimmingV13.version = 13;
   const historicalWater = historicalSwimmingV13.activities.find(
     (activity) => activity.id === "water"
@@ -4691,7 +4747,7 @@ console.log("ok  every v9-v23 fixture reaches v25 with Island ECC and unrelated 
   });
   localStorage.setItem("itc.prototype.v1", JSON.stringify(historicalSwimmingV13));
   const repaired = store.load();
-  assert.equal(repaired.version, 25, "the historical Swimming fixture must reach v25");
+  assert.equal(repaired.version, 26, "the historical Swimming fixture must reach v26");
   assert.deepEqual(
     Object.fromEntries(["location", "mapsQuery", "photo"].map((field) => [
       field,
@@ -4705,7 +4761,7 @@ console.log("ok  every v9-v23 fixture reaches v25 with Island ECC and unrelated 
     "v14 must repair exact historical Swimming defaults before v24",
   );
 
-  const customizedSwimmingV13 = structuredClone(freshV24State);
+  const customizedSwimmingV13 = structuredClone(freshV26State);
   customizedSwimmingV13.version = 13;
   const customizedWater = customizedSwimmingV13.activities.find(
     (activity) => activity.id === "water"
@@ -4717,7 +4773,7 @@ console.log("ok  every v9-v23 fixture reaches v25 with Island ECC and unrelated 
   });
   localStorage.setItem("itc.prototype.v1", JSON.stringify(customizedSwimmingV13));
   const preserved = store.load();
-  assert.equal(preserved.version, 25, "the customized Swimming fixture must reach v25");
+  assert.equal(preserved.version, 26, "the customized Swimming fixture must reach v26");
   assert.deepEqual(
     Object.fromEntries(["location", "mapsQuery", "photo"].map((field) => [
       field,
@@ -4731,7 +4787,7 @@ console.log("ok  every v9-v23 fixture reaches v25 with Island ECC and unrelated 
     "v14 must preserve Admin-customized Swimming values through v24",
   );
 }
-console.log("ok  v14 Swimming defaults repair and Admin customizations survive the v13-to-v24 chain");
+console.log("ok  v14 Swimming defaults repair and Admin customizations survive the v13-to-v26 chain");
 
 // --- Generic Socials preview: rolling seven-day selector ---
 store.resetLocalData();
@@ -5793,10 +5849,10 @@ console.log("ok  reset");
     failures++;
     console.error("FAIL v10 migration must clear session tied to a removed demo user");
   } else console.log("ok  v10 migration clears removed session");
-  if (migrated.version !== 25) {
+  if (migrated.version !== 26) {
     failures++;
     console.error(`FAIL integrated migration must advance version to 25, got ${migrated.version}`);
-  } else console.log("ok  integrated migration advances genuine v9 state to v25");
+  } else console.log("ok  integrated migration advances genuine v9 state to v26");
 }
 
 {
@@ -5815,7 +5871,7 @@ console.log("ok  reset");
   store.load();
   const v14 = JSON.parse(mem.get("itc.prototype.v1"));
   const migratedUser = v14.users.find((user) => user.id === "real-v13-member");
-  if (v14.version !== 25 || !migratedUser) throw new Error("v25 migration lost the genuine member");
+  if (v14.version !== 26 || !migratedUser) throw new Error("v26 migration lost the genuine member");
   for (const field of ["indemnitySignature", "indemnitySignedAt", "indemnityFormVersion", "emergencyRelationship"]) {
     if (!(field in migratedUser) || migratedUser[field] !== null) {
       throw new Error(`v14 migration should initialize ${field} to null`);
@@ -5844,10 +5900,10 @@ console.log("ok  reset");
   v21.bookings = [structuredClone(preservedBooking)];
   localStorage.setItem("itc.prototype.v1", JSON.stringify(v21));
   const migrated = store.load();
-  assert.equal(migrated.version, 25);
+  assert.equal(migrated.version, 26);
   assert.equal(migrated.bookings.some((booking) => booking.id === preservedBooking.id), false,
     "v22 attendance compatibility must run before v24 removes the pooled booking");
-  console.log("ok  v21 pooled booking reaches and is retired by v25");
+  console.log("ok  v21 pooled booking reaches and is retired by v26");
 }
 
 // --- Admin payment/attendance state seam -----------------------------------
@@ -6572,11 +6628,11 @@ for (const fixture of sourceSnapshots) {
     && !Array.isArray(migrated.paymentPayouts);
   const suppliedPayoutsPreserved = fixture.version !== 12
     || migrated.paymentPayouts["real-admin"]?.fpsPhone === "+852 6000 0000";
-  if (migrated.version !== 25 || suppliedIds.some((id) => !serialized.includes(id))
+  if (migrated.version !== 26 || suppliedIds.some((id) => !serialized.includes(id))
       || !payoutMapValid || !suppliedPayoutsPreserved) {
     failures++;
-    console.error(`FAIL genuine v${fixture.version} fixture must reach v25 intact`);
-  } else console.log(`ok  genuine v${fixture.version} fixture reaches v25 intact`);
+    console.error(`FAIL genuine v${fixture.version} fixture must reach v26 intact`);
+  } else console.log(`ok  genuine v${fixture.version} fixture reaches v26 intact`);
 }
 
 for (const invalidCounter of [null, -1, 1.5, "broken"]) {
