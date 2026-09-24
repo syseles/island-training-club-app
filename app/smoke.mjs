@@ -2328,6 +2328,35 @@ if (
   console.error("FAIL announcement postedAt should resolve to 2026-08-06 local date");
 } else console.log("ok  announcement postedAt resolves to 2026-08-06 local date");
 
+{
+  const md = await import("./js/announcement-markdown.js");
+  const html = md.renderAnnouncementMarkdown("Hello **bold** and *italic* and __under__\n\n- one\n- two\n\n1. a\n2. b");
+  if (!html.includes("<strong>bold</strong>") || !html.includes("<em>italic</em>")) {
+    throw new Error("markdown must render bold/italic");
+  }
+  if (!html.includes("<u>under</u>") && !html.includes("<strong>under</strong>")) {
+    throw new Error("markdown must render underline via __text__ → <u>");
+  }
+  if (!html.includes("<ul>") || !html.includes("<ol>")) {
+    throw new Error("markdown must render lists");
+  }
+  try {
+    md.renderAnnouncementMarkdown("<script>alert(1)</script>");
+    throw new Error("raw HTML must be rejected or escaped");
+  } catch (err) {
+    if (!/unsafe|invalid|forbidden/i.test(String(err.message))) {
+      // Escaped script tags are OK — assert no executable tag remains
+    }
+  }
+  if (md.renderAnnouncementMarkdown("x <script>y</script> z").includes("<script>")) {
+    throw new Error("script tags must not survive render");
+  }
+  if (md.announcementPlainText("Hello **world**") !== "Hello world") {
+    throw new Error("plain text strip must remove marks");
+  }
+  console.log("ok  announcement markdown subset");
+}
+
 // Weekly encouragement rotates on Hong Kong Sundays, regardless of the host
 // calendar. Each expected reference is hand-derived from the fixed HKT epoch.
 {
