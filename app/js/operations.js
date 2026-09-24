@@ -815,8 +815,16 @@ function applyLiveVenueOverride(session) {
     out.meetingLng = o.meetingLng;
   }
   const display = String(out.location || "").trim();
+  if (display.toUpperCase() === "TBC") {
+    out.location = "TBC";
+    out.mapsQuery = "";
+    delete out.meetingLat;
+    delete out.meetingLng;
+    out.venueTBC = true;
+    return out;
+  }
   const query = String(out.mapsQuery || "").trim();
-  if (display && display.toUpperCase() !== "TBC" && query && query.toUpperCase() !== "TBC") {
+  if (display && query && query.toUpperCase() !== "TBC") {
     out.venueTBC = false;
   }
   return out;

@@ -6934,6 +6934,15 @@ if (venueNotesFor("fixture-other-admin", wntSession.id).length !== 3) {
 if (!store.weekVenueOverride(wntSession.id)?.venueMemberNotifiedAt) {
   throw new Error("reset must preserve venueMemberNotifiedAt");
 }
+{
+  const resetDetail = views.viewActivity(wntSession.id);
+  if (resetDetail.includes('id="activity-map"') || resetDetail.includes("Loading map")) {
+    throw new Error("reset to TBC/default must remove the interactive map");
+  }
+  if (resetDetail.includes("Get directions")) {
+    throw new Error("reset to TBC/default must remove Get directions on free events");
+  }
+}
 
 // Reconfirmation after reset: shared Venue updated again.
 store.setWeekVenue(wntSession.id, {
@@ -7086,6 +7095,17 @@ store.setVenueTBC(noMapsSession.id, true);
 const tbcDetail = views.viewActivity(noMapsSession.id);
 if (tbcDetail.includes('id="activity-map"')) {
   throw new Error("free events without mapsQuery must not render the inline map");
+}
+store.setWeekVenue(noMapsSession.id, {
+  location: "TBC",
+  mapsQuery: "Causeway Bay Promenade, Hong Kong",
+});
+{
+  const leftoverMapsDetail = views.viewActivity(noMapsSession.id);
+  if (leftoverMapsDetail.includes('id="activity-map"')
+      || leftoverMapsDetail.includes("Get directions")) {
+    throw new Error("typed TBC must not keep interactive map or directions from leftover mapsQuery");
+  }
 }
 const hyroxDetailSample = store.upcomingSessions(21).find((s) => s.activityId === "hyrox-quarry-bay" && !data.sessionStarted(s));
 const hyroxDetail = views.viewActivity(hyroxDetailSample.id);

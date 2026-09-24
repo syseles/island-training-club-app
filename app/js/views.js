@@ -498,8 +498,11 @@ export function viewActivity(sessionId, options) {
   let actionBlock = "";
   const markerLabel = `${s.name} · ${fmtDate(s.date)} · ${fmtTime(s.time)}`;
   const venuePresentation = venuePresentationFor({ ...s, markerLabel });
-  const showDirections = !s.cancelled && !past
-    && (venuePresentation.kind === "coordinates" || Boolean(s.mapsQuery || s.location));
+  const showDirections = !s.cancelled && !past && (
+    venuePresentation.kind !== "none"
+    || (s.kind !== "free" && Boolean(String(s.mapsQuery || s.location || "").trim())
+      && String(s.location || "").trim().toUpperCase() !== "TBC")
+  );
   const directionsLink = showDirections
     ? `<a class="btn ghost" href="${mapsHref(s)}" target="_blank" rel="noopener">Get directions</a>`
     : "";
