@@ -36,6 +36,7 @@ import {
   isRetiredHyroxLegacyRouteId,
 } from "./hyrox-retirement.js";
 import { normalizeMeetingPoint, normalizeVenueLocation } from "./venue.js";
+import { announcementPlainText, assertSafeAnnouncementMarkdown } from "./announcement-markdown.js";
 import * as liveOps from "./operations.js";
 
 const STORAGE_KEY = "itc.prototype.v1";
@@ -44,7 +45,7 @@ const APPLY_DRAFT_KEY = "itc.apply.draft.v1";
 const APPLY_DRAFT_VERSION = 1;
 const LAST_ROUTE_KEY = "itc.last-route.v1";
 const LAST_ROUTE_VERSION = 1;
-const STATE_VERSION = 24;
+const STATE_VERSION = 25;
 
 const ROUTE_ID = "[A-Za-z0-9._~-]+";
 const RESTORABLE_ROUTE_PATTERNS = [
@@ -65,6 +66,7 @@ let liveProfile = null;
 let liveUser = null;
 let liveProfileFetchedAt = 0;
 let liveGivingCampaign = null;
+let livePublishedAnnouncements = [];
 // Supabase remains the identity directory. Payment Ops caches live profiles
 // in memory only; device-local persistence stores UUID-keyed operations.
 let livePaymentDirectory = new Map();
@@ -224,6 +226,7 @@ function freshState() {
     replacementRequests: [],
     replacementAudit: [],
     notifications: [],
+    announcements: [],
     duty: {},
   };
 }
@@ -259,6 +262,15 @@ export async function hydrateLiveOperations({ ensureWindow = false, force = fals
   }
   await liveOps.hydrateOperationalState({ force, authenticated });
   await liveOps.startOperationalRealtime();
+  if (authenticated) {
+    try {
+      await refreshLivePublishedAnnouncements();
+    } catch (err) {
+      console.warn("refreshLivePublishedAnnouncements failed", err);
+    }
+  } else {
+    livePublishedAnnouncements = [];
+  }
   return liveOps.operationalStateStatus();
 }
 
@@ -875,6 +887,9 @@ function migrate() {
     // migration has run. Relationship fields and exact legacy route IDs are
     // authoritative; arbitrary BFT/Midtown substrings are never classified.
     retireLocalHyroxPool();
+  }
+  if (v < 25) {
+    if (!Array.isArray(state.announcements)) state.announcements = [];
   }
   state.version = STATE_VERSION;
 }
@@ -3268,6 +3283,150 @@ export function setWeekVenue(sessionId, {
   return { sessionId, activityId: overrideActivityId, ...override };
 }
 
+// --- Community announcements (local publish + inbox fan-out) -----------------
+
+const ANNOUNCEMENT_ADMIN_ROLES = new Set(["admin", "super_admin", "superadmin"]);
+const communityAnnouncementColumns =
+  "id, title, body, photo_url, status, creator_profile_id, published_at, created_at";
+
+function normalizeCommunityAnnouncement(row) {
+  if (!row) return null;
+  const publishedAt = row.published_at ?? row.publishedAt ?? row.created_at ?? row.createdAt;
+  const postedAt = publishedAt ? Date.parse(publishedAt) : NaN;
+  return {
+    id: row.id,
+    title: row.title,
+    body: row.body,
+    photoUrl: row.photo_url ?? row.photoUrl ?? null,
+    postedAt: Number.isFinite(postedAt) ? postedAt : Date.now(),
+    createdBy: row.creator_profile_id ?? row.createdBy ?? null,
+    status: String(row.status || "published").toLowerCase(),
+  };
+}
+
+async function refreshLivePublishedAnnouncements() {
+  if (!isLive() || !supabase) {
+    livePublishedAnnouncements = [];
+    return livePublishedAnnouncements;
+  }
+  const { data, error } = await supabase
+    .from("community_announcements")
+    .select(communityAnnouncementColumns)
+    .eq("status", "published")
+    .order("published_at", { ascending: false });
+  if (error) throw error;
+  livePublishedAnnouncements = (data || []).map(normalizeCommunityAnnouncement).filter(Boolean);
+  return livePublishedAnnouncements;
+}
+
+export async function refreshPublishedAnnouncements() {
+  return refreshLivePublishedAnnouncements();
+}
+
+export function listPublishedAnnouncements() {
+  if (isLive()) return [...livePublishedAnnouncements];
+  return [...(state.announcements || [])].sort((a, b) => b.postedAt - a.postedAt);
+}
+
+export async function publishAnnouncement({ title, body, photoUrl } = {}) {
+  const actor = isLive() ? await getCurrentUser() : currentUser();
+  if (!actor || !ANNOUNCEMENT_ADMIN_ROLES.has(actor.role)) {
+    throw new Error("Admin only.");
+  }
+  const cleanTitle = String(title || "").trim();
+  const cleanBody = String(body || "").trim();
+  if (!cleanTitle) throw new Error("Enter a title");
+  if (!cleanBody) throw new Error("Enter announcement body");
+  let cleanPhoto = String(photoUrl || "").trim() || null;
+  if (cleanPhoto && !/^https:\/\//i.test(cleanPhoto)) {
+    throw new Error("Photo URL must be https");
+  }
+  try {
+    assertSafeAnnouncementMarkdown(cleanBody);
+  } catch (err) {
+    if (String(err?.message || "") === "unsafe announcement markdown") {
+      throw new Error("Body cannot include HTML tags");
+    }
+    throw err;
+  }
+  if (isLive() && supabase) {
+    const { data, error } = await supabase.rpc("publish_community_announcement", {
+      p_title: cleanTitle,
+      p_body: cleanBody,
+      p_photo_url: cleanPhoto,
+    });
+    if (error) {
+      const message = String(error.message || "");
+      if (/Enter a title/i.test(message)) throw new Error("Enter a title");
+      if (/Enter announcement body/i.test(message)) throw new Error("Enter announcement body");
+      if (/Photo URL must be https/i.test(message)) throw new Error("Photo URL must be https");
+      if (/Administrator access required/i.test(message)) throw new Error("Admin only.");
+      throw new Error("Unable to publish announcement.");
+    }
+    const row = normalizeCommunityAnnouncement(data);
+    if (!row?.id || row.status !== "published") {
+      throw new Error("Unable to publish announcement.");
+    }
+    await refreshLivePublishedAnnouncements();
+    return row;
+  }
+  const row = {
+    id: uid("ann"),
+    title: cleanTitle,
+    body: cleanBody,
+    photoUrl: cleanPhoto,
+    postedAt: Date.now(),
+    createdBy: actor.id,
+    status: "published",
+  };
+  state.announcements.push(row);
+  const plain = announcementPlainText(cleanBody);
+  const preview = plain.length > 140 ? `${plain.slice(0, 137)}…` : plain;
+  const link = "#/community/announcements";
+  const sharedBody = `${cleanTitle} — ${preview}`;
+  const sharedNotified = new Set();
+  const shareAnnouncement = (userId) => {
+    if (sharedNotified.has(userId)) return;
+    sharedNotified.add(userId);
+    state.notifications.push({
+      id: uid("n"),
+      userId,
+      kind: "community_announcement_published",
+      title: cleanTitle,
+      body: sharedBody,
+      link,
+      read: false,
+      createdAt: Date.now(),
+    });
+  };
+  for (const user of state.users) {
+    if (user?.status !== "approved") continue;
+    if (user.role === "member" && user.communityNews) {
+      shareAnnouncement(user.id);
+    }
+  }
+  shareAnnouncement(actor.id);
+  const actorLabel = actor.preferredName || actor.fullName || actor.email || "Admin";
+  const auditBody = `${actorLabel} published “${cleanTitle}”.`;
+  for (const user of state.users) {
+    if (user?.status !== "approved") continue;
+    if (!["admin", "super_admin", "superadmin"].includes(user.role)) continue;
+    if (user.id === actor.id) continue;
+    state.notifications.push({
+      id: uid("n"),
+      userId: user.id,
+      kind: "community_announcement_audit",
+      title: "Announcement published",
+      body: auditBody,
+      link,
+      read: false,
+      createdAt: Date.now(),
+    });
+  }
+  save();
+  return row;
+}
+
 // --- Giving (FPS donations) -----------------------------------------------------
 // FPS is a push payment from the member's banking app, so the prototype
 // records every gift as "pending" until a leader reconciles it against the
@@ -3951,6 +4110,7 @@ export async function signOutLive() {
   liveUser = null;
   liveProfileFetchedAt = 0;
   livePaymentDirectory = new Map();
+  livePublishedAnnouncements = [];
   const { error } = await supabase.auth.signOut();
   if (error) throw error;
 }

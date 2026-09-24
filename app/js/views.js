@@ -16,6 +16,7 @@ import {
   normalizeVenueLocation,
   venuePresentationFor,
 } from "./venue.js";
+import { renderAnnouncementMarkdown, announcementPlainText } from "./announcement-markdown.js";
 import {
   LEADERS,
   CULTURE,
@@ -928,8 +929,45 @@ function communityHeading(user) {
   return "Find your place in the crew.";
 }
 
+function anniversaryStoryMarkup() {
+  const announcement = ANNOUNCEMENTS[0];
+  if (!announcement) return "";
+  return `
+    <article class="anniversary-story">
+      <div class="kicker">${esc(fmtDay(announcement.postedAt))} · ITC Anniversary</div>
+      <h1 class="display sm">${esc(announcement.title)}.</h1>
+      <p class="subcopy mt8">${esc(announcement.lead)}</p>
+      <div class="anniversary-hero">
+        <strong aria-label="2 years">2<span>yrs</span></strong>
+        <div><h2>Look what God has built.</h2><p>One community, growing stronger together.</p></div>
+      </div>
+      <div class="milestone-grid">
+        ${announcement.milestones.map((item) => `
+          <div class="milestone">
+            <strong>${esc(item.value)}</strong>
+            <span>${esc(item.label)}</span>
+          </div>`).join("")}
+      </div>
+      <p class="anniversary-message">${esc(announcement.body)}</p>
+      <blockquote class="anniversary-commitment">${esc(announcement.commitment)}</blockquote>
+    </article>`;
+}
+
+function publishedAnnouncementListMarkup() {
+  return store.listPublishedAnnouncements().map((item) => `
+      <article class="announcement-article card">
+        <div class="card-body">
+          <div class="kicker">${esc(fmtDay(item.postedAt))} · Club news</div>
+          <h2 class="display sm">${esc(item.title)}</h2>
+          ${item.photoUrl ? `<img class="announcement-photo" src="${esc(item.photoUrl)}" alt="">` : ""}
+          ${renderAnnouncementMarkdown(item.body)}
+        </div>
+      </article>`).join("");
+}
+
 function communityHome() {
   const user = store.currentUser();
+  const latestPublished = store.listPublishedAnnouncements()[0];
   const announcement = ANNOUNCEMENTS[0];
   const nextSocial = store.nextSocialSession();
   const socialHref = nextSocial ? `#/activity/${nextSocial.id}` : "#/schedule";
@@ -956,7 +994,12 @@ function communityHome() {
         <h2>Latest from ITC</h2>
         <a href="#/community/announcements">All announcements →</a>
       </div>
-      ${announcement ? `
+      ${latestPublished ? `
+        <a class="community-announcement-preview" href="#/community/announcements">
+          <span class="kicker dim">${esc(fmtDay(latestPublished.postedAt))} · Club news</span>
+          <h3>${esc(latestPublished.title)}</h3>
+          <p>${esc(announcementPlainText(latestPublished.body).slice(0, 140))}</p>
+        </a>` : announcement ? `
         <a class="community-announcement-preview" href="#/community/announcements">
           <span class="kicker dim">${esc(fmtDay(announcement.postedAt))} · ITC Anniversary</span>
           <h3>${esc(announcement.title)}</h3>
@@ -1152,35 +1195,65 @@ function communityFellowship() {
 }
 
 function communityAnnouncements() {
-  const announcement = ANNOUNCEMENTS[0];
-  if (!announcement) {
+  const user = store.currentUser();
+  const anniversary = anniversaryStoryMarkup();
+  const published = publishedAnnouncementListMarkup();
+  const adminCompose = user && isAdminRole(user.role)
+    ? `<a class="btn sm mt16" href="#/admin/announcements/new">Publish announcement</a>`
+    : "";
+  if (!anniversary && !published) {
     return `
       <a class="back-link" href="#/community">← Community</a>
       <div class="kicker mt16">Community · Announcements</div>
       <h1 class="display sm">Announcements.</h1>
+      ${adminCompose}
       <div class="empty mt16">No announcements yet.</div>`;
   }
+  const publishedSection = published
+    ? `<div class="section-head mt24"><h2>Club news</h2></div>
+      <div class="announcement-list">${published}</div>`
+    : "";
   return `
     <a class="back-link" href="#/community">← Community</a>
-    <article class="anniversary-story">
-    <article class="anniversary-story">
-      <div class="kicker">${esc(fmtDay(announcement.postedAt))} · ITC Anniversary</div>
-      <h1 class="display sm">${esc(announcement.title)}.</h1>
-      <p class="subcopy mt8">${esc(announcement.lead)}</p>
-      <div class="anniversary-hero">
-        <strong aria-label="2 years">2<span>yrs</span></strong>
-        <div><h2>Look what God has built.</h2><p>One community, growing stronger together.</p></div>
+    <div class="kicker mt16">Community · Announcements</div>
+    ${adminCompose}
+    ${anniversary}
+    ${publishedSection}`;
+}
+
+export async function viewAdminAnnouncementCompose() {
+  const user = store.currentUser();
+  if (!user || !isAdminRole(user.role)) return { redirect: "#/account" };
+  return `
+    <a class="back-link" href="#/community/announcements">← Announcements</a>
+    <div class="kicker mt16">Admin · Announcements</div>
+    <h1 class="display sm">Publish announcement.</h1>
+    <p class="subcopy mt8">Club news uses fixed ITC typography and colors. Write in Markdown — members see the same styling in Community.</p>
+    <form id="form-announcement-publish" class="card mt16" data-form="announcement-publish" novalidate>
+      <div class="card-body">
+        <div class="field">
+          <label for="ann-title">Title *</label>
+          <input id="ann-title" name="title" required maxlength="200" placeholder="Headline for members">
+        </div>
+        <div class="field">
+          <label for="ann-body">Body *</label>
+          <textarea id="ann-body" name="body" rows="8" required maxlength="8000" placeholder="What should members know?"></textarea>
+          <p class="muted small mt8">Markdown: **bold** *italic* __underline__ · bullet lists with <code>- item</code> · numbered lists with <code>1. item</code></p>
+        </div>
+        <div class="field">
+          <label for="ann-photo">Photo URL (optional)</label>
+          <input id="ann-photo" name="photo_url" type="url" inputmode="url" placeholder="https://…">
+        </div>
+        <div class="announcement-preview card mt16" aria-live="polite">
+          <div class="card-body">
+            <div class="kicker">Preview</div>
+            <p class="muted small">Markdown: **bold** *italic* __underline__</p>
+            <p class="muted small mt8">Your published announcement will appear under Club news on the Announcements page.</p>
+          </div>
+        </div>
+        <button class="btn mt24" type="submit">Publish</button>
       </div>
-      <div class="milestone-grid">
-        ${announcement.milestones.map((item) => `
-          <div class="milestone">
-            <strong>${esc(item.value)}</strong>
-            <span>${esc(item.label)}</span>
-          </div>`).join("")}
-      </div>
-      <p class="anniversary-message">${esc(announcement.body)}</p>
-      <blockquote class="anniversary-commitment">${esc(announcement.commitment)}</blockquote>
-    </article>`;
+    </form>`;
 }
 
 function profileSubpageHeader({ backHref = "#/account", backLabel = "Profile", title }) {
