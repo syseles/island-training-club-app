@@ -544,12 +544,12 @@ Expected: PASS venue recipient assertions. If the harness is unavailable in this
 
 - [ ] **Step 3: Re-run local smoke**
 
-Run: `node app/smoke.mjs`  
+Run: `node app/smoke.mjs`
 Expected: PASS
 
 - [ ] **Step 4: Whitespace check**
 
-Run: `git diff --check`  
+Run: `git diff --check`
 Expected: clean
 
 - [ ] **Step 5: Commit**

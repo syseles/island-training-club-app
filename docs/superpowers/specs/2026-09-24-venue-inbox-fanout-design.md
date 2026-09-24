@@ -1,9 +1,9 @@
 # Venue Inbox Fan-out
 
-**Date:** 2026-09-24  
-**Branch:** `feature/venue-inbox-fanout` (off `main`)  
-**Status:** Approved for implementation  
-**Plan:** `docs/superpowers/plans/2026-09-24-venue-inbox-fanout.md`  
+**Date:** 2026-09-24
+**Branch:** `feature/venue-inbox-fanout` (off `main`)
+**Status:** Approved for implementation
+**Plan:** `docs/superpowers/plans/2026-09-24-venue-inbox-fanout.md`
 **Follow-up (separate branch/PR):** Community announcement publish + inbox (`feature/community-announcement-inbox`)
 
 ## Problem
