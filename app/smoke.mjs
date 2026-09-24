@@ -6667,13 +6667,23 @@ const actorNotes = venueNotesFor("fixture-admin", wntSession.id);
 const pendingNotes = venueNotesFor("fixture-pending-user", wntSession.id);
 const unrelatedNotes = venueNotesFor("fixture-unrelated-member", wntSession.id);
 if (memberNotes.length !== 1) {
-  throw new Error("first confirmation must notify each active RSVP exactly once");
+  throw new Error("first confirmation must notify each member exactly once");
+}
+if (memberNotes[0]?.title !== "Venue confirmed") {
+  throw new Error("first confirmation shared title must be Venue confirmed");
+}
+if (actorNotes.length !== 1) {
+  throw new Error("acting admin must receive the shared venue notification");
+}
+if (actorNotes[0]?.title !== "Venue confirmed"
+    || actorNotes[0]?.body !== memberNotes[0]?.body) {
+  throw new Error("acting admin shared row must match member copy");
 }
 if (otherAdminNotes.length !== 1) {
   throw new Error("other admin must receive audit notification on actual save");
 }
-if (actorNotes.length) {
-  throw new Error("actor must not receive its own audit notification");
+if (otherAdminNotes[0]?.title !== "Session venue updated") {
+  throw new Error("other admin must receive the audit title");
 }
 if (pendingNotes.length) {
   throw new Error("pending profile must not receive venue notifications");
@@ -6703,37 +6713,68 @@ store.setWeekVenue(wntSession.id, {
   location: "Central Harbourfront — 7pm sharp",
   mapsQuery: "Central Harbourfront, Hong Kong",
 });
-if (venueNotesFor("fixture-member", wntSession.id).length !== 1) {
-  throw new Error("no-op save must not duplicate member notification");
+if (venueNotesFor("fixture-member", wntSession.id).length !== 1
+    || venueNotesFor("fixture-admin", wntSession.id).length !== 1
+    || venueNotesFor("fixture-other-admin", wntSession.id).length !== 1) {
+  throw new Error("no-op save must not duplicate venue notifications");
 }
-// Every effective edit notifies the active RSVP cohort and other Admins.
+
+// Later edit: shared to members + actor (Venue updated); audit to other admins.
 store.setWeekVenue(wntSession.id, {
   location: "Wan Chai Promenade — 7pm sharp",
   mapsQuery: "Wan Chai Promenade, Hong Kong",
 });
-if (venueNotesFor("fixture-member", wntSession.id).length !== 2) {
-  throw new Error("an effective venue edit must notify the active RSVP once");
+const memberAfterEdit = venueNotesFor("fixture-member", wntSession.id);
+const actorAfterEdit = venueNotesFor("fixture-admin", wntSession.id);
+const otherAfterEdit = venueNotesFor("fixture-other-admin", wntSession.id);
+if (memberAfterEdit.length !== 2) {
+  throw new Error("subsequent edits must re-notify members");
 }
-if (venueNotesFor("fixture-other-admin", wntSession.id).length !== 2) {
+if (memberAfterEdit[0]?.title !== "Venue updated") {
+  throw new Error("later shared title must be Venue updated");
+}
+if (actorAfterEdit.length !== 2 || actorAfterEdit[0]?.title !== "Venue updated") {
+  throw new Error("acting admin must receive later shared Venue updated");
+}
+if (otherAfterEdit.length !== 2) {
   throw new Error("second save must notify other Admins again");
 }
-// Reset clears location/mapsQuery but preserves venueMemberNotifiedAt.
+
+// Reset: audit only; preserve venueMemberNotifiedAt for title choice.
 store.setWeekVenue(wntSession.id, { location: null, mapsQuery: null });
 const resetDecorated = store.getSession(wntSession.id);
 if (resetDecorated.location === "Central Harbourfront — 7pm sharp"
     || resetDecorated.mapsQuery === "Central Harbourfront, Hong Kong") {
   throw new Error("reset should restore the activity-template venue values");
 }
-if (venueNotesFor("fixture-member", wntSession.id).length !== 3) {
-  throw new Error("resetting an effective venue must notify the active RSVP once");
+if (venueNotesFor("fixture-member", wntSession.id).length !== 2
+    || venueNotesFor("fixture-admin", wntSession.id).length !== 2) {
+  throw new Error("reset must not shared-notify members or actor");
 }
-// A later effective confirmation also notifies the still-active RSVP once.
+if (venueNotesFor("fixture-other-admin", wntSession.id).length !== 3) {
+  throw new Error("reset must audit other Admins");
+}
+if (!store.weekVenueOverride(wntSession.id)?.venueMemberNotifiedAt) {
+  throw new Error("reset must preserve venueMemberNotifiedAt");
+}
+
+// Reconfirmation after reset: shared Venue updated again.
 store.setWeekVenue(wntSession.id, {
   location: "Causeway Bay Promenade — 7pm sharp",
   mapsQuery: "Causeway Bay Promenade, Hong Kong",
 });
-if (venueNotesFor("fixture-member", wntSession.id).length !== 4) {
-  throw new Error("reconfirmation after reset must notify the active RSVP once");
+if (venueNotesFor("fixture-member", wntSession.id).length !== 3) {
+  throw new Error("reconfirmation after reset must shared-notify members again");
+}
+if (venueNotesFor("fixture-admin", wntSession.id).length !== 3) {
+  throw new Error("reconfirmation after reset must shared-notify acting admin again");
+}
+if (venueNotesFor("fixture-other-admin", wntSession.id).length !== 4) {
+  throw new Error("reconfirmation after reset must audit other Admins");
+}
+const latestMember = venueNotesFor("fixture-member", wntSession.id)[0];
+if (latestMember?.title !== "Venue updated") {
+  throw new Error("reconfirmation shared title must be Venue updated");
 }
 const weekOverride = store.weekVenueOverride(wntSession.id);
 if (weekOverride.location !== "Causeway Bay Promenade — 7pm sharp"
@@ -6771,6 +6812,7 @@ if (!otherWnt || "meetingLat" in store.getSession(otherWnt.id)) {
 }
 const memberBeforeMove = venueNotesFor("fixture-member", tamarSession.id).length;
 const adminBeforeMove = venueNotesFor("fixture-other-admin", tamarSession.id).length;
+const actorBeforeMove = venueNotesFor("fixture-admin", tamarSession.id).length;
 store.setWeekVenue(tamarSession.id, {
   location: "Tamar Park",
   mapsQuery: "Tamar Park",
@@ -6779,6 +6821,9 @@ store.setWeekVenue(tamarSession.id, {
 });
 if (venueNotesFor("fixture-member", tamarSession.id).length !== memberBeforeMove) {
   throw new Error("coordinate-only edit must not repeat member fan-out");
+}
+if (venueNotesFor("fixture-admin", tamarSession.id).length !== actorBeforeMove) {
+  throw new Error("coordinate-only edit must not shared-notify the acting admin");
 }
 if (venueNotesFor("fixture-other-admin", tamarSession.id).length !== adminBeforeMove + 1) {
   throw new Error("coordinate-only edit must create one Admin audit notification");
