@@ -45,7 +45,7 @@ const APPLY_DRAFT_KEY = "itc.apply.draft.v1";
 const APPLY_DRAFT_VERSION = 1;
 const LAST_ROUTE_KEY = "itc.last-route.v1";
 const LAST_ROUTE_VERSION = 1;
-const STATE_VERSION = 25;
+const STATE_VERSION = 26;
 
 const ROUTE_ID = "[A-Za-z0-9._~-]+";
 const RESTORABLE_ROUTE_PATTERNS = [
@@ -890,6 +890,15 @@ function migrate() {
   }
   if (v < 25) {
     if (!Array.isArray(state.announcements)) state.announcements = [];
+  }
+  if (v < 26) {
+    // v26: web push for operational booking/payment/venue is opt-in (default off).
+    // Preference only — no service worker or send path in this version.
+    for (const user of state.users || []) {
+      if (!Object.prototype.hasOwnProperty.call(user, "webPushOps")) {
+        user.webPushOps = false;
+      }
+    }
   }
   state.version = STATE_VERSION;
 }
@@ -4242,6 +4251,7 @@ function localApplication(user) {
     email_receipts: !!user.emailReceipts,
     community_news: !!user.communityNews,
     hyrox_payment_reminders: user.hyroxPaymentReminders !== false,
+    web_push_ops: !!user.webPushOps,
   };
 }
 
@@ -4283,6 +4293,7 @@ function privacyPatch(form) {
     email_receipts: !!form.email_receipts,
     community_news: !!form.community_news,
     hyrox_payment_reminders: !!form.hyrox_payment_reminders,
+    web_push_ops: !!form.web_push_ops,
   };
 }
 
@@ -4412,6 +4423,7 @@ export async function updateMyPrivacyPreferences(form) {
     user.emailReceipts = patch.email_receipts;
     user.communityNews = patch.community_news;
     user.hyroxPaymentReminders = patch.hyrox_payment_reminders;
+    user.webPushOps = patch.web_push_ops;
     save();
     return localApplication(user);
   }

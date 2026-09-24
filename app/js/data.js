@@ -474,6 +474,17 @@ export function notificationHktTime(value) {
   return `${formatted.replace(/\b(am|pm)\b/i, (period) => period.toUpperCase())} HKT`;
 }
 
+/** Kinds eligible for future web push when applications.web_push_ops is on (phase 1: allowlist only). */
+export const WEB_PUSH_OPS_KINDS = Object.freeze([
+  "operational_booking_reserved",
+  "operational_rsvp_confirmed",
+  "operational_payment_approved",
+  "operational_session_deferred",
+  "operational_session_cancelled",
+  "operational_session_cancelled_no_defer",
+  "operational_session_venue_updated",
+]);
+
 const NOTIFICATION_DESTINATIONS = new Map([
   ["operational_booking_reserved", "#/account/payments"],
   ["operational_rsvp_confirmed", "#/schedule"],

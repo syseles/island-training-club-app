@@ -1356,6 +1356,7 @@ async function hydrateLiveUser(user) {
         ? !!app.hyrox_payment_reminders : user.hyroxPaymentReminders !== false,
       emailReceipts: app.email_receipts !== undefined ? !!app.email_receipts : user.emailReceipts,
       communityNews: app.community_news !== undefined ? !!app.community_news : user.communityNews,
+      webPushOps: app.web_push_ops !== undefined ? !!app.web_push_ops : !!user.webPushOps,
       indemnityAcceptedAt: app.waiver_accepted_at ?? user.indemnityAcceptedAt,
       indemnitySignature: app.waiver_signature_text ?? user.indemnitySignature ?? "",
       indemnitySignedAt: app.waiver_signed_at ?? user.indemnitySignedAt ?? "",
@@ -1748,6 +1749,8 @@ async function accountPrivacyEdit(user) {
       <p class="muted small">Thursday payment reminders for unpaid HYROX reservations. You can still check payment status in the app.</p>
       <label class="check"><input type="checkbox" name="email_receipts" ${hydrated.emailReceipts ? "checked" : ""}> Email receipts</label>
       <label class="check"><input type="checkbox" name="community_news" ${hydrated.communityNews ? "checked" : ""}> Community news</label>
+      <label class="check"><input type="checkbox" name="web_push_ops" ${hydrated.webPushOps ? "checked" : ""}> Web push for bookings &amp; venue</label>
+      <p class="muted small">Browser alerts for booking, payment, and venue updates when web push is available. Off by default — in-app inbox still works either way.</p>
       <div class="actions">
         <button class="btn" type="submit">Save changes</button>
         <a class="btn ghost" href="#/account/privacy">Cancel</a>
@@ -1768,6 +1771,7 @@ async function accountPrivacy(user) {
         <div class="line"><span>HYROX payment reminders</span><strong>${onOff(hydrated.hyroxPaymentReminders !== false)}</strong></div>
         <div class="line"><span>Email receipts</span><strong>${onOff(hydrated.emailReceipts)}</strong></div>
         <div class="line"><span>Community news</span><strong>${onOff(hydrated.communityNews)}</strong></div>
+        <div class="line"><span>Web push for bookings &amp; venue</span><strong>${onOff(!!hydrated.webPushOps)}</strong></div>
       </div>
       <a class="btn ghost sm mt16" href="#/account/privacy/edit">Edit privacy preferences</a>
       <p class="muted small mt16">You can update these communication preferences at any time.</p>
