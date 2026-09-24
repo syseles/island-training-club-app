@@ -1114,6 +1114,8 @@ console.log("ok  web push ops preference migration is phase-1 column only");
   assert.equal(/caches\.|cache\.addAll/i.test(pushSw), false, "push-sw must not use Cache API");
   const webPushClient = readFileSync(resolve(__dirnameSmoke, "js/web-push.js"), "utf8");
   assert.ok(webPushClient.includes("syncWebPushSubscription"), "web-push client helper missing");
+  assert.ok(webPushClient.includes("push-sw.js"), "web-push client must resolve push-sw.js");
+  assert.ok(webPushClient.includes("__itcSyncWebPush"), "web-push debug helper missing");
   assert.ok(
     readFileSync(resolve(__dirnameSmoke, "index.html"), "utf8").includes("VAPID_PUBLIC_KEY"),
     "index.html must expose VAPID_PUBLIC_KEY",

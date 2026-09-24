@@ -3,11 +3,24 @@
 
 import { isLive, supabase } from "./config.js";
 
-const SW_URL = "/app/push-sw.js";
-
 function vapidPublicKey() {
   if (typeof window === "undefined") return "";
   return String(window.VAPID_PUBLIC_KEY || "").trim();
+}
+
+/** Resolve /app/ whether the page is /app/, /app/index.html, or app served at /. */
+function appPaths() {
+  const path = String(location.pathname || "/");
+  let basePath = "/app/";
+  if (path.includes("/app/")) {
+    basePath = `${path.slice(0, path.indexOf("/app/") + 4)}/`;
+  } else if (path === "/" || path.endsWith("/index.html") || /\.(html?)$/i.test(path)) {
+    // python -m http.server run from inside app/ → docs at /
+    basePath = path.replace(/\/[^/]*$/, "/") || "/";
+  }
+  const swUrl = new URL("push-sw.js", `${location.origin}${basePath}`).href;
+  const scope = new URL(basePath, location.origin).href;
+  return { basePath, swUrl, scope };
 }
 
 function urlBase64ToUint8Array(base64String) {
@@ -21,25 +34,58 @@ function urlBase64ToUint8Array(base64String) {
 
 export function webPushSupported() {
   return typeof window !== "undefined"
+    && window.isSecureContext
     && "serviceWorker" in navigator
     && "PushManager" in window
     && "Notification" in window;
 }
 
+async function waitForActivation(reg) {
+  const worker = reg.installing || reg.waiting || reg.active;
+  if (!worker) return reg;
+  if (worker.state === "activated") return reg;
+  await new Promise((resolve) => {
+    worker.addEventListener("statechange", () => {
+      if (worker.state === "activated" || worker.state === "redundant") resolve();
+    });
+  });
+  return reg;
+}
+
 async function registration() {
-  if (!webPushSupported()) throw new Error("Web push is not supported in this browser.");
-  return navigator.serviceWorker.register(SW_URL, { scope: "/app/" });
+  if (!webPushSupported()) {
+    throw new Error("Web push needs HTTPS (or localhost) and a supported browser.");
+  }
+  const { swUrl, scope } = appPaths();
+  const probe = await fetch(swUrl, { method: "GET", cache: "no-store" });
+  if (!probe.ok) {
+    throw new Error(`Push service worker missing (${probe.status}): ${swUrl}`);
+  }
+  const reg = await navigator.serviceWorker.register(swUrl, { scope });
+  await waitForActivation(reg);
+  return reg;
 }
 
 export async function syncWebPushSubscription({ enabled } = {}) {
-  if (!isLive() || !supabase) return { ok: true, skipped: "local" };
+  if (!isLive() || !supabase) {
+    if (enabled) {
+      throw new Error("Web push only works in live Supabase mode (check SUPABASE_URL in index.html).");
+    }
+    return { ok: true, skipped: "local" };
+  }
   if (!webPushSupported()) {
-    if (enabled) throw new Error("Web push needs a supported browser (and HTTPS).");
+    if (enabled) {
+      throw new Error("Web push needs HTTPS (or localhost) and a supported browser.");
+    }
     return { ok: true, skipped: "unsupported" };
   }
+
+  const { scope } = appPaths();
+
   if (!enabled) {
     try {
-      const reg = await navigator.serviceWorker.getRegistration("/app/");
+      const reg = await navigator.serviceWorker.getRegistration(scope)
+        || await navigator.serviceWorker.getRegistration();
       const sub = await reg?.pushManager?.getSubscription();
       if (sub) {
         const endpoint = sub.endpoint;
@@ -63,14 +109,21 @@ export async function syncWebPushSubscription({ enabled } = {}) {
   }
 
   const reg = await registration();
-  await navigator.serviceWorker.ready;
   let sub = await reg.pushManager.getSubscription();
-  if (!sub) {
-    sub = await reg.pushManager.subscribe({
-      userVisibleOnly: true,
-      applicationServerKey: urlBase64ToUint8Array(publicKey),
-    });
+  if (sub) {
+    // Re-subscribe if the existing sub was created with a different VAPID key.
+    try {
+      await sub.unsubscribe();
+    } catch (_err) {
+      /* continue and create a fresh subscription */
+    }
+    sub = null;
   }
+  sub = await reg.pushManager.subscribe({
+    userVisibleOnly: true,
+    applicationServerKey: urlBase64ToUint8Array(publicKey),
+  });
+
   const json = sub.toJSON();
   const endpoint = json.endpoint;
   const p256dh = json.keys?.p256dh;
@@ -78,6 +131,7 @@ export async function syncWebPushSubscription({ enabled } = {}) {
   if (!endpoint || !p256dh || !auth) {
     throw new Error("Unable to read push subscription keys.");
   }
+
   const { data: userData, error: userError } = await supabase.auth.getUser();
   if (userError) throw userError;
   const profileId = userData?.user?.id;
@@ -91,6 +145,16 @@ export async function syncWebPushSubscription({ enabled } = {}) {
     user_agent: typeof navigator !== "undefined" ? navigator.userAgent : null,
     updated_at: new Date().toISOString(),
   }, { onConflict: "endpoint" });
-  if (error) throw error;
-  return { ok: true, endpoint };
+  if (error) {
+    throw new Error(error.message || "Unable to save push subscription.");
+  }
+
+  console.info("[itc web-push] subscribed", { endpoint: endpoint.slice(0, 48), sw: reg.active?.scriptURL });
+  return { ok: true, endpoint, scriptURL: reg.active?.scriptURL || null };
+}
+
+// Manual retry from DevTools: await window.__itcSyncWebPush(true)
+if (typeof window !== "undefined") {
+  window.__itcSyncWebPush = (enabled = true) => syncWebPushSubscription({ enabled: !!enabled });
+  window.__itcWebPushPaths = appPaths;
 }

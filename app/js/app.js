@@ -1539,16 +1539,28 @@ document.addEventListener("submit", async (e) => {
         await store.updateMyPrivacyPreferences(entries);
         if (isLive()) {
           try {
-            await syncWebPushSubscription({ enabled });
+            const pushResult = await syncWebPushSubscription({ enabled });
+            if (enabled && pushResult?.endpoint) {
+              toast("Privacy preferences saved — browser push on");
+              location.hash = "#/account/privacy";
+              await renderWithFeedback();
+              return;
+            }
           } catch (pushErr) {
             if (enabled) {
               // Prefer stays saved; surface push setup failure separately.
+              console.error("[itc web-push]", pushErr);
               toast(pushErr.message || "Privacy saved, but browser push was not enabled", true);
               location.hash = "#/account/privacy";
               await renderWithFeedback();
               return;
             }
           }
+        } else if (enabled) {
+          toast("Privacy saved locally — web push needs live Supabase mode", true);
+          location.hash = "#/account/privacy";
+          await renderWithFeedback();
+          return;
         }
         toast("Privacy preferences saved");
         location.hash = "#/account/privacy";
