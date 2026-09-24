@@ -7150,7 +7150,13 @@ if (tbcDetail.includes('id="activity-map"')) {
   throw new Error("free events without mapsQuery must not render the inline map");
 }
 {
-  views.scheduleState.weekOffset = 0;
+  const today = data.todayLocal();
+  const currentSunday = data.sundayOf(today);
+  const sessionSunday = data.sundayOf(data.parseISO(noMapsSession.dateISO));
+  const weekOffset = Math.round(
+    (sessionSunday.getTime() - currentSunday.getTime()) / (7 * 24 * 60 * 60 * 1000)
+  );
+  views.scheduleState.weekOffset = weekOffset;
   views.scheduleState.selected = noMapsSession.dateISO;
   views.scheduleState.filter = "all";
   const tbcSchedule = views.viewSchedule();
