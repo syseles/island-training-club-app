@@ -3759,8 +3759,8 @@ begin
     'first blank reset does not create audit notifications'
   );
 
-  -- First confirmation: TBC -> real venue. Members should be notified once,
-  -- other Admins should be notified once, actor excluded.
+  -- First confirmation: TBC -> real venue. Shared to members + acting admin;
+  -- audit to other admins; pending excluded.
   perform public.set_session_venue(
     v_session,
     'Central Harbourfront — 7pm sharp',
@@ -3793,25 +3793,48 @@ begin
     'first confirmation notifies approved members once'
   );
   perform pg_temp.op_assert(
+    exists (
+      select 1 from public.notifications
+       where kind = 'operational_session_venue_updated'
+         and destination = '#/activity/' || v_session
+         and profile_id = v_admin
+         and title = 'Venue confirmed'
+         and body = 'Wednesday Night Training on 2026-08-19 is at Central Harbourfront — 7pm sharp. Check the activity page for details.'
+    ),
+    'acting admin receives shared Venue confirmed'
+  );
+  perform pg_temp.op_assert(
     (select count(*) from public.notifications
        where kind = 'operational_session_venue_updated'
          and destination = '#/activity/' || v_session
-         and profile_id = v_super) = 1,
+         and profile_id = v_super
+         and title = 'Session venue updated') = 1,
     'other admins receive audit notification'
   );
   perform pg_temp.op_assert(
     not exists (select 1 from public.notifications
        where kind = 'operational_session_venue_updated'
          and destination = '#/activity/' || v_session
-         and profile_id in (v_admin, v_pending)),
-    'actor and pending profiles are excluded'
+         and profile_id = v_pending),
+    'pending profiles are excluded'
+  );
+  perform pg_temp.op_assert(
+    (select count(*) from public.notifications
+       where kind = 'operational_session_venue_updated'
+         and destination = '#/activity/' || v_session
+         and profile_id = v_admin
+         and title = 'Session venue updated') = 0,
+    'acting admin does not also receive audit'
   );
   perform pg_temp.op_assert(
     (select count(*) from public.notifications
        where kind = 'operational_session_venue_updated'
          and destination = '#/activity/' || v_session)
-      = (select count(*) from public.profiles where role = 'member') + 1,
-    'every member and the non-acting Super Admin receive the dated activity destination'
+      = (select count(*) from public.profiles where role = 'member')
+        + 1  -- acting admin shared
+        + (select count(*) from public.profiles
+            where role in ('admin', 'super_admin') and id <> v_admin),
+    'members + acting admin shared + other admins audit'
   );
   perform pg_temp.op_assert(
     exists (
@@ -3832,7 +3855,7 @@ begin
     'admin audit copy identifies the acting profile'
   );
 
-  -- Subsequent edit (also TBC flag): only Admins receive a new audit row.
+  -- Subsequent edit: shared to all members + actor, audit to other admins.
   select count(*) into v_initial_count from public.notifications
     where kind = 'operational_session_venue_updated';
   perform public.set_session_venue(
@@ -3844,8 +3867,22 @@ begin
   select count(*) into v_after_edit_count from public.notifications
     where kind = 'operational_session_venue_updated';
   perform pg_temp.op_assert(
-    v_after_edit_count - v_initial_count = 1,
-    'second save fans out only to other admins'
+    v_after_edit_count - v_initial_count
+      = (select count(*) from public.profiles where role = 'member')
+        + 1
+        + (select count(*) from public.profiles
+            where role in ('admin', 'super_admin') and id <> v_admin),
+    'second save shared-notifies members+actor and audits other admins'
+  );
+  perform pg_temp.op_assert(
+    exists (
+      select 1 from public.notifications
+       where kind = 'operational_session_venue_updated'
+         and profile_id = v_member_a
+         and title = 'Venue updated'
+         and body like 'Wednesday Night Training on 2026-08-19 is at Wan Chai Promenade%'
+    ),
+    'later edit uses Venue updated shared title'
   );
 
   -- No-op save: no new notification rows.
@@ -3864,14 +3901,18 @@ begin
     'no-op save does not notify anyone'
   );
 
-  -- Reset clears location/maps_query but preserves member_notified_at.
+  -- Reset: audit only; preserve member_notified_at for title choice.
   select member_notified_at into v_member_notified_at
     from public.operational_session_venue_overrides where session_id = v_session;
+  select count(*) into v_initial_count from public.notifications
+    where kind = 'operational_session_venue_updated';
   perform public.set_session_venue(v_session, null, null, false);
   select count(*) into v_after_reset_count from public.notifications
     where kind = 'operational_session_venue_updated';
   perform pg_temp.op_assert(
-    v_after_reset_count - v_initial_count = 1,
+    v_after_reset_count - v_initial_count
+      = (select count(*) from public.profiles
+          where role in ('admin', 'super_admin') and id <> v_admin),
     'reset fans out only to other admins'
   );
   perform pg_temp.op_assert(
@@ -3881,10 +3922,10 @@ begin
   perform pg_temp.op_assert(
     (select member_notified_at from public.operational_session_venue_overrides where session_id = v_session)
       = v_member_notified_at,
-    'reset preserves member_notified_at so members are not re-notified'
+    'reset preserves member_notified_at for confirmed vs updated titles'
   );
 
-  -- Reconfirmation after reset does not re-notify members.
+  -- Reconfirmation after reset: shared again as Venue updated.
   perform public.set_session_venue(
     v_session,
     'Causeway Bay Promenade — 7pm sharp',
@@ -3894,8 +3935,12 @@ begin
   select count(*) into v_after_reconfirm_count from public.notifications
     where kind = 'operational_session_venue_updated';
   perform pg_temp.op_assert(
-    v_after_reconfirm_count - v_after_reset_count = 1,
-    'reconfirmation after reset notifies only other admins'
+    v_after_reconfirm_count - v_after_reset_count
+      = (select count(*) from public.profiles where role = 'member')
+        + 1
+        + (select count(*) from public.profiles
+            where role in ('admin', 'super_admin') and id <> v_admin),
+    'reconfirmation after reset shared-notifies members+actor and audits other admins'
   );
 
   -- A partial row does not consume member dedupe or create blank copy. Once
