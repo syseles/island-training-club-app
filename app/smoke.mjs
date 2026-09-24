@@ -1067,6 +1067,41 @@ console.log("ok  collector payment reminder migration preserves opt-out and leas
   );
 }
 console.log("ok  web push ops preference migration is phase-1 column only");
+{
+  const webPushDeliveryMigration = readFileSync(
+    resolve(__dirnameSmoke, "../supabase/migrations/20260927000001_web_push_delivery.sql"),
+    "utf8",
+  );
+  for (const marker of [
+    "push_subscriptions",
+    "request_web_push_delivery",
+    "web_push_ops_kind_eligible",
+    "pg_net",
+    "Venue confirmed",
+    "Session venue updated",
+  ]) {
+    assert.ok(
+      webPushDeliveryMigration.includes(marker),
+      `web push delivery migration missing ${marker}`,
+    );
+  }
+  assert.equal(
+    /caches\.|cache\.add/i.test(webPushDeliveryMigration),
+    false,
+    "delivery migration must not introduce caching APIs",
+  );
+  const pushSw = readFileSync(resolve(__dirnameSmoke, "push-sw.js"), "utf8");
+  assert.ok(pushSw.includes('addEventListener("push"'), "push-sw must handle push");
+  assert.ok(pushSw.includes("notificationclick"), "push-sw must handle notificationclick");
+  assert.equal(/caches\.|cache\.addAll/i.test(pushSw), false, "push-sw must not use Cache API");
+  const webPushClient = readFileSync(resolve(__dirnameSmoke, "js/web-push.js"), "utf8");
+  assert.ok(webPushClient.includes("syncWebPushSubscription"), "web-push client helper missing");
+  assert.ok(
+    readFileSync(resolve(__dirnameSmoke, "index.html"), "utf8").includes("VAPID_PUBLIC_KEY"),
+    "index.html must expose VAPID_PUBLIC_KEY",
+  );
+}
+console.log("ok  web push delivery migration and push-only service worker markers");
 for (const marker of [
   "10/F, Island ECC, Quarry Bay",
   "Island ECC, Quarry Bay, Hong Kong",

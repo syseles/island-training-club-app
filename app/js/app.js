@@ -14,6 +14,7 @@ import {
   normalizeVenueLocation,
   TAMAR_DEFAULT_MEETING_POINT,
 } from "./venue.js";
+import { syncWebPushSubscription } from "./web-push.js";
 
 const viewEl = document.getElementById("view");
 const navEl = document.getElementById("bottom-nav");
@@ -1533,7 +1534,22 @@ document.addEventListener("submit", async (e) => {
     const control = form.querySelector('[type="submit"]');
     await withBusyControl(control, "Saving…", async () => {
       try {
-        await store.updateMyPrivacyPreferences(Object.fromEntries(new FormData(form).entries()));
+        const entries = Object.fromEntries(new FormData(form).entries());
+        const enabled = !!entries.web_push_ops;
+        await store.updateMyPrivacyPreferences(entries);
+        if (isLive()) {
+          try {
+            await syncWebPushSubscription({ enabled });
+          } catch (pushErr) {
+            if (enabled) {
+              // Prefer stays saved; surface push setup failure separately.
+              toast(pushErr.message || "Privacy saved, but browser push was not enabled", true);
+              location.hash = "#/account/privacy";
+              await renderWithFeedback();
+              return;
+            }
+          }
+        }
         toast("Privacy preferences saved");
         location.hash = "#/account/privacy";
         await renderWithFeedback();

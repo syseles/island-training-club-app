@@ -1,69 +1,45 @@
-# Web push for operational booking / payment / venue (phase 1)
+# Web push for operational booking / payment / venue
 
 **Date:** 2026-09-24  
-**Status:** Phase 1 — preference + contract only (no service worker, no send path)  
-**Branch base:** `main` (non-Shop)
+**Status:** Phase 2 — live browser Web Push delivery (push-only service worker)  
+**Branch:** `feature/web-push-delivery` (off `main`, non-Shop)
 
 ## Decisions
 
-1. **Events (v1):** operational booking, payment, and venue notifications only — not community announcements, giving, welcome, or admin audit rows.
-2. **Delivery (v1):** design + schema/prefs now; **defer** Push API service worker, VAPID, subscription store, and Edge/`pg_net` sender until the production host stack is chosen.
-3. **Channel gate:** new opt-in `applications.web_push_ops` (default **false**), independent of `whatsapp_reminders`, `email_receipts`, `community_news`, and `hyrox_payment_reminders`.
-4. **Inbox remains source of truth.** Future web push mirrors a subset of `public.notifications` inserts; it does not replace in-app notifications.
+1. **Events:** operational booking, payment, and venue shared rows only (`WEB_PUSH_OPS_KINDS`). Venue audit title `Session venue updated` is excluded.
+2. **Gate:** `applications.web_push_ops` (opt-in) **and** a row in `push_subscriptions`.
+3. **Inbox remains source of truth.** Push mirrors allowlisted inserts; it does not replace in-app notifications.
+4. **Service worker:** [`app/push-sw.js`](../../app/push-sw.js) is **push-only** (no offline/asset cache). Explicit exception to the prototype “no service worker” rule for this live channel only.
 
-## Push-eligible kinds (allowlist)
-
-Member-facing operational kinds only:
-
-| Kind | Notes |
-|------|--------|
-| `operational_booking_reserved` | Booking hold / reserve |
-| `operational_rsvp_confirmed` | Free-event RSVP |
-| `operational_payment_approved` | Payment confirmed |
-| `operational_session_deferred` | Session deferred |
-| `operational_session_cancelled` | Session cancelled |
-| `operational_session_cancelled_no_defer` | Cancelled without defer |
-| `operational_session_venue_updated` | Venue TBC→confirmed / later edits — **shared member rows only** |
-
-**Explicitly out of push scope**
-
-- Admin / ops: `operational_payment_marked`, `operational_gym_finalized`, all `admin_*`, audit-only venue rows
-- Community: `community_announcement_*`, giving, welcome
-- HYROX cycle-specific kinds (`operational_hyrox_*`) — revisit in a later expansion; not part of this allowlist
-- Channel stubs (WhatsApp / email) as delivery mechanisms
-
-Client allowlist constant: `WEB_PUSH_OPS_KINDS` in `app/js/data.js` (documentation + future dispatcher contract).
-
-## Phase 1 deliverables
-
-- Spec (this document)
-- Migration: `applications.web_push_ops boolean not null default false`
-- Local user field `webPushOps` (default false) + ``STATE_VERSION` bump to 26
-- Privacy & Notifications summary + edit checkbox (“Web push for bookings & venue”)
-- Wire through `localApplication`, `privacyPatch`, `updateMyPrivacyPreferences`, live hydrate
-- Smoke: default off, UI marker, toggle round-trip
-
-## Phase 2 (deferred — production stack)
+## Architecture
 
 ```text
-notifications INSERT (kind ∈ allowlist)
-  → join applications.web_push_ops = true
-  → look up push_subscriptions for profile_id
-  → Edge Function / worker sends Web Push (VAPID)
-  → notificationclick opens destination (#/… deep link)
+notifications INSERT (kind/title eligible)
+  → applications.web_push_ops
+  → push_subscriptions for profile
+  → pg_net POST Edge Function send-web-push (x-web-push-secret)
+  → VAPID Web Push → OS notification
+  → click opens /app/#/…
 ```
 
-Still required later:
+Client: Privacy toggle ON → permission → `PushManager.subscribe` → upsert `push_subscriptions`.  
+OFF → unsubscribe + delete rows.
 
-- Minimal push-only service worker (no offline cache; AGENTS ban remains for prototype refinement)
-- `push_subscriptions` table (`endpoint`, p256dh, auth, profile_id, user agent)
-- VAPID key management
-- Browser permission UX + iOS Add-to-Home-Screen notes
-- Integration test: opted-in member receives send stub; opted-out does not
+## Phase 1 (already on main)
+
+- Pref column + Privacy UI + allowlist constant + local `STATE_VERSION` 26
+
+## Phase 2 deliverables
+
+- Migration `20260927000001_web_push_delivery.sql`
+- Edge Function `send-web-push`
+- `app/push-sw.js` + `app/js/web-push.js`
+- `window.VAPID_PUBLIC_KEY` in `app/index.html`
+- Runbook: [web-push.md](../../runbooks/web-push.md)
 
 ## Non-goals
 
-- Replacing in-app inbox polling
-- Real WhatsApp or email delivery
-- Offline / asset-caching service worker
-- Shop / merchandise notifications
+- Offline caching SW  
+- WhatsApp / email  
+- Community announcement push  
+- Local-mode OS notifications  
