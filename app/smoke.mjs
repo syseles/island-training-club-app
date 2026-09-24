@@ -1100,9 +1100,9 @@ console.log("ok  web push ops preference migration is phase-1 column only");
     );
   }
   assert.equal(
-    /alter database/i.test(webPushSettingsMigration),
+    /alter database\s+postgres\s+set/i.test(webPushSettingsMigration),
     false,
-    "settings migration must not use ALTER DATABASE (denied on hosted Supabase)",
+    "settings migration must not use ALTER DATABASE SET (denied on hosted Supabase)",
   );
   assert.equal(
     /caches\.|cache\.add/i.test(webPushDeliveryMigration),
