@@ -35,7 +35,7 @@ import {
   isRetiredHyroxNotification,
   isRetiredHyroxLegacyRouteId,
 } from "./hyrox-retirement.js";
-import { normalizeMeetingPoint, normalizeVenueLocation } from "./venue.js";
+import { normalizeMeetingPoint, normalizeVenueLocation, hasConfirmedVenue } from "./venue.js";
 import { announcementPlainText, assertSafeAnnouncementMarkdown } from "./announcement-markdown.js";
 import * as liveOps from "./operations.js";
 
@@ -2209,13 +2209,6 @@ export function getSession(sessionId) {
   return decorateSession(s);
 }
 
-function hasConfirmedVenue(location, mapsQuery) {
-  const display = String(location || "").trim();
-  const query = String(mapsQuery || "").trim();
-  return Boolean(display && display.toUpperCase() !== "TBC"
-    && query && query.toUpperCase() !== "TBC");
-}
-
 const WNT_TBC_NOTE = "Meeting point to be confirmed — check back before Wednesday. Bring water and a friend.";
 const WNT_CONFIRMED_NOTE = "Bring water and a friend.";
 const WNT_CANONICAL_NOTES = new Set([
@@ -2223,6 +2216,32 @@ const WNT_CANONICAL_NOTES = new Set([
   WNT_TBC_NOTE,
   WNT_CONFIRMED_NOTE,
 ]);
+
+function decorateSession(s) {
+  const o = state.sessionOverrides[s.id];
+  const out = { ...s };
+  if (!o) return applyWntLeaderNote(out);
+  if (o.time) out.time = o.time;
+  if (o.cancelled) { out.cancelled = true; out.cancelReason = o.cancelled; }
+  if (o.venueTBC) {
+    out.venueTBC = true;
+    out.location = "TBC";
+    out.mapsQuery = "";
+    delete out.meetingLat;
+    delete out.meetingLng;
+  }
+  if (o.notice) out.notice = o.notice;
+  if (o.gymConfirmedAt) out.gymConfirmedAt = o.gymConfirmedAt;
+  if (o.gymNote) out.gymNote = o.gymNote;
+  if (!o.venueTBC) {
+    if (o.location) out.location = o.location;
+    if (o.mapsQuery) out.mapsQuery = o.mapsQuery;
+    const point = normalizeMeetingPoint(o.meetingLat, o.meetingLng);
+    if (point) Object.assign(out, { meetingLat: point.lat, meetingLng: point.lng });
+  }
+  if (hasConfirmedVenue(out.location, out.mapsQuery)) out.venueTBC = false;
+  return applyWntLeaderNote(out);
+}
 
 function applyWntLeaderNote(session) {
   if (session?.activityId !== "wnt" || !WNT_CANONICAL_NOTES.has(String(session.memberNote || ""))) {
@@ -2234,24 +2253,6 @@ function applyWntLeaderNote(session) {
       ? WNT_CONFIRMED_NOTE
       : WNT_TBC_NOTE,
   };
-}
-
-function decorateSession(s) {
-  const o = state.sessionOverrides[s.id];
-  const out = { ...s };
-  if (!o) return applyWntLeaderNote(out);
-  if (o.time) out.time = o.time;
-  if (o.cancelled) { out.cancelled = true; out.cancelReason = o.cancelled; }
-  if (o.venueTBC) { out.venueTBC = true; out.location = "TBC"; }
-  if (o.notice) out.notice = o.notice;
-  if (o.gymConfirmedAt) out.gymConfirmedAt = o.gymConfirmedAt;
-  if (o.gymNote) out.gymNote = o.gymNote;
-  if (o.location) out.location = o.location;
-  if (o.mapsQuery) out.mapsQuery = o.mapsQuery;
-  const point = normalizeMeetingPoint(o.meetingLat, o.meetingLng);
-  if (point) Object.assign(out, { meetingLat: point.lat, meetingLng: point.lng });
-  if (hasConfirmedVenue(out.location, out.mapsQuery)) out.venueTBC = false;
-  return applyWntLeaderNote(out);
 }
 
 export function weekVenueOverride(sessionId) {

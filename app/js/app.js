@@ -1857,14 +1857,16 @@ document.addEventListener("submit", async (e) => {
       const fd = new FormData(form);
       const location = String(fd.get("location") || "").trim();
       const enteredMapsQuery = String(fd.get("mapsQuery") || "").trim();
-      const mapsQuery = enteredMapsQuery || location;
+      const mapsQuery = location.toUpperCase() === "TBC"
+        ? ""
+        : (enteredMapsQuery || location);
       await withBusyControl(control, "Saving\u2026", async () => {
         try {
           await store.setWeekVenue(form.dataset.session, {
-            location,
+            location: location.toUpperCase() === "TBC" ? "TBC" : location,
             mapsQuery,
-            meetingLat: fd.get("meetingLat"),
-            meetingLng: fd.get("meetingLng"),
+            meetingLat: location.toUpperCase() === "TBC" ? null : fd.get("meetingLat"),
+            meetingLng: location.toUpperCase() === "TBC" ? null : fd.get("meetingLng"),
           });
           toast("Venue saved for this week");
           await renderWithFeedback();

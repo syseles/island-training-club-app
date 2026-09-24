@@ -37,11 +37,24 @@ export function normalizeMeetingPoint(lat, lng) {
     : null;
 }
 
+/** Usable dated venue: both display and maps query present and not TBC. */
+export function hasConfirmedVenue(location, mapsQuery) {
+  const display = String(location || "").trim();
+  const query = String(mapsQuery || "").trim();
+  return Boolean(display && display.toUpperCase() !== "TBC"
+    && query && query.toUpperCase() !== "TBC");
+}
+
 export function venuePresentationFor(session = {}) {
   const query = String(session.mapsQuery || "").trim();
   const markerLabel = String(session.markerLabel || session.name || session.location || query);
   const isWnt = session.activityId === "wnt" || String(session.id || "").startsWith("wnt-");
   const venue = normalizeVenueLocation(session.location);
+
+  // TBC / incomplete venues must not keep an interactive map or leftover geocode.
+  if (!hasConfirmedVenue(session.location, session.mapsQuery)) {
+    return { kind: "none" };
+  }
 
   if (isWnt && ECC_PRESENTATIONS.has(venue)) {
     return { kind: "image", ...ECC_PRESENTATIONS.get(venue), fallbackQuery: query };
