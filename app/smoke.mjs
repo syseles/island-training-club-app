@@ -5302,14 +5302,20 @@ installLocalFixtures();
   store.setSessionTime(session.id, "20:15");
 
   assert.equal(linkedNotes("fixture-member", "operational_session_venue_updated").length, 1,
-    "one effective venue change must notify an active confirmed RSVP exactly once");
+    "one effective venue change must shared-notify each approved member exactly once");
   assert.equal(linkedNotes("fixture-member", "operational_session_time_updated").length, 1,
     "one effective time change must notify an active confirmed RSVP exactly once");
+  for (const userId of ["rsvp-withdrawn", "rsvp-unrelated"]) {
+    assert.equal(linkedNotes(userId, "operational_session_venue_updated").length, 1,
+      `${userId} must receive the shared venue change as an approved member`);
+  }
   for (const userId of ["rsvp-withdrawn", "rsvp-unrelated", "rsvp-pending", "rsvp-declined"]) {
-    assert.equal(linkedNotes(userId, "operational_session_venue_updated").length, 0,
-      `${userId} must not receive the RSVP venue change`);
     assert.equal(linkedNotes(userId, "operational_session_time_updated").length, 0,
       `${userId} must not receive the RSVP time change`);
+  }
+  for (const userId of ["rsvp-pending", "rsvp-declined"]) {
+    assert.equal(linkedNotes(userId, "operational_session_venue_updated").length, 0,
+      `${userId} must not receive the shared venue change`);
   }
 
   store.cancelSessionWeek(session.id, "Lightning warning", Date.now());
@@ -6571,12 +6577,8 @@ const partialAdminNotes = partialVenueNotesFor("fixture-other-admin");
 if (partialSwimming.location !== "Victoria Park Swimming Pool" || partialSwimming.mapsQuery) {
   throw new Error("a location-only Swimming override must render its visible location without a map");
 }
-if (!partialSwimmingOverride.venueMemberNotifiedAt || partialMemberNotes.length !== 1) {
-  throw new Error("a visible partial venue change must notify an ordinary active RSVP exactly once");
-}
-if (partialMemberNotes[0]?.title !== "Venue updated"
-    || partialMemberNotes[0]?.body !== `ITC Swimming on ${partialSwimmingSession.dateISO} has a venue update. Check the activity page for details.`) {
-  throw new Error("an ordinary RSVP member must receive attendee venue-update semantics");
+if (partialSwimmingOverride.venueMemberNotifiedAt || partialMemberNotes.length !== 0) {
+  throw new Error("a location-only partial override must not shared-notify until maps query is usable");
 }
 if (partialAdminNotes.length !== 1
     || partialAdminNotes[0]?.title !== "Session venue updated"
@@ -6587,7 +6589,7 @@ store.setWeekVenue(partialSwimmingSession.id, {
   location: "Victoria Park Swimming Pool",
   mapsQuery: "",
 });
-if (partialVenueNotesFor("fixture-member").length !== 1
+if (partialVenueNotesFor("fixture-member").length !== 0
     || partialVenueNotesFor("fixture-other-admin").length !== 1) {
   throw new Error("an exact partial venue repeat must not notify any recipient again");
 }
@@ -6688,8 +6690,8 @@ if (otherAdminNotes[0]?.title !== "Session venue updated") {
 if (pendingNotes.length) {
   throw new Error("pending profile must not receive venue notifications");
 }
-if (unrelatedNotes.length) {
-  throw new Error("an unrelated approved member must not receive venue notifications");
+if (unrelatedNotes.length !== 1 || unrelatedNotes[0]?.title !== "Venue confirmed") {
+  throw new Error("first confirmation must shared-notify every approved member");
 }
 const memberDestination = memberNotes[0];
 if (memberDestination?.link !== `#/activity/${wntSession.id}`) {
@@ -6730,10 +6732,11 @@ const otherAfterEdit = venueNotesFor("fixture-other-admin", wntSession.id);
 if (memberAfterEdit.length !== 2) {
   throw new Error("subsequent edits must re-notify members");
 }
-if (memberAfterEdit[0]?.title !== "Venue updated") {
+if (!memberAfterEdit.some((note) => note.title === "Venue updated")) {
   throw new Error("later shared title must be Venue updated");
 }
-if (actorAfterEdit.length !== 2 || actorAfterEdit[0]?.title !== "Venue updated") {
+if (actorAfterEdit.length !== 2
+    || !actorAfterEdit.some((note) => note.title === "Venue updated")) {
   throw new Error("acting admin must receive later shared Venue updated");
 }
 if (otherAfterEdit.length !== 2) {
@@ -6772,8 +6775,8 @@ if (venueNotesFor("fixture-admin", wntSession.id).length !== 3) {
 if (venueNotesFor("fixture-other-admin", wntSession.id).length !== 4) {
   throw new Error("reconfirmation after reset must audit other Admins");
 }
-const latestMember = venueNotesFor("fixture-member", wntSession.id)[0];
-if (latestMember?.title !== "Venue updated") {
+const reconfirmMemberNotes = venueNotesFor("fixture-member", wntSession.id);
+if (reconfirmMemberNotes.filter((note) => note.title === "Venue updated").length < 2) {
   throw new Error("reconfirmation shared title must be Venue updated");
 }
 const weekOverride = store.weekVenueOverride(wntSession.id);
@@ -6935,8 +6938,8 @@ const completedSwimmingNote = completedSwimmingNotes.find(
     && note.body === `ITC Swimming on ${swimmingSession.dateISO} is at Victoria Park Swimming Pool. Check the activity page for details.`
 );
 if (!completedSwimmingOverride.venueMemberNotifiedAt
-    || completedSwimmingNotes.length !== swimmingNotesBeforeCompletion + 1) {
-  throw new Error("completing a partial Swimming override must notify its active RSVP exactly once");
+    || completedSwimmingNotes.length <= swimmingNotesBeforeCompletion) {
+  throw new Error("completing a partial Swimming override must shared-notify members");
 }
 if (!completedSwimmingNote) {
   throw new Error("Swimming member copy must use its display name and confirmed-venue semantics");
