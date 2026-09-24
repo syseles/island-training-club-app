@@ -149,10 +149,15 @@ function sessionRow(s, { past, showDate = true, highlight } = {}) {
   } else {
     end = `${store.spotsLeft(s) > 0 ? `<span class="badge paid">${fmtMoney(s.price)}</span>` : ""}${spotsLabel(s)}`;
   }
+  const locationLabel = String(s.location || "").trim();
+  const locationIsTbc = !locationLabel || locationLabel.toUpperCase() === "TBC";
   const sub = [
-    showDate ? `${esc(fmtDate(s.date))} · ${esc(s.location)}` : esc(s.location),
+    showDate
+      ? `${esc(fmtDate(s.date))} · ${esc(locationLabel || "TBC")}`
+      : esc(locationLabel || "TBC"),
     s.cancelled ? esc(sessionCancellationCopy(s)) : "",
-    s.venueTBC && !s.cancelled ? "Venue TBC" : "",
+    // Avoid "TBC · Venue TBC" when location is already TBC.
+    s.venueTBC && !s.cancelled && !locationIsTbc ? "Venue TBC" : "",
     s.notice ? esc(s.notice) : "",
   ].filter(Boolean).join(" · ");
   return `
@@ -1753,7 +1758,7 @@ async function accountPrivacyEdit(user) {
       <label class="check"><input type="checkbox" name="email_receipts" ${hydrated.emailReceipts ? "checked" : ""}> Email receipts</label>
       <label class="check"><input type="checkbox" name="community_news" ${hydrated.communityNews ? "checked" : ""}> Community news</label>
       <label class="check"><input type="checkbox" name="web_push_ops" ${hydrated.webPushOps ? "checked" : ""}> Web push for bookings &amp; venue</label>
-      <p class="muted small">Browser alerts for booking, payment, and venue updates when web push is available. Off by default — in-app inbox still works either way.</p>
+      <p class="muted small">Browser alerts for booking, payment, and venue updates (live mode, HTTPS). Off by default. iPhone needs Add to Home Screen. In-app inbox still works either way.</p>
       <div class="actions">
         <button class="btn" type="submit">Save changes</button>
         <a class="btn ghost" href="#/account/privacy">Cancel</a>

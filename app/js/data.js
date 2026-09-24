@@ -474,7 +474,7 @@ export function notificationHktTime(value) {
   return `${formatted.replace(/\b(am|pm)\b/i, (period) => period.toUpperCase())} HKT`;
 }
 
-/** Kinds eligible for future web push when applications.web_push_ops is on (phase 1: allowlist only). */
+/** Kinds eligible for web push when applications.web_push_ops is on (live delivery). */
 export const WEB_PUSH_OPS_KINDS = Object.freeze([
   "operational_booking_reserved",
   "operational_rsvp_confirmed",

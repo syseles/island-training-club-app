@@ -1067,6 +1067,59 @@ console.log("ok  collector payment reminder migration preserves opt-out and leas
   );
 }
 console.log("ok  web push ops preference migration is phase-1 column only");
+{
+  const webPushDeliveryMigration = readFileSync(
+    resolve(__dirnameSmoke, "../supabase/migrations/20260927000001_web_push_delivery.sql"),
+    "utf8",
+  );
+  for (const marker of [
+    "push_subscriptions",
+    "request_web_push_delivery",
+    "web_push_ops_kind_eligible",
+    "pg_net",
+    "Venue confirmed",
+    "Session venue updated",
+  ]) {
+    assert.ok(
+      webPushDeliveryMigration.includes(marker),
+      `web push delivery migration missing ${marker}`,
+    );
+  }
+  const webPushSettingsMigration = readFileSync(
+    resolve(__dirnameSmoke, "../supabase/migrations/20260927000002_web_push_settings_table.sql"),
+    "utf8",
+  );
+  for (const marker of [
+    "private.web_push_settings",
+    "hook_secret",
+    "request_web_push_delivery",
+  ]) {
+    assert.ok(
+      webPushSettingsMigration.includes(marker),
+      `web push settings migration missing ${marker}`,
+    );
+  }
+  assert.equal(
+    /alter database\s+postgres\s+set/i.test(webPushSettingsMigration),
+    false,
+    "settings migration must not use ALTER DATABASE SET (denied on hosted Supabase)",
+  );
+  assert.equal(
+    /caches\.|cache\.add/i.test(webPushDeliveryMigration),
+    false,
+    "delivery migration must not introduce caching APIs",
+  );  const pushSw = readFileSync(resolve(__dirnameSmoke, "push-sw.js"), "utf8");
+  assert.ok(pushSw.includes('addEventListener("push"'), "push-sw must handle push");
+  assert.ok(pushSw.includes("notificationclick"), "push-sw must handle notificationclick");
+  assert.equal(/caches\.|cache\.addAll/i.test(pushSw), false, "push-sw must not use Cache API");
+  const webPushClient = readFileSync(resolve(__dirnameSmoke, "js/web-push.js"), "utf8");
+  assert.ok(webPushClient.includes("syncWebPushSubscription"), "web-push client helper missing");
+  assert.ok(
+    readFileSync(resolve(__dirnameSmoke, "index.html"), "utf8").includes("VAPID_PUBLIC_KEY"),
+    "index.html must expose VAPID_PUBLIC_KEY",
+  );
+}
+console.log("ok  web push delivery migration and push-only service worker markers");
 for (const marker of [
   "10/F, Island ECC, Quarry Bay",
   "Island ECC, Quarry Bay, Hong Kong",
@@ -7095,6 +7148,24 @@ store.setVenueTBC(noMapsSession.id, true);
 const tbcDetail = views.viewActivity(noMapsSession.id);
 if (tbcDetail.includes('id="activity-map"')) {
   throw new Error("free events without mapsQuery must not render the inline map");
+}
+{
+  const today = data.todayLocal();
+  const currentSunday = data.sundayOf(today);
+  const sessionSunday = data.sundayOf(data.parseISO(noMapsSession.dateISO));
+  const weekOffset = Math.round(
+    (sessionSunday.getTime() - currentSunday.getTime()) / (7 * 24 * 60 * 60 * 1000)
+  );
+  views.scheduleState.weekOffset = weekOffset;
+  views.scheduleState.selected = noMapsSession.dateISO;
+  views.scheduleState.filter = "all";
+  const tbcSchedule = views.viewSchedule();
+  if (tbcSchedule.includes("TBC · Venue TBC") || tbcSchedule.includes("Venue TBC · TBC")) {
+    throw new Error("TBC schedule rows must not duplicate venue TBC labels");
+  }
+  if (!tbcSchedule.includes(`href="#/activity/${noMapsSession.id}"`)) {
+    throw new Error("expected TBC session row on its schedule day");
+  }
 }
 store.setWeekVenue(noMapsSession.id, {
   location: "TBC",
